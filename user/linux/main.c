@@ -3,6 +3,7 @@
 enum {
 	LINUX_HANDLE_VFS = 3,
 	LINUX_HANDLE_NAMES = 4,
+	LINUX_EPERM = 1,
 	LINUX_EBADF = 9,
 	LINUX_ENOENT = 2,
 	LINUX_EINVAL = 22,
@@ -13,9 +14,14 @@ enum {
 	LINUX_NO_PROCESS = 0xffffffff,
 	LINUX_GETUID = 102,
 	LINUX_GETGID = 104,
+	LINUX_SETUID = 105,
+	LINUX_SETGID = 106,
 	LINUX_GETEUID = 107,
 	LINUX_GETEGID = 108,
 	LINUX_GETGROUPS = 115,
+	LINUX_SETGROUPS = 116,
+	LINUX_SETRESUID = 117,
+	LINUX_SETRESGID = 119,
 	LINUX_WNOHANG = 1,
 	LINUX_WUNTRACED = 2,
 	LINUX_WCONTINUED = 8,
@@ -782,6 +788,59 @@ static long linux_user_groups(struct linux_process *process, u64 max_groups,
 	return (long)reply.words[1];
 }
 
+static long linux_user_setres(struct linux_process *process, u64 type,
+			      u64 real, u64 effective, u64 saved)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = type,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, real, effective, saved },
+	};
+	struct bunix_msg reply;
+
+	if (process == 0 || linux_user_service() == 0) {
+		return -LINUX_ESRCH;
+	}
+
+	request.words[0] = process->bunix_task;
+	if (bunix_ipc_call(user_service, &request, &reply) != 0) {
+		return -LINUX_EINVAL;
+	}
+	return reply.words[0] == 0 ? 0 : -LINUX_EPERM;
+}
+
+static long linux_user_setgroups(struct linux_process *process, u64 count,
+				 u64 group0, u64 group1)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_SETGROUPS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, count, group0, group1 },
+	};
+	struct bunix_msg reply;
+
+	if (count > 2) {
+		return -LINUX_EINVAL;
+	}
+	if (process == 0 || linux_user_service() == 0) {
+		return -LINUX_ESRCH;
+	}
+
+	request.words[0] = process->bunix_task;
+	if (bunix_ipc_call(user_service, &request, &reply) != 0) {
+		return -LINUX_EINVAL;
+	}
+	return reply.words[0] == 0 ? 0 : -LINUX_EPERM;
+}
+
 static long linux_getpgid(struct linux_process *process, u64 pid)
 {
 	struct linux_process *target = pid == 0 ? process :
@@ -1234,6 +1293,40 @@ int main(void)
 								message.words[0],
 								&reply.words[1],
 								&reply.words[2]);
+			break;
+		case BUNIX_LINUX_SETUID:
+			reply.words[0] = (u64)linux_user_setres(process,
+								BUNIX_USER_SETRESUID,
+								message.words[0],
+								message.words[0],
+								message.words[0]);
+			break;
+		case BUNIX_LINUX_SETGID:
+			reply.words[0] = (u64)linux_user_setres(process,
+								BUNIX_USER_SETRESGID,
+								message.words[0],
+								message.words[0],
+								message.words[0]);
+			break;
+		case BUNIX_LINUX_SETRESUID:
+			reply.words[0] = (u64)linux_user_setres(process,
+								BUNIX_USER_SETRESUID,
+								message.words[0],
+								message.words[1],
+								message.words[2]);
+			break;
+		case BUNIX_LINUX_SETRESGID:
+			reply.words[0] = (u64)linux_user_setres(process,
+								BUNIX_USER_SETRESGID,
+								message.words[0],
+								message.words[1],
+								message.words[2]);
+			break;
+		case BUNIX_LINUX_SETGROUPS:
+			reply.words[0] = (u64)linux_user_setgroups(process,
+								   message.words[0],
+								   message.words[1],
+								   message.words[2]);
 			break;
 		case BUNIX_LINUX_GETPPID:
 			reply.words[0] = process->ppid;

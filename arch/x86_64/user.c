@@ -70,6 +70,8 @@ enum {
 	LINUX_SYSCALL_GETUID = 102,
 	LINUX_SYSCALL_SYSLOG = 103,
 	LINUX_SYSCALL_GETGID = 104,
+	LINUX_SYSCALL_SETUID = 105,
+	LINUX_SYSCALL_SETGID = 106,
 	LINUX_SYSCALL_GETEUID = 107,
 	LINUX_SYSCALL_GETEGID = 108,
 	LINUX_SYSCALL_GETPPID = 110,
@@ -83,6 +85,9 @@ enum {
 	LINUX_SYSCALL_SETPGID = 109,
 	LINUX_SYSCALL_SETSID = 112,
 	LINUX_SYSCALL_GETGROUPS = 115,
+	LINUX_SYSCALL_SETGROUPS = 116,
+	LINUX_SYSCALL_SETRESUID = 117,
+	LINUX_SYSCALL_SETRESGID = 119,
 	LINUX_SYSCALL_GETPGID = 121,
 	LINUX_SYSCALL_ARCH_PRCTL = 158,
 	LINUX_SYSCALL_FUTEX = 202,
@@ -157,6 +162,8 @@ enum {
 	USER_LINUX_GETPID = 39,
 	USER_LINUX_GETUID = 102,
 	USER_LINUX_GETGID = 104,
+	USER_LINUX_SETUID = 105,
+	USER_LINUX_SETGID = 106,
 	USER_LINUX_GETEUID = 107,
 	USER_LINUX_GETEGID = 108,
 	USER_LINUX_SETPGID = 109,
@@ -164,6 +171,9 @@ enum {
 	USER_LINUX_GETPGRP = 111,
 	USER_LINUX_SETSID = 112,
 	USER_LINUX_GETGROUPS = 115,
+	USER_LINUX_SETGROUPS = 116,
+	USER_LINUX_SETRESUID = 117,
+	USER_LINUX_SETRESGID = 119,
 	USER_LINUX_GETPGID = 121,
 	USER_LINUX_FCNTL = 72,
 	USER_LINUX_WAIT4 = 61,
@@ -1058,6 +1068,10 @@ static const char *linux_syscall_name(u64 number)
 		return "syslog";
 	case LINUX_SYSCALL_GETGID:
 		return "getgid";
+	case LINUX_SYSCALL_SETUID:
+		return "setuid";
+	case LINUX_SYSCALL_SETGID:
+		return "setgid";
 	case LINUX_SYSCALL_GETEUID:
 		return "geteuid";
 	case LINUX_SYSCALL_GETEGID:
@@ -1068,6 +1082,12 @@ static const char *linux_syscall_name(u64 number)
 		return "getpgrp";
 	case LINUX_SYSCALL_GETGROUPS:
 		return "getgroups";
+	case LINUX_SYSCALL_SETGROUPS:
+		return "setgroups";
+	case LINUX_SYSCALL_SETRESUID:
+		return "setresuid";
+	case LINUX_SYSCALL_SETRESGID:
+		return "setresgid";
 	case LINUX_SYSCALL_GETPGID:
 		return "getpgid";
 	case LINUX_SYSCALL_SETPGID:
@@ -1833,6 +1853,48 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			}
 		}
 		return reply.words[0];
+	case LINUX_SYSCALL_SETUID:
+	case LINUX_SYSCALL_SETGID:
+	case LINUX_SYSCALL_SETRESUID:
+	case LINUX_SYSCALL_SETRESGID:
+		request.type = number == LINUX_SYSCALL_SETUID ?
+			       USER_LINUX_SETUID :
+			       number == LINUX_SYSCALL_SETGID ?
+			       USER_LINUX_SETGID :
+			       number == LINUX_SYSCALL_SETRESUID ?
+			       USER_LINUX_SETRESUID : USER_LINUX_SETRESGID;
+		request.words[0] = arg0;
+		request.words[1] = arg1;
+		request.words[2] = arg2;
+		request.words[3] = 0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
+	case LINUX_SYSCALL_SETGROUPS: {
+		u32 groups[2] = { 0, 0 };
+
+		if (arg0 > 2) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (arg0 != 0 &&
+		    vm_read_user(task_vm_space(task), arg1, groups,
+				 arg0 * sizeof(groups[0])) != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+
+		request.type = USER_LINUX_SETGROUPS;
+		request.words[0] = arg0;
+		request.words[1] = groups[0];
+		request.words[2] = groups[1];
+		request.words[3] = 0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
+	}
 	case LINUX_SYSCALL_GETPGID:
 	case LINUX_SYSCALL_SETPGID:
 		request.type = number == LINUX_SYSCALL_GETPGID ?

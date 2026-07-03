@@ -329,6 +329,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux return checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux credential checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux fork credential checks ok" $(BUILD_DIR)/serial.log
+	grep -F "linux credential mutation checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: process" $(BUILD_DIR)/serial.log
 	grep -F "linux brk checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: openat" $(BUILD_DIR)/serial.log

@@ -325,6 +325,76 @@ fork_child:
 	cmpq $-9, %rax
 	jne fail
 
+	movl $2, group_buffer(%rip)
+	movl $3, group_buffer + 4(%rip)
+	movq $116, %rax
+	movq $2, %rdi
+	leaq group_buffer(%rip), %rsi
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $115, %rax
+	movq $2, %rdi
+	leaq group_buffer(%rip), %rsi
+	syscall
+	cmpq $2, %rax
+	jne fail
+	cmpl $2, group_buffer(%rip)
+	jne fail
+	cmpl $3, group_buffer + 4(%rip)
+	jne fail
+
+	movq $119, %rax
+	movq $5, %rdi
+	movq $6, %rsi
+	movq $7, %rdx
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $104, %rax
+	syscall
+	cmpq $5, %rax
+	jne fail
+	movq $108, %rax
+	syscall
+	cmpq $6, %rax
+	jne fail
+
+	movq $117, %rax
+	movq $8, %rdi
+	movq $9, %rsi
+	movq $10, %rdx
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $102, %rax
+	syscall
+	cmpq $8, %rax
+	jne fail
+	movq $107, %rax
+	syscall
+	cmpq $9, %rax
+	jne fail
+
+	movq $105, %rax
+	xorq %rdi, %rdi
+	syscall
+	cmpq $-1, %rax
+	jne fail
+	movq $106, %rax
+	xorq %rdi, %rdi
+	syscall
+	cmpq $-1, %rax
+	jne fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq credential_mutation_message(%rip), %rsi
+	movq $credential_mutation_message_end - credential_mutation_message, %rdx
+	syscall
+	cmpq $credential_mutation_message_end - credential_mutation_message, %rax
+	jne fail
+
 	movq $231, %rax
 	xorq %rdi, %rdi
 	syscall
@@ -356,6 +426,9 @@ ok_message_end:
 credential_message:
 	.ascii "linux credential checks ok\n"
 credential_message_end:
+credential_mutation_message:
+	.ascii "linux credential mutation checks ok\n"
+credential_mutation_message_end:
 brk_message:
 	.ascii "linux brk checks ok\n"
 brk_message_end:

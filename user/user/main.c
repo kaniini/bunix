@@ -4,6 +4,7 @@ enum {
 	USER_HANDLE_NAMES = 3,
 	USER_MAX_CREDENTIALS = 32,
 	USER_MAX_GROUPS = 2,
+	USER_ID_KEEP = (u64)-1,
 };
 
 struct user_credential {
@@ -202,6 +203,67 @@ static long credential_getgroups(u64 task, u64 max_groups,
 	return 0;
 }
 
+static int credential_can_mutate(const struct user_credential *credential)
+{
+	return credential != 0 && credential->euid == 0;
+}
+
+static long credential_setresuid(u64 task, u64 uid, u64 euid, u64 suid)
+{
+	struct user_credential *credential = credential_find(task);
+
+	if (!credential_can_mutate(credential)) {
+		return -1;
+	}
+
+	if (uid != USER_ID_KEEP) {
+		credential->uid = uid;
+	}
+	if (euid != USER_ID_KEEP) {
+		credential->euid = euid;
+	}
+	if (suid != USER_ID_KEEP) {
+		credential->suid = suid;
+	}
+	return 0;
+}
+
+static long credential_setresgid(u64 task, u64 gid, u64 egid, u64 sgid)
+{
+	struct user_credential *credential = credential_find(task);
+
+	if (!credential_can_mutate(credential)) {
+		return -1;
+	}
+
+	if (gid != USER_ID_KEEP) {
+		credential->gid = gid;
+	}
+	if (egid != USER_ID_KEEP) {
+		credential->egid = egid;
+	}
+	if (sgid != USER_ID_KEEP) {
+		credential->sgid = sgid;
+	}
+	return 0;
+}
+
+static long credential_setgroups(u64 task, u64 group_count, u64 group0,
+				 u64 group1)
+{
+	struct user_credential *credential = credential_find(task);
+
+	if (!credential_can_mutate(credential) ||
+	    group_count > USER_MAX_GROUPS) {
+		return -1;
+	}
+
+	credential->group_count = group_count;
+	credential->groups[0] = group_count > 0 ? group0 : 0;
+	credential->groups[1] = group_count > 1 ? group1 : 0;
+	return 0;
+}
+
 int main(void)
 {
 	const char online[] = "user: online\n";
@@ -263,6 +325,24 @@ int main(void)
 			reply.words[0] = (u64)credential_getgroups(message.words[0],
 								   message.words[1],
 								   &reply);
+			break;
+		case BUNIX_USER_SETRESUID:
+			reply.words[0] = (u64)credential_setresuid(message.words[0],
+								   message.words[1],
+								   message.words[2],
+								   message.words[3]);
+			break;
+		case BUNIX_USER_SETRESGID:
+			reply.words[0] = (u64)credential_setresgid(message.words[0],
+								   message.words[1],
+								   message.words[2],
+								   message.words[3]);
+			break;
+		case BUNIX_USER_SETGROUPS:
+			reply.words[0] = (u64)credential_setgroups(message.words[0],
+								   message.words[1],
+								   message.words[2],
+								   message.words[3]);
 			break;
 		default:
 			reply.words[0] = (u64)-1;
