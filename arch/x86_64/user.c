@@ -54,6 +54,7 @@ enum {
 	LINUX_SYSCALL_CLOSE = 3,
 	LINUX_SYSCALL_STAT = 4,
 	LINUX_SYSCALL_FSTAT = 5,
+	LINUX_SYSCALL_LSTAT = 6,
 	LINUX_SYSCALL_POLL = 7,
 	LINUX_SYSCALL_MMAP = 9,
 	LINUX_SYSCALL_MPROTECT = 10,
@@ -1038,6 +1039,8 @@ static const char *linux_syscall_name(u64 number)
 		return "stat";
 	case LINUX_SYSCALL_FSTAT:
 		return "fstat";
+	case LINUX_SYSCALL_LSTAT:
+		return "lstat";
 	case LINUX_SYSCALL_POLL:
 		return "poll";
 	case LINUX_SYSCALL_MMAP:
@@ -2092,14 +2095,15 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_STAT:
+	case LINUX_SYSCALL_LSTAT:
 	case LINUX_SYSCALL_NEWFSTATAT: {
 		struct shared_buffer *buffer;
-		const char *path = number == LINUX_SYSCALL_STAT ?
-				    (const char *)arg0 : (const char *)arg1;
-		const u64 dirfd = number == LINUX_SYSCALL_STAT ?
-				  (u64)-100 : arg0;
-		const u64 stat_addr = number == LINUX_SYSCALL_STAT ?
-				      arg1 : arg2;
+		const char *path = number == LINUX_SYSCALL_NEWFSTATAT ?
+				    (const char *)arg1 : (const char *)arg0;
+		const u64 dirfd = number == LINUX_SYSCALL_NEWFSTATAT ?
+				  arg0 : (u64)-100;
+		const u64 stat_addr = number == LINUX_SYSCALL_NEWFSTATAT ?
+				      arg2 : arg1;
 		u64 packed[2] = { 0, 0 };
 		u64 len = 0;
 

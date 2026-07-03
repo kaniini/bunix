@@ -89,15 +89,20 @@ while ! grep -F "uid=0" "$log" >/dev/null 2>&1; do
 done
 
 i=0
-while ! grep -F "/hello.txt" "$log" >/dev/null 2>&1; do
+while ! grep -F "Size: 15" "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
-		echo "busybox stat did not report /hello.txt" >&2
+		echo "busybox stat did not report /hello.txt size" >&2
 		tail -n 120 "$log" >&2 || true
 		exit 1
 	fi
 	sleep 1
 done
+if grep -F "can't stat '/hello.txt'" "$log" >/dev/null 2>&1; then
+	echo "busybox stat failed for /hello.txt" >&2
+	tail -n 120 "$log" >&2 || true
+	exit 1
+fi
 
 i=0
 while ! grep -F "AFTER" "$log" >/dev/null 2>&1; do
