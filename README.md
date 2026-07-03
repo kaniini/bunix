@@ -97,11 +97,10 @@ Idle CPUs mark themselves idle under the run-queue lock and then enter
 `sti; hlt` only after a final locked runnable check. Remote run-queue enqueue
 clears that idle state under the same lock and sends a scheduler IPI when the
 target CPU was sleeping. Normal thread creation uses scheduler-owned automatic
-placement over the least-loaded CPU, while server launch can provide a preferred
-CPU that the scheduler validates. The current boot flow lets init use automatic
-placement and prefers the kernel-hosted VM server, hello, and ping user modules
-on CPU 1, which exercises user entry, syscalls, IPC wakeups, server work, and
-timer preemption across CPUs.
+placement over the least-loaded CPU with round-robin tie breaking. The current
+boot flow lets VM, init, hello, and ping all use automatic placement, which
+exercises user entry, syscalls, IPC wakeups, server work, and scheduling across
+both CPUs.
 
 Each task owns a `vm_space` granted by the VM server facade. On x86_64, a VM
 space contains a real PML4, PDPT, and page directory, currently identity-mapping
@@ -139,8 +138,8 @@ started VM plus init, init received its boot capabilities, and init launched the
 hello and ping C servers with explicit inherited handles. Init sends ping a
 synchronous user IPC call through the returned service-port handle, ping
 receives it through blocking `recv`, sends a VM event through its inherited VM
-capability, exercises local-APIC timer preemption on CPU 1 while the VM server
-handles the event, and replies to init through the granted reply capability.
+capability, exercises automatic CPU placement across both CPUs, and replies to
+init through the granted reply capability.
 
 For an interactive serial console:
 

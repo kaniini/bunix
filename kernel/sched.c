@@ -140,12 +140,8 @@ static u32 sched_cpu_load(struct cpu_sched *cpu)
 	return load;
 }
 
-static u32 sched_select_cpu(u32 preferred_cpu)
+static u32 sched_select_auto_cpu(void)
 {
-	if (preferred_cpu < sched_cpu_count) {
-		return preferred_cpu;
-	}
-
 	const u64 flags = spin_lock_irqsave(&placement_lock);
 	u32 best_cpu = next_auto_cpu % sched_cpu_count;
 	u32 best_load = sched_cpu_load(&cpus[best_cpu]);
@@ -283,14 +279,12 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 
 static struct thread *thread_create_placed(struct task *task, const char *name,
 					   thread_entry_t entry, void *arg,
-					   u32 preferred_cpu,
+					   u32 cpu_id,
 					   const char *placement_policy)
 {
 	if (task == 0 || entry == 0) {
 		return 0;
 	}
-
-	const u32 cpu_id = sched_select_cpu(preferred_cpu);
 
 	const u64 flags = spin_lock_irqsave(&thread_table_lock);
 
@@ -326,16 +320,8 @@ static struct thread *thread_create_placed(struct task *task, const char *name,
 struct thread *thread_create(struct task *task, const char *name,
 			     thread_entry_t entry, void *arg)
 {
-	return thread_create_placed(task, name, entry, arg, SCHED_CPU_ANY, "auto");
-}
-
-struct thread *thread_create_preferred_cpu(struct task *task, const char *name,
-					   thread_entry_t entry, void *arg,
-					   u32 preferred_cpu)
-{
-	return thread_create_placed(task, name, entry, arg, preferred_cpu,
-				    preferred_cpu == SCHED_CPU_ANY ? "auto" :
-				    "preferred");
+	return thread_create_placed(task, name, entry, arg,
+				    sched_select_auto_cpu(), "auto");
 }
 
 struct thread *thread_create_on_cpu(struct task *task, const char *name,

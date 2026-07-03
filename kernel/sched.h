@@ -5,8 +5,6 @@
 
 typedef void (*thread_entry_t)(void *arg);
 
-#define SCHED_CPU_ANY 0xffffffffu
-
 enum thread_state {
 	THREAD_EMPTY = 0,
 	THREAD_READY,
@@ -26,9 +24,6 @@ void sched_secondary_start(u32 cpu_id) __attribute__((noreturn));
 struct task *task_create(const char *name, struct vm_space *vm_space);
 struct thread *thread_create(struct task *task, const char *name,
 			     thread_entry_t entry, void *arg);
-struct thread *thread_create_preferred_cpu(struct task *task, const char *name,
-					   thread_entry_t entry, void *arg,
-					   u32 preferred_cpu);
 struct thread *thread_create_on_cpu(struct task *task, const char *name,
 				    thread_entry_t entry, void *arg,
 				    u32 cpu_id);
