@@ -78,7 +78,9 @@ enum {
 	LINUX_MMAP_BASE = 0x10000000,
 	LINUX_MMAP_LIMIT = 0x20000000,
 	LINUX_MAX_MMAP_SIZE = 0x1000000,
+	LINUX_PROT_READ = 0x1,
 	LINUX_PROT_WRITE = 0x2,
+	LINUX_PROT_EXEC = 0x4,
 	LINUX_MAP_PRIVATE = 0x2,
 	LINUX_MAP_FIXED = 0x10,
 	LINUX_MAP_ANONYMOUS = 0x20,
@@ -116,6 +118,7 @@ enum {
 	ELF_TYPE_EXEC = 2,
 	ELF_MACHINE_X86_64 = 62,
 	ELF_PH_LOAD = 1,
+	ELF_PF_X = 1,
 	ELF_PF_W = 2,
 	ELF_EHDR_SIZE = 64,
 	ELF_PHDR_SIZE = 56,
@@ -242,6 +245,38 @@ static u64 align_down(u64 value, u64 align)
 static u64 align_up(u64 value, u64 align)
 {
 	return align_down(value + align - 1, align);
+}
+
+static u32 linux_prot_to_task(u64 prot)
+{
+	u32 task_prot = 0;
+
+	if ((prot & LINUX_PROT_READ) != 0) {
+		task_prot |= TASK_VM_PROT_READ;
+	}
+	if ((prot & LINUX_PROT_WRITE) != 0) {
+		task_prot |= TASK_VM_PROT_WRITE;
+	}
+	if ((prot & LINUX_PROT_EXEC) != 0) {
+		task_prot |= TASK_VM_PROT_EXEC;
+	}
+	return task_prot;
+}
+
+static u32 linux_map_flags_to_task(u64 flags)
+{
+	u32 task_flags = 0;
+
+	if ((flags & LINUX_MAP_PRIVATE) != 0) {
+		task_flags |= TASK_VM_MAP_PRIVATE;
+	}
+	if ((flags & LINUX_MAP_ANONYMOUS) != 0) {
+		task_flags |= TASK_VM_MAP_ANONYMOUS;
+	}
+	if ((flags & LINUX_MAP_FIXED) != 0) {
+		task_flags |= TASK_VM_MAP_FIXED;
+	}
+	return task_flags;
 }
 
 static u64 min_u64(u64 left, u64 right)
@@ -529,6 +564,14 @@ static int linux_exec_unmap_current(struct task *task)
 	return 0;
 }
 
+static int linux_unmap_task_range(struct task *task, u64 base, u64 len)
+{
+	if (vm_unmap_user_range(task_vm_space(task), base, len) != 0) {
+		return -1;
+	}
+	return task_remove_vm_region(task, base, len);
+}
+
 static int linux_exec_map_segment(struct task *task, const u8 *image,
 				  const struct elf64_phdr *phdr)
 {
@@ -559,8 +602,14 @@ static int linux_exec_map_segment(struct task *task, const u8 *image,
 		}
 	}
 
-	if (task_add_vm_region(task, page_start, page_end - page_start,
-			       writable, TASK_VM_REGION_ELF) != 0) {
+	const u32 prot = TASK_VM_PROT_READ |
+			 (writable != 0 ? TASK_VM_PROT_WRITE : 0) |
+			 ((phdr->flags & ELF_PF_X) != 0 ?
+			  TASK_VM_PROT_EXEC : 0);
+
+	if (task_add_vm_mapping(task, page_start, page_end - page_start,
+				prot, TASK_VM_MAP_PRIVATE, TASK_VM_REGION_ELF,
+				TASK_VM_OBJECT_FILE, 0, phdr->offset) != 0) {
 		return -1;
 	}
 
@@ -661,9 +710,12 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 
 	if (vm_alloc_user_range(task_vm_space(task), stack_base,
 				LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE, 1) != 0 ||
-	    task_add_vm_region(task, stack_base,
-			       LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE, 1,
-			       TASK_VM_REGION_STACK) != 0 ||
+	    task_add_vm_mapping(task, stack_base,
+				LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE,
+				TASK_VM_PROT_READ | TASK_VM_PROT_WRITE,
+				TASK_VM_MAP_PRIVATE | TASK_VM_MAP_ANONYMOUS,
+				TASK_VM_REGION_STACK, TASK_VM_OBJECT_ANON,
+				0, 0) != 0 ||
 		    vm_write_user(task_vm_space(task), LINUX_EXEC_STACK_TOP -
 				  VM_PAGE_SIZE, stack_page, VM_PAGE_SIZE) != 0) {
 		slab_free(image);
@@ -735,7 +787,9 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_MMAP: {
 		const u64 prot = arg2;
 		const u64 flags = arg3;
-		const u32 writable = (prot & LINUX_PROT_WRITE) != 0;
+		const u32 task_prot = linux_prot_to_task(prot);
+		const u32 task_flags = linux_map_flags_to_task(flags);
+		const u32 writable = (task_prot & TASK_VM_PROT_WRITE) != 0;
 		u64 base = arg0;
 		u64 len = arg1;
 
@@ -760,12 +814,24 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_ENOMEM;
 		}
 
+		if ((flags & LINUX_MAP_FIXED) != 0 &&
+		    !task_vm_range_is_free(task, base, len) &&
+		    linux_unmap_task_range(task, base, len) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if ((flags & LINUX_MAP_FIXED) == 0 &&
+		    !task_vm_range_is_free(task, base, len)) {
+			return (u64)-LINUX_ENOMEM;
+		}
+
 		if (vm_alloc_user_range(task_vm_space(task), base, len,
 					writable) != 0) {
 			return (u64)-LINUX_ENOMEM;
 		}
-		if (task_add_vm_region(task, base, len, writable,
-				       TASK_VM_REGION_MMAP) != 0) {
+		if (task_add_vm_mapping(task, base, len, task_prot,
+					task_flags, TASK_VM_REGION_MMAP,
+					TASK_VM_OBJECT_ANON, 0, 0) != 0) {
+			(void)vm_unmap_user_range(task_vm_space(task), base, len);
 			return (u64)-LINUX_ENOMEM;
 		}
 
@@ -788,10 +854,7 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		}
 
 		len = align_up(len, VM_PAGE_SIZE);
-		if (vm_unmap_user_range(task_vm_space(task), base, len) != 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		if (task_remove_vm_region(task, base, len) != 0) {
+		if (linux_unmap_task_range(task, base, len) != 0) {
 			return (u64)-LINUX_EINVAL;
 		}
 		console_printf("linux: munmap task=%u addr=%p len=%u\n",
@@ -826,10 +889,20 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			if (new_page > old_page &&
 			    (vm_alloc_user_range(task_vm_space(task), old_page,
 						 new_page - old_page, 1) != 0 ||
-			     task_add_or_extend_vm_region(task, old_page,
-							  new_page - old_page,
-							  1,
-							  TASK_VM_REGION_BRK) != 0)) {
+			     task_add_or_extend_vm_mapping(task, old_page,
+							   new_page - old_page,
+							   TASK_VM_PROT_READ |
+							   TASK_VM_PROT_WRITE,
+							   TASK_VM_MAP_PRIVATE |
+							   TASK_VM_MAP_ANONYMOUS,
+							   TASK_VM_REGION_BRK,
+							   TASK_VM_OBJECT_ANON,
+							   0, 0) != 0)) {
+				return task_linux_brk(task);
+			}
+			if (new_page < old_page &&
+			    linux_unmap_task_range(task, new_page,
+						   old_page - new_page) != 0) {
 				return task_linux_brk(task);
 			}
 			task_set_linux_brk(task, arg0);

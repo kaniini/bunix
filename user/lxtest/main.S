@@ -62,6 +62,19 @@ _start:
 	syscall
 	cmpq %r14, %rax
 	jne fail
+	movq $12, %rax
+	movq %r13, %rdi
+	syscall
+	cmpq %r13, %rax
+	jne fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq brk_message(%rip), %rsi
+	movq $brk_message_end - brk_message, %rdx
+	syscall
+	cmpq $brk_message_end - brk_message, %rax
+	jne fail
 
 	movq $9, %rax
 	xorq %rdi, %rdi
@@ -80,6 +93,23 @@ _start:
 	jne fail
 	movq $0x65676170206f7774, %rax
 	movq %rax, 4096(%rbx)
+	cmpq %rax, 4096(%rbx)
+	jne fail
+	movq $9, %rax
+	movq %rbx, %rdi
+	movq $4096, %rsi
+	movq $3, %rdx
+	movq $0x32, %r10
+	movq $-1, %r8
+	xorq %r9, %r9
+	syscall
+	cmpq %rbx, %rax
+	jne fail
+	movq $0x6465786966207061, %rax
+	movq %rax, (%rbx)
+	cmpq %rax, (%rbx)
+	jne fail
+	movq $0x65676170206f7774, %rax
 	cmpq %rax, 4096(%rbx)
 	jne fail
 
@@ -121,7 +151,7 @@ _start:
 	jmp 2f
 
 fork_child:
-	movq $0x6b63656863207061, %rax
+	movq $0x6465786966207061, %rax
 	cmpq %rax, (%rbx)
 	jne fail
 	movq $0x65676170206f7774, %rax
@@ -245,6 +275,9 @@ badfd_message_end:
 ok_message:
 	.ascii "linux return checks ok\n"
 ok_message_end:
+brk_message:
+	.ascii "linux brk checks ok\n"
+brk_message_end:
 stat_message:
 	.ascii "linux metadata checks ok\n"
 stat_message_end:

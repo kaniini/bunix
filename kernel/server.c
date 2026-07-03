@@ -600,8 +600,11 @@ struct task *server_task_fork_current(const struct arch_syscall_frame *frame)
 					task_vm_space(parent),
 					region->base, region->len,
 					region->writable) != 0 ||
-		    task_add_vm_region(child, region->base, region->len,
-				       region->writable, region->kind) != 0) {
+		    task_add_vm_mapping(child, region->base, region->len,
+					region->prot, region->flags,
+					region->kind, region->object_type,
+					region->object_id,
+					region->offset) != 0) {
 			return 0;
 		}
 	}

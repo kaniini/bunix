@@ -425,11 +425,13 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux-server: ebadf" $(BUILD_DIR)/serial.log
 	grep -F "linux return checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: process" $(BUILD_DIR)/serial.log
+	grep -F "linux brk checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: openat" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: fstat" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: newfstatat" $(BUILD_DIR)/serial.log
 	grep -F "linux metadata checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux: mmap task=" $(BUILD_DIR)/serial.log
+	grep -F "len=4096 flags=0x32" $(BUILD_DIR)/serial.log
 	grep -F "linux mmap checks ok" $(BUILD_DIR)/serial.log
 	grep -F "kernel: task fork parent=" $(BUILD_DIR)/serial.log
 	grep -F "linux: fork parent=" $(BUILD_DIR)/serial.log

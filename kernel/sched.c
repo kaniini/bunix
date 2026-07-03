@@ -1114,6 +1114,26 @@ static u64 region_end(const struct task_vm_region *region)
 	return region->base + region->len;
 }
 
+static u32 writable_to_prot(u32 writable)
+{
+	return TASK_VM_PROT_READ |
+	       (writable != 0 ? TASK_VM_PROT_WRITE : 0);
+}
+
+static u32 writable_to_flags(u32 kind)
+{
+	return TASK_VM_MAP_PRIVATE |
+	       (kind == TASK_VM_REGION_MMAP ||
+		kind == TASK_VM_REGION_BRK ||
+		kind == TASK_VM_REGION_STACK ? TASK_VM_MAP_ANONYMOUS : 0);
+}
+
+static u32 kind_to_object_type(u32 kind)
+{
+	return kind == TASK_VM_REGION_ELF ? TASK_VM_OBJECT_FILE :
+					    TASK_VM_OBJECT_ANON;
+}
+
 static int regions_overlap(u64 a_base, u64 a_len, u64 b_base, u64 b_len)
 {
 	const u64 a_end = a_base + a_len;
@@ -1154,26 +1174,39 @@ void task_set_linux_mmap_next(struct task *task, u64 next)
 int task_add_vm_region(struct task *task, u64 base, u64 len, u32 writable,
 		       u32 kind)
 {
+	return task_add_vm_mapping(task, base, len, writable_to_prot(writable),
+				   writable_to_flags(kind), kind,
+				   kind_to_object_type(kind), 0, 0);
+}
+
+int task_add_vm_mapping(struct task *task, u64 base, u64 len, u32 prot,
+			u32 map_flags, u32 kind, u32 object_type,
+			u32 object_id, u64 offset)
+{
 	if (task == 0 || len == 0 || base + len < base) {
 		return -1;
 	}
 
-	const u64 flags = spin_lock_irqsave(&task->lock);
+	const u64 irq_flags = spin_lock_irqsave(&task->lock);
 
 	for (u32 i = 0; i < task->vm_region_count; i++) {
 		struct task_vm_region *region = &task->vm_regions[i];
 
 		if (region->kind == kind &&
-		    region->writable == writable &&
+		    region->prot == prot &&
+		    region->flags == map_flags &&
+		    region->object_type == object_type &&
+		    region->object_id == object_id &&
+		    region->offset + region->len == offset &&
 		    region_end(region) == base) {
 			region->len += len;
-			spin_unlock_irqrestore(&task->lock, flags);
+			spin_unlock_irqrestore(&task->lock, irq_flags);
 			return 0;
 		}
 	}
 
 	if (task->vm_region_count >= MAX_TASK_VM_REGIONS) {
-		spin_unlock_irqrestore(&task->lock, flags);
+		spin_unlock_irqrestore(&task->lock, irq_flags);
 		console_printf("sched: vma table full task=%u\n", task->pid);
 		return -1;
 	}
@@ -1182,7 +1215,7 @@ int task_add_vm_region(struct task *task, u64 base, u64 len, u32 writable,
 		const struct task_vm_region *region = &task->vm_regions[i];
 
 		if (regions_overlap(base, len, region->base, region->len)) {
-			spin_unlock_irqrestore(&task->lock, flags);
+			spin_unlock_irqrestore(&task->lock, irq_flags);
 			console_printf("sched: vma overlap task=%u base=%p len=%u\n",
 				       task->pid, (const void *)base, (u32)len);
 			return -1;
@@ -1193,14 +1226,29 @@ int task_add_vm_region(struct task *task, u64 base, u64 len, u32 writable,
 		&task->vm_regions[task->vm_region_count++];
 	region->base = base;
 	region->len = len;
-	region->writable = writable;
+	region->offset = offset;
+	region->writable = (prot & TASK_VM_PROT_WRITE) != 0;
 	region->kind = kind;
-	spin_unlock_irqrestore(&task->lock, flags);
+	region->prot = prot;
+	region->flags = map_flags;
+	region->object_type = object_type;
+	region->object_id = object_id;
+	spin_unlock_irqrestore(&task->lock, irq_flags);
 	return 0;
 }
 
 int task_add_or_extend_vm_region(struct task *task, u64 base, u64 len,
 				 u32 writable, u32 kind)
+{
+	return task_add_or_extend_vm_mapping(task, base, len,
+					     writable_to_prot(writable),
+					     writable_to_flags(kind), kind,
+					     kind_to_object_type(kind), 0, 0);
+}
+
+int task_add_or_extend_vm_mapping(struct task *task, u64 base, u64 len,
+				  u32 prot, u32 map_flags, u32 kind,
+				  u32 object_type, u32 object_id, u64 offset)
 {
 	if (task == 0 || len == 0 || base + len < base) {
 		return -1;
@@ -1213,7 +1261,10 @@ int task_add_or_extend_vm_region(struct task *task, u64 base, u64 len,
 		const u64 end = region_end(region);
 
 		if (region->kind == kind &&
-		    region->writable == writable &&
+		    region->prot == prot &&
+		    region->flags == map_flags &&
+		    region->object_type == object_type &&
+		    region->object_id == object_id &&
 		    region->base <= base &&
 		    base + len >= region->base &&
 		    base <= end) {
@@ -1226,7 +1277,29 @@ int task_add_or_extend_vm_region(struct task *task, u64 base, u64 len,
 	}
 
 	spin_unlock_irqrestore(&task->lock, flags);
-	return task_add_vm_region(task, base, len, writable, kind);
+	return task_add_vm_mapping(task, base, len, prot, map_flags, kind,
+				   object_type, object_id, offset);
+}
+
+int task_vm_range_is_free(struct task *task, u64 base, u64 len)
+{
+	if (task == 0 || len == 0 || base + len < base) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
+	for (u32 i = 0; i < task->vm_region_count; i++) {
+		const struct task_vm_region *region = &task->vm_regions[i];
+
+		if (regions_overlap(base, len, region->base, region->len)) {
+			spin_unlock_irqrestore(&task->lock, flags);
+			return 0;
+		}
+	}
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	return 1;
 }
 
 int task_remove_vm_region(struct task *task, u64 base, u64 len)
