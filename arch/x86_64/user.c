@@ -213,12 +213,15 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		request.cap_object = buffer;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
+			buffer_destroy(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
 		if ((i64)reply.words[0] > 0 &&
 		    buffer_read(buffer, 0, (void *)arg1, reply.words[0]) != 0) {
+			buffer_destroy(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
+		buffer_destroy(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_WRITE: {
@@ -231,6 +234,7 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		buffer = buffer_create(arg2 == 0 ? 1 : arg2);
 		if (buffer == 0 ||
 		    buffer_write(buffer, 0, (const void *)arg1, arg2) != 0) {
+			buffer_destroy(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
 
@@ -244,8 +248,10 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		request.cap_object = buffer;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
+			buffer_destroy(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
+		buffer_destroy(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_GETPID:
@@ -292,12 +298,15 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		request.cap_object = buffer;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
+			buffer_destroy(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
 		if (reply.words[0] == 0 &&
 		    buffer_read(buffer, 0, (void *)arg1, LINUX_STAT_SIZE) != 0) {
+			buffer_destroy(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
+		buffer_destroy(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_CLOSE:
@@ -327,6 +336,7 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		buffer = buffer_create(len);
 		if (buffer == 0 ||
 		    buffer_write(buffer, 0, path, len) != 0) {
+			buffer_destroy(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
 
@@ -340,8 +350,10 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		request.cap_object = buffer;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
+			buffer_destroy(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
+		buffer_destroy(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_NEWFSTATAT: {
@@ -379,12 +391,15 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		request.cap_object = buffer;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
+			buffer_destroy(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
 		if (reply.words[0] == 0 &&
 		    buffer_read(buffer, 0, (void *)arg2, LINUX_STAT_SIZE) != 0) {
+			buffer_destroy(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
+		buffer_destroy(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_EXIT_GROUP:

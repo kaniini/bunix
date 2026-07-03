@@ -66,6 +66,21 @@ struct shared_buffer *buffer_create(u64 size)
 	return 0;
 }
 
+void buffer_destroy(struct shared_buffer *buffer)
+{
+	if (buffer == 0) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&buffer_table_lock);
+
+	buffer->in_use = 0;
+	buffer->id = 0;
+	buffer->size = 0;
+	spin_unlock_irqrestore(&buffer_table_lock, flags);
+	console_printf("buffer: destroy\n");
+}
+
 u64 buffer_id(const struct shared_buffer *buffer)
 {
 	return buffer != 0 ? buffer->id : 0;

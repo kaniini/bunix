@@ -11,6 +11,7 @@ enum {
 	LINUX_MAX_PATH = 32,
 	LINUX_STAT_SIZE = 144,
 	LINUX_MAX_PROCESSES = 16,
+	LINUX_MAX_FDS = 16,
 	LINUX_S_IFCHR = 0020000,
 	LINUX_S_IFREG = 0100000,
 	LINUX_FD_CONSOLE = 1,
@@ -30,9 +31,11 @@ struct linux_process {
 	u64 tid;
 	u64 bunix_task;
 	u64 bunix_thread;
+	u64 exited;
+	u64 exit_status;
+	struct linux_fd fds[LINUX_MAX_FDS];
 };
 
-static struct linux_fd fds[16];
 static struct linux_process processes[LINUX_MAX_PROCESSES];
 static char write_buffer[LINUX_MAX_WRITE];
 static u64 next_pid = 1;
@@ -84,14 +87,30 @@ static void unpack_path(char *path, u64 word0, u64 word1)
 	path[15] = '\0';
 }
 
-static long alloc_fd(u64 kind, u64 handle, u64 size)
+static void linux_process_init_fds(struct linux_process *process)
 {
-	for (u64 fd = 3; fd < sizeof(fds) / sizeof(fds[0]); fd++) {
-		if (fds[fd].kind == 0) {
-			fds[fd].kind = kind;
-			fds[fd].handle = handle;
-			fds[fd].offset = 0;
-			fds[fd].size = size;
+	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
+		process->fds[fd].handle = 0;
+		process->fds[fd].kind = 0;
+		process->fds[fd].offset = 0;
+		process->fds[fd].size = 0;
+	}
+
+	process->fds[1].handle = BUNIX_HANDLE_CONSOLE;
+	process->fds[1].kind = LINUX_FD_CONSOLE;
+	process->fds[2].handle = BUNIX_HANDLE_CONSOLE;
+	process->fds[2].kind = LINUX_FD_CONSOLE;
+}
+
+static long alloc_fd(struct linux_process *process, u64 kind, u64 handle,
+		     u64 size)
+{
+	for (u64 fd = 3; fd < LINUX_MAX_FDS; fd++) {
+		if (process->fds[fd].kind == 0) {
+			process->fds[fd].kind = kind;
+			process->fds[fd].handle = handle;
+			process->fds[fd].offset = 0;
+			process->fds[fd].size = size;
 			return (long)fd;
 		}
 	}
@@ -129,6 +148,9 @@ static struct linux_process *linux_process_for(const struct bunix_msg *message)
 			processes[i].tid = pid;
 			processes[i].bunix_task = message->sender;
 			processes[i].bunix_thread = message->words[1];
+			processes[i].exited = 0;
+			processes[i].exit_status = 0;
+			linux_process_init_fds(&processes[i]);
 			return &processes[i];
 		}
 	}
@@ -136,7 +158,8 @@ static struct linux_process *linux_process_for(const struct bunix_msg *message)
 	return 0;
 }
 
-static long linux_openat(u64 dirfd, u64 path_len, u64 flags, u64 path_buffer)
+static long linux_openat(struct linux_process *process, u64 dirfd,
+			 u64 path_len, u64 flags, u64 path_buffer)
 {
 	char path[LINUX_MAX_PATH];
 	struct bunix_msg request = {
@@ -164,7 +187,7 @@ static long linux_openat(u64 dirfd, u64 path_len, u64 flags, u64 path_buffer)
 		return -LINUX_ENOENT;
 	}
 
-	return alloc_fd(LINUX_FD_FILE, reply.words[1], reply.words[2]);
+	return alloc_fd(process, LINUX_FD_FILE, reply.words[1], reply.words[2]);
 }
 
 static long linux_stat_write(u64 stat_buffer, u64 mode, u64 size)
@@ -188,18 +211,18 @@ static long linux_stat_write(u64 stat_buffer, u64 mode, u64 size)
 		0 : -LINUX_EINVAL;
 }
 
-static long linux_fstat(u64 fd, u64 stat_buffer)
+static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 {
-	if (fd >= sizeof(fds) / sizeof(fds[0]) || fds[fd].kind == 0) {
+	if (fd >= LINUX_MAX_FDS || process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
 
-	if (fds[fd].kind == LINUX_FD_CONSOLE) {
+	if (process->fds[fd].kind == LINUX_FD_CONSOLE) {
 		return linux_stat_write(stat_buffer, LINUX_S_IFCHR | 0600, 0);
 	}
 
 	return linux_stat_write(stat_buffer, LINUX_S_IFREG | 0444,
-				fds[fd].size);
+				process->fds[fd].size);
 }
 
 static long linux_newfstatat(u64 dirfd, u64 word0, u64 word1, u64 stat_buffer)
@@ -236,7 +259,8 @@ static long linux_newfstatat(u64 dirfd, u64 word0, u64 word1, u64 stat_buffer)
 	return result;
 }
 
-static long linux_read(u64 fd, u64 len, u64 buffer)
+static long linux_read(struct linux_process *process, u64 fd, u64 len,
+		       u64 buffer)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
@@ -249,24 +273,24 @@ static long linux_read(u64 fd, u64 len, u64 buffer)
 	};
 	struct bunix_msg reply;
 
-	if (fd >= sizeof(fds) / sizeof(fds[0]) ||
-	    fds[fd].kind != LINUX_FD_FILE ||
+	if (fd >= LINUX_MAX_FDS ||
+	    process->fds[fd].kind != LINUX_FD_FILE ||
 	    buffer == 0) {
 		return -LINUX_EBADF;
 	}
 
-	request.words[0] = fds[fd].handle;
-	request.words[1] = fds[fd].offset;
+	request.words[0] = process->fds[fd].handle;
+	request.words[1] = process->fds[fd].offset;
 	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
 	    reply.words[0] != 0) {
 		return -LINUX_EINVAL;
 	}
 
-	fds[fd].offset += reply.words[1];
+	process->fds[fd].offset += reply.words[1];
 	return (long)reply.words[1];
 }
 
-static long linux_close(u64 fd)
+static long linux_close(struct linux_process *process, u64 fd)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
@@ -279,24 +303,24 @@ static long linux_close(u64 fd)
 	};
 	struct bunix_msg reply;
 
-	if (fd >= sizeof(fds) / sizeof(fds[0]) ||
-	    fds[fd].kind == 0 ||
+	if (fd >= LINUX_MAX_FDS ||
+	    process->fds[fd].kind == 0 ||
 	    fd < 3) {
 		return -LINUX_EBADF;
 	}
 
-	if (fds[fd].kind == LINUX_FD_FILE) {
-		request.words[0] = fds[fd].handle;
+	if (process->fds[fd].kind == LINUX_FD_FILE) {
+		request.words[0] = process->fds[fd].handle;
 		if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
 		    reply.words[0] != 0) {
 			return -LINUX_EINVAL;
 		}
 	}
 
-	fds[fd].kind = 0;
-	fds[fd].handle = 0;
-	fds[fd].offset = 0;
-	fds[fd].size = 0;
+	process->fds[fd].kind = 0;
+	process->fds[fd].handle = 0;
+	process->fds[fd].offset = 0;
+	process->fds[fd].size = 0;
 	return 0;
 }
 
@@ -310,14 +334,10 @@ int main(void)
 	const char fstat_ok[] = "linux-server: fstat\n";
 	const char newfstatat_ok[] = "linux-server: newfstatat\n";
 	const char process_ok[] = "linux-server: process\n";
+	const char exited_ok[] = "linux-server: exited\n";
 	const char close_ok[] = "linux-server: close\n";
 	const char exit_group[] = "linux-server: exit_group\n";
 	struct bunix_msg message;
-
-	fds[1].handle = BUNIX_HANDLE_CONSOLE;
-	fds[1].kind = LINUX_FD_CONSOLE;
-	fds[2].handle = BUNIX_HANDLE_CONSOLE;
-	fds[2].kind = LINUX_FD_CONSOLE;
 
 	bunix_console_write(online, sizeof(online) - 1);
 	for (;;) {
@@ -355,7 +375,8 @@ int main(void)
 			reply.words[0] = process->tid;
 			break;
 		case BUNIX_LINUX_OPENAT:
-			reply.words[0] = (u64)linux_openat(message.words[0],
+			reply.words[0] = (u64)linux_openat(process,
+							   message.words[0],
 							   message.words[1],
 							   message.words[2],
 							   message.cap);
@@ -367,7 +388,8 @@ int main(void)
 			}
 			break;
 		case BUNIX_LINUX_FSTAT:
-			reply.words[0] = (u64)linux_fstat(message.words[0],
+			reply.words[0] = (u64)linux_fstat(process,
+							  message.words[0],
 							  message.cap);
 			if (reply.words[0] == 0) {
 				bunix_console_write(fstat_ok,
@@ -391,7 +413,8 @@ int main(void)
 			}
 			break;
 		case BUNIX_LINUX_READ:
-			reply.words[0] = (u64)linux_read(message.words[0],
+			reply.words[0] = (u64)linux_read(process,
+							 message.words[0],
 							 message.words[1],
 							 message.cap);
 			if ((long)reply.words[0] >= 0) {
@@ -405,8 +428,8 @@ int main(void)
 			const u64 fd = message.words[0];
 			const u64 len = message.words[1];
 
-			if (fd >= sizeof(fds) / sizeof(fds[0]) ||
-			    fds[fd].kind != LINUX_FD_CONSOLE) {
+			if (fd >= LINUX_MAX_FDS ||
+			    process->fds[fd].kind != LINUX_FD_CONSOLE) {
 				bunix_console_write(bad_fd, sizeof(bad_fd) - 1);
 				reply.words[0] = (u64)-LINUX_EBADF;
 			} else if (message.cap == 0 || len > sizeof(write_buffer) ||
@@ -424,7 +447,8 @@ int main(void)
 					.words = { (u64)write_buffer, len, 0, 0 },
 				};
 
-				bunix_ipc_send(fds[fd].handle, &console_message);
+				bunix_ipc_send(process->fds[fd].handle,
+					       &console_message);
 				bunix_console_write(write_ok, sizeof(write_ok) - 1);
 				reply.words[0] = len;
 			}
@@ -434,13 +458,17 @@ int main(void)
 			break;
 		}
 		case BUNIX_LINUX_CLOSE:
-			reply.words[0] = (u64)linux_close(message.words[0]);
+			reply.words[0] = (u64)linux_close(process,
+							  message.words[0]);
 			if (reply.words[0] == 0) {
 				bunix_console_write(close_ok, sizeof(close_ok) - 1);
 			}
 			break;
 		case BUNIX_LINUX_EXIT_GROUP:
+			process->exited = 1;
+			process->exit_status = message.words[0];
 			bunix_console_write(exit_group, sizeof(exit_group) - 1);
+			bunix_console_write(exited_ok, sizeof(exited_ok) - 1);
 			reply.words[0] = 0;
 			break;
 		default:

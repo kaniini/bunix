@@ -219,6 +219,7 @@ int main(void)
 	struct bunix_msg proc_reply;
 	const char first_done[] = "init: first process exited\n";
 	const char linux_spawned[] = "init: linux process spawned\n";
+	const char linux_spawned_again[] = "init: second linux process spawned\n";
 
 	pack_path(&proc_request.words[0], "/bin/first");
 	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
@@ -260,6 +261,15 @@ int main(void)
 		return 1;
 	}
 	bunix_console_write(linux_spawned, sizeof(linux_spawned) - 1);
+
+	proc_request.type = BUNIX_PROC_SPAWN;
+	pack_path(&proc_request.words[0], "/bin/lxtest");
+	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
+	    proc_reply.words[0] != 0) {
+		return 1;
+	}
+	bunix_console_write(linux_spawned_again,
+			    sizeof(linux_spawned_again) - 1);
 
 	return 0;
 }

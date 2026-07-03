@@ -27,6 +27,7 @@ enum {
 	EXEC_HANDLE_STDERR = EXEC_HANDLE_STDOUT,
 	EXEC_HANDLE_TIME = 3,
 	EXEC_HANDLE_PROC = 4,
+	PROC_MAX_PROCESSES = 16,
 };
 
 struct process {
@@ -77,7 +78,7 @@ struct exec_info {
 	const struct elf64_phdr *phdrs;
 };
 
-static struct process first_process;
+static struct process processes[PROC_MAX_PROCESSES];
 static u64 next_pid = 1;
 static unsigned char segment_buffer[PROC_SEGMENT_MAX];
 static unsigned char init_stack[PROC_INIT_STACK_MAX];
@@ -485,11 +486,34 @@ static void reply_status(u64 reply_handle, u64 pid, u64 status)
 	bunix_ipc_send(reply_handle, &reply);
 }
 
-static long spawn_process(const char *path)
+static struct process *process_find(u64 pid)
+{
+	for (u64 i = 0; i < PROC_MAX_PROCESSES; i++) {
+		if (processes[i].pid == pid) {
+			return &processes[i];
+		}
+	}
+
+	return 0;
+}
+
+static struct process *process_alloc(void)
+{
+	for (u64 i = 0; i < PROC_MAX_PROCESSES; i++) {
+		if (processes[i].pid == 0) {
+			return &processes[i];
+		}
+	}
+
+	return 0;
+}
+
+static long spawn_process(const char *path, u64 *pid)
 {
 	u64 vfs;
+	struct process *process = process_alloc();
 
-	if (first_process.pid != 0 && !first_process.exited) {
+	if (process == 0 || pid == 0) {
 		return -1;
 	}
 
@@ -498,13 +522,15 @@ static long spawn_process(const char *path)
 		return -1;
 	}
 
-	first_process.pid = next_pid++;
-	first_process.status = 0;
-	first_process.exited = 0;
-	first_process.waiter = 0;
+	process->pid = next_pid++;
+	process->status = 0;
+	process->exited = 0;
+	process->waiter = 0;
+	*pid = process->pid;
 
 	if (exec_path(vfs, path, str_eq(path, "/bin/lxtest") ? "lxtest" : "first") != 0) {
-		first_process.pid = 0;
+		process->pid = 0;
+		*pid = 0;
 		return -1;
 	}
 
@@ -519,6 +545,7 @@ int main(void)
 	const char exec_linux[] = "proc: exec /bin/lxtest\n";
 	const char spawned[] = "proc: spawned pid=1\n";
 	const char spawned_linux[] = "proc: spawned pid=2\n";
+	const char spawned_linux_again[] = "proc: spawned pid=3\n";
 	const char exited[] = "proc: exited pid=1 status=0\n";
 	const char waited[] = "proc: wait pid=1 status=0\n";
 	struct bunix_msg message;
@@ -550,20 +577,26 @@ int main(void)
 		switch (message.type) {
 		case BUNIX_PROC_SPAWN: {
 			char path[16];
+			u64 pid = 0;
 
 			for (u64 i = 0; i < sizeof(path); i++) {
 				path[i] = '\0';
 			}
 			unpack_bytes((unsigned char *)path, &message.words[0],
 				     sizeof(path));
-			if (spawn_process(path) == 0) {
+			if (spawn_process(path, &pid) == 0) {
 				reply.words[0] = 0;
-				reply.words[1] = first_process.pid;
+				reply.words[1] = pid;
 				if (str_eq(path, "/bin/lxtest")) {
 					bunix_console_write(exec_linux,
 							    sizeof(exec_linux) - 1);
-					bunix_console_write(spawned_linux,
-							    sizeof(spawned_linux) - 1);
+					if (pid == 2) {
+						bunix_console_write(spawned_linux,
+								    sizeof(spawned_linux) - 1);
+					} else if (pid == 3) {
+						bunix_console_write(spawned_linux_again,
+								    sizeof(spawned_linux_again) - 1);
+					}
 				} else {
 					bunix_console_write(exec, sizeof(exec) - 1);
 					bunix_console_write(spawned,
@@ -574,32 +607,37 @@ int main(void)
 			}
 			break;
 		}
-		case BUNIX_PROC_WAIT:
-			if (first_process.pid == 0) {
+		case BUNIX_PROC_WAIT: {
+			struct process *process = process_find(message.words[0]);
+
+			if (process == 0) {
 				reply.words[0] = (u64)-1;
-			} else if (first_process.exited) {
+			} else if (process->exited) {
 				reply.words[0] = 0;
-				reply.words[1] = first_process.pid;
-				reply.words[2] = first_process.status;
+				reply.words[1] = process->pid;
+				reply.words[2] = process->status;
 				bunix_console_write(waited, sizeof(waited) - 1);
 			} else if (message.reply != 0) {
-				first_process.waiter = message.reply;
+				process->waiter = message.reply;
 				should_reply = 0;
 			} else {
 				reply.words[0] = (u64)-1;
 			}
 			break;
-		case BUNIX_PROC_EXIT:
-			if (first_process.pid == message.words[0]) {
-				first_process.status = message.words[1];
-				first_process.exited = 1;
+		}
+		case BUNIX_PROC_EXIT: {
+			struct process *process = process_find(message.words[0]);
+
+			if (process != 0) {
+				process->status = message.words[1];
+				process->exited = 1;
 				reply.words[0] = 0;
 				bunix_console_write(exited, sizeof(exited) - 1);
-				if (first_process.waiter != 0) {
-					reply_status(first_process.waiter,
-						     first_process.pid,
-						     first_process.status);
-					first_process.waiter = 0;
+				if (process->waiter != 0) {
+					reply_status(process->waiter,
+						     process->pid,
+						     process->status);
+					process->waiter = 0;
 					bunix_console_write(waited,
 							    sizeof(waited) - 1);
 				}
@@ -607,6 +645,7 @@ int main(void)
 				reply.words[0] = (u64)-1;
 			}
 			break;
+		}
 		default:
 			reply.words[0] = (u64)-1;
 			break;

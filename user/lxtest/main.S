@@ -32,17 +32,21 @@ _start:
 	xorq %rdx, %rdx
 	syscall
 	cmpq $3, %rax
-	jl fail
+	jne fail
 	movq %rax, %r12
 
 	movq $39, %rax
 	syscall
 	cmpq $1, %rax
+	je 1f
+	cmpq $2, %rax
 	jne fail
+1:
+	movq %rax, %r15
 
 	movq $186, %rax
 	syscall
-	cmpq $1, %rax
+	cmpq %r15, %rax
 	jne fail
 
 	movq $12, %rax

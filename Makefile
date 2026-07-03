@@ -392,6 +392,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "proc: exec /bin/lxtest" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=1" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=2" $(BUILD_DIR)/serial.log
+	grep -F "proc: spawned pid=3" $(BUILD_DIR)/serial.log
 	grep -F "proc: exited pid=1 status=0" $(BUILD_DIR)/serial.log
 	grep -F "proc: wait pid=1 status=0" $(BUILD_DIR)/serial.log
 	grep -F "first: stdout ready" $(BUILD_DIR)/serial.log
@@ -430,6 +431,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "init: fs ready" $(BUILD_DIR)/serial.log
 	grep -F "init: first process exited" $(BUILD_DIR)/serial.log
 	grep -F "init: linux process spawned" $(BUILD_DIR)/serial.log
+	grep -F "init: second linux process spawned" $(BUILD_DIR)/serial.log
 	grep -F "rootfs: module" $(BUILD_DIR)/serial.log
 	grep -F "init: bad cap denied" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server time" $(BUILD_DIR)/serial.log
@@ -452,9 +454,11 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: thread tid=3 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=8 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=11 exited" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=12 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: reap tid=3 task=3 name=init remaining=0" $(BUILD_DIR)/serial.log
 	grep -F "sched: reap tid=8 task=8 name=first remaining=0" $(BUILD_DIR)/serial.log
 	grep -F "sched: reap tid=11 task=11 name=lxtest remaining=0" $(BUILD_DIR)/serial.log
+	grep -F "sched: reap tid=12 task=12 name=lxtest remaining=0" $(BUILD_DIR)/serial.log
 
 check-tools:
 	@command -v $(CC)
