@@ -88,8 +88,12 @@ and the shared kernel structures used by the current server path now have
 spinlock/IRQ-save protection: run queues, task handles, IPC queues/message
 pools, the name registry, PMM, and VM space allocation. QEMU tests boot with
 `-smp 2`, and x86_64 discovers CPUs through the Multiboot2 ACPI RSDP and MADT.
-The second CPU is discovered but not started yet; the next SMP slice is LAPIC
-mapping, AP trampoline startup, per-CPU current-thread state, and IPI wakeups.
+The BSP maps and enables the local APIC, copies a low-memory AP trampoline, and
+starts the second CPU with INIT/SIPI. APs enter 64-bit C code, then the BSP
+releases them into the common scheduler's secondary idle loop after scheduler
+initialization. User/server threads are still effectively BSP-pinned until the
+next SMP slice adds per-CPU user TSS/syscall state, IPI wakeups, and load
+distribution.
 
 Each task owns a `vm_space` granted by the VM server facade. On x86_64, a VM
 space contains a real PML4, PDPT, and page directory, currently identity-mapping

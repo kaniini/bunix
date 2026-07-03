@@ -1,4 +1,5 @@
 #include "console.h"
+#include "spinlock.h"
 #include <arch/io.h>
 #include <stdarg.h>
 
@@ -13,6 +14,7 @@ enum {
 static u16 *const vga = (u16 *)VGA_TEXT_BUFFER;
 static u32 cursor_row;
 static u32 cursor_col;
+static struct spinlock console_lock = SPINLOCK_INIT("console");
 
 static void serial_init(void)
 {
@@ -64,7 +66,7 @@ void console_init(void)
 	}
 }
 
-void console_putc(char c)
+static void console_putc_raw(char c)
 {
 	if (c == '\n') {
 		serial_putc('\r');
@@ -80,45 +82,77 @@ void console_putc(char c)
 	}
 }
 
-void console_write(const char *text)
+static void console_write_raw(const char *text)
 {
 	while (*text != '\0') {
-		console_putc(*text++);
+		console_putc_raw(*text++);
+	}
+}
+
+void console_putc(char c)
+{
+	const u64 flags = spin_lock_irqsave(&console_lock);
+
+	console_putc_raw(c);
+	spin_unlock_irqrestore(&console_lock, flags);
+}
+
+void console_write(const char *text)
+{
+	const u64 flags = spin_lock_irqsave(&console_lock);
+
+	console_write_raw(text);
+	spin_unlock_irqrestore(&console_lock, flags);
+}
+
+static void console_write_hex32_raw(u32 value)
+{
+	static const char digits[] = "0123456789abcdef";
+
+	console_write_raw("0x");
+	for (int shift = 28; shift >= 0; shift -= 4) {
+		console_putc_raw(digits[(value >> shift) & 0x0f]);
 	}
 }
 
 void console_write_hex32(u32 value)
 {
+	const u64 flags = spin_lock_irqsave(&console_lock);
+
+	console_write_hex32_raw(value);
+	spin_unlock_irqrestore(&console_lock, flags);
+}
+
+static void console_write_hex64_raw(u64 value)
+{
 	static const char digits[] = "0123456789abcdef";
 
-	console_write("0x");
-	for (int shift = 28; shift >= 0; shift -= 4) {
-		console_putc(digits[(value >> shift) & 0x0f]);
+	console_write_raw("0x");
+	for (int shift = 60; shift >= 0; shift -= 4) {
+		console_putc_raw(digits[(value >> shift) & 0x0f]);
 	}
 }
 
 void console_write_hex64(u64 value)
 {
-	static const char digits[] = "0123456789abcdef";
+	const u64 flags = spin_lock_irqsave(&console_lock);
 
-	console_write("0x");
-	for (int shift = 60; shift >= 0; shift -= 4) {
-		console_putc(digits[(value >> shift) & 0x0f]);
-	}
+	console_write_hex64_raw(value);
+	spin_unlock_irqrestore(&console_lock, flags);
 }
 
-static void console_write_uint(u64 value, u32 base, int is_signed)
+static void console_write_uint_raw(u64 value, u32 base, int is_signed)
 {
 	char buffer[32];
 	u32 cursor = 0;
 
 	if (is_signed && (i64)value < 0) {
-		console_putc('-');
+		console_putc_raw('-');
 		value = (u64)(-(i64)value);
 	}
 
 	if (value == 0) {
-		console_putc('0');
+		console_putc_raw('0');
 		return;
 	}
 
@@ -129,66 +163,76 @@ static void console_write_uint(u64 value, u32 base, int is_signed)
 	}
 
 	while (cursor > 0) {
-		console_putc(buffer[--cursor]);
+		console_putc_raw(buffer[--cursor]);
 	}
 }
 
-static void console_write_pointer(const void *ptr)
+static void console_write_pointer_raw(const void *ptr)
 {
 	const u64 value = (u64)ptr;
 	static const char digits[] = "0123456789abcdef";
 
-	console_write("0x");
+	console_write_raw("0x");
 	for (int shift = 60; shift >= 0; shift -= 4) {
-		console_putc(digits[(value >> shift) & 0x0f]);
+		console_putc_raw(digits[(value >> shift) & 0x0f]);
 	}
 }
 
-void console_vprintf(const char *fmt, va_list args)
+static void console_vprintf_raw(const char *fmt, va_list args)
 {
 	while (*fmt != '\0') {
 		if (*fmt != '%') {
-			console_putc(*fmt++);
+			console_putc_raw(*fmt++);
 			continue;
 		}
 
 		fmt++;
 		switch (*fmt) {
 		case '\0':
-			console_putc('%');
+			console_putc_raw('%');
 			return;
 		case '%':
-			console_putc('%');
+			console_putc_raw('%');
 			break;
 		case 'c':
-			console_putc((char)va_arg(args, int));
+			console_putc_raw((char)va_arg(args, int));
 			break;
 		case 's': {
 			const char *text = va_arg(args, const char *);
-			console_write(text != 0 ? text : "(null)");
+			console_write_raw(text != 0 ? text : "(null)");
 			break;
 		}
 		case 'd':
 		case 'i':
-			console_write_uint((u64)va_arg(args, int), 10, 1);
+			console_write_uint_raw((u64)va_arg(args, int), 10, 1);
 			break;
 		case 'u':
-			console_write_uint((u64)va_arg(args, unsigned int), 10, 0);
+			console_write_uint_raw((u64)va_arg(args, unsigned int),
+					       10, 0);
 			break;
 		case 'x':
-			console_write_uint((u64)va_arg(args, unsigned int), 16, 0);
+			console_write_uint_raw((u64)va_arg(args, unsigned int),
+					       16, 0);
 			break;
 		case 'p':
-			console_write_pointer(va_arg(args, const void *));
+			console_write_pointer_raw(va_arg(args, const void *));
 			break;
 		default:
-			console_putc('%');
-			console_putc(*fmt);
+			console_putc_raw('%');
+			console_putc_raw(*fmt);
 			break;
 		}
 
 		fmt++;
 	}
+}
+
+void console_vprintf(const char *fmt, va_list args)
+{
+	const u64 flags = spin_lock_irqsave(&console_lock);
+
+	console_vprintf_raw(fmt, args);
+	spin_unlock_irqrestore(&console_lock, flags);
 }
 
 void console_printf(const char *fmt, ...)

@@ -36,6 +36,7 @@ USER_ASFLAGS := -m64 -g -ffreestanding -fno-pic -fno-pie \
 
 KERNEL_SRCS := \
 	arch/$(ARCH)/boot/multiboot2.S \
+	arch/$(ARCH)/ap_trampoline.S \
 	arch/$(ARCH)/interrupts.c \
 	arch/$(ARCH)/smp.c \
 	arch/$(ARCH)/interrupts.S \
@@ -171,6 +172,11 @@ test: $(EFI_BOOT_APP)
 	grep -F "user: gdt/tss/syscall ready" $(BUILD_DIR)/serial.log
 	grep -F "multiboot2: acpi rsdp=" $(BUILD_DIR)/serial.log
 	grep -F "smp: discovered cpus=2" $(BUILD_DIR)/serial.log
+	grep -F "smp: ap online cpu=1" $(BUILD_DIR)/serial.log
+	grep -F "smp: started aps=1" $(BUILD_DIR)/serial.log
+	grep -F "sched: init cpus=2 boot_cpu=0" $(BUILD_DIR)/serial.log
+	grep -F "sched: cpu=1 online" $(BUILD_DIR)/serial.log
+	grep -F "smp: scheduler aps=1" $(BUILD_DIR)/serial.log
 	grep -F "names: init entries=32" $(BUILD_DIR)/serial.log
 	grep -F "names: register name=vm id=1 kind=2" $(BUILD_DIR)/serial.log
 	grep -F "names: register name=console id=2 kind=2" $(BUILD_DIR)/serial.log

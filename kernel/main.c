@@ -36,6 +36,7 @@ void kernel_main(u32 magic, u64 multiboot_info)
 	name_service_init();
 	vm_server_init();
 	sched_init();
+	arch_smp_release_aps();
 	server_start_boot_modules(multiboot_info);
 	sched_enable_preemption();
 	sched_run();

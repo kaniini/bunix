@@ -4,7 +4,10 @@
 #include "types.h"
 
 void arch_smp_init(u64 multiboot_info);
+void arch_smp_release_aps(void);
 u32 arch_smp_cpu_count(void);
+u32 arch_smp_current_cpu_id(void);
 u32 arch_smp_lapic_id(u32 cpu_index);
+u32 arch_smp_started_count(void);
 
 #endif

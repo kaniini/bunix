@@ -27,6 +27,7 @@ struct vm_frame vm_rpc_alloc_frame(void);
 void vm_rpc_free_frame(struct vm_frame frame);
 int vm_map_user_page(struct vm_space *space, u64 vaddr, struct vm_frame frame,
 		     u32 writable);
+int vm_map_kernel_page(u64 vaddr, u64 phys, u32 writable);
 struct vm_frame vm_alloc_user_page(struct vm_space *space, u64 vaddr,
 				   u32 writable);
 u64 vm_rpc_free_frames(void);

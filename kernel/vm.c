@@ -88,6 +88,11 @@ int vm_map_user_page(struct vm_space *space, u64 vaddr, struct vm_frame frame,
 	return arch_vm_map_page(&space->arch, vaddr, frame.addr, writable, 1);
 }
 
+int vm_map_kernel_page(u64 vaddr, u64 phys, u32 writable)
+{
+	return arch_vm_map_page(&kernel_space.arch, vaddr, phys, writable, 0);
+}
+
 struct vm_frame vm_alloc_user_page(struct vm_space *space, u64 vaddr,
 				   u32 writable)
 {

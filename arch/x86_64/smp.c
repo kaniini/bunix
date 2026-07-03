@@ -1,11 +1,34 @@
 #include <arch/smp.h>
+#include <arch/io.h>
 #include "console.h"
 #include "multiboot2.h"
+#include "sched.h"
+#include "timer.h"
+#include "vm.h"
 
 enum {
 	MAX_SMP_CPUS = 8,
+	AP_BOOT_TIMEOUT_TICKS = 100,
+	AP_STACK_SIZE = 16384,
+	AP_TRAMPOLINE_PHYS = 0x7000,
 	ACPI_MADT_SIGNATURE = 0x43495041,
 	MADT_TYPE_LOCAL_APIC = 0,
+	LAPIC_REG_ID = 0x20,
+	LAPIC_REG_EOI = 0xb0,
+	LAPIC_REG_SVR = 0xf0,
+	LAPIC_REG_ICR_LOW = 0x300,
+	LAPIC_REG_ICR_HIGH = 0x310,
+	LAPIC_ENABLE = 1 << 8,
+	LAPIC_ICR_DELIVERY_STATUS = 1 << 12,
+	LAPIC_ICR_INIT = 5 << 8,
+	LAPIC_ICR_STARTUP = 6 << 8,
+	LAPIC_ICR_LEVEL_ASSERT = 1 << 14,
+	LAPIC_ICR_TRIGGER_LEVEL = 1 << 15,
+	MSR_GS_BASE = 0xc0000101,
+};
+
+struct cpu_local {
+	u32 cpu_id;
 };
 
 struct rsdp {
@@ -55,6 +78,19 @@ struct madt_local_apic {
 static u32 cpu_count;
 static u32 lapic_ids[MAX_SMP_CPUS];
 static u32 lapic_mmio_address;
+static u32 lapic_ready;
+static volatile u32 ap_started_count;
+static volatile u32 ap_scheduler_count;
+static volatile u32 release_aps;
+static volatile u32 ap_online[MAX_SMP_CPUS];
+static volatile u32 cpu_local_ready;
+static struct cpu_local cpu_locals[MAX_SMP_CPUS];
+u64 arch_smp_ap_stack_top;
+u32 arch_smp_ap_boot_cpu;
+static u8 ap_stacks[MAX_SMP_CPUS][AP_STACK_SIZE] __attribute__((aligned(16)));
+
+extern u8 arch_smp_ap_trampoline_start[];
+extern u8 arch_smp_ap_trampoline_end[];
 
 static int mem_eq(const char *left, const char *right, u64 len)
 {
@@ -147,6 +183,138 @@ static void parse_madt(const struct madt *madt)
 	}
 }
 
+static volatile u32 *lapic_reg(u32 reg)
+{
+	return (volatile u32 *)((u64)lapic_mmio_address + reg);
+}
+
+static u32 lapic_read(u32 reg)
+{
+	return *lapic_reg(reg);
+}
+
+static u32 cpu_index_from_lapic_id(u32 apic_id)
+{
+	for (u32 i = 0; i < cpu_count; i++) {
+		if (lapic_ids[i] == apic_id) {
+			return i;
+		}
+	}
+
+	return 0;
+}
+
+static void set_current_cpu_id(u32 cpu_id)
+{
+	cpu_locals[cpu_id].cpu_id = cpu_id;
+	arch_wrmsr(MSR_GS_BASE, (u64)&cpu_locals[cpu_id]);
+	cpu_local_ready = 1;
+}
+
+static void lapic_write(u32 reg, u32 value)
+{
+	*lapic_reg(reg) = value;
+	(void)lapic_read(LAPIC_REG_ID);
+}
+
+static void lapic_wait_delivery(void)
+{
+	while ((lapic_read(LAPIC_REG_ICR_LOW) & LAPIC_ICR_DELIVERY_STATUS) != 0) {
+		__asm__ volatile ("pause");
+	}
+}
+
+static void delay_ticks(u64 ticks)
+{
+	const u64 end = timer_ticks() + ticks;
+
+	while (timer_ticks() < end) {
+		__asm__ volatile ("pause");
+	}
+}
+
+static void copy_trampoline(void)
+{
+	u8 *dst = (u8 *)AP_TRAMPOLINE_PHYS;
+	const u8 *src = arch_smp_ap_trampoline_start;
+	const u64 len = (u64)(arch_smp_ap_trampoline_end -
+			      arch_smp_ap_trampoline_start);
+
+	for (u64 i = 0; i < len; i++) {
+		dst[i] = src[i];
+	}
+}
+
+static int lapic_init(void)
+{
+	if (lapic_mmio_address == 0 ||
+	    vm_map_kernel_page(lapic_mmio_address, lapic_mmio_address, 1) != 0) {
+		console_printf("smp: lapic map failed addr=%p\n",
+			       (const void *)(u64)lapic_mmio_address);
+		return -1;
+	}
+
+	lapic_write(LAPIC_REG_SVR, lapic_read(LAPIC_REG_SVR) | LAPIC_ENABLE | 0xff);
+	set_current_cpu_id(cpu_index_from_lapic_id(lapic_read(LAPIC_REG_ID) >> 24));
+	lapic_ready = 1;
+	return 0;
+}
+
+static int start_ap(u32 cpu_index)
+{
+	const u8 vector = AP_TRAMPOLINE_PHYS >> 12;
+	const u32 apic_id = lapic_ids[cpu_index];
+	const u64 deadline = timer_ticks() + AP_BOOT_TIMEOUT_TICKS;
+
+	arch_smp_ap_boot_cpu = cpu_index;
+	arch_smp_ap_stack_top = (u64)(ap_stacks[cpu_index] + AP_STACK_SIZE);
+	ap_online[cpu_index] = 0;
+	__sync_synchronize();
+
+	lapic_write(LAPIC_REG_ICR_HIGH, apic_id << 24);
+	lapic_write(LAPIC_REG_ICR_LOW,
+		    LAPIC_ICR_INIT | LAPIC_ICR_LEVEL_ASSERT |
+		    LAPIC_ICR_TRIGGER_LEVEL);
+	lapic_wait_delivery();
+	delay_ticks(1);
+
+	lapic_write(LAPIC_REG_ICR_HIGH, apic_id << 24);
+	lapic_write(LAPIC_REG_ICR_LOW, LAPIC_ICR_STARTUP | vector);
+	lapic_wait_delivery();
+	delay_ticks(1);
+
+	lapic_write(LAPIC_REG_ICR_HIGH, apic_id << 24);
+	lapic_write(LAPIC_REG_ICR_LOW, LAPIC_ICR_STARTUP | vector);
+	lapic_wait_delivery();
+
+	while (timer_ticks() < deadline) {
+		if (ap_online[cpu_index] != 0) {
+			console_printf("smp: ap online cpu=%u lapic=%u\n",
+				       cpu_index, apic_id);
+			return 0;
+		}
+		__asm__ volatile ("pause");
+	}
+
+	console_printf("smp: ap start timeout cpu=%u lapic=%u\n",
+		       cpu_index, apic_id);
+	return -1;
+}
+
+static void start_aps(void)
+{
+	if (cpu_count < 2 || lapic_init() != 0) {
+		return;
+	}
+
+	copy_trampoline();
+	for (u32 i = 1; i < cpu_count; i++) {
+		(void)start_ap(i);
+	}
+
+	console_printf("smp: started aps=%u\n", ap_started_count);
+}
+
 void arch_smp_init(u64 multiboot_info)
 {
 	const struct rsdp *rsdp = (const struct rsdp *)multiboot2_acpi_rsdp(multiboot_info);
@@ -186,6 +354,7 @@ void arch_smp_init(u64 multiboot_info)
 	console_printf("smp: discovered cpus=%u lapic=%p bsp_apic=%u\n",
 		       cpu_count, (const void *)(u64)lapic_mmio_address,
 		       lapic_ids[0]);
+	start_aps();
 }
 
 u32 arch_smp_cpu_count(void)
@@ -193,7 +362,55 @@ u32 arch_smp_cpu_count(void)
 	return cpu_count;
 }
 
+u32 arch_smp_current_cpu_id(void)
+{
+	u32 cpu_id;
+
+	if (!cpu_local_ready) {
+		return 0;
+	}
+
+	__asm__ volatile ("movl %%gs:0, %0" : "=r"(cpu_id));
+	return cpu_id;
+}
+
 u32 arch_smp_lapic_id(u32 cpu_index)
 {
 	return cpu_index < cpu_count ? lapic_ids[cpu_index] : 0;
+}
+
+u32 arch_smp_started_count(void)
+{
+	return ap_started_count;
+}
+
+void arch_smp_release_aps(void)
+{
+	if (ap_started_count == 0) {
+		return;
+	}
+
+	release_aps = 1;
+	__sync_synchronize();
+
+	const u64 deadline = timer_ticks() + AP_BOOT_TIMEOUT_TICKS;
+	while (timer_ticks() < deadline && ap_scheduler_count < ap_started_count) {
+		__asm__ volatile ("pause");
+	}
+
+	console_printf("smp: scheduler aps=%u\n", ap_scheduler_count);
+}
+
+void arch_smp_ap_entry(u32 cpu_index)
+{
+	set_current_cpu_id(cpu_index);
+	ap_online[cpu_index] = 1;
+	__sync_fetch_and_add(&ap_started_count, 1);
+
+	while (!release_aps) {
+		__asm__ volatile ("pause");
+	}
+
+	__sync_fetch_and_add(&ap_scheduler_count, 1);
+	sched_secondary_start(cpu_index);
 }

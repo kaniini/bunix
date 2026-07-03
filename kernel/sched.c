@@ -3,11 +3,12 @@
 #include "sched.h"
 #include "spinlock.h"
 #include "vm.h"
+#include <arch/smp.h>
 #include <arch/thread.h>
 #include <arch/user.h>
 
 enum {
-	MAX_CPUS = 1,
+	MAX_CPUS = 8,
 	MAX_TASKS = 16,
 	MAX_THREADS = 32,
 	MAX_TASK_HANDLES = 32,
@@ -59,16 +60,16 @@ static struct thread threads[MAX_THREADS];
 static struct task kernel_task;
 static struct cpu_sched cpus[MAX_CPUS];
 static u32 boot_cpu_id;
-static u32 current_cpu_id;
 static u32 next_pid = 1;
 static u32 next_tid = 1;
 static u32 preemption_enabled;
+static u32 sched_cpu_count = 1;
 static struct spinlock task_table_lock = SPINLOCK_INIT("task-table");
 static struct spinlock thread_table_lock = SPINLOCK_INIT("thread-table");
 
 static struct cpu_sched *sched_current_cpu(void)
 {
-	return &cpus[current_cpu_id];
+	return &cpus[arch_smp_current_cpu_id()];
 }
 
 static void runq_push(struct run_queue *runq, struct thread *thread)
@@ -149,8 +150,12 @@ void sched_init(void)
 	kernel_task.name = "kernel";
 	kernel_task.thread_count = 1;
 	kernel_task.vm_space = vm_kernel_space();
+	sched_cpu_count = arch_smp_cpu_count();
+	if (sched_cpu_count > MAX_CPUS) {
+		sched_cpu_count = MAX_CPUS;
+	}
 
-	for (u32 i = 0; i < MAX_CPUS; i++) {
+	for (u32 i = 0; i < sched_cpu_count; i++) {
 		cpus[i].id = i;
 		cpus[i].runq.head = 0;
 		cpus[i].runq.tail = 0;
@@ -167,13 +172,30 @@ void sched_init(void)
 	}
 
 	boot_cpu_id = 0;
-	current_cpu_id = boot_cpu_id;
-	console_printf("sched: init cpus=%u boot_cpu=%u\n", MAX_CPUS, boot_cpu_id);
+	console_printf("sched: init cpus=%u boot_cpu=%u\n", sched_cpu_count,
+		       boot_cpu_id);
 }
 
 u32 sched_current_cpu_id(void)
 {
 	return sched_current_cpu()->id;
+}
+
+void sched_secondary_start(u32 cpu_id)
+{
+	if (cpu_id == 0 || cpu_id >= sched_cpu_count) {
+		console_printf("sched: invalid secondary cpu=%u\n", cpu_id);
+		for (;;) {
+			__asm__ volatile ("cli; hlt");
+		}
+	}
+
+	console_printf("sched: cpu=%u online\n", cpu_id);
+
+	for (;;) {
+		sched_run();
+		__asm__ volatile ("cli; hlt");
+	}
 }
 
 struct task *task_create(const char *name, struct vm_space *vm_space)
