@@ -42,8 +42,10 @@ enum {
 	SYSCALL_TASK_START_AT = -40,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_EXIT_GROUP = 231,
+	LINUX_EBADF = 9,
 	LINUX_EINVAL = 22,
 	LINUX_ENOSYS = 38,
+	LINUX_MAX_SYSCALL_BUFFER = 4096,
 	USER_IPC_WORDS = 4,
 	USER_FOURCC_CONS = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	USER_FOURCC_LINX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
@@ -138,6 +140,7 @@ static void ipc_message_to_user(const struct ipc_message *message,
 static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 {
 	struct ipc_port *linux = ipc_port_find("linux");
+	struct ipc_port *reply_port = task_reply_port(task_current());
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_LINX,
 		.type = (u32)number,
@@ -148,16 +151,24 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		.cap_object = 0,
 		.words = { arg0, arg1, arg2, 0 },
 	};
+	struct ipc_message reply;
 
-	if (linux == 0) {
+	if (linux == 0 || reply_port == 0) {
 		return (u64)-LINUX_ENOSYS;
 	}
+	request.reply_port = reply_port;
 
 	switch (number) {
 	case LINUX_SYSCALL_WRITE: {
-		const char *src = (const char *)arg1;
+		struct shared_buffer *buffer;
 
-		if (src == 0 || arg2 > 16) {
+		if (arg1 == 0 || arg2 > LINUX_MAX_SYSCALL_BUFFER) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		buffer = buffer_create(arg2 == 0 ? 1 : arg2);
+		if (buffer == 0 ||
+		    buffer_write(buffer, 0, (const void *)arg1, arg2) != 0) {
 			return (u64)-LINUX_EINVAL;
 		}
 
@@ -166,21 +177,20 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		request.words[1] = arg2;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		for (u64 i = 0; i < arg2; i++) {
-			const u64 slot = 2 + i / 8;
-			const u64 shift = (i % 8) * 8;
-
-			request.words[slot] |= ((u64)(u8)src[i]) << shift;
-		}
-		if (ipc_send(linux, &request) != 0) {
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_RECV;
+		request.cap_object = buffer;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
 			return (u64)-LINUX_ENOSYS;
 		}
-		return arg2;
+		return reply.words[0];
 	}
 	case LINUX_SYSCALL_EXIT_GROUP:
 		request.type = USER_LINUX_EXIT_GROUP;
 		request.words[0] = arg0;
 		(void)ipc_send(linux, &request);
+		(void)ipc_recv(reply_port, &reply);
 		console_printf("linux: exit_group status=%u\n", (u32)arg0);
 		__asm__ volatile ("sti");
 		thread_exit();

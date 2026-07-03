@@ -408,7 +408,9 @@ test: $(EFI_BOOT_APP)
 	grep -F "first: aux proc=4" $(BUILD_DIR)/serial.log
 	grep -F "first: exit 0" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: online" $(BUILD_DIR)/serial.log
-	grep -F "linux syscall" $(BUILD_DIR)/serial.log
+	grep -F "linux syscall shared buffer" $(BUILD_DIR)/serial.log
+	grep -F "linux-server: ebadf" $(BUILD_DIR)/serial.log
+	grep -F "linux return checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: write" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: exit_group" $(BUILD_DIR)/serial.log
 	grep -F "linux: exit_group status=0" $(BUILD_DIR)/serial.log

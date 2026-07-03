@@ -143,13 +143,16 @@ user authority path.
 
 Linux syscall numbers are kept separate from the native negative Bunix syscall
 space. For the current MVP, nonnegative syscall numbers trap into the kernel
-and are marshalled as `LINX` protocol events to the user-space linux
-personality server. `/bin/lxtest` contains no Bunix headers or crt0; it issues
-raw x86_64 Linux syscall numbers for `write` and `exit_group`. The personality
-server handles the write event using its delegated console capability and logs
-the exit event. This path is intentionally small and asynchronous for now; the
-next Linux slices need a real syscall reply/wait object, fd table ownership in
-the personality server, and shared-buffer transfer for larger user buffers.
+and are marshalled as synchronous `LINX` protocol requests to the user-space
+linux personality server. The kernel attaches user buffers as shared-buffer
+capabilities and blocks the caller on a reply port, then returns the server's
+Linux-style result value. `/bin/lxtest` contains no Bunix headers or crt0; it
+issues raw x86_64 Linux syscall numbers for `write` and `exit_group`, verifies
+the returned byte counts and `-EBADF` for an invalid fd, and only then exits
+successfully. The personality server owns the initial fd table for stdout and
+stderr, handles console-backed writes using its delegated console capability,
+and acknowledges exit events. The next Linux slices need persistent per-process
+state, `openat`/`read`/`close` over VFS, and a real memory API for `brk`/`mmap`.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with
