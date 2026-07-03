@@ -52,7 +52,9 @@ enum {
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
 	LINUX_SYSCALL_CLOSE = 3,
+	LINUX_SYSCALL_STAT = 4,
 	LINUX_SYSCALL_FSTAT = 5,
+	LINUX_SYSCALL_POLL = 7,
 	LINUX_SYSCALL_MMAP = 9,
 	LINUX_SYSCALL_MPROTECT = 10,
 	LINUX_SYSCALL_MUNMAP = 11,
@@ -98,6 +100,8 @@ enum {
 	LINUX_EINVAL = 22,
 	LINUX_ENOSYS = 38,
 	LINUX_ENOTTY = 25,
+	LINUX_POLLIN = 0x0001,
+	LINUX_POLLOUT = 0x0004,
 	LINUX_ARCH_SET_FS = 0x1002,
 	LINUX_FUTEX_WAIT = 0,
 	LINUX_FUTEX_WAKE = 1,
@@ -887,8 +891,12 @@ static const char *linux_syscall_name(u64 number)
 		return "open";
 	case LINUX_SYSCALL_CLOSE:
 		return "close";
+	case LINUX_SYSCALL_STAT:
+		return "stat";
 	case LINUX_SYSCALL_FSTAT:
 		return "fstat";
+	case LINUX_SYSCALL_POLL:
+		return "poll";
 	case LINUX_SYSCALL_MMAP:
 		return "mmap";
 	case LINUX_SYSCALL_MPROTECT:
@@ -984,6 +992,19 @@ static void linux_strace_log(const struct arch_syscall_frame *frame, u64 result)
 		       (const void *)frame->arg0, (const void *)frame->arg1,
 		       (const void *)frame->arg2, (const void *)frame->arg3,
 		       (const void *)result);
+}
+
+static void linux_strace_enter(const struct arch_syscall_frame *frame)
+{
+	const struct task *task = task_current();
+	const u64 number = frame->number;
+
+	console_printf("linux-strace-enter: task=%u name=%s rip=%p %s(%p,%p,%p,%p)\n",
+		       task_id(task), task_name(task),
+		       (const void *)frame->user_rip,
+		       linux_syscall_name(number),
+		       (const void *)frame->arg0, (const void *)frame->arg1,
+		       (const void *)frame->arg2, (const void *)frame->arg3);
 }
 
 static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
@@ -1334,15 +1355,44 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 		return (u64)-LINUX_ENOSYS;
 	}
+	case LINUX_SYSCALL_POLL: {
+		struct {
+			int fd;
+			short events;
+			short revents;
+		} pollfd;
+		u64 ready = 0;
+
+		if (arg0 == 0 || arg1 > 64) {
+			return (u64)-LINUX_EINVAL;
+		}
+		for (u64 i = 0; i < arg1; i++) {
+			const u64 addr = arg0 + i * sizeof(pollfd);
+			short revents = 0;
+
+			if (read_current_user(addr, &pollfd, sizeof(pollfd)) != 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+			if (pollfd.fd >= 0) {
+				revents = pollfd.events &
+					(LINUX_POLLIN | LINUX_POLLOUT);
+			}
+			if (revents != 0) {
+				ready++;
+			}
+			if (write_current_user(addr + 6, &revents,
+					       sizeof(revents)) != 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+		}
+		return ready;
+	}
 	case LINUX_SYSCALL_WRITEV: {
 		struct {
 			u64 base;
 			u64 len;
 		} iov;
 		u64 total = 0;
-		u64 done = 0;
-		struct shared_buffer *buffer;
-		u64 flags;
 
 		if (linux == 0 || reply_port == 0 || arg1 == 0 || arg2 > 16) {
 			return (u64)-LINUX_EINVAL;
@@ -1352,54 +1402,32 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 					      sizeof(iov)) != 0) {
 				return (u64)-LINUX_EINVAL;
 			}
-			if (iov.len > LINUX_MAX_SYSCALL_BUFFER - total ||
-			    (iov.base == 0 && iov.len != 0)) {
+			if (iov.base == 0 && iov.len != 0) {
 				return (u64)-LINUX_EINVAL;
 			}
-			total += iov.len;
-		}
+			for (u64 offset = 0; offset < iov.len;) {
+				const u64 chunk =
+					min_u64(iov.len - offset,
+						LINUX_MAX_SYSCALL_BUFFER);
+				const u64 wrote =
+					linux_write_one(linux, reply_port, arg0,
+							iov.base + offset,
+							chunk);
 
-		buffer = buffer_create(total == 0 ? 1 : total);
-		if (buffer == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-
-		flags = spin_lock_irqsave(&syscall_copy_lock);
-		for (u64 i = 0; i < arg2; i++) {
-			if (read_current_user(arg1 + i * sizeof(iov), &iov,
-					      sizeof(iov)) != 0 ||
-			    (iov.len != 0 &&
-			     read_current_user(iov.base,
-					       syscall_copy_buffer + done,
-					       iov.len) != 0)) {
-				spin_unlock_irqrestore(&syscall_copy_lock, flags);
-				buffer_release(buffer);
-				return (u64)-LINUX_EINVAL;
+				if ((i64)wrote < 0) {
+					return total != 0 ? total : wrote;
+				}
+				if (wrote == 0) {
+					return total;
+				}
+				total += wrote;
+				offset += wrote;
+				if (wrote != chunk) {
+					return total;
+				}
 			}
-			done += iov.len;
 		}
-		if (buffer_write(buffer, 0, syscall_copy_buffer, total) != 0) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
-		}
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
-
-		request.type = USER_LINUX_WRITE;
-		request.words[0] = arg0;
-		request.words[1] = total;
-		request.words[2] = 0;
-		request.words[3] = 0;
-		request.cap_type = IPC_CAP_BUFFER;
-		request.cap_rights = TASK_RIGHT_RECV;
-		request.cap_object = buffer;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_ENOSYS;
-		}
-		buffer_release(buffer);
-		return reply.words[0];
+		return total;
 	}
 	case LINUX_SYSCALL_EXIT:
 		return linux_exit_current(arg0);
@@ -1601,13 +1629,19 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		buffer_release(buffer);
 		return reply.words[0];
 	}
+	case LINUX_SYSCALL_STAT:
 	case LINUX_SYSCALL_NEWFSTATAT: {
 		struct shared_buffer *buffer;
-		const char *path = (const char *)arg1;
+		const char *path = number == LINUX_SYSCALL_STAT ?
+				    (const char *)arg0 : (const char *)arg1;
+		const u64 dirfd = number == LINUX_SYSCALL_STAT ?
+				  (u64)-100 : arg0;
+		const u64 stat_addr = number == LINUX_SYSCALL_STAT ?
+				      arg1 : arg2;
 		u64 packed[2] = { 0, 0 };
 		u64 len = 0;
 
-		if (path == 0 || arg2 == 0) {
+		if (path == 0 || stat_addr == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
 		while (len < sizeof(packed) && path[len] != '\0') {
@@ -1627,7 +1661,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 
 		request.type = USER_LINUX_NEWFSTATAT;
-		request.words[0] = arg0;
+		request.words[0] = dirfd;
 		request.words[1] = LINUX_STAT_SIZE;
 		request.words[2] = packed[0];
 		request.words[3] = packed[1];
@@ -1640,7 +1674,8 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_ENOSYS;
 		}
 		if (reply.words[0] == 0 &&
-		    buffer_read(buffer, 0, (void *)arg2, LINUX_STAT_SIZE) != 0) {
+		    buffer_read(buffer, 0, (void *)stat_addr,
+				LINUX_STAT_SIZE) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
@@ -1660,8 +1695,10 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 
 static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 {
-	const u64 result = linux_syscall_handle(frame);
+	u64 result;
 
+	linux_strace_enter(frame);
+	result = linux_syscall_handle(frame);
 	linux_strace_log(frame, result);
 	return result;
 }

@@ -670,7 +670,6 @@ int main(void)
 	const char online[] = "linux-server: online\n";
 	const char bad_fd[] = "linux-server: ebadf\n";
 	const char open_ok[] = "linux-server: openat\n";
-	const char read_ok[] = "linux-server: read\n";
 	const char fstat_ok[] = "linux-server: fstat\n";
 	const char newfstatat_ok[] = "linux-server: newfstatat\n";
 	const char process_ok[] = "linux-server: process\n";
@@ -816,9 +815,6 @@ int main(void)
 							 message.words[0],
 							 message.words[1],
 							 message.cap);
-			if ((long)reply.words[0] >= 0) {
-				bunix_console_write(read_ok, sizeof(read_ok) - 1);
-			}
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

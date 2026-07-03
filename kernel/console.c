@@ -1,4 +1,5 @@
 #include "console.h"
+#include "sched.h"
 #include "spinlock.h"
 #include <arch/io.h>
 #include <stdarg.h>
@@ -144,6 +145,7 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "linux: munmap") ||
 	    str_starts_with(fmt, "linux: execve") ||
 	    str_starts_with(fmt, "linux: fork") ||
+	    str_starts_with(fmt, "linux-strace") ||
 	    str_starts_with(fmt, "multiboot2: module") ||
 	    str_starts_with(fmt, "names: lookup") ||
 	    str_starts_with(fmt, "names: register") ||
@@ -186,11 +188,25 @@ static void serial_putc(char c)
 	arch_outb(COM1, (u8)c);
 }
 
+static int serial_try_getc(char *out)
+{
+	if ((arch_inb(COM1 + 5) & 0x01) == 0) {
+		return 0;
+	}
+
+	*out = (char)arch_inb(COM1);
+	return 1;
+}
+
 static char serial_getc(void)
 {
-	while ((arch_inb(COM1 + 5) & 0x01) == 0) {
+	char c;
+
+	while (!serial_try_getc(&c)) {
+		thread_yield();
 	}
-	return (char)arch_inb(COM1);
+
+	return c;
 }
 
 static void vga_newline(void)
@@ -323,25 +339,15 @@ u64 console_read_line(char *buffer, u64 len)
 
 		if (c == '\b' || c == 0x7f) {
 			if (used != 0) {
-				const u64 flags = spin_lock_irqsave(&console_lock);
-
 				used--;
-				console_putc_raw('\b');
-				spin_unlock_irqrestore(&console_lock, flags);
 			}
 			continue;
 		}
 
 		if (c == '\n') {
-			const u64 flags = spin_lock_irqsave(&console_lock);
-
-			buffer[used++] = '\n';
-			console_putc_raw('\n');
-			spin_unlock_irqrestore(&console_lock, flags);
-			return used;
-		}
-
-		if (used + 1 >= len) {
+			if (used < len) {
+				buffer[used++] = '\n';
+			}
 			return used;
 		}
 
@@ -350,10 +356,9 @@ u64 console_read_line(char *buffer, u64 len)
 		}
 
 		buffer[used++] = c;
-		const u64 flags = spin_lock_irqsave(&console_lock);
-
-		console_putc_raw(c);
-		spin_unlock_irqrestore(&console_lock, flags);
+		if (used == len) {
+			return used;
+		}
 	}
 }
 
