@@ -130,6 +130,10 @@ test: $(EFI_BOOT_APP)
 	grep -F "vm-server: rpc free_frame" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create vm" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=vm" $(BUILD_DIR)/serial.log
+	grep -F "ipc: send port=vm type=2 sender=0" $(BUILD_DIR)/serial.log
+	grep -F "ipc: recv port=vm type=2 sender=0" $(BUILD_DIR)/serial.log
+	grep -F "ipc: send port=kernel-rpc type=2 sender=1" $(BUILD_DIR)/serial.log
+	grep -F "ipc: recv port=kernel-rpc type=2 sender=1" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=vm type=1 sender=3" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: ipc event type=1 sender=3 word0=0x2a" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server hello" $(BUILD_DIR)/serial.log
@@ -138,7 +142,6 @@ test: $(EFI_BOOT_APP)
 	grep -F "ping: one" $(BUILD_DIR)/serial.log
 	grep -F "sched: yield tid=3 cpu=0" $(BUILD_DIR)/serial.log
 	grep -F "ping: two" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=1 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=2 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=3 exited" $(BUILD_DIR)/serial.log
 

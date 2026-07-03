@@ -76,7 +76,13 @@ static void start_boot_module(const struct multiboot2_module *module, void *ctx)
 		start->image_start = module->start;
 		start->image_end = module->end;
 
-		struct vm_space *space = vm_server_create_space(boot_servers[i].name);
+		struct vm_space *space;
+
+		if (str_eq(boot_servers[i].name, "vm")) {
+			space = vm_server_bootstrap_space(boot_servers[i].name);
+		} else {
+			space = vm_server_rpc_create_space(boot_servers[i].name);
+		}
 		if (space == 0) {
 			return;
 		}

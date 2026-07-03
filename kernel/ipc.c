@@ -24,6 +24,7 @@ struct ipc_port {
 
 static struct ipc_port ports[MAX_PORTS];
 static struct ipc_message_node messages[MAX_MESSAGES];
+static struct ipc_port *kernel_reply_port;
 
 static int str_eq(const char *left, const char *right)
 {
@@ -73,6 +74,7 @@ void ipc_init(void)
 	}
 
 	console_printf("ipc: init ports=%u messages=%u\n", MAX_PORTS, MAX_MESSAGES);
+	kernel_reply_port = ipc_port_create("kernel-rpc");
 }
 
 struct ipc_port *ipc_port_create(const char *name)
@@ -164,4 +166,24 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 	console_printf("ipc: recv port=%s type=%u sender=%u queued=%u\n",
 		       port->name, message->type, message->sender, port->queued);
 	return 0;
+}
+
+int ipc_call_kernel(struct ipc_port *port, const struct ipc_message *request,
+		    struct ipc_message *reply)
+{
+	struct ipc_message call;
+
+	if (kernel_reply_port == 0 || port == 0 || request == 0 || reply == 0) {
+		return -1;
+	}
+
+	call = *request;
+	call.reply_port = kernel_reply_port;
+
+	if (ipc_send(port, &call) != 0) {
+		return -1;
+	}
+
+	sched_run();
+	return ipc_recv(kernel_reply_port, reply);
 }

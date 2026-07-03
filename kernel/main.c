@@ -5,6 +5,7 @@
 #include "server.h"
 #include "types.h"
 #include "vm.h"
+#include "../servers/vm/vm_server.h"
 
 void kernel_main(u32 magic, u64 multiboot_info)
 {
@@ -25,6 +26,7 @@ void kernel_main(u32 magic, u64 multiboot_info)
 	vm_init(multiboot_info);
 	vm_self_test();
 	ipc_init();
+	vm_server_init();
 	sched_init();
 	server_start_boot_modules(multiboot_info);
 	sched_run();

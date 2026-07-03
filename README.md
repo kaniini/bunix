@@ -41,6 +41,10 @@ fixed-size messages, and receivers block when a port is empty. This is intended
 to grow toward lightweight kernel-thread/event-port style server communication
 rather than forcing every interaction into a synchronous syscall shape.
 
+VM space grants now travel through VM server RPC messages. The VM server still
+uses a bootstrap space for itself, then receives `VM_RPC_CREATE_SPACE` messages
+for other module-backed servers and replies over the caller's reply port.
+
 ## Scheduler shape
 
 Tasks are resource containers that will map naturally to Linux processes.

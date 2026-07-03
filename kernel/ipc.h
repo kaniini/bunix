@@ -12,6 +12,7 @@ struct ipc_port;
 struct ipc_message {
 	u32 type;
 	u32 sender;
+	struct ipc_port *reply_port;
 	u64 words[IPC_WORDS];
 };
 
@@ -20,5 +21,7 @@ struct ipc_port *ipc_port_create(const char *name);
 struct ipc_port *ipc_port_find(const char *name);
 int ipc_send(struct ipc_port *port, const struct ipc_message *message);
 int ipc_recv(struct ipc_port *port, struct ipc_message *message);
+int ipc_call_kernel(struct ipc_port *port, const struct ipc_message *request,
+		    struct ipc_message *reply);
 
 #endif
