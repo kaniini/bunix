@@ -7,17 +7,16 @@ enum {
 	VM_PAGE_SIZE = 4096,
 };
 
-struct vm_page {
+struct vm_frame {
 	u64 addr;
-	struct vm_page *next;
 };
 
 void vm_init(u64 multiboot_info);
-struct vm_page *vm_page_alloc(void);
-void vm_page_free(struct vm_page *page);
-u64 vm_page_addr(const struct vm_page *page);
-u64 vm_free_page_count(void);
-u64 vm_total_page_count(void);
+
+struct vm_frame vm_rpc_alloc_frame(void);
+void vm_rpc_free_frame(struct vm_frame frame);
+u64 vm_rpc_free_frames(void);
+u64 vm_rpc_total_frames(void);
 void vm_self_test(void);
 
 #endif

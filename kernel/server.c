@@ -7,6 +7,7 @@
 static const struct server boot_servers[] = {
 	{ "hello", hello_server_start },
 	{ "ping", ping_server_start },
+	{ "vm", vm_server_start },
 };
 
 struct module_server_start {

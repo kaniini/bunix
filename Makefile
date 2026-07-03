@@ -28,11 +28,13 @@ KERNEL_SRCS := \
 	kernel/main.c \
 	kernel/console.c \
 	kernel/multiboot2.c \
+	kernel/pmm.c \
 	kernel/sched.c \
 	kernel/server.c \
 	kernel/vm.c \
 	servers/hello/hello.c \
-	servers/ping/ping.c
+	servers/ping/ping.c \
+	servers/vm/vm.c
 
 KERNEL_OBJS := $(KERNEL_SRCS:%=$(BUILD_DIR)/%.o)
 DEPS := $(KERNEL_OBJS:.o=.d)
@@ -57,7 +59,7 @@ iso: $(EFI_BOOT_IMG)
 
 esp: $(EFI_BOOT_APP)
 
-$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg modules/hello.server modules/ping.server
+$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg modules/hello.server modules/ping.server modules/vm.server
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -67,9 +69,10 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg modules/hello.server modules
 		"boot/grub/grub.cfg=boot/grub-standalone.cfg" \
 		"boot/bunixos.kernel=$(KERNEL)" \
 		"modules/hello.server=modules/hello.server" \
-		"modules/ping.server=modules/ping.server"
+		"modules/ping.server=modules/ping.server" \
+		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg modules/hello.server modules/ping.server
+$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg modules/hello.server modules/ping.server modules/vm.server
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -82,6 +85,7 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg modules/hello.server modules/ping.serve
 	cp boot/grub.cfg $(ISO_ROOT)/boot/grub/grub.cfg
 	cp modules/hello.server $(ISO_ROOT)/modules/hello.server
 	cp modules/ping.server $(ISO_ROOT)/modules/ping.server
+	cp modules/vm.server $(ISO_ROOT)/modules/vm.server
 	$(GRUB_MKRESCUE) -o $@ $(ISO_ROOT)
 
 run: $(EFI_BOOT_APP)
@@ -114,6 +118,11 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: thread tid=1 task=1 name=hello" $(BUILD_DIR)/serial.log
 	grep -F "sched: task pid=2 name=ping" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=2 task=2 name=ping" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=3 name=vm" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=3 task=3 name=vm" $(BUILD_DIR)/serial.log
+	grep -F "kernel: starting module server vm" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: memory authority online" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: rpc free_frame" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server hello" $(BUILD_DIR)/serial.log
 	grep -F "hello: world <3" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping" $(BUILD_DIR)/serial.log
@@ -122,6 +131,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "ping: two" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=1 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=2 exited" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=3 exited" $(BUILD_DIR)/serial.log
 
 check-tools:
 	@command -v $(CC)
