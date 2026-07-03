@@ -17,6 +17,13 @@ struct task;
 struct thread;
 struct vm_space;
 struct ipc_port;
+struct shared_buffer;
+
+enum task_cap_type {
+	TASK_CAP_NONE = 0,
+	TASK_CAP_PORT,
+	TASK_CAP_BUFFER,
+};
 
 enum task_handle_rights {
 	TASK_RIGHT_SEND = 1 << 0,
@@ -37,13 +44,19 @@ struct thread *thread_create_on_cpu(struct task *task, const char *name,
 struct task *task_current(void);
 struct thread *thread_current(void);
 u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights);
+u64 task_grant_buffer(struct task *task, struct shared_buffer *buffer,
+		      u32 rights);
 u64 task_grant_task(struct task *owner, struct task *target, u32 rights);
 struct task *task_from_handle(struct task *owner, u64 handle, u32 rights);
 int task_can_inherit_handle(struct task *src, u64 handle, u32 rights);
 u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
 				u32 rights);
+int task_export_cap(struct task *task, u64 handle, u32 rights,
+		    enum task_cap_type *type, void **object);
 struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
 				       u32 rights);
+struct shared_buffer *task_buffer_from_handle(struct task *task, u64 handle,
+					      u32 rights);
 int task_close_handle(struct task *task, u64 handle);
 struct ipc_port *task_reply_port(struct task *task);
 void sched_run(void);

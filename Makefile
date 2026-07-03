@@ -61,6 +61,7 @@ KERNEL_SRCS := \
 	arch/$(ARCH)/user.c \
 	arch/$(ARCH)/vm.c \
 	kernel/main.c \
+	kernel/buffer.c \
 	kernel/console.c \
 	kernel/elf.c \
 	kernel/ipc.c \
@@ -357,6 +358,12 @@ test: $(EFI_BOOT_APP)
 	grep -F "time: ready" $(BUILD_DIR)/serial.log
 	grep -F "proc: online" $(BUILD_DIR)/serial.log
 	grep -F "proc: ready" $(BUILD_DIR)/serial.log
+	grep -F "buffer: create id=1 size=4096" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=5 handle=7 type=buffer rights=0x7 target=1" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=7 handle=7 type=buffer rights=0x5 target=1" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=6 handle=5 type=buffer rights=0x1 target=1" $(BUILD_DIR)/serial.log
+	grep -F "buffer: write id=1 offset=0 len=450" $(BUILD_DIR)/serial.log
+	grep -F "buffer: read id=1 offset=0 len=450" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/first" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=1" $(BUILD_DIR)/serial.log
 	grep -F "proc: exited pid=1 status=0" $(BUILD_DIR)/serial.log

@@ -132,6 +132,28 @@ static int block_read_bytes(u64 block, u64 offset, unsigned char *buffer,
 	return 0;
 }
 
+static int block_read_buffer(u64 block, u64 offset, u64 buffer, u64 len)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_BLOCK,
+		.type = BUNIX_BLOCK_READ_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND,
+		.reply = 0,
+		.cap = buffer,
+		.words = { offset, len, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(block, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[1] > len) {
+		return -1;
+	}
+
+	return (int)reply.words[1];
+}
+
 static int rootfs_mount(u64 block)
 {
 	struct bunix_msg request = {
@@ -277,6 +299,44 @@ int main(void)
 				reply.words[1] = 0;
 			} else {
 				pack_bytes(&reply.words[2], buffer, len);
+			}
+			break;
+		}
+		case BUNIX_VFS_READ_PATH_BUFFER: {
+			char path[ROOTFS_MAX_PATH];
+			struct rootfs_entry entry;
+			const u64 offset = message.words[2];
+			u64 len = message.words[3];
+			int read_len;
+
+			for (u64 i = 0; i < sizeof(path); i++) {
+				path[i] = '\0';
+			}
+			unpack_bytes((unsigned char *)path, &message.words[0], 16);
+
+			if (message.cap == 0 ||
+			    (message.cap_rights & (BUNIX_RIGHT_SEND |
+						   BUNIX_RIGHT_DUP)) !=
+			    (BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP) ||
+			    rootfs_find(path, &entry) != 0) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
+
+			if (offset >= entry.size) {
+				len = 0;
+			} else if (len > entry.size - offset) {
+				len = entry.size - offset;
+			}
+
+			read_len = block_read_buffer(block, entry.offset + offset,
+						     message.cap, len);
+			if (read_len < 0) {
+				reply.words[0] = (u64)-1;
+				reply.words[1] = 0;
+			} else {
+				reply.words[0] = 0;
+				reply.words[1] = (u64)read_len;
 			}
 			break;
 		}

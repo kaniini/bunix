@@ -1,3 +1,4 @@
+#include "buffer.h"
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
@@ -21,6 +22,7 @@ enum task_handle_type {
 	TASK_HANDLE_EMPTY = 0,
 	TASK_HANDLE_PORT,
 	TASK_HANDLE_TASK,
+	TASK_HANDLE_BUFFER,
 };
 
 struct task_handle {
@@ -451,6 +453,43 @@ u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights)
 	return 0;
 }
 
+u64 task_grant_buffer(struct task *task, struct shared_buffer *buffer,
+		      u32 rights)
+{
+	if (task == 0 || buffer == 0) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
+	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
+		if (task->handles[i].type == TASK_HANDLE_BUFFER &&
+		    task->handles[i].object == buffer &&
+		    task->handles[i].rights == rights) {
+			spin_unlock_irqrestore(&task->lock, flags);
+			return i + 1;
+		}
+	}
+
+	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
+		if (task->handles[i].type != TASK_HANDLE_EMPTY) {
+			continue;
+		}
+
+		task->handles[i].type = TASK_HANDLE_BUFFER;
+		task->handles[i].rights = rights;
+		task->handles[i].object = buffer;
+		console_printf("sched: grant task=%u handle=%u type=buffer rights=0x%x target=%u\n",
+			       task->pid, i + 1, rights, (u32)buffer_id(buffer));
+		spin_unlock_irqrestore(&task->lock, flags);
+		return i + 1;
+	}
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	console_printf("sched: handle table full task=%u\n", task->pid);
+	return 0;
+}
+
 u64 task_grant_task(struct task *owner, struct task *target, u32 rights)
 {
 	if (owner == 0 || target == 0 || rights == 0) {
@@ -549,7 +588,44 @@ u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
 		return task_grant_port(dst, (struct ipc_port *)src_handle.object,
 				       rights);
 	}
+	if (src_handle.type == TASK_HANDLE_BUFFER) {
+		return task_grant_buffer(dst,
+					 (struct shared_buffer *)src_handle.object,
+					 rights);
+	}
+	if (src_handle.type == TASK_HANDLE_TASK) {
+		return task_grant_task(dst, (struct task *)src_handle.object,
+				       rights);
+	}
 
+	return 0;
+}
+
+int task_export_cap(struct task *task, u64 handle, u32 rights,
+		    enum task_cap_type *type, void **object)
+{
+	if (task == 0 || handle == 0 || handle > MAX_TASK_HANDLES ||
+	    type == 0 || object == 0) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	const struct task_handle task_handle = task->handles[handle - 1];
+
+	if ((task_handle.type != TASK_HANDLE_PORT &&
+	     task_handle.type != TASK_HANDLE_BUFFER) ||
+	    (task_handle.rights & rights) != rights) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		console_printf("sched: cap denied task=%u handle=%u need=0x%x rights=0x%x\n",
+			       task->pid, (u32)handle, rights,
+			       task_handle.rights);
+		return -1;
+	}
+
+	*object = task_handle.object;
+	*type = task_handle.type == TASK_HANDLE_PORT ?
+		TASK_CAP_PORT : TASK_CAP_BUFFER;
+	spin_unlock_irqrestore(&task->lock, flags);
 	return 0;
 }
 
@@ -576,6 +652,31 @@ struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
 
 	spin_unlock_irqrestore(&task->lock, flags);
 	return port;
+}
+
+struct shared_buffer *task_buffer_from_handle(struct task *task, u64 handle,
+					      u32 rights)
+{
+	if (task == 0 || handle == 0 || handle > MAX_TASK_HANDLES) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	const struct task_handle task_handle = task->handles[handle - 1];
+
+	if (task_handle.type != TASK_HANDLE_BUFFER ||
+	    (task_handle.rights & rights) != rights) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		console_printf("sched: buffer handle denied task=%u handle=%u need=0x%x rights=0x%x\n",
+			       task->pid, (u32)handle, rights,
+			       task_handle.rights);
+		return 0;
+	}
+
+	struct shared_buffer *buffer = (struct shared_buffer *)task_handle.object;
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	return buffer;
 }
 
 int task_close_handle(struct task *task, u64 handle)
@@ -605,7 +706,9 @@ int task_close_handle(struct task *task, u64 handle)
 	console_printf("sched: close task=%u handle=%u type=%s rights=0x%x\n",
 		       task->pid, (u32)handle,
 		       type == TASK_HANDLE_PORT ? "port" :
-		       type == TASK_HANDLE_TASK ? "task" : "unknown", rights);
+		       type == TASK_HANDLE_TASK ? "task" :
+		       type == TASK_HANDLE_BUFFER ? "buffer" : "unknown",
+		       rights);
 	return 0;
 }
 

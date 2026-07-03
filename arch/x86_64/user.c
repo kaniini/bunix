@@ -1,6 +1,7 @@
 #include <arch/user.h>
 #include <arch/io.h>
 #include <arch/smp.h>
+#include "buffer.h"
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
@@ -34,6 +35,9 @@ enum {
 	SYSCALL_TASK_MAP = -26,
 	SYSCALL_TASK_GRANT = -28,
 	SYSCALL_TASK_START = -30,
+	SYSCALL_BUFFER_CREATE = -32,
+	SYSCALL_BUFFER_READ = -34,
+	SYSCALL_BUFFER_WRITE = -36,
 	USER_IPC_WORDS = 4,
 	USER_FOURCC_CONS = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	USER_CONSOLE_WRITE = 1,
@@ -60,7 +64,8 @@ static int user_message_to_ipc(const struct user_ipc_message *user_message,
 	message->reply_port = task_port_from_handle(task_current(),
 						    user_message->reply,
 						    TASK_RIGHT_SEND);
-	message->cap_port = 0;
+	message->cap_type = IPC_CAP_NONE;
+	message->cap_object = 0;
 	if (user_message->cap == 0 && user_message->cap_rights != 0) {
 		return -1;
 	}
@@ -74,12 +79,18 @@ static int user_message_to_ipc(const struct user_ipc_message *user_message,
 			return -1;
 		}
 
-		message->cap_port =
-			task_port_from_handle(task_current(), user_message->cap,
-					      rights);
-		if (message->cap_port == 0 || user_message->cap_rights == 0) {
+		enum task_cap_type type = TASK_CAP_NONE;
+		void *object = 0;
+
+		if (task_export_cap(task_current(), user_message->cap, rights,
+				    &type, &object) != 0 ||
+		    user_message->cap_rights == 0) {
 			return -1;
 		}
+
+		message->cap_type = type == TASK_CAP_PORT ?
+			IPC_CAP_PORT : IPC_CAP_BUFFER;
+		message->cap_object = object;
 	}
 
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
@@ -98,8 +109,18 @@ static void ipc_message_to_user(const struct ipc_message *message,
 	user_message->cap_rights = message->cap_rights;
 	user_message->reply = task_grant_port(task_current(), message->reply_port,
 					      TASK_RIGHT_SEND);
-	user_message->cap = task_grant_port(task_current(), message->cap_port,
-					    message->cap_rights);
+	user_message->cap = 0;
+	if (message->cap_type == IPC_CAP_PORT) {
+		user_message->cap =
+			task_grant_port(task_current(),
+					(struct ipc_port *)message->cap_object,
+					message->cap_rights);
+	} else if (message->cap_type == IPC_CAP_BUFFER) {
+		user_message->cap =
+			task_grant_buffer(task_current(),
+					  (struct shared_buffer *)message->cap_object,
+					  message->cap_rights);
+	}
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
 		user_message->words[i] = message->words[i];
 	}
@@ -282,6 +303,41 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 					      (u32)arg2);
 	case SYSCALL_TASK_START:
 		return (u64)server_task_start(task_current(), arg0, arg1);
+	case SYSCALL_BUFFER_CREATE: {
+		struct shared_buffer *buffer = buffer_create(arg0);
+		const u64 handle =
+			task_grant_buffer(task_current(), buffer,
+					  TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+					  TASK_RIGHT_DUP);
+
+		return handle != 0 ? handle : (u64)-1;
+	}
+	case SYSCALL_BUFFER_READ: {
+		const u64 *args = (const u64 *)arg0;
+
+		if (args == 0) {
+			return (u64)-1;
+		}
+
+		struct shared_buffer *buffer =
+			task_buffer_from_handle(task_current(), args[0],
+						TASK_RIGHT_RECV);
+		return (u64)buffer_read(buffer, args[1], (void *)args[2],
+					args[3]);
+	}
+	case SYSCALL_BUFFER_WRITE: {
+		const u64 *args = (const u64 *)arg0;
+
+		if (args == 0) {
+			return (u64)-1;
+		}
+
+		struct shared_buffer *buffer =
+			task_buffer_from_handle(task_current(), args[0],
+						TASK_RIGHT_SEND);
+		return (u64)buffer_write(buffer, args[1],
+					 (const void *)args[2], args[3]);
+	}
 	case SYSCALL_PORT_CREATE:
 		return task_grant_port(task_current(),
 				       ipc_port_create_private((const char *)arg0),

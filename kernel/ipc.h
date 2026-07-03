@@ -8,6 +8,13 @@ enum {
 };
 
 struct ipc_port;
+struct shared_buffer;
+
+enum ipc_cap_type {
+	IPC_CAP_NONE = 0,
+	IPC_CAP_PORT,
+	IPC_CAP_BUFFER,
+};
 
 struct ipc_message {
 	u32 protocol;
@@ -15,7 +22,8 @@ struct ipc_message {
 	u32 sender;
 	u32 cap_rights;
 	struct ipc_port *reply_port;
-	struct ipc_port *cap_port;
+	enum ipc_cap_type cap_type;
+	void *cap_object;
 	u64 words[IPC_WORDS];
 };
 

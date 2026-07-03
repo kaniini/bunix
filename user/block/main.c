@@ -2,6 +2,7 @@
 
 enum {
 	BLOCK_HANDLE_NAMES = 3,
+	BLOCK_BUFFER_MAX = 4096,
 };
 
 static long register_service(u64 service, u64 handle)
@@ -91,6 +92,38 @@ int main(void)
 				reply.words[1] = 0;
 			} else {
 				pack_bytes(&reply.words[2], buffer, len);
+			}
+			break;
+		}
+		case BUNIX_BLOCK_READ_BUFFER: {
+			const u64 offset = message.words[0];
+			const u64 buffer_offset = message.words[2];
+			u64 len = message.words[1];
+			unsigned char buffer[BLOCK_BUFFER_MAX];
+
+			if (message.cap == 0 ||
+			    (message.cap_rights & BUNIX_RIGHT_SEND) == 0) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
+
+			if (offset >= disk_size) {
+				len = 0;
+			} else if (len > disk_size - offset) {
+				len = disk_size - offset;
+			}
+			if (len > sizeof(buffer)) {
+				len = sizeof(buffer);
+			}
+
+			reply.words[0] = 0;
+			reply.words[1] = len;
+			if (len != 0 &&
+			    (bunix_boot_module_read(offset, buffer, len) != 0 ||
+			     bunix_buffer_write(message.cap, buffer_offset,
+						buffer, len) != 0)) {
+				reply.words[0] = (u64)-1;
+				reply.words[1] = 0;
 			}
 			break;
 		}

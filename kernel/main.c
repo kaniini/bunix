@@ -1,3 +1,4 @@
+#include "buffer.h"
 #include "console.h"
 #include "ipc.h"
 #include "multiboot2.h"
@@ -14,6 +15,7 @@
 void kernel_main(u32 magic, u64 multiboot_info)
 {
 	console_init();
+	buffer_init();
 
 	console_printf("bunixos: x86_64 microkernel bootstrap\n");
 	console_printf("bunixos: multiboot2 magic=0x%x info=%p\n",
