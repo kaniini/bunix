@@ -1,15 +1,12 @@
 #include "console.h"
 #include "pmm.h"
+#include "slab.h"
 #include "spinlock.h"
 #include "vm.h"
 #include <arch/smp.h>
 
-enum {
-	MAX_VM_SPACES = 32,
-};
-
 static struct vm_space kernel_space;
-static struct vm_space spaces[MAX_VM_SPACES];
+static struct vm_space *spaces;
 static u32 next_space_id = 1;
 static struct spinlock vm_spaces_lock = SPINLOCK_INIT("vm-spaces");
 
@@ -19,6 +16,7 @@ void vm_init(u64 multiboot_info)
 	arch_vm_kernel_space_init(&kernel_space.arch);
 	kernel_space.id = 0;
 	kernel_space.owner = "kernel";
+	kernel_space.next = 0;
 }
 
 struct vm_space *vm_kernel_space(void)
@@ -29,35 +27,35 @@ struct vm_space *vm_kernel_space(void)
 struct vm_space *vm_rpc_create_space(const char *owner)
 {
 	const u64 flags = spin_lock_irqsave(&vm_spaces_lock);
+	struct vm_space *space = slab_zalloc(sizeof(*space));
 
-	for (u32 i = 0; i < MAX_VM_SPACES; i++) {
-		if (spaces[i].id != 0) {
-			continue;
-		}
-
-		if (arch_vm_space_init(&spaces[i].arch) != 0) {
-			spin_unlock_irqrestore(&vm_spaces_lock, flags);
-			return 0;
-		}
-		const u64 lapic = arch_smp_lapic_address();
-		if (lapic != 0 &&
-		    arch_vm_map_page(&spaces[i].arch, lapic, lapic, 1, 0) != 0) {
-			spin_unlock_irqrestore(&vm_spaces_lock, flags);
-			return 0;
-		}
-
-		spaces[i].id = next_space_id++;
-		spaces[i].owner = owner;
-		console_printf("vm: create space id=%u owner=%s cr3=%p\n",
-			       spaces[i].id, owner,
-			       (const void *)spaces[i].arch.cr3);
+	if (space == 0) {
 		spin_unlock_irqrestore(&vm_spaces_lock, flags);
-		return &spaces[i];
+		console_printf("vm: space alloc failed for %s\n", owner);
+		return 0;
 	}
 
+	if (arch_vm_space_init(&space->arch) != 0) {
+		slab_free(space);
+		spin_unlock_irqrestore(&vm_spaces_lock, flags);
+		return 0;
+	}
+	const u64 lapic = arch_smp_lapic_address();
+	if (lapic != 0 &&
+	    arch_vm_map_page(&space->arch, lapic, lapic, 1, 0) != 0) {
+		slab_free(space);
+		spin_unlock_irqrestore(&vm_spaces_lock, flags);
+		return 0;
+	}
+
+	space->id = next_space_id++;
+	space->owner = owner;
+	space->next = spaces;
+	spaces = space;
+	console_printf("vm: create space id=%u owner=%s cr3=%p\n",
+		       space->id, owner, (const void *)space->arch.cr3);
 	spin_unlock_irqrestore(&vm_spaces_lock, flags);
-	console_printf("vm: space table full for %s\n", owner);
-	return 0;
+	return space;
 }
 
 void vm_rpc_activate_space(struct vm_space *space)

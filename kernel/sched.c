@@ -2,6 +2,7 @@
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
+#include "slab.h"
 #include "spinlock.h"
 #include "timer.h"
 #include "vm.h"
@@ -11,8 +12,6 @@
 
 enum {
 	MAX_CPUS = 8,
-	MAX_TASKS = 16,
-	MAX_THREADS = 32,
 	MAX_TASK_HANDLES = 32,
 	MAX_TASK_VM_REGIONS = 32,
 	KERNEL_STACK_SIZE = 32768,
@@ -35,6 +34,7 @@ struct task_handle {
 struct task {
 	u32 pid;
 	const char *name;
+	struct task *next;
 	u32 thread_count;
 	struct vm_space *vm_space;
 	u64 linux_brk;
@@ -79,8 +79,7 @@ struct cpu_sched {
 	u32 quantum_left;
 };
 
-static struct task tasks[MAX_TASKS];
-static struct thread threads[MAX_THREADS];
+static struct task *tasks;
 static struct task kernel_task;
 static struct cpu_sched cpus[MAX_CPUS];
 static u32 boot_cpu_id;
@@ -202,6 +201,7 @@ static void sched_reap_thread(struct thread *thread)
 
 	console_printf("sched: reap tid=%u task=%u name=%s remaining=%u\n",
 		       tid, pid, name, remaining);
+	slab_free(thread);
 }
 
 static u32 sched_select_auto_cpu(void)
@@ -258,8 +258,21 @@ void sched_init(void)
 {
 	kernel_task.pid = 0;
 	kernel_task.name = "kernel";
+	kernel_task.next = 0;
 	kernel_task.thread_count = 1;
 	kernel_task.vm_space = vm_kernel_space();
+	kernel_task.linux_brk = 0;
+	kernel_task.linux_mmap_next = 0;
+	kernel_task.vm_region_count = 0;
+	kernel_task.reply_port = 0;
+	spinlock_init(&kernel_task.lock, "task");
+	for (u32 handle = 0; handle < MAX_TASK_HANDLES; handle++) {
+		kernel_task.handles[handle].type = TASK_HANDLE_EMPTY;
+		kernel_task.handles[handle].rights = 0;
+		kernel_task.handles[handle].object = 0;
+	}
+
+	tasks = 0;
 	sched_cpu_count = arch_smp_cpu_count();
 	if (sched_cpu_count > MAX_CPUS) {
 		sched_cpu_count = MAX_CPUS;
@@ -316,35 +329,34 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	}
 
 	const u64 flags = spin_lock_irqsave(&task_table_lock);
+	struct task *task = slab_zalloc(sizeof(*task));
 
-	for (u32 i = 0; i < MAX_TASKS; i++) {
-		if (tasks[i].pid != 0) {
-			continue;
-		}
-
-		tasks[i].pid = next_pid++;
-		tasks[i].name = name;
-		tasks[i].thread_count = 0;
-		tasks[i].vm_space = vm_space;
-		tasks[i].linux_brk = 0x900000;
-		tasks[i].linux_mmap_next = 0x10000000;
-		tasks[i].vm_region_count = 0;
-		tasks[i].reply_port = 0;
-		spinlock_init(&tasks[i].lock, "task");
-		for (u32 handle = 0; handle < MAX_TASK_HANDLES; handle++) {
-			tasks[i].handles[handle].type = TASK_HANDLE_EMPTY;
-			tasks[i].handles[handle].rights = 0;
-			tasks[i].handles[handle].object = 0;
-		}
-		console_printf("sched: task pid=%u name=%s vm=%u\n",
-			       tasks[i].pid, name, tasks[i].vm_space->id);
+	if (task == 0) {
 		spin_unlock_irqrestore(&task_table_lock, flags);
-		return &tasks[i];
+		console_printf("sched: task alloc failed for %s\n", name);
+		return 0;
 	}
 
+	task->pid = next_pid++;
+	task->name = name;
+	task->next = tasks;
+	task->thread_count = 0;
+	task->vm_space = vm_space;
+	task->linux_brk = 0x900000;
+	task->linux_mmap_next = 0x10000000;
+	task->vm_region_count = 0;
+	task->reply_port = 0;
+	spinlock_init(&task->lock, "task");
+	for (u32 handle = 0; handle < MAX_TASK_HANDLES; handle++) {
+		task->handles[handle].type = TASK_HANDLE_EMPTY;
+		task->handles[handle].rights = 0;
+		task->handles[handle].object = 0;
+	}
+	tasks = task;
+	console_printf("sched: task pid=%u name=%s vm=%u\n",
+		       task->pid, name, task->vm_space->id);
 	spin_unlock_irqrestore(&task_table_lock, flags);
-	console_printf("sched: task table full for %s\n", name);
-	return 0;
+	return task;
 }
 
 struct vm_space *task_vm_space(struct task *task)
@@ -363,36 +375,33 @@ static struct thread *thread_create_placed(struct task *task, const char *name,
 
 	const u64 task_flags = spin_lock_irqsave(&task->lock);
 	const u64 thread_flags = spin_lock_irqsave(&thread_table_lock);
+	struct thread *thread = slab_zalloc(sizeof(*thread));
 
-	for (u32 i = 0; i < MAX_THREADS; i++) {
-		if (threads[i].state != THREAD_EMPTY) {
-			continue;
-		}
-
-		threads[i].tid = next_tid++;
-		threads[i].name = name;
-		threads[i].task = task;
-		threads[i].entry = entry;
-		threads[i].arg = arg;
-		threads[i].run_next = 0;
-		arch_thread_context_init(&threads[i].context,
-					 threads[i].kernel_stack + KERNEL_STACK_SIZE,
-					 sched_thread_bootstrap);
-		task->thread_count++;
-		console_printf("sched: thread tid=%u task=%u name=%s\n",
-			       threads[i].tid, task->pid, name);
-		console_printf("sched: place tid=%u cpu=%u policy=%s\n",
-			       threads[i].tid, cpu_id, placement_policy);
+	if (thread == 0) {
 		spin_unlock_irqrestore(&thread_table_lock, thread_flags);
 		spin_unlock_irqrestore(&task->lock, task_flags);
-		sched_enqueue_on(&cpus[cpu_id], &threads[i]);
-		return &threads[i];
+		console_printf("sched: thread alloc failed for %s\n", name);
+		return 0;
 	}
 
+	thread->tid = next_tid++;
+	thread->name = name;
+	thread->task = task;
+	thread->entry = entry;
+	thread->arg = arg;
+	thread->run_next = 0;
+	arch_thread_context_init(&thread->context,
+				 thread->kernel_stack + KERNEL_STACK_SIZE,
+				 sched_thread_bootstrap);
+	task->thread_count++;
+	console_printf("sched: thread tid=%u task=%u name=%s\n",
+		       thread->tid, task->pid, name);
+	console_printf("sched: place tid=%u cpu=%u policy=%s\n",
+		       thread->tid, cpu_id, placement_policy);
 	spin_unlock_irqrestore(&thread_table_lock, thread_flags);
 	spin_unlock_irqrestore(&task->lock, task_flags);
-	console_printf("sched: thread table full for %s\n", name);
-	return 0;
+	sched_enqueue_on(&cpus[cpu_id], thread);
+	return thread;
 }
 
 struct thread *thread_create(struct task *task, const char *name,

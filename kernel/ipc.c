@@ -1,11 +1,10 @@
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
+#include "slab.h"
 #include "spinlock.h"
 
 enum {
-	MAX_PORTS = 32,
-	MAX_MESSAGES = 32,
 	PROTO_BLOCK = ('B') | ('L' << 8) | ('K' << 16) | ('0' << 24),
 	PROTO_VFS = ('V') | ('F' << 8) | ('S' << 16) | ('0' << 24),
 };
@@ -13,21 +12,19 @@ enum {
 struct ipc_message_node {
 	struct ipc_message message;
 	struct ipc_message_node *next;
-	u32 in_use;
 };
 
 struct ipc_port {
 	const char *name;
 	u64 id;
+	struct ipc_port *next;
 	struct ipc_message_node *head;
 	struct ipc_message_node *tail;
 	struct thread *receiver;
 	u32 queued;
-	u32 in_use;
 };
 
-static struct ipc_port ports[MAX_PORTS];
-static struct ipc_message_node messages[MAX_MESSAGES];
+static struct ipc_port *ports;
 static struct ipc_port *kernel_reply_port;
 static u64 next_port_id = 1;
 static struct spinlock ipc_lock = SPINLOCK_INIT("ipc");
@@ -60,9 +57,9 @@ static int ipc_should_log(const struct ipc_port *port,
 
 static struct ipc_port *ipc_port_find_locked(const char *name)
 {
-	for (u32 i = 0; i < MAX_PORTS; i++) {
-		if (ports[i].in_use && str_eq(ports[i].name, name)) {
-			return &ports[i];
+	for (struct ipc_port *port = ports; port != 0; port = port->next) {
+		if (str_eq(port->name, name)) {
+			return port;
 		}
 	}
 
@@ -71,42 +68,22 @@ static struct ipc_port *ipc_port_find_locked(const char *name)
 
 static struct ipc_message_node *message_alloc(void)
 {
-	for (u32 i = 0; i < MAX_MESSAGES; i++) {
-		if (messages[i].in_use) {
-			continue;
-		}
-
-		messages[i].in_use = 1;
-		messages[i].next = 0;
-		return &messages[i];
+	struct ipc_message_node *node = slab_alloc(sizeof(*node));
+	if (node != 0) {
+		node->next = 0;
 	}
-
-	return 0;
+	return node;
 }
 
 static void message_free(struct ipc_message_node *node)
 {
-	node->in_use = 0;
-	node->next = 0;
+	slab_free(node);
 }
 
 void ipc_init(void)
 {
-	for (u32 i = 0; i < MAX_PORTS; i++) {
-		ports[i].in_use = 0;
-		ports[i].id = 0;
-		ports[i].head = 0;
-		ports[i].tail = 0;
-		ports[i].receiver = 0;
-		ports[i].queued = 0;
-	}
-
-	for (u32 i = 0; i < MAX_MESSAGES; i++) {
-		messages[i].in_use = 0;
-		messages[i].next = 0;
-	}
-
-	console_printf("ipc: init ports=%u messages=%u\n", MAX_PORTS, MAX_MESSAGES);
+	ports = 0;
+	console_printf("ipc: init slab ports messages\n");
 	kernel_reply_port = ipc_port_create("kernel-rpc");
 }
 
@@ -121,20 +98,20 @@ static struct ipc_port *ipc_port_alloc(const char *name, u32 reuse_named)
 		return existing;
 	}
 
-	for (u32 i = 0; i < MAX_PORTS; i++) {
-		if (!ports[i].in_use) {
-			ports[i].in_use = 1;
-			ports[i].id = next_port_id++;
-			ports[i].name = name;
-			console_printf("ipc: port create %s id=%u\n", name,
-				       (u32)ports[i].id);
-			spin_unlock_irqrestore(&ipc_lock, flags);
-			return &ports[i];
-		}
+	struct ipc_port *port = slab_zalloc(sizeof(*port));
+	if (port != 0) {
+		port->id = next_port_id++;
+		port->name = name;
+		port->next = ports;
+		ports = port;
+		console_printf("ipc: port create %s id=%u\n", name,
+			       (u32)port->id);
+		spin_unlock_irqrestore(&ipc_lock, flags);
+		return port;
 	}
 
 	spin_unlock_irqrestore(&ipc_lock, flags);
-	console_printf("ipc: port table full for %s\n", name);
+	console_printf("ipc: port alloc failed for %s\n", name);
 	return 0;
 }
 
@@ -175,10 +152,10 @@ struct ipc_port *ipc_port_from_id(u64 id)
 
 	const u64 flags = spin_lock_irqsave(&ipc_lock);
 
-	for (u32 i = 0; i < MAX_PORTS; i++) {
-		if (ports[i].in_use && ports[i].id == id) {
+	for (struct ipc_port *port = ports; port != 0; port = port->next) {
+		if (port->id == id) {
 			spin_unlock_irqrestore(&ipc_lock, flags);
-			return &ports[i];
+			return port;
 		}
 	}
 
@@ -197,7 +174,7 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 	const u64 flags = spin_lock_irqsave(&ipc_lock);
 	node = message_alloc();
 	if (node == 0) {
-		console_printf("ipc: message pool exhausted port=%s\n", port->name);
+		console_printf("ipc: message alloc failed port=%s\n", port->name);
 		spin_unlock_irqrestore(&ipc_lock, flags);
 		return -1;
 	}

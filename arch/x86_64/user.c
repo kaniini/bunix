@@ -5,6 +5,7 @@
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
+#include "slab.h"
 #include "spinlock.h"
 #include "timer.h"
 #include "server.h"
@@ -67,7 +68,6 @@ enum {
 	ARCH_USER_MAX_CPUS = 8,
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
 	LINUX_EXEC_MAX_IMAGE = 65536,
-	LINUX_EXEC_MAX_SLOTS = ARCH_USER_MAX_CPUS,
 	LINUX_EXEC_MAX_PATH = 32,
 	LINUX_EXEC_STACK_TOP = 0x800000,
 	LINUX_EXEC_STACK_PAGES = 16,
@@ -150,9 +150,6 @@ struct elf64_phdr {
 	u64 align;
 } __attribute__((packed));
 
-static u8 linux_exec_images[LINUX_EXEC_MAX_SLOTS][LINUX_EXEC_MAX_IMAGE];
-static u32 linux_exec_slot_used[LINUX_EXEC_MAX_SLOTS];
-static struct spinlock linux_exec_lock = SPINLOCK_INIT("linux-exec");
 static u8 syscall_copy_buffer[LINUX_MAX_SYSCALL_BUFFER];
 static struct spinlock syscall_copy_lock = SPINLOCK_INIT("syscall-copy");
 struct user_ipc_message {
@@ -348,41 +345,6 @@ static int console_write_user(u64 vaddr, u64 len)
 	}
 
 	return 0;
-}
-
-static u8 *linux_exec_slot_acquire(u32 *slot_out)
-{
-	if (slot_out == 0) {
-		return 0;
-	}
-
-	const u64 flags = spin_lock_irqsave(&linux_exec_lock);
-
-	for (u32 i = 0; i < LINUX_EXEC_MAX_SLOTS; i++) {
-		if (linux_exec_slot_used[i]) {
-			continue;
-		}
-
-		linux_exec_slot_used[i] = 1;
-		spin_unlock_irqrestore(&linux_exec_lock, flags);
-		*slot_out = i;
-		return linux_exec_images[i];
-	}
-
-	spin_unlock_irqrestore(&linux_exec_lock, flags);
-	return 0;
-}
-
-static void linux_exec_slot_release(u32 slot)
-{
-	if (slot >= LINUX_EXEC_MAX_SLOTS) {
-		return;
-	}
-
-	const u64 flags = spin_lock_irqsave(&linux_exec_lock);
-
-	linux_exec_slot_used[slot] = 0;
-	spin_unlock_irqrestore(&linux_exec_lock, flags);
 }
 
 static int linux_vfs_close(struct task *task, u64 file)
@@ -657,7 +619,6 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	const struct elf64_ehdr *ehdr;
 	u8 stack_page[VM_PAGE_SIZE];
 	u8 *image;
-	u32 image_slot;
 	u64 new_sp = 0;
 	const u64 stack_base =
 		LINUX_EXEC_STACK_TOP - LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE;
@@ -667,7 +628,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		return (u64)-LINUX_EINVAL;
 	}
 
-	image = linux_exec_slot_acquire(&image_slot);
+	image = slab_alloc(LINUX_EXEC_MAX_IMAGE);
 	if (image == 0) {
 		return (u64)-LINUX_ENOMEM;
 	}
@@ -676,12 +637,12 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 				&image_size) != 0 ||
 	    linux_exec_validate(image, image_size, &ehdr) != 0 ||
 	    linux_exec_build_stack(path, stack_page, &new_sp) != 0) {
-		linux_exec_slot_release(image_slot);
+		slab_free(image);
 		return (u64)-LINUX_EINVAL;
 	}
 
 	if (linux_exec_unmap_current(task) != 0) {
-		linux_exec_slot_release(image_slot);
+		slab_free(image);
 		return (u64)-LINUX_EINVAL;
 	}
 
@@ -693,7 +654,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 
 		if (phdr->type == ELF_PH_LOAD &&
 		    linux_exec_map_segment(task, image, phdr) != 0) {
-			linux_exec_slot_release(image_slot);
+			slab_free(image);
 			return (u64)-LINUX_ENOMEM;
 		}
 	}
@@ -705,7 +666,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			       TASK_VM_REGION_STACK) != 0 ||
 		    vm_write_user(task_vm_space(task), LINUX_EXEC_STACK_TOP -
 				  VM_PAGE_SIZE, stack_page, VM_PAGE_SIZE) != 0) {
-		linux_exec_slot_release(image_slot);
+		slab_free(image);
 		return (u64)-LINUX_ENOMEM;
 	}
 
@@ -714,7 +675,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	console_printf("linux: execve task=%u path=%s entry=%p stack=%p\n",
 		       task_id(task), path, (const void *)ehdr->entry,
 		       (const void *)new_sp);
-	linux_exec_slot_release(image_slot);
+	slab_free(image);
 	return 0;
 }
 

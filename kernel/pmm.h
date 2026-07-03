@@ -15,8 +15,10 @@ struct pmm_page {
 
 void pmm_init(u64 multiboot_info);
 struct pmm_page *pmm_page_alloc(void);
+u64 pmm_pages_alloc_contiguous(u64 count);
 void pmm_page_free(struct pmm_page *page);
 void pmm_page_free_addr(u64 addr);
+void pmm_pages_free_contiguous(u64 addr, u64 count);
 u64 pmm_page_addr(const struct pmm_page *page);
 u64 pmm_free_page_count(void);
 u64 pmm_total_page_count(void);

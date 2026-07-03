@@ -1,21 +1,19 @@
 #include "buffer.h"
 #include "console.h"
+#include "slab.h"
 #include "spinlock.h"
 
 enum {
-	MAX_BUFFERS = 16,
 	BUFFER_MAX_SIZE = 4096,
 };
 
 struct shared_buffer {
 	u64 id;
 	u64 size;
-	u32 in_use;
 	struct spinlock lock;
 	u8 data[BUFFER_MAX_SIZE];
 };
 
-static struct shared_buffer buffers[MAX_BUFFERS];
 static u64 next_buffer_id = 1;
 static struct spinlock buffer_table_lock = SPINLOCK_INIT("buffer-table");
 
@@ -28,15 +26,7 @@ static void mem_copy(u8 *dst, const u8 *src, u64 len)
 
 void buffer_init(void)
 {
-	for (u32 i = 0; i < MAX_BUFFERS; i++) {
-		buffers[i].id = 0;
-		buffers[i].size = 0;
-		buffers[i].in_use = 0;
-		spinlock_init(&buffers[i].lock, "buffer");
-	}
-
-	console_printf("buffer: init buffers=%u size=%u\n", MAX_BUFFERS,
-		       BUFFER_MAX_SIZE);
+	console_printf("buffer: init slab size=%u\n", BUFFER_MAX_SIZE);
 }
 
 struct shared_buffer *buffer_create(u64 size)
@@ -46,24 +36,21 @@ struct shared_buffer *buffer_create(u64 size)
 	}
 
 	const u64 flags = spin_lock_irqsave(&buffer_table_lock);
+	struct shared_buffer *buffer = slab_alloc(sizeof(*buffer));
 
-	for (u32 i = 0; i < MAX_BUFFERS; i++) {
-		if (buffers[i].in_use) {
-			continue;
-		}
-
-		buffers[i].in_use = 1;
-		buffers[i].id = next_buffer_id++;
-		buffers[i].size = size;
+	if (buffer == 0) {
 		spin_unlock_irqrestore(&buffer_table_lock, flags);
-		console_printf("buffer: create id=%u size=%u\n",
-			       (u32)buffers[i].id, (u32)size);
-		return &buffers[i];
+		console_printf("buffer: alloc failed\n");
+		return 0;
 	}
 
+	buffer->id = next_buffer_id++;
+	buffer->size = size;
+	spinlock_init(&buffer->lock, "buffer");
 	spin_unlock_irqrestore(&buffer_table_lock, flags);
-	console_printf("buffer: pool exhausted\n");
-	return 0;
+	console_printf("buffer: create id=%u size=%u\n",
+		       (u32)buffer->id, (u32)size);
+	return buffer;
 }
 
 void buffer_destroy(struct shared_buffer *buffer)
@@ -74,10 +61,10 @@ void buffer_destroy(struct shared_buffer *buffer)
 
 	const u64 flags = spin_lock_irqsave(&buffer_table_lock);
 
-	buffer->in_use = 0;
 	buffer->id = 0;
 	buffer->size = 0;
 	spin_unlock_irqrestore(&buffer_table_lock, flags);
+	slab_free(buffer);
 	console_printf("buffer: destroy\n");
 }
 

@@ -75,6 +75,7 @@ KERNEL_SRCS := \
 	kernel/name.c \
 	kernel/pmm.c \
 	kernel/sched.c \
+	kernel/slab.c \
 	kernel/server.c \
 	kernel/spinlock.c \
 	kernel/timer.c \
@@ -266,6 +267,9 @@ test: $(EFI_BOOT_APP)
 	grep -F "names: init entries=32" $(BUILD_DIR)/serial.log
 	grep -F "names: register name=vm id=1 kind=2" $(BUILD_DIR)/serial.log
 	grep -F "names: register name=console id=2 kind=2" $(BUILD_DIR)/serial.log
+	grep -F "slab: init caches=" $(BUILD_DIR)/serial.log
+	grep -F "buffer: init slab" $(BUILD_DIR)/serial.log
+	grep -F "ipc: init slab ports messages" $(BUILD_DIR)/serial.log
 	grep -F "kernel: recorded data module disk0" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=vm id=1" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=names id=2" $(BUILD_DIR)/serial.log

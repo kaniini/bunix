@@ -15,6 +15,7 @@ struct vm_frame {
 struct vm_space {
 	u32 id;
 	const char *owner;
+	struct vm_space *next;
 	struct arch_vm_space arch;
 };
 

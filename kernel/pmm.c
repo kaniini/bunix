@@ -51,6 +51,20 @@ static struct pmm_page *find_page(u64 addr)
 	return 0;
 }
 
+static void page_list_remove(struct pmm_page *page)
+{
+	struct pmm_page **link = &free_pages;
+
+	while (*link != 0) {
+		if (*link == page) {
+			*link = page->next;
+			page->next = 0;
+			return;
+		}
+		link = &(*link)->next;
+	}
+}
+
 static void import_mmap_entry(const struct multiboot2_mmap_entry *entry,
 			      void *ctx)
 {
@@ -148,6 +162,43 @@ struct pmm_page *pmm_page_alloc(void)
 	return page;
 }
 
+u64 pmm_pages_alloc_contiguous(u64 count)
+{
+	if (count == 0) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&pmm_lock);
+
+	for (u64 i = 0; i + count <= total_pages; i++) {
+		u32 usable = 1;
+		const u64 start = pages[i].addr;
+
+		for (u64 j = 0; j < count; j++) {
+			if (!pages[i + j].is_free ||
+			    pages[i + j].addr != start + j * PMM_PAGE_SIZE) {
+				usable = 0;
+				break;
+			}
+		}
+
+		if (!usable) {
+			continue;
+		}
+
+		for (u64 j = 0; j < count; j++) {
+			page_list_remove(&pages[i + j]);
+			pages[i + j].is_free = 0;
+		}
+		free_pages_count -= count;
+		spin_unlock_irqrestore(&pmm_lock, flags);
+		return start;
+	}
+
+	spin_unlock_irqrestore(&pmm_lock, flags);
+	return 0;
+}
+
 void pmm_page_free(struct pmm_page *page)
 {
 	const u64 flags = spin_lock_irqsave(&pmm_lock);
@@ -164,6 +215,13 @@ void pmm_page_free(struct pmm_page *page)
 void pmm_page_free_addr(u64 addr)
 {
 	pmm_page_free(find_page(addr));
+}
+
+void pmm_pages_free_contiguous(u64 addr, u64 count)
+{
+	for (u64 i = 0; i < count; i++) {
+		pmm_page_free_addr(addr + i * PMM_PAGE_SIZE);
+	}
 }
 
 u64 pmm_page_addr(const struct pmm_page *page)

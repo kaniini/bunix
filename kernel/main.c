@@ -5,6 +5,7 @@
 #include "name.h"
 #include "sched.h"
 #include "server.h"
+#include "slab.h"
 #include "types.h"
 #include "vm.h"
 #include <arch/interrupts.h>
@@ -15,7 +16,6 @@
 void kernel_main(u32 magic, u64 multiboot_info)
 {
 	console_init();
-	buffer_init();
 
 	console_printf("bunixos: x86_64 microkernel bootstrap\n");
 	console_printf("bunixos: multiboot2 magic=0x%x info=%p\n",
@@ -30,6 +30,8 @@ void kernel_main(u32 magic, u64 multiboot_info)
 
 	multiboot2_dump(multiboot_info);
 	vm_init(multiboot_info);
+	slab_init();
+	buffer_init();
 	vm_self_test();
 	arch_interrupts_init();
 	arch_user_init();
