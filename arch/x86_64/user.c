@@ -148,7 +148,13 @@ enum {
 	USER_LINUX_OPEN = 2,
 	USER_LINUX_CLOSE = 3,
 	USER_LINUX_FSTAT = 5,
+	USER_LINUX_IOCTL = 16,
 	USER_LINUX_GETPID = 39,
+	USER_LINUX_SETPGID = 109,
+	USER_LINUX_GETPPID = 110,
+	USER_LINUX_GETPGRP = 111,
+	USER_LINUX_SETSID = 112,
+	USER_LINUX_GETPGID = 121,
 	USER_LINUX_FCNTL = 72,
 	USER_LINUX_WAIT4 = 61,
 	USER_LINUX_GETTID = 186,
@@ -1256,16 +1262,8 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 	}
-	case LINUX_SYSCALL_GETPPID:
-		return 1;
-	case LINUX_SYSCALL_GETPGRP:
-	case LINUX_SYSCALL_GETPGID:
-		return 1;
-	case LINUX_SYSCALL_SETPGID:
 	case LINUX_SYSCALL_KILL:
 		return 0;
-	case LINUX_SYSCALL_SETSID:
-		return 1;
 	case LINUX_SYSCALL_GETCWD: {
 		const char cwd[] = "/";
 
@@ -1314,41 +1312,10 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 		return 0;
 	case LINUX_SYSCALL_IOCTL:
-		if (arg1 == LINUX_TCGETS) {
-			u8 termios[64];
-
-			if (arg2 == 0) {
-				return (u64)-LINUX_EINVAL;
-			}
-			mem_zero(termios, sizeof(termios));
-			return write_current_user(arg2, termios,
-						  sizeof(termios)) == 0 ?
-			       0 : (u64)-LINUX_EINVAL;
-		}
-		if (arg1 == LINUX_TCSETS) {
-			return 0;
-		}
-		if (arg1 == LINUX_TIOCGPGRP) {
-			const int foreground_pgrp = 1;
-
-			if (arg2 == 0) {
-				return (u64)-LINUX_EINVAL;
-			}
-			return write_current_user(arg2, &foreground_pgrp,
-						  sizeof(foreground_pgrp)) == 0 ?
-			       0 : (u64)-LINUX_EINVAL;
-		}
-		if (arg1 == LINUX_TIOCSPGRP) {
-			return 0;
-		}
-		if (arg1 == LINUX_TIOCGWINSZ) {
-			u16 winsz[4] = { 25, 80, 0, 0 };
-
-			if (arg2 == 0) {
-				return (u64)-LINUX_EINVAL;
-			}
-			return write_current_user(arg2, winsz, sizeof(winsz)) == 0 ?
-			       0 : (u64)-LINUX_EINVAL;
+		if (arg1 == LINUX_TCGETS || arg1 == LINUX_TCSETS ||
+		    arg1 == LINUX_TIOCGPGRP || arg1 == LINUX_TIOCSPGRP ||
+		    arg1 == LINUX_TIOCGWINSZ) {
+			break;
 		}
 		return (u64)-LINUX_ENOTTY;
 	case LINUX_SYSCALL_FCNTL:
@@ -1582,6 +1549,91 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_ENOSYS;
 		}
 		return reply.words[0];
+	case LINUX_SYSCALL_GETPPID:
+	case LINUX_SYSCALL_GETPGRP:
+	case LINUX_SYSCALL_SETSID:
+		request.type = number == LINUX_SYSCALL_GETPPID ?
+			       USER_LINUX_GETPPID :
+			       number == LINUX_SYSCALL_GETPGRP ?
+			       USER_LINUX_GETPGRP : USER_LINUX_SETSID;
+		request.words[0] = 0;
+		request.words[1] = 0;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
+	case LINUX_SYSCALL_GETPGID:
+	case LINUX_SYSCALL_SETPGID:
+		request.type = number == LINUX_SYSCALL_GETPGID ?
+			       USER_LINUX_GETPGID : USER_LINUX_SETPGID;
+		request.words[0] = arg0;
+		request.words[1] = arg1;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
+	case LINUX_SYSCALL_IOCTL: {
+		struct shared_buffer *buffer = 0;
+		u64 output_size = 0;
+		u32 value = 0;
+
+		if (arg1 != LINUX_TCGETS && arg1 != LINUX_TCSETS &&
+		    arg1 != LINUX_TIOCGPGRP && arg1 != LINUX_TIOCSPGRP &&
+		    arg1 != LINUX_TIOCGWINSZ) {
+			return (u64)-LINUX_ENOTTY;
+		}
+		if (arg2 == 0 && arg1 != LINUX_TCSETS) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (arg1 == LINUX_TIOCSPGRP &&
+		    read_current_user(arg2, &value, sizeof(value)) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (arg1 == LINUX_TCGETS) {
+			output_size = 64;
+		} else if (arg1 == LINUX_TIOCGPGRP) {
+			output_size = sizeof(value);
+		} else if (arg1 == LINUX_TIOCGWINSZ) {
+			output_size = 8;
+		}
+		if (output_size != 0) {
+			buffer = buffer_create(output_size);
+			if (buffer == 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+		}
+
+		request.type = USER_LINUX_IOCTL;
+		request.words[0] = arg0;
+		request.words[1] = arg1;
+		request.words[2] = value;
+		request.words[3] = 0;
+		request.cap_type = buffer != 0 ? IPC_CAP_BUFFER : IPC_CAP_NONE;
+		request.cap_rights = buffer != 0 ? TASK_RIGHT_SEND : 0;
+		request.cap_object = buffer;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			if (buffer != 0) {
+				buffer_release(buffer);
+			}
+			return (u64)-LINUX_ENOSYS;
+		}
+		if (reply.words[0] == 0 && buffer != 0 &&
+		    buffer_read(buffer, 0, (void *)arg2, output_size) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+		if (buffer != 0) {
+			buffer_release(buffer);
+		}
+		return reply.words[0];
+	}
 	case LINUX_SYSCALL_WAIT4: {
 		struct shared_buffer *buffer = 0;
 

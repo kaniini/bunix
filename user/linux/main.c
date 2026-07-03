@@ -10,9 +10,15 @@ enum {
 	LINUX_ESRCH = 3,
 	LINUX_ECHILD = 10,
 	LINUX_WAIT_BLOCK = 0x7fffffff,
+	LINUX_NO_PROCESS = 0xffffffff,
 	LINUX_WNOHANG = 1,
 	LINUX_WUNTRACED = 2,
 	LINUX_WCONTINUED = 8,
+	LINUX_TCGETS = 0x5401,
+	LINUX_TCSETS = 0x5402,
+	LINUX_TIOCGPGRP = 0x540f,
+	LINUX_TIOCSPGRP = 0x5410,
+	LINUX_TIOCGWINSZ = 0x5413,
 	LINUX_MAX_WRITE = 4096,
 	LINUX_MAX_PATH = 32,
 	LINUX_STAT_SIZE = 144,
@@ -43,6 +49,11 @@ struct linux_process {
 	u64 pid;
 	u64 tid;
 	u64 ppid;
+	u64 pgid;
+	u64 sid;
+	u64 parent;
+	u64 first_child;
+	u64 next_sibling;
 	u64 bunix_task;
 	u64 bunix_thread;
 	u64 exited;
@@ -57,8 +68,82 @@ struct linux_process {
 static struct linux_process processes[LINUX_MAX_PROCESSES];
 static char write_buffer[LINUX_MAX_WRITE];
 static u64 next_pid = 1;
+static u64 foreground_pgid = 1;
 
 static void linux_process_reset(struct linux_process *process);
+
+static u64 linux_process_index(const struct linux_process *process)
+{
+	if (process == 0) {
+		return LINUX_NO_PROCESS;
+	}
+
+	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
+		if (&processes[i] == process) {
+			return i;
+		}
+	}
+
+	return LINUX_NO_PROCESS;
+}
+
+static struct linux_process *linux_process_at(u64 index)
+{
+	return index < LINUX_MAX_PROCESSES ? &processes[index] : 0;
+}
+
+static void linux_process_init_links(struct linux_process *process)
+{
+	process->parent = LINUX_NO_PROCESS;
+	process->first_child = LINUX_NO_PROCESS;
+	process->next_sibling = LINUX_NO_PROCESS;
+}
+
+static void linux_child_link(struct linux_process *parent,
+			     struct linux_process *child)
+{
+	if (parent == 0 || child == 0) {
+		return;
+	}
+
+	child->parent = linux_process_index(parent);
+	child->next_sibling = parent->first_child;
+	parent->first_child = linux_process_index(child);
+	child->ppid = parent->pid;
+}
+
+static void linux_child_unlink(struct linux_process *child)
+{
+	struct linux_process *parent;
+	u64 *link;
+	const u64 child_index = linux_process_index(child);
+
+	if (child == 0 || child->parent == LINUX_NO_PROCESS ||
+	    child_index == LINUX_NO_PROCESS) {
+		return;
+	}
+
+	parent = linux_process_at(child->parent);
+	if (parent == 0) {
+		return;
+	}
+
+	link = &parent->first_child;
+	while (*link != LINUX_NO_PROCESS) {
+		struct linux_process *candidate = linux_process_at(*link);
+
+		if (*link == child_index) {
+			*link = child->next_sibling;
+			child->parent = LINUX_NO_PROCESS;
+			child->next_sibling = LINUX_NO_PROCESS;
+			return;
+		}
+		if (candidate == 0) {
+			break;
+		}
+		link = &candidate->next_sibling;
+	}
+}
 
 static long register_service(u64 service)
 {
@@ -129,6 +214,13 @@ static void zero_bytes(char *buffer, u64 len)
 static void store_u32(char *buffer, u64 offset, unsigned int value)
 {
 	for (u64 i = 0; i < 4; i++) {
+		buffer[offset + i] = (char)((value >> (i * 8)) & 0xff);
+	}
+}
+
+static void store_u16(char *buffer, u64 offset, unsigned int value)
+{
+	for (u64 i = 0; i < 2; i++) {
 		buffer[offset + i] = (char)((value >> (i * 8)) & 0xff);
 	}
 }
@@ -251,6 +343,9 @@ static long linux_register_process(u64 bunix_task, u64 ppid)
 			processes[i].pid = pid;
 			processes[i].tid = pid;
 			processes[i].ppid = ppid;
+			processes[i].pgid = pid;
+			processes[i].sid = pid;
+			linux_process_init_links(&processes[i]);
 			processes[i].bunix_task = bunix_task;
 			processes[i].bunix_thread = 0;
 			processes[i].exited = 0;
@@ -260,6 +355,9 @@ static long linux_register_process(u64 bunix_task, u64 ppid)
 			processes[i].wait_buffer = 0;
 			processes[i].wait_pid = 0;
 			linux_process_init_fds(&processes[i]);
+			if (foreground_pgid == 0 || pid == 1) {
+				foreground_pgid = pid;
+			}
 			return (long)pid;
 		}
 	}
@@ -283,6 +381,10 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 			processes[i].pid = pid;
 			processes[i].tid = pid;
 			processes[i].ppid = parent->pid;
+			processes[i].pgid = parent->pgid;
+			processes[i].sid = parent->sid;
+			linux_process_init_links(&processes[i]);
+			linux_child_link(parent, &processes[i]);
 			processes[i].bunix_task = child_task;
 			processes[i].bunix_thread = 0;
 			processes[i].exited = 0;
@@ -316,12 +418,43 @@ static int linux_child_matches(const struct linux_process *parent,
 			       const struct linux_process *child, long pid)
 {
 	if (parent == 0 || child == 0 ||
-	    child->ppid != parent->pid ||
+	    child->parent != linux_process_index(parent) ||
 	    child->waited) {
 		return 0;
 	}
 
 	return pid == -1 || child->pid == (u64)pid;
+}
+
+static void linux_reparent_children(struct linux_process *process)
+{
+	struct linux_process *init = linux_process_find_pid(1);
+	u64 child_index;
+
+	if (process == 0 || process->first_child == LINUX_NO_PROCESS) {
+		return;
+	}
+
+	child_index = process->first_child;
+	process->first_child = LINUX_NO_PROCESS;
+
+	while (child_index != LINUX_NO_PROCESS) {
+		struct linux_process *child = linux_process_at(child_index);
+		u64 next;
+
+		if (child == 0) {
+			break;
+		}
+		next = child->next_sibling;
+		child->parent = LINUX_NO_PROCESS;
+		child->next_sibling = LINUX_NO_PROCESS;
+		if (init != 0 && init != process) {
+			linux_child_link(init, child);
+		} else {
+			child->ppid = 0;
+		}
+		child_index = next;
+	}
 }
 
 static int linux_store_wait_status(u64 buffer, u64 exit_status)
@@ -349,12 +482,20 @@ static long linux_wait4(struct linux_process *parent, long pid, u64 options,
 		return -LINUX_EINVAL;
 	}
 
-	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
-		if (!linux_child_matches(parent, &processes[i], pid)) {
+	for (u64 child_index = parent->first_child;
+	     child_index != LINUX_NO_PROCESS;) {
+		struct linux_process *child = linux_process_at(child_index);
+
+		if (child == 0) {
+			break;
+		}
+		child_index = child->next_sibling;
+
+		if (!linux_child_matches(parent, child, pid)) {
 			continue;
 		}
 
-		candidate = &processes[i];
+		candidate = child;
 		if (candidate->exited) {
 			const u64 waited_pid = candidate->pid;
 			if (linux_store_wait_status(status_buffer,
@@ -418,6 +559,101 @@ static void linux_wake_parent(struct linux_process *child)
 	parent->waiter = 0;
 	parent->wait_buffer = 0;
 	parent->wait_pid = 0;
+}
+
+static long linux_getpgid(struct linux_process *process, u64 pid)
+{
+	struct linux_process *target = pid == 0 ? process :
+				       linux_process_find_pid(pid);
+
+	if (target == 0) {
+		return -LINUX_ESRCH;
+	}
+	return (long)target->pgid;
+}
+
+static long linux_setpgid(struct linux_process *process, u64 pid, u64 pgid)
+{
+	struct linux_process *target = pid == 0 ? process :
+				       linux_process_find_pid(pid);
+
+	if (target == 0) {
+		return -LINUX_ESRCH;
+	}
+	if (target != process &&
+	    target->parent != linux_process_index(process)) {
+		return -LINUX_ESRCH;
+	}
+	target->pgid = pgid == 0 ? target->pid : pgid;
+	return 0;
+}
+
+static long linux_setsid(struct linux_process *process)
+{
+	if (process == 0) {
+		return -LINUX_ESRCH;
+	}
+
+	process->sid = process->pid;
+	process->pgid = process->pid;
+	foreground_pgid = process->pgid;
+	return (long)process->sid;
+}
+
+static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
+			u64 value, u64 buffer)
+{
+	char data[8];
+	u64 pgid;
+
+	if (fd >= LINUX_MAX_FDS ||
+	    process->fds[fd].kind != LINUX_FD_CONSOLE) {
+		return -LINUX_EBADF;
+	}
+
+	switch (request) {
+	case LINUX_TCGETS:
+		if (buffer == 0) {
+			return -LINUX_EINVAL;
+		}
+		zero_bytes(data, sizeof(data));
+		for (u64 offset = 0; offset < 64; offset += sizeof(data)) {
+			if (bunix_buffer_write(buffer, offset, data,
+					       sizeof(data)) != 0) {
+				return -LINUX_EINVAL;
+			}
+		}
+		return 0;
+	case LINUX_TCSETS:
+		return 0;
+	case LINUX_TIOCGPGRP:
+		if (buffer == 0) {
+			return -LINUX_EINVAL;
+		}
+		/* Until job-control stops exist, each caller is foreground. */
+		zero_bytes(data, sizeof(data));
+		store_u32(data, 0, (unsigned int)process->pgid);
+		return bunix_buffer_write(buffer, 0, data, 4) == 0 ?
+		       0 : -LINUX_EINVAL;
+	case LINUX_TIOCSPGRP:
+		pgid = value;
+		if (pgid == 0) {
+			return -LINUX_EINVAL;
+		}
+		foreground_pgid = pgid;
+		return 0;
+	case LINUX_TIOCGWINSZ:
+		if (buffer == 0) {
+			return -LINUX_EINVAL;
+		}
+		zero_bytes(data, sizeof(data));
+		store_u16(data, 0, 25);
+		store_u16(data, 2, 80);
+		return bunix_buffer_write(buffer, 0, data, 8) == 0 ?
+		       0 : -LINUX_EINVAL;
+	default:
+		return -LINUX_EINVAL;
+	}
 }
 
 static long linux_openat(struct linux_process *process, u64 dirfd,
@@ -655,10 +891,14 @@ static void linux_process_reset(struct linux_process *process)
 		return;
 	}
 
+	linux_child_unlink(process);
 	linux_close_process_fds(process);
 	process->pid = 0;
 	process->tid = 0;
 	process->ppid = 0;
+	process->pgid = 0;
+	process->sid = 0;
+	linux_process_init_links(process);
 	process->bunix_task = 0;
 	process->bunix_thread = 0;
 	process->exited = 0;
@@ -753,6 +993,34 @@ int main(void)
 			break;
 		case BUNIX_LINUX_GETTID:
 			reply.words[0] = process->tid;
+			break;
+		case BUNIX_LINUX_GETPPID:
+			reply.words[0] = process->ppid;
+			break;
+		case BUNIX_LINUX_GETPGRP:
+			reply.words[0] = process->pgid;
+			break;
+		case BUNIX_LINUX_GETPGID:
+			reply.words[0] = (u64)linux_getpgid(process,
+							    message.words[0]);
+			break;
+		case BUNIX_LINUX_SETPGID:
+			reply.words[0] = (u64)linux_setpgid(process,
+							    message.words[0],
+							    message.words[1]);
+			break;
+		case BUNIX_LINUX_SETSID:
+			reply.words[0] = (u64)linux_setsid(process);
+			break;
+		case BUNIX_LINUX_IOCTL:
+			reply.words[0] = (u64)linux_ioctl(process,
+							  message.words[0],
+							  message.words[1],
+							  message.words[2],
+							  message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
 			break;
 		case BUNIX_LINUX_WAIT4: {
 			const long waited = linux_wait4(process,
@@ -870,6 +1138,7 @@ int main(void)
 			break;
 		case BUNIX_LINUX_EXIT_GROUP:
 			linux_close_process_fds(process);
+			linux_reparent_children(process);
 			process->exited = 1;
 			process->exit_status = message.words[0];
 			bunix_console_write(exit_group, sizeof(exit_group) - 1);
