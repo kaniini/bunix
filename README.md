@@ -56,7 +56,9 @@ is a send-capability to the child's service port in the parent task. `recv`
 blocks the current thread and wakes when a sender queues an event. `ipc_call`
 uses a per-task private reply port, and received messages can carry a
 send-capability reply handle that the server can use without learning anything
-else about the caller.
+else about the caller. A task can also close one of its own handles, which
+clears only that task-local capability slot; the underlying object and any other
+task's capabilities remain untouched.
 
 The VM server owns the memory authority policy, but module task spaces are now
 granted through direct kernel VM calls during launch. That avoids a synchronous
@@ -153,7 +155,8 @@ receives it through blocking `recv`, sends a VM event through its inherited VM
 capability, exercises automatic CPU placement across both CPUs, and replies to
 init through the granted reply capability. Hello receives only console rights;
 the test also checks that its attempt to use the conventional VM handle is
-denied.
+denied. Ping closes its VM handle after one successful send and proves the local
+capability has been revoked by attempting a second VM send.
 
 For an interactive serial console:
 

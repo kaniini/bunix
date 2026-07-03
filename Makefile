@@ -233,6 +233,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "ipc: send port=ping type=1 sender=2 queued=1" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv port=ping type=1 sender=2 queued=0" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=vm type=1 sender=4" $(BUILD_DIR)/serial.log
+	grep -F "sched: close task=4 handle=3 type=port rights=0x5" $(BUILD_DIR)/serial.log
+	grep -F "sched: handle denied task=4 handle=3 need=0x1 rights=0x0" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=reply type=2 sender=4 queued=1" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv port=reply type=2 sender=4 queued=0" $(BUILD_DIR)/serial.log
 	grep -F "sched: preemption enabled" $(BUILD_DIR)/serial.log
@@ -251,6 +253,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "kernel: starting module server ping image=0x" $(BUILD_DIR)/serial.log
 	grep -F "elf: load vaddr=0x0000000000400000" $(BUILD_DIR)/serial.log
 	grep -F "ping: one" $(BUILD_DIR)/serial.log
+	grep -F "ping: vm closed" $(BUILD_DIR)/serial.log
 	grep -F "ping: two" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=2 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=3 exited" $(BUILD_DIR)/serial.log

@@ -13,6 +13,7 @@ enum {
 	BUNIX_SYSCALL_IPC_SEND = -12,
 	BUNIX_SYSCALL_IPC_RECV = -13,
 	BUNIX_SYSCALL_IPC_CALL = -14,
+	BUNIX_SYSCALL_HANDLE_CLOSE = -16,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_CONSOLE_WRITE = 1,
 	BUNIX_HANDLE_SELF = 1,
@@ -117,6 +118,11 @@ static inline long bunix_ipc_call(u64 port, const struct bunix_msg *request,
 {
 	return bunix_syscall3(BUNIX_SYSCALL_IPC_CALL, port, (u64)request,
 			      (u64)reply);
+}
+
+static inline long bunix_handle_close(u64 handle)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_HANDLE_CLOSE, handle);
 }
 
 static inline long bunix_console_write(const char *text, usize len)

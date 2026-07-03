@@ -490,6 +490,36 @@ struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
 	return port;
 }
 
+int task_close_handle(struct task *task, u64 handle)
+{
+	if (task == 0 || handle == 0 || handle > MAX_TASK_HANDLES) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	struct task_handle *task_handle = &task->handles[handle - 1];
+
+	if (task_handle->type == TASK_HANDLE_EMPTY) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		console_printf("sched: close denied task=%u handle=%u\n",
+			       task->pid, (u32)handle);
+		return -1;
+	}
+
+	const enum task_handle_type type = task_handle->type;
+	const u32 rights = task_handle->rights;
+
+	task_handle->type = TASK_HANDLE_EMPTY;
+	task_handle->rights = 0;
+	task_handle->object = 0;
+	spin_unlock_irqrestore(&task->lock, flags);
+
+	console_printf("sched: close task=%u handle=%u type=%s rights=0x%x\n",
+		       task->pid, (u32)handle,
+		       type == TASK_HANDLE_PORT ? "port" : "unknown", rights);
+	return 0;
+}
+
 struct ipc_port *task_reply_port(struct task *task)
 {
 	if (task == 0) {

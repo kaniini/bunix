@@ -39,6 +39,7 @@ u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights);
 u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle);
 struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
 				       u32 rights);
+int task_close_handle(struct task *task, u64 handle);
 struct ipc_port *task_reply_port(struct task *task);
 void sched_run(void);
 void sched_idle_loop(void) __attribute__((noreturn));
