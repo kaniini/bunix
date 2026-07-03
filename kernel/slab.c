@@ -5,6 +5,7 @@
 
 enum {
 	SLAB_MAGIC = 0x534c4142,
+	SLAB_LARGE_MAGIC = 0x534c4247,
 	SLAB_MIN_ALIGN = 16,
 };
 
@@ -30,6 +31,12 @@ struct slab_cache {
 	u32 object_size;
 	struct slab_header *slabs;
 	struct spinlock lock;
+};
+
+struct slab_large_header {
+	u32 magic;
+	u32 page_count;
+	u64 size;
 };
 
 static struct slab_cache slab_caches[] = {
@@ -115,6 +122,25 @@ static struct slab_header *slab_grow(struct slab_cache *cache)
 	return slab;
 }
 
+static void *slab_alloc_large(u64 size)
+{
+	const u64 offset = align_up(sizeof(struct slab_large_header),
+				    SLAB_MIN_ALIGN);
+	const u64 bytes = align_up(offset + size, PMM_PAGE_SIZE);
+	const u64 pages = bytes / PMM_PAGE_SIZE;
+	const u64 base = pmm_pages_alloc_contiguous(pages);
+
+	if (base == 0) {
+		return 0;
+	}
+
+	struct slab_large_header *header = (struct slab_large_header *)base;
+	header->magic = SLAB_LARGE_MAGIC;
+	header->page_count = pages;
+	header->size = size;
+	return (void *)(base + offset);
+}
+
 void slab_init(void)
 {
 	for (u32 i = 0; i < sizeof(slab_caches) / sizeof(slab_caches[0]); i++) {
@@ -137,7 +163,7 @@ void *slab_alloc(u64 size)
 
 	struct slab_cache *cache = cache_for_size(size);
 	if (cache == 0) {
-		return 0;
+		return slab_alloc_large(size);
 	}
 
 	const u64 flags = spin_lock_irqsave(&cache->lock);
@@ -174,6 +200,20 @@ void *slab_zalloc(u64 size)
 void slab_free(void *ptr)
 {
 	if (ptr == 0) {
+		return;
+	}
+
+	const u64 large_base = (u64)ptr -
+			       align_up(sizeof(struct slab_large_header),
+					SLAB_MIN_ALIGN);
+	struct slab_large_header *large =
+		(struct slab_large_header *)large_base;
+	if ((large_base & (PMM_PAGE_SIZE - 1)) == 0 &&
+	    large->magic == SLAB_LARGE_MAGIC) {
+		const u32 pages = large->page_count;
+
+		large->magic = 0;
+		pmm_pages_free_contiguous(large_base, pages);
 		return;
 	}
 

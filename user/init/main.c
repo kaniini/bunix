@@ -297,6 +297,7 @@ int main(void)
 		return 1;
 	}
 	bunix_console_write(shell_spawned, sizeof(shell_spawned) - 1);
+	bunix_console_logs_to_ring();
 
 	return 0;
 }

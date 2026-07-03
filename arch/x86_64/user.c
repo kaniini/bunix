@@ -67,11 +67,13 @@ enum {
 	LINUX_SYSCALL_GETCWD = 79,
 	LINUX_SYSCALL_CHDIR = 80,
 	LINUX_SYSCALL_GETUID = 102,
+	LINUX_SYSCALL_SYSLOG = 103,
 	LINUX_SYSCALL_GETGID = 104,
 	LINUX_SYSCALL_GETEUID = 107,
 	LINUX_SYSCALL_GETEGID = 108,
 	LINUX_SYSCALL_GETPPID = 110,
 	LINUX_SYSCALL_GETPGRP = 111,
+	LINUX_SYSCALL_CLONE = 56,
 	LINUX_SYSCALL_FORK = 57,
 	LINUX_SYSCALL_VFORK = 58,
 	LINUX_SYSCALL_KILL = 62,
@@ -134,6 +136,8 @@ enum {
 	USER_FOURCC_LINX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
 	USER_FOURCC_VFS = ('V') | ('F' << 8) | ('S' << 16) | ('0' << 24),
 	USER_CONSOLE_WRITE = 1,
+	USER_CONSOLE_LOG = 2,
+	USER_CONSOLE_LOGS_TO_RING = 3,
 	USER_VFS_OPEN = 4,
 	USER_VFS_STAT = 5,
 	USER_VFS_READ_FILE_BUFFER = 6,
@@ -425,6 +429,32 @@ static int console_write_user(u64 vaddr, u64 len)
 			return -1;
 		}
 		console_write_len((const char *)buffer, chunk);
+		done += chunk;
+	}
+
+	return 0;
+}
+
+static int console_log_user(u64 vaddr, u64 len)
+{
+	enum {
+		CONSOLE_COPY_CHUNK = 128,
+	};
+
+	u8 buffer[CONSOLE_COPY_CHUNK];
+	u64 done = 0;
+
+	if (vaddr == 0) {
+		return -1;
+	}
+
+	while (done < len) {
+		const u64 chunk = min_u64(len - done, CONSOLE_COPY_CHUNK);
+
+		if (read_current_user(vaddr + done, buffer, chunk) != 0) {
+			return -1;
+		}
+		console_log_write_len((const char *)buffer, chunk);
 		done += chunk;
 	}
 
@@ -919,6 +949,8 @@ static const char *linux_syscall_name(u64 number)
 		return "chdir";
 	case LINUX_SYSCALL_GETUID:
 		return "getuid";
+	case LINUX_SYSCALL_SYSLOG:
+		return "syslog";
 	case LINUX_SYSCALL_GETGID:
 		return "getgid";
 	case LINUX_SYSCALL_GETEUID:
@@ -935,6 +967,8 @@ static const char *linux_syscall_name(u64 number)
 		return "setpgid";
 	case LINUX_SYSCALL_SETSID:
 		return "setsid";
+	case LINUX_SYSCALL_CLONE:
+		return "clone";
 	case LINUX_SYSCALL_FORK:
 		return "fork";
 	case LINUX_SYSCALL_VFORK:
@@ -1112,6 +1146,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			       task_id(task), (const void *)base, (u32)len);
 		return 0;
 	}
+	case LINUX_SYSCALL_CLONE:
 	case LINUX_SYSCALL_FORK:
 	case LINUX_SYSCALL_VFORK: {
 		struct task *child = server_task_fork_current(frame);
@@ -1176,6 +1211,51 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_GETEUID:
 	case LINUX_SYSCALL_GETEGID:
 		return 0;
+	case LINUX_SYSCALL_SYSLOG: {
+		enum {
+			LINUX_SYSLOG_ACTION_READ = 2,
+			LINUX_SYSLOG_ACTION_READ_ALL = 3,
+			LINUX_SYSLOG_ACTION_READ_CLEAR = 4,
+			LINUX_SYSLOG_ACTION_CLEAR = 5,
+			LINUX_SYSLOG_ACTION_CONSOLE_OFF = 6,
+			LINUX_SYSLOG_ACTION_CONSOLE_ON = 7,
+			LINUX_SYSLOG_ACTION_CONSOLE_LEVEL = 8,
+			LINUX_SYSLOG_ACTION_SIZE_BUFFER = 10,
+		};
+		const u64 size = min_u64(console_log_size(),
+					 LINUX_MAX_SYSCALL_BUFFER);
+		u64 nread;
+		u64 flags;
+
+		switch (arg0) {
+		case LINUX_SYSLOG_ACTION_SIZE_BUFFER:
+			return size;
+		case LINUX_SYSLOG_ACTION_CLEAR:
+		case LINUX_SYSLOG_ACTION_CONSOLE_OFF:
+		case LINUX_SYSLOG_ACTION_CONSOLE_ON:
+		case LINUX_SYSLOG_ACTION_CONSOLE_LEVEL:
+			return 0;
+		case LINUX_SYSLOG_ACTION_READ:
+		case LINUX_SYSLOG_ACTION_READ_ALL:
+		case LINUX_SYSLOG_ACTION_READ_CLEAR:
+			if (arg1 == 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+			nread = min_u64(arg2, size);
+			flags = spin_lock_irqsave(&syscall_copy_lock);
+			nread = console_log_read((char *)syscall_copy_buffer,
+						 nread);
+			if (write_current_user(arg1, syscall_copy_buffer,
+					       nread) != 0) {
+				spin_unlock_irqrestore(&syscall_copy_lock, flags);
+				return (u64)-LINUX_EINVAL;
+			}
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			return nread;
+		default:
+			return (u64)-LINUX_EINVAL;
+		}
+	}
 	case LINUX_SYSCALL_GETPPID:
 		return 1;
 	case LINUX_SYSCALL_GETPGRP:
@@ -2126,10 +2206,21 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 
 		if (port != 0 &&
 		    user_message.protocol == USER_FOURCC_CONS &&
-		    user_message.type == USER_CONSOLE_WRITE &&
 		    str_eq(ipc_port_name(port), "console")) {
-			return (u64)console_write_user(user_message.words[0],
-						       user_message.words[1]);
+			if (user_message.type == USER_CONSOLE_WRITE) {
+				return (u64)console_write_user(
+					user_message.words[0],
+					user_message.words[1]);
+			}
+			if (user_message.type == USER_CONSOLE_LOG) {
+				return (u64)console_log_user(
+					user_message.words[0],
+					user_message.words[1]);
+			}
+			if (user_message.type == USER_CONSOLE_LOGS_TO_RING) {
+				console_logs_to_ring();
+				return 0;
+			}
 		}
 
 		struct ipc_message message = {

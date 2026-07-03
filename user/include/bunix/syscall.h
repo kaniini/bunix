@@ -88,6 +88,8 @@ enum {
 	BUNIX_SERVICE_BLOCK = BUNIX_PROTO_BLOCK,
 	BUNIX_SERVICE_VFS = BUNIX_PROTO_VFS,
 	BUNIX_CONSOLE_WRITE = 1,
+	BUNIX_CONSOLE_LOG = 2,
+	BUNIX_CONSOLE_LOGS_TO_RING = 3,
 	BUNIX_HANDLE_SELF = 1,
 	BUNIX_HANDLE_CONSOLE = 2,
 	BUNIX_HANDLE_VM = 3,
@@ -313,12 +315,27 @@ static inline long bunix_console_write(const char *text, usize len)
 {
 	const struct bunix_msg message = {
 		.protocol = BUNIX_PROTO_CONSOLE,
-		.type = BUNIX_CONSOLE_WRITE,
+		.type = BUNIX_CONSOLE_LOG,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply = 0,
 		.cap = 0,
 		.words = { (u64)text, len, 0, 0 },
+	};
+
+	return bunix_ipc_send(BUNIX_HANDLE_CONSOLE, &message);
+}
+
+static inline long bunix_console_logs_to_ring(void)
+{
+	const struct bunix_msg message = {
+		.protocol = BUNIX_PROTO_CONSOLE,
+		.type = BUNIX_CONSOLE_LOGS_TO_RING,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
 	};
 
 	return bunix_ipc_send(BUNIX_HANDLE_CONSOLE, &message);

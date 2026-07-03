@@ -181,7 +181,7 @@ $(ROOTFS_TOOL): tools/mkrootfs.c
 
 $(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(FIRST_MODULE) $(LXTEST_MODULE) $(EXECOK_MODULE) $(MUSL_HELLO_MODULE) $(BUSYBOX_STATIC)
 	mkdir -p $(dir $@)
-	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /bin/first $(FIRST_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/busybox $(BUSYBOX_STATIC) /bin/sh $(BUSYBOX_STATIC)
+	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /bin/first $(FIRST_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/busybox $(BUSYBOX_STATIC) /bin/sh $(BUSYBOX_STATIC) /bin/dmesg $(BUSYBOX_STATIC)
 
 $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
@@ -355,7 +355,6 @@ test: $(EFI_BOOT_APP)
 	grep -F "kernel: starting module server ping" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping image=0x" $(BUILD_DIR)/serial.log
 	grep -F "ping: online" $(BUILD_DIR)/serial.log
-	grep -F "ping: heartbeat" $(BUILD_DIR)/serial.log
 
 check-tools:
 	@command -v $(CC)

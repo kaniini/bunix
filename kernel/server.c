@@ -52,11 +52,11 @@ struct fork_start {
 	struct arch_syscall_frame frame;
 };
 
-static struct task_start task_starts[16];
+static struct task_start task_starts[64];
 static u32 task_start_count;
-static struct fork_start fork_starts[16];
+static struct fork_start fork_starts[64];
 static u32 fork_start_count;
-static char task_names[16][32];
+static char task_names[64][32];
 static u32 task_name_count;
 
 static int str_eq(const char *left, const char *right);

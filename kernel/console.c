@@ -10,12 +10,17 @@ enum {
 	VGA_TEXT_BUFFER = 0xb8000,
 	VGA_ATTR = 0x0f,
 	COM1 = 0x3f8,
+	CONSOLE_LOG_BUFFER_SIZE = 32768,
 };
 
 static u16 *const vga = (u16 *)VGA_TEXT_BUFFER;
 static u32 cursor_row;
 static u32 cursor_col;
 static struct spinlock console_lock = SPINLOCK_INIT("console");
+static char console_log_buffer[CONSOLE_LOG_BUFFER_SIZE];
+static u64 console_log_start;
+static u64 console_log_len;
+static int console_log_ring_only;
 
 enum console_log_level {
 	CONSOLE_LOG_ERROR,
@@ -276,6 +281,41 @@ static void console_write_raw(const char *text)
 	}
 }
 
+static void console_log_putc_raw(char c)
+{
+	if (console_log_len < CONSOLE_LOG_BUFFER_SIZE) {
+		console_log_buffer[(console_log_start + console_log_len) %
+				   CONSOLE_LOG_BUFFER_SIZE] = c;
+		console_log_len++;
+	} else {
+		console_log_buffer[console_log_start] = c;
+		console_log_start =
+			(console_log_start + 1) % CONSOLE_LOG_BUFFER_SIZE;
+	}
+}
+
+static void console_log_write_raw(const char *text)
+{
+	while (*text != '\0') {
+		console_log_putc_raw(*text++);
+	}
+}
+
+static void console_log_emit_raw(char c)
+{
+	console_log_putc_raw(c);
+	if (!console_log_ring_only) {
+		console_putc_raw(c);
+	}
+}
+
+static void console_log_emit_text_raw(const char *text)
+{
+	while (*text != '\0') {
+		console_log_emit_raw(*text++);
+	}
+}
+
 static void console_write_token_raw(const char *text)
 {
 	while (*text != '\0' && *text != ' ') {
@@ -291,6 +331,16 @@ void console_set_verbosity(const char *level)
 	console_write_raw("kernel: log level ");
 	console_write_token_raw(level != 0 ? level : "info");
 	console_putc_raw('\n');
+
+	spin_unlock_irqrestore(&console_lock, flags);
+}
+
+void console_logs_to_ring(void)
+{
+	const u64 flags = spin_lock_irqsave(&console_lock);
+
+	console_log_ring_only = 1;
+	console_log_write_raw("kernel: console logs routed to dmesg\n");
 
 	spin_unlock_irqrestore(&console_lock, flags);
 }
@@ -320,6 +370,43 @@ void console_write_len(const char *text, u64 len)
 	}
 
 	spin_unlock_irqrestore(&console_lock, flags);
+}
+
+void console_log_write_len(const char *text, u64 len)
+{
+	const u64 flags = spin_lock_irqsave(&console_lock);
+
+	for (u64 i = 0; i < len; i++) {
+		console_log_emit_raw(text[i]);
+	}
+
+	spin_unlock_irqrestore(&console_lock, flags);
+}
+
+u64 console_log_size(void)
+{
+	const u64 flags = spin_lock_irqsave(&console_lock);
+	const u64 len = console_log_len;
+
+	spin_unlock_irqrestore(&console_lock, flags);
+	return len;
+}
+
+u64 console_log_read(char *buffer, u64 len)
+{
+	const u64 flags = spin_lock_irqsave(&console_lock);
+	const u64 nread = len < console_log_len ? len : console_log_len;
+	const u64 offset = console_log_len - nread;
+
+	for (u64 i = 0; i < nread; i++) {
+		const u64 index = (console_log_start + offset + i) %
+				  CONSOLE_LOG_BUFFER_SIZE;
+
+		buffer[i] = console_log_buffer[index];
+	}
+
+	spin_unlock_irqrestore(&console_lock, flags);
+	return nread;
 }
 
 u64 console_read_line(char *buffer, u64 len)
@@ -398,40 +485,41 @@ void console_write_hex64(u64 value)
 	spin_unlock_irqrestore(&console_lock, flags);
 }
 
-static void console_write_uint_raw(u64 value, u32 base, int is_signed)
+static void console_log_write_uint_raw(u64 value, u32 base, int is_signed)
 {
 	char buffer[32];
 	u32 cursor = 0;
 
 	if (is_signed && (i64)value < 0) {
-		console_putc_raw('-');
+		console_log_emit_raw('-');
 		value = (u64)(-(i64)value);
 	}
 
 	if (value == 0) {
-		console_putc_raw('0');
+		console_log_emit_raw('0');
 		return;
 	}
 
 	while (value != 0) {
 		const u32 digit = value % base;
-		buffer[cursor++] = (char)(digit < 10 ? '0' + digit : 'a' + digit - 10);
+		buffer[cursor++] = (char)(digit < 10 ? '0' + digit :
+					  'a' + digit - 10);
 		value /= base;
 	}
 
 	while (cursor > 0) {
-		console_putc_raw(buffer[--cursor]);
+		console_log_emit_raw(buffer[--cursor]);
 	}
 }
 
-static void console_write_pointer_raw(const void *ptr)
+static void console_log_write_pointer_raw(const void *ptr)
 {
 	const u64 value = (u64)ptr;
 	static const char digits[] = "0123456789abcdef";
 
-	console_write_raw("0x");
+	console_log_emit_text_raw("0x");
 	for (int shift = 60; shift >= 0; shift -= 4) {
-		console_putc_raw(digits[(value >> shift) & 0x0f]);
+		console_log_emit_raw(digits[(value >> shift) & 0x0f]);
 	}
 }
 
@@ -439,44 +527,46 @@ static void console_vprintf_raw(const char *fmt, va_list args)
 {
 	while (*fmt != '\0') {
 		if (*fmt != '%') {
-			console_putc_raw(*fmt++);
+			console_log_emit_raw(*fmt++);
 			continue;
 		}
 
 		fmt++;
 		switch (*fmt) {
 		case '\0':
-			console_putc_raw('%');
+			console_log_emit_raw('%');
 			return;
 		case '%':
-			console_putc_raw('%');
+			console_log_emit_raw('%');
 			break;
 		case 'c':
-			console_putc_raw((char)va_arg(args, int));
+			console_log_emit_raw((char)va_arg(args, int));
 			break;
 		case 's': {
 			const char *text = va_arg(args, const char *);
-			console_write_raw(text != 0 ? text : "(null)");
+			console_log_emit_text_raw(text != 0 ? text : "(null)");
 			break;
 		}
 		case 'd':
 		case 'i':
-			console_write_uint_raw((u64)va_arg(args, int), 10, 1);
+			console_log_write_uint_raw((u64)va_arg(args, int),
+						   10, 1);
 			break;
 		case 'u':
-			console_write_uint_raw((u64)va_arg(args, unsigned int),
-					       10, 0);
+			console_log_write_uint_raw(
+				(u64)va_arg(args, unsigned int), 10, 0);
 			break;
 		case 'x':
-			console_write_uint_raw((u64)va_arg(args, unsigned int),
-					       16, 0);
+			console_log_write_uint_raw(
+				(u64)va_arg(args, unsigned int), 16, 0);
 			break;
 		case 'p':
-			console_write_pointer_raw(va_arg(args, const void *));
+			console_log_write_pointer_raw(va_arg(args,
+							     const void *));
 			break;
 		default:
-			console_putc_raw('%');
-			console_putc_raw(*fmt);
+			console_log_emit_raw('%');
+			console_log_emit_raw(*fmt);
 			break;
 		}
 
