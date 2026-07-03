@@ -44,6 +44,7 @@ struct run_queue {
 	struct thread *head;
 	struct thread *tail;
 	u32 count;
+	u32 idle;
 	struct spinlock lock;
 };
 
@@ -107,15 +108,17 @@ static void sched_enqueue_on(struct cpu_sched *cpu, struct thread *thread)
 {
 	const u32 remote = cpu->id != sched_current_cpu_id();
 	const u64 flags = spin_lock_irqsave(&cpu->runq.lock);
+	const u32 was_idle = cpu->runq.idle;
 
 	thread->cpu_id = cpu->id;
 	thread->state = THREAD_READY;
+	cpu->runq.idle = 0;
 	runq_push(&cpu->runq, thread);
 	console_printf("sched: enqueue tid=%u cpu=%u runq=%u\n",
 		       thread->tid, cpu->id, cpu->runq.count);
 	spin_unlock_irqrestore(&cpu->runq.lock, flags);
 
-	if (remote) {
+	if (remote && was_idle) {
 		arch_smp_send_scheduler_ipi(cpu->id);
 	}
 }
@@ -165,6 +168,7 @@ void sched_init(void)
 		cpus[i].runq.head = 0;
 		cpus[i].runq.tail = 0;
 		cpus[i].runq.count = 0;
+		cpus[i].runq.idle = 0;
 		spinlock_init(&cpus[i].runq.lock, "runq");
 
 		cpus[i].scheduler_thread.tid = 0;
@@ -197,10 +201,7 @@ void sched_secondary_start(u32 cpu_id)
 
 	console_printf("sched: cpu=%u online\n", cpu_id);
 
-	for (;;) {
-		sched_run();
-		__asm__ volatile ("pause");
-	}
+	sched_idle_loop();
 }
 
 struct task *task_create(const char *name, struct vm_space *vm_space)
@@ -382,6 +383,31 @@ void sched_run(void)
 		sched_activate_thread_space(next);
 		arch_thread_switch(&prev->context, &next->context);
 		sched_activate_thread_space(cpu->current);
+	}
+}
+
+static void sched_idle_wait(struct cpu_sched *cpu)
+{
+	__asm__ volatile ("cli" ::: "memory");
+
+	const u64 flags = spin_lock_irqsave(&cpu->runq.lock);
+	if (cpu->runq.count == 0) {
+		cpu->runq.idle = 1;
+		spin_unlock_irqrestore(&cpu->runq.lock, flags);
+		__asm__ volatile ("sti; hlt" ::: "memory");
+		return;
+	}
+
+	cpu->runq.idle = 0;
+	spin_unlock_irqrestore(&cpu->runq.lock, flags);
+	__asm__ volatile ("sti" ::: "memory");
+}
+
+void sched_idle_loop(void)
+{
+	for (;;) {
+		sched_run();
+		sched_idle_wait(sched_current_cpu());
 	}
 }
 

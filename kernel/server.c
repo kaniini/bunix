@@ -39,7 +39,8 @@ static u32 module_cpu_id(const struct server *server)
 		return 0;
 	}
 
-	if (server->start != 0 || str_eq(server->name, "hello")) {
+	if (server->start != 0 || str_eq(server->name, "hello") ||
+	    str_eq(server->name, "ping")) {
 		return 1;
 	}
 

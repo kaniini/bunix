@@ -18,9 +18,13 @@ enum {
 	LAPIC_REG_ID = 0x20,
 	LAPIC_REG_EOI = 0xb0,
 	LAPIC_REG_SVR = 0xf0,
+	LAPIC_REG_LVT_TIMER = 0x320,
 	LAPIC_REG_ICR_LOW = 0x300,
 	LAPIC_REG_ICR_HIGH = 0x310,
+	LAPIC_REG_TIMER_INIT_COUNT = 0x380,
+	LAPIC_REG_TIMER_DIVIDE = 0x3e0,
 	LAPIC_ENABLE = 1 << 8,
+	LAPIC_TIMER_PERIODIC = 1 << 17,
 	LAPIC_ICR_DELIVERY_STATUS = 1 << 12,
 	LAPIC_ICR_INIT = 5 << 8,
 	LAPIC_ICR_STARTUP = 6 << 8,
@@ -29,6 +33,8 @@ enum {
 	LAPIC_ICR_TRIGGER_LEVEL = 1 << 15,
 	MSR_GS_BASE = 0xc0000101,
 	IRQ_SCHED_IPI_VECTOR = 64,
+	IRQ_LAPIC_TIMER_VECTOR = 65,
+	LAPIC_TIMER_INITIAL_COUNT = 1000000,
 };
 
 struct cpu_local {
@@ -242,6 +248,26 @@ static void lapic_eoi(void)
 	lapic_write(LAPIC_REG_EOI, 0);
 }
 
+static void lapic_enable_current_cpu(void)
+{
+	lapic_write(LAPIC_REG_SVR, lapic_read(LAPIC_REG_SVR) | LAPIC_ENABLE | 0xff);
+}
+
+static void lapic_timer_init_current_cpu(void)
+{
+	if (!lapic_ready) {
+		return;
+	}
+
+	lapic_enable_current_cpu();
+	lapic_write(LAPIC_REG_TIMER_DIVIDE, 0x3);
+	lapic_write(LAPIC_REG_LVT_TIMER,
+		    LAPIC_TIMER_PERIODIC | IRQ_LAPIC_TIMER_VECTOR);
+	lapic_write(LAPIC_REG_TIMER_INIT_COUNT, LAPIC_TIMER_INITIAL_COUNT);
+	console_printf("timer: lapic cpu=%u periodic\n",
+		       arch_smp_current_cpu_id());
+}
+
 static void delay_ticks(u64 ticks)
 {
 	const u64 end = timer_ticks() + ticks;
@@ -272,9 +298,9 @@ static int lapic_init(void)
 		return -1;
 	}
 
-	lapic_write(LAPIC_REG_SVR, lapic_read(LAPIC_REG_SVR) | LAPIC_ENABLE | 0xff);
 	set_current_cpu_id(cpu_index_from_lapic_id(lapic_read(LAPIC_REG_ID) >> 24));
 	lapic_ready = 1;
+	lapic_timer_init_current_cpu();
 	return 0;
 }
 
@@ -426,6 +452,11 @@ void arch_smp_handle_scheduler_ipi(void)
 	lapic_eoi();
 }
 
+void arch_smp_handle_timer_interrupt(void)
+{
+	lapic_eoi();
+}
+
 u32 arch_smp_started_count(void)
 {
 	return ap_started_count;
@@ -460,6 +491,7 @@ void arch_smp_ap_entry(u32 cpu_index)
 
 	arch_interrupts_load();
 	arch_user_init_cpu(cpu_index);
+	lapic_timer_init_current_cpu();
 	__sync_fetch_and_add(&ap_scheduler_count, 1);
 	sched_secondary_start(cpu_index);
 }

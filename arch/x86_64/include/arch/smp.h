@@ -11,6 +11,7 @@ u32 arch_smp_lapic_id(u32 cpu_index);
 u64 arch_smp_lapic_address(void);
 void arch_smp_send_scheduler_ipi(u32 cpu_index);
 void arch_smp_handle_scheduler_ipi(void);
+void arch_smp_handle_timer_interrupt(void);
 u32 arch_smp_started_count(void);
 
 #endif

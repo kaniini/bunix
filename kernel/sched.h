@@ -33,6 +33,7 @@ u64 task_grant_port(struct task *task, struct ipc_port *port);
 struct ipc_port *task_port_from_handle(struct task *task, u64 handle);
 struct ipc_port *task_reply_port(struct task *task);
 void sched_run(void);
+void sched_idle_loop(void) __attribute__((noreturn));
 void thread_yield(void);
 void thread_block(void);
 void thread_unblock(struct thread *thread);

@@ -39,10 +39,7 @@ void kernel_main(u32 magic, u64 multiboot_info)
 	arch_smp_release_aps();
 	server_start_boot_modules(multiboot_info);
 	sched_enable_preemption();
-	sched_run();
 
 	console_printf("kernel: idle\n");
-	for (;;) {
-		__asm__ volatile ("hlt");
-	}
+	sched_idle_loop();
 }

@@ -24,6 +24,7 @@ ISR_ERR 13
 ISR_ERR 14
 ISR_NOERR 32
 ISR_NOERR 64
+ISR_NOERR 65
 
 .global isr_common
 .type isr_common, @function

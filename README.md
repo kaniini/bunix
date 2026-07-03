@@ -93,12 +93,13 @@ trampoline, and starts the second CPU with INIT/SIPI. APs enter 64-bit C code,
 load their own IDT, GDT, TSS, syscall MSRs, and syscall stack slot, then the BSP
 releases them into the common scheduler's secondary loop.
 
-Remote run-queue enqueue sends a scheduler IPI to the target CPU. The current
-boot policy pins init and ping to CPU 0 while running the kernel-hosted VM
-server and hello user module on CPU 1, which exercises user entry, syscalls, IPC
-wakeups, and server work across CPUs. AP idle currently polls with `pause` to
-avoid a lost wakeup race; a proper idle state protocol and local APIC timer are
-the next pieces needed for fully efficient SMP scheduling.
+Idle CPUs mark themselves idle under the run-queue lock and then enter
+`sti; hlt` only after a final locked runnable check. Remote run-queue enqueue
+clears that idle state under the same lock and sends a scheduler IPI when the
+target CPU was sleeping. The current boot policy pins init to CPU 0 while
+running the kernel-hosted VM server, hello, and ping user modules on CPU 1,
+which exercises user entry, syscalls, IPC wakeups, server work, and timer
+preemption across CPUs.
 
 Each task owns a `vm_space` granted by the VM server facade. On x86_64, a VM
 space contains a real PML4, PDPT, and page directory, currently identity-mapping
@@ -109,11 +110,12 @@ the broad user-visible identity map.
 
 ## Interrupts
 
-x86_64 installs an IDT, remaps the legacy PIC, and starts the PIT at 100 Hz.
-Timer interrupts drive scheduler ticks. User threads have separate trap stacks
-for ring-3 interrupts, and the kernel enables preemption before normal server
-scheduling. The scheduler preempts only interrupted user-mode frames, leaving
-kernel/syscall critical paths non-preemptible for now.
+x86_64 installs an IDT, remaps the legacy PIC, starts the PIT at 100 Hz for the
+global bootstrap clock, and programs each online CPU's local APIC timer for
+periodic scheduler ticks. User threads have separate trap stacks for ring-3
+interrupts, and the kernel enables preemption before normal server scheduling.
+The scheduler preempts only interrupted user-mode frames, leaving kernel/syscall
+critical paths non-preemptible for now.
 
 ## Build
 
@@ -135,8 +137,8 @@ started VM plus init, init received its boot capabilities, and init launched the
 hello and ping C servers with explicit inherited handles. Init sends ping a
 synchronous user IPC call through the returned service-port handle, ping
 receives it through blocking `recv`, sends a VM event through its inherited VM
-capability, exercises timer-driven preemption while the VM server handles the
-event, and replies to init through the granted reply capability.
+capability, exercises local-APIC timer preemption on CPU 1 while the VM server
+handles the event, and replies to init through the granted reply capability.
 
 For an interactive serial console:
 

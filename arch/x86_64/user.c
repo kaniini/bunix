@@ -131,6 +131,16 @@ void arch_user_init_cpu(u32 cpu_id)
 	gdt_set_tss(cpu, 5, (u64)&cpu->tss, sizeof(cpu->tss) - 1);
 
 	__asm__ volatile ("lgdt %0" : : "m"(ptr));
+	/* APs arrive on the trampoline GDT; reload CS before interrupts return. */
+	__asm__ volatile (
+		"pushq %[code]\n"
+		"leaq 1f(%%rip), %%rax\n"
+		"pushq %%rax\n"
+		"lretq\n"
+		"1:\n"
+		:
+		: [code] "i"(GDT_KERNEL_CODE)
+		: "rax", "memory");
 	__asm__ volatile (
 		"movw %0, %%ds\n"
 		"movw %0, %%es\n"

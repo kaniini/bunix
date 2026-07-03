@@ -21,6 +21,7 @@ enum {
 
 	IRQ_TIMER_VECTOR = 32,
 	IRQ_SCHED_IPI_VECTOR = 64,
+	IRQ_LAPIC_TIMER_VECTOR = 65,
 };
 
 struct idt_entry {
@@ -48,6 +49,7 @@ extern void isr_stub_13(void);
 extern void isr_stub_14(void);
 extern void isr_stub_32(void);
 extern void isr_stub_64(void);
+extern void isr_stub_65(void);
 
 static void idt_set_gate_flags(u8 vector, void (*handler)(void), u8 flags)
 {
@@ -137,6 +139,14 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 		return;
 	}
 
+	if (frame->vector == IRQ_LAPIC_TIMER_VECTOR) {
+		arch_smp_handle_timer_interrupt();
+		if ((frame->cs & 3) == 3) {
+			sched_tick();
+		}
+		return;
+	}
+
 	console_printf("interrupts: vector=%u error=0x%x rip=%p\n",
 		       (u32)frame->vector, (u32)frame->error_code,
 		       (const void *)frame->rip);
@@ -155,6 +165,7 @@ void arch_interrupts_init(void)
 	idt_set_gate(14, isr_stub_14);
 	idt_set_gate(IRQ_TIMER_VECTOR, isr_stub_32);
 	idt_set_gate(IRQ_SCHED_IPI_VECTOR, isr_stub_64);
+	idt_set_gate(IRQ_LAPIC_TIMER_VECTOR, isr_stub_65);
 	arch_interrupts_load();
 	console_printf("interrupts: idt loaded\n");
 
