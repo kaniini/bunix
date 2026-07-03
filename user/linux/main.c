@@ -6,9 +6,11 @@ enum {
 	LINUX_ENOENT = 2,
 	LINUX_EINVAL = 22,
 	LINUX_EMFILE = 24,
+	LINUX_ESRCH = 3,
 	LINUX_MAX_WRITE = 4096,
 	LINUX_MAX_PATH = 32,
 	LINUX_STAT_SIZE = 144,
+	LINUX_MAX_PROCESSES = 16,
 	LINUX_S_IFCHR = 0020000,
 	LINUX_S_IFREG = 0100000,
 	LINUX_FD_CONSOLE = 1,
@@ -23,8 +25,17 @@ struct linux_fd {
 	u64 size;
 };
 
+struct linux_process {
+	u64 pid;
+	u64 tid;
+	u64 bunix_task;
+	u64 bunix_thread;
+};
+
 static struct linux_fd fds[16];
+static struct linux_process processes[LINUX_MAX_PROCESSES];
 static char write_buffer[LINUX_MAX_WRITE];
+static u64 next_pid = 1;
 
 static void zero_bytes(char *buffer, u64 len)
 {
@@ -86,6 +97,43 @@ static long alloc_fd(u64 kind, u64 handle, u64 size)
 	}
 
 	return -LINUX_EMFILE;
+}
+
+static struct linux_process *linux_process_find(u64 bunix_task)
+{
+	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
+		if (processes[i].bunix_task == bunix_task) {
+			return &processes[i];
+		}
+	}
+
+	return 0;
+}
+
+static struct linux_process *linux_process_for(const struct bunix_msg *message)
+{
+	struct linux_process *process = linux_process_find(message->sender);
+
+	if (process != 0) {
+		if (message->words[1] != 0) {
+			process->bunix_thread = message->words[1];
+		}
+		return process;
+	}
+
+	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
+		if (processes[i].pid == 0) {
+			const u64 pid = next_pid++;
+
+			processes[i].pid = pid;
+			processes[i].tid = pid;
+			processes[i].bunix_task = message->sender;
+			processes[i].bunix_thread = message->words[1];
+			return &processes[i];
+		}
+	}
+
+	return 0;
 }
 
 static long linux_openat(u64 dirfd, u64 path_len, u64 flags, u64 path_buffer)
@@ -261,6 +309,7 @@ int main(void)
 	const char read_ok[] = "linux-server: read\n";
 	const char fstat_ok[] = "linux-server: fstat\n";
 	const char newfstatat_ok[] = "linux-server: newfstatat\n";
+	const char process_ok[] = "linux-server: process\n";
 	const char close_ok[] = "linux-server: close\n";
 	const char exit_group[] = "linux-server: exit_group\n";
 	struct bunix_msg message;
@@ -288,7 +337,23 @@ int main(void)
 		}
 
 		reply.type = message.type;
+		struct linux_process *process = linux_process_for(&message);
+		if (process == 0) {
+			reply.words[0] = (u64)-LINUX_ESRCH;
+			if (message.reply != 0) {
+				bunix_ipc_send(message.reply, &reply);
+			}
+			continue;
+		}
+
 		switch (message.type) {
+		case BUNIX_LINUX_GETPID:
+			reply.words[0] = process->pid;
+			bunix_console_write(process_ok, sizeof(process_ok) - 1);
+			break;
+		case BUNIX_LINUX_GETTID:
+			reply.words[0] = process->tid;
+			break;
 		case BUNIX_LINUX_OPENAT:
 			reply.words[0] = (u64)linux_openat(message.words[0],
 							   message.words[1],

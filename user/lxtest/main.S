@@ -37,13 +37,13 @@ _start:
 
 	movq $39, %rax
 	syscall
-	testq %rax, %rax
-	jle fail
+	cmpq $1, %rax
+	jne fail
 
 	movq $186, %rax
 	syscall
-	testq %rax, %rax
-	jle fail
+	cmpq $1, %rax
+	jne fail
 
 	movq $12, %rax
 	xorq %rdi, %rdi

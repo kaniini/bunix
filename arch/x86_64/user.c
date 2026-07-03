@@ -65,6 +65,8 @@ enum {
 	USER_LINUX_WRITE = 1,
 	USER_LINUX_CLOSE = 3,
 	USER_LINUX_FSTAT = 5,
+	USER_LINUX_GETPID = 39,
+	USER_LINUX_GETTID = 186,
 	USER_LINUX_OPENAT = 257,
 	USER_LINUX_NEWFSTATAT = 262,
 	USER_LINUX_EXIT_GROUP = 231,
@@ -171,10 +173,6 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 	struct ipc_message reply;
 
 	switch (number) {
-	case LINUX_SYSCALL_GETPID:
-		return task_id(task);
-	case LINUX_SYSCALL_GETTID:
-		return thread_id(thread_current());
 	case LINUX_SYSCALL_BRK:
 		if (arg0 == 0) {
 			return task_linux_brk(task);
@@ -250,6 +248,28 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		}
 		return reply.words[0];
 	}
+	case LINUX_SYSCALL_GETPID:
+		request.type = USER_LINUX_GETPID;
+		request.words[0] = task_id(task);
+		request.words[1] = thread_id(thread_current());
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
+	case LINUX_SYSCALL_GETTID:
+		request.type = USER_LINUX_GETTID;
+		request.words[0] = task_id(task);
+		request.words[1] = thread_id(thread_current());
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
 	case LINUX_SYSCALL_FSTAT: {
 		struct shared_buffer *buffer;
 

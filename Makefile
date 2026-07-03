@@ -411,6 +411,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux syscall shared buffer" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: ebadf" $(BUILD_DIR)/serial.log
 	grep -F "linux return checks ok" $(BUILD_DIR)/serial.log
+	grep -F "linux-server: process" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: openat" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: fstat" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: newfstatat" $(BUILD_DIR)/serial.log
