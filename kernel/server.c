@@ -1,5 +1,6 @@
 #include "console.h"
 #include "elf.h"
+#include "ipc.h"
 #include "multiboot2.h"
 #include "name.h"
 #include "sched.h"
@@ -102,22 +103,24 @@ int server_launch_module(const char *name)
 		if (!str_eq(start->server->name, name)) {
 			continue;
 		}
+		const char *server_name = start->server->name;
 
 		if (start->launched) {
 			console_printf("kernel: module server %s already launched\n",
-				       name);
+				       server_name);
 			return -1;
 		}
 
 		start->launched = 1;
-		console_printf("kernel: launching module server %s\n", name);
+		console_printf("kernel: launching module server %s\n",
+			       server_name);
 
-		struct vm_space *space = vm_server_bootstrap_space(name);
+		struct vm_space *space = vm_server_bootstrap_space(server_name);
 		if (space == 0) {
 			return -1;
 		}
 
-		struct task *task = task_create(name, space);
+		struct task *task = task_create(server_name, space);
 		if (task == 0) {
 			return -1;
 		}
@@ -127,7 +130,7 @@ int server_launch_module(const char *name)
 					  (page + 1) * VM_PAGE_SIZE;
 			if (vm_alloc_user_page(space, vaddr, 1).addr == 0) {
 				console_printf("kernel: failed to map stack for %s\n",
-					       name);
+					       server_name);
 				return -1;
 			}
 		}
@@ -135,14 +138,15 @@ int server_launch_module(const char *name)
 		start->space = space;
 		start->stack = USER_STACK_TOP;
 
-		if (thread_create(task, name, module_server_thread, start) == 0) {
+		if (thread_create(task, server_name, module_server_thread, start) == 0) {
 			console_printf("kernel: failed to create server thread %s\n",
-				       name);
+				       server_name);
 			return -1;
 		}
 
-		if (!str_eq(name, "vm")) {
-			name_service_register(name, NAME_SERVICE_TASK,
+		if (!str_eq(server_name, "vm")) {
+			ipc_port_create(server_name);
+			name_service_register(server_name, NAME_SERVICE_TASK,
 					      task_id(task));
 		}
 

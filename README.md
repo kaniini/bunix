@@ -41,6 +41,11 @@ fixed-size messages, and receivers block when a port is empty. This is intended
 to grow toward lightweight kernel-thread/event-port style server communication
 rather than forcing every interaction into a synchronous syscall shape.
 
+User mode can now create/lookup ports and send/receive fixed-size
+`struct bunix_msg` messages. Port handles are small integer IDs rather than
+kernel pointers. `recv` blocks the current thread and wakes when a sender queues
+an event.
+
 The VM server owns the memory authority policy, but module task spaces are now
 granted through direct kernel VM calls during launch. That avoids a synchronous
 scheduler re-entry path while VM remains kernel-hosted. VM still receives
@@ -57,7 +62,7 @@ the target task's VM space, allocates private stack pages, enters ring 3 with
 `iretq`, and exposes a small negative-number syscall namespace over
 `syscall/sysret`. Current calls include console write, thread exit, timer ticks,
 name lookup/name registration, service writes, VM ping-by-service, module
-launch.
+launch, port create/lookup, and IPC send/receive.
 
 ## Scheduler shape
 
@@ -103,9 +108,10 @@ make test
 
 `make test` boots through OVMF/GRUB with KVM, captures serial output in
 `build/serial.log`, and checks that GRUB passed Multiboot2 modules, the kernel
-started VM plus init, and init launched the hello and ping C servers. Ping
-resolves VM by name, sends a VM event, and exercises timer-driven preemption
-while the VM server handles the event.
+started VM plus init, and init launched the hello and ping C servers. Init sends
+ping a queued user IPC message, ping receives it through blocking `recv`, then
+sends a VM event and exercises timer-driven preemption while the VM server
+handles the event.
 
 For an interactive serial console:
 

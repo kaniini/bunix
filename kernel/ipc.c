@@ -15,6 +15,7 @@ struct ipc_message_node {
 
 struct ipc_port {
 	const char *name;
+	u64 id;
 	struct ipc_message_node *head;
 	struct ipc_message_node *tail;
 	struct thread *receiver;
@@ -25,6 +26,7 @@ struct ipc_port {
 static struct ipc_port ports[MAX_PORTS];
 static struct ipc_message_node messages[MAX_MESSAGES];
 static struct ipc_port *kernel_reply_port;
+static u64 next_port_id = 1;
 
 static int str_eq(const char *left, const char *right)
 {
@@ -62,6 +64,7 @@ void ipc_init(void)
 {
 	for (u32 i = 0; i < MAX_PORTS; i++) {
 		ports[i].in_use = 0;
+		ports[i].id = 0;
 		ports[i].head = 0;
 		ports[i].tail = 0;
 		ports[i].receiver = 0;
@@ -79,11 +82,20 @@ void ipc_init(void)
 
 struct ipc_port *ipc_port_create(const char *name)
 {
+	struct ipc_port *existing = ipc_port_find(name);
+	if (existing != 0) {
+		console_printf("ipc: port existing %s id=%u\n", name,
+			       (u32)existing->id);
+		return existing;
+	}
+
 	for (u32 i = 0; i < MAX_PORTS; i++) {
 		if (!ports[i].in_use) {
 			ports[i].in_use = 1;
+			ports[i].id = next_port_id++;
 			ports[i].name = name;
-			console_printf("ipc: port create %s\n", name);
+			console_printf("ipc: port create %s id=%u\n", name,
+				       (u32)ports[i].id);
 			return &ports[i];
 		}
 	}
@@ -96,6 +108,26 @@ struct ipc_port *ipc_port_find(const char *name)
 {
 	for (u32 i = 0; i < MAX_PORTS; i++) {
 		if (ports[i].in_use && str_eq(ports[i].name, name)) {
+			return &ports[i];
+		}
+	}
+
+	return 0;
+}
+
+u64 ipc_port_id(const struct ipc_port *port)
+{
+	return port != 0 ? port->id : 0;
+}
+
+struct ipc_port *ipc_port_from_id(u64 id)
+{
+	if (id == 0) {
+		return 0;
+	}
+
+	for (u32 i = 0; i < MAX_PORTS; i++) {
+		if (ports[i].in_use && ports[i].id == id) {
 			return &ports[i];
 		}
 	}

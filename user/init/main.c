@@ -3,14 +3,21 @@
 int main(void)
 {
 	const char launching[] = "init: launching servers\n";
-	const char done[] = "init: done\n";
-	const u64 console = (u64)bunix_name_lookup("console");
+	struct bunix_msg ping_message = {
+		.type = 1,
+		.sender = 0,
+		.words = { 0x2a, 0, 0, 0 },
+	};
+	u64 ping_port = 0;
 
 	bunix_name_register("init");
-	bunix_service_write(console, launching, sizeof(launching) - 1);
+	bunix_console_write(launching, sizeof(launching) - 1);
 	bunix_launch_module("hello");
 	bunix_launch_module("ping");
-	bunix_service_write(console, done, sizeof(done) - 1);
+	while (ping_port == 0) {
+		ping_port = (u64)bunix_port_lookup("ping");
+	}
+	bunix_ipc_send(ping_port, &ping_message);
 
 	return 0;
 }

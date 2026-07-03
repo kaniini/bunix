@@ -15,6 +15,18 @@ enum {
 	BUNIX_SYSCALL_SERVICE_VM_PING = -7,
 	BUNIX_SYSCALL_LAUNCH_MODULE = -8,
 	BUNIX_SYSCALL_NAME_REGISTER = -9,
+	BUNIX_SYSCALL_PORT_CREATE = -10,
+	BUNIX_SYSCALL_PORT_LOOKUP = -11,
+	BUNIX_SYSCALL_IPC_SEND = -12,
+	BUNIX_SYSCALL_IPC_RECV = -13,
+	BUNIX_IPC_WORDS = 4,
+	BUNIX_CONSOLE_WRITE = 1,
+};
+
+struct bunix_msg {
+	unsigned int type;
+	unsigned int sender;
+	u64 words[BUNIX_IPC_WORDS];
 };
 
 static inline long bunix_syscall0(long number)
@@ -97,6 +109,37 @@ static inline u64 bunix_timer_ticks(void)
 static inline long bunix_service_vm_ping(u64 service, u64 word)
 {
 	return bunix_syscall2(BUNIX_SYSCALL_SERVICE_VM_PING, service, word);
+}
+
+static inline long bunix_port_create(const char *name)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_PORT_CREATE, (u64)name);
+}
+
+static inline long bunix_port_lookup(const char *name)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_PORT_LOOKUP, (u64)name);
+}
+
+static inline long bunix_ipc_send(u64 port, const struct bunix_msg *message)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_IPC_SEND, port, (u64)message);
+}
+
+static inline long bunix_ipc_recv(u64 port, struct bunix_msg *message)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_IPC_RECV, port, (u64)message);
+}
+
+static inline long bunix_console_write(const char *text, usize len)
+{
+	const struct bunix_msg message = {
+		.type = BUNIX_CONSOLE_WRITE,
+		.sender = 0,
+		.words = { (u64)text, len, 0, 0 },
+	};
+
+	return bunix_ipc_send(0, &message);
 }
 
 #endif

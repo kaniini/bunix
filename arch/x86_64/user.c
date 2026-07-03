@@ -28,6 +28,18 @@ enum {
 	SYSCALL_SERVICE_VM_PING = -7,
 	SYSCALL_LAUNCH_MODULE = -8,
 	SYSCALL_NAME_REGISTER = -9,
+	SYSCALL_PORT_CREATE = -10,
+	SYSCALL_PORT_LOOKUP = -11,
+	SYSCALL_IPC_SEND = -12,
+	SYSCALL_IPC_RECV = -13,
+	USER_IPC_WORDS = 4,
+	USER_CONSOLE_WRITE = 1,
+};
+
+struct user_ipc_message {
+	u32 type;
+	u32 sender;
+	u64 words[USER_IPC_WORDS];
 };
 
 struct gdt_ptr {
@@ -197,6 +209,69 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		return name_service_register((const char *)arg0,
 					     NAME_SERVICE_TASK,
 					     task_id(task_current()));
+	case SYSCALL_PORT_CREATE: {
+		const char *current_name = task_name(task_current());
+		struct ipc_port *existing = ipc_port_find(current_name);
+
+		if (existing != 0) {
+			return ipc_port_id(existing);
+		}
+
+		return ipc_port_id(ipc_port_create((const char *)arg0));
+	}
+	case SYSCALL_PORT_LOOKUP: {
+		struct ipc_port *port = ipc_port_find((const char *)arg0);
+		return ipc_port_id(port);
+	}
+	case SYSCALL_IPC_SEND: {
+		const struct user_ipc_message *user_message =
+			(const struct user_ipc_message *)arg1;
+
+		if (user_message == 0) {
+			return (u64)-1;
+		}
+
+		if (arg0 == 0 && user_message->type == USER_CONSOLE_WRITE) {
+			const char *text = (const char *)user_message->words[0];
+			const u64 len = user_message->words[1];
+			for (u64 i = 0; i < len; i++) {
+				console_putc(text[i]);
+			}
+			return 0;
+		}
+
+		struct ipc_port *port = ipc_port_from_id(arg0);
+		struct ipc_message message = {
+			.type = user_message->type,
+			.sender = 0,
+			.reply_port = 0,
+			.words = {
+				user_message->words[0],
+				user_message->words[1],
+				user_message->words[2],
+				user_message->words[3],
+			},
+		};
+
+		return (u64)ipc_send(port, &message);
+	}
+	case SYSCALL_IPC_RECV: {
+		struct user_ipc_message *user_message =
+			(struct user_ipc_message *)arg1;
+		struct ipc_message message;
+
+		if (user_message == 0 ||
+		    ipc_recv(ipc_port_from_id(arg0), &message) != 0) {
+			return (u64)-1;
+		}
+
+		user_message->type = message.type;
+		user_message->sender = message.sender;
+		for (u64 i = 0; i < USER_IPC_WORDS; i++) {
+			user_message->words[i] = message.words[i];
+		}
+		return 0;
+	}
 	default:
 		console_printf("syscall: unknown number=%u\n", (u32)number);
 		return (u64)-1;

@@ -182,16 +182,19 @@ test: $(EFI_BOOT_APP)
 	grep -F "vm-server: memory authority online" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: rpc free_frame" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create vm" $(BUILD_DIR)/serial.log
+	grep -F "ipc: port create init" $(BUILD_DIR)/serial.log
+	grep -F "ipc: port create hello" $(BUILD_DIR)/serial.log
+	grep -F "ipc: port create ping" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=vm" $(BUILD_DIR)/serial.log
+	grep -F "ipc: send port=ping type=1 sender=2 queued=1" $(BUILD_DIR)/serial.log
+	grep -F "ipc: recv port=ping type=1 sender=2 queued=0" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=vm type=1 sender=4" $(BUILD_DIR)/serial.log
 	grep -F "sched: preemption enabled" $(BUILD_DIR)/serial.log
 	grep -F "sched: preempt tid=4 cpu=0" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: ipc event type=1 sender=4 word0=0x2a" $(BUILD_DIR)/serial.log
 	grep -F "init: launching servers" $(BUILD_DIR)/serial.log
-	grep -F "init: done" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server hello" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server ping" $(BUILD_DIR)/serial.log
-	grep -F "names: lookup name=console id=2" $(BUILD_DIR)/serial.log
 	grep -F "names: lookup name=vm id=1" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server hello" $(BUILD_DIR)/serial.log
 	grep -F "elf: entry=0x0000000000400000" $(BUILD_DIR)/serial.log
