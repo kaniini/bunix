@@ -53,11 +53,11 @@ int main(void)
 	u64 block = 0;
 
 	bunix_console_write(online, sizeof(online) - 1);
+	register_service(BUNIX_SERVICE_VFS, BUNIX_HANDLE_SELF);
 	while (block == 0) {
 		block = resolve_service(BUNIX_SERVICE_BLOCK, BUNIX_RIGHT_SEND);
 	}
 	bunix_console_write(ready, sizeof(ready) - 1);
-	register_service(BUNIX_SERVICE_VFS, BUNIX_HANDLE_SELF);
 
 	for (;;) {
 		struct bunix_msg reply = {

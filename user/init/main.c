@@ -109,6 +109,9 @@ int main(void)
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	bunix_launch_module_with_caps("vfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	const u64 fs_tick = bunix_timer_ticks();
+	while (bunix_timer_ticks() < fs_tick + 4) {
+	}
 	while (vfs == 0) {
 		vfs = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
 	}

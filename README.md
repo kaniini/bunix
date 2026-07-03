@@ -9,7 +9,7 @@ other user servers. The current boot proves both a synthetic filesystem read and
 the original hello path:
 
 ```text
-rootfs: hello
+rootfs: module
 hello: world <3
 ```
 
@@ -73,17 +73,18 @@ event-port style IPC, currently exercised by ping.
 
 ## Filesystem Path
 
-The first filesystem slice is a server-to-server read flow. Init launches a
-block server and a VFS server with only console and names capabilities. The
-block server registers `BLK0` and serves a fixed read-only byte string from its
-own image. VFS resolves `BLK0`, registers `VFS0`, and proxies a read request to
-block. Init resolves `VFS0`, reads the synthetic root file, and prints
-`rootfs: hello`.
+The first filesystem slice is a server-to-server read flow. GRUB loads a
+`disk0` Multiboot2 data module from `modules/disk0.img`, and the kernel assigns
+that boot module only to the block server. Init launches a block server and a
+VFS server with only console and names capabilities. The block server registers
+`BLK0` and serves read-only bytes from its assigned disk image. VFS resolves
+`BLK0`, registers `VFS0`, and proxies a read request to block. Init resolves
+`VFS0`, reads the synthetic root file, and prints `rootfs: module`.
 
 This is intentionally not a real disk filesystem yet. The useful primitive is
-the capability-shaped chain `init -> names -> vfs -> block`, which is the path
-that can later point at a Multiboot2 rootfs image and then at a real Alpine
-root filesystem format.
+the capability-shaped chain `init -> names -> vfs -> block -> disk0`, which is
+the path that can later point at a real disk image and then at an Alpine root
+filesystem format.
 
 ## User Mode
 
@@ -174,8 +175,8 @@ make test
 started VM, names, and init, init received its boot capabilities, and init
 registered and resolved services through the user-space names server before
 launching block, VFS, hello, and ping with attenuated inherited handles. The
-test checks the `VFS0 -> BLK0` read and the resulting `rootfs: hello` console
-output. Init also proves the OCAP launch rule by asking for a receive right it
+test checks the `VFS0 -> BLK0 -> disk0` read and the resulting `rootfs: module`
+console output. Init also proves the OCAP launch rule by asking for a receive right it
 does not hold, which the kernel rejects before the module is marked launched.
 Init sends ping a synchronous user IPC call through the returned service-port
 handle, ping receives it through blocking `recv`, sends a VMEM FourCC event

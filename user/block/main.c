@@ -4,8 +4,6 @@ enum {
 	BLOCK_HANDLE_NAMES = 3,
 };
 
-static const char root_file[] = "rootfs: hello\n";
-
 static long register_service(u64 service, u64 handle)
 {
 	struct bunix_msg request = {
@@ -26,7 +24,7 @@ static long register_service(u64 service, u64 handle)
 	return reply.words[0] == 0 ? 0 : -1;
 }
 
-static void pack_bytes(u64 *words, const char *data, u64 len)
+static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
 {
 	words[0] = 0;
 	words[1] = 0;
@@ -43,6 +41,7 @@ int main(void)
 {
 	const char online[] = "block: online\n";
 	struct bunix_msg message;
+	const u64 disk_size = bunix_boot_module_size();
 
 	bunix_console_write(online, sizeof(online) - 1);
 	register_service(BUNIX_SERVICE_BLOCK, BUNIX_HANDLE_SELF);
@@ -67,17 +66,18 @@ int main(void)
 		switch (message.type) {
 		case BUNIX_BLOCK_GET_INFO:
 			reply.words[0] = 0;
-			reply.words[1] = sizeof(root_file) - 1;
+			reply.words[1] = disk_size;
 			reply.words[2] = 16;
 			break;
 		case BUNIX_BLOCK_READ: {
 			const u64 offset = message.words[0];
 			u64 len = message.words[1];
+			unsigned char buffer[16];
 
-			if (offset >= sizeof(root_file) - 1) {
+			if (offset >= disk_size) {
 				len = 0;
-			} else if (len > sizeof(root_file) - 1 - offset) {
-				len = sizeof(root_file) - 1 - offset;
+			} else if (len > disk_size - offset) {
+				len = disk_size - offset;
 			}
 			if (len > 16) {
 				len = 16;
@@ -85,7 +85,13 @@ int main(void)
 
 			reply.words[0] = 0;
 			reply.words[1] = len;
-			pack_bytes(&reply.words[2], root_file + offset, len);
+			if (len != 0 &&
+			    bunix_boot_module_read(offset, buffer, len) != 0) {
+				reply.words[0] = (u64)-1;
+				reply.words[1] = 0;
+			} else {
+				pack_bytes(&reply.words[2], buffer, len);
+			}
 			break;
 		}
 		default:

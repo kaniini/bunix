@@ -24,6 +24,8 @@ int server_launch_module(const char *name);
 u64 server_launch_module_with_caps(const char *name, struct task *parent,
 				   const struct task_launch_cap *caps,
 				   u64 cap_count);
+u64 server_boot_module_size(void);
+int server_boot_module_read(u64 offset, void *buffer, u64 len);
 void vm_server_start(void);
 
 #endif

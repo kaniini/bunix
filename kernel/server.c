@@ -24,13 +24,22 @@ struct module_server_start {
 	const struct server *server;
 	u64 image_start;
 	u64 image_end;
+	u64 data_start;
+	u64 data_end;
 	struct vm_space *space;
 	u64 stack;
 	u32 launched;
 };
 
+struct boot_data_module {
+	const char *name;
+	u64 start;
+	u64 end;
+};
+
 static struct module_server_start module_starts[16];
 static u32 module_start_count;
+static struct boot_data_module disk0_module;
 
 static int str_eq(const char *left, const char *right);
 static const struct server *find_boot_server(const char *name);
@@ -91,6 +100,13 @@ static int str_eq(const char *left, const char *right)
 	}
 
 	return *left == *right;
+}
+
+static void mem_copy(u8 *dst, const u8 *src, u64 len)
+{
+	for (u64 i = 0; i < len; i++) {
+		dst[i] = src[i];
+	}
 }
 
 int server_launch_module(const char *name)
@@ -233,14 +249,65 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 	return (u64)-1;
 }
 
+static struct module_server_start *current_module_start(void)
+{
+	const char *name = task_name(task_current());
+
+	for (u32 i = 0; i < module_start_count; i++) {
+		if (str_eq(module_starts[i].server->name, name)) {
+			return &module_starts[i];
+		}
+	}
+
+	return 0;
+}
+
+u64 server_boot_module_size(void)
+{
+	const struct module_server_start *start = current_module_start();
+
+	return start != 0 && start->data_end > start->data_start ?
+	       start->data_end - start->data_start : 0;
+}
+
+int server_boot_module_read(u64 offset, void *buffer, u64 len)
+{
+	const struct module_server_start *start = current_module_start();
+	const u64 size = server_boot_module_size();
+
+	if (start == 0 || start->data_start == 0 || buffer == 0 ||
+	    offset > size || len > size - offset) {
+		return -1;
+	}
+
+	mem_copy((u8 *)buffer, (const u8 *)(start->data_start + offset), len);
+	return 0;
+}
+
 static void record_boot_module(const struct multiboot2_module *module, void *ctx)
 {
 	(void)ctx;
 
 	const struct server *server = find_boot_server(module->cmdline);
 	if (server == 0) {
-		console_printf("kernel: ignoring unknown module %s\n",
-			       module->cmdline);
+		if (str_eq(module->cmdline, "disk0")) {
+			disk0_module.name = module->cmdline;
+			disk0_module.start = module->start;
+			disk0_module.end = module->end;
+			console_printf("kernel: recorded data module disk0 image=%p-%p size=%u\n",
+				       (const void *)module->start,
+				       (const void *)module->end,
+				       (u32)(module->end - module->start));
+			for (u32 i = 0; i < module_start_count; i++) {
+				if (str_eq(module_starts[i].server->name, "block")) {
+					module_starts[i].data_start = module->start;
+					module_starts[i].data_end = module->end;
+				}
+			}
+			return;
+		}
+
+		console_printf("kernel: ignoring unknown module %s\n", module->cmdline);
 		return;
 	}
 
@@ -254,6 +321,12 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 	start->server = server;
 	start->image_start = module->start;
 	start->image_end = module->end;
+	start->data_start = 0;
+	start->data_end = 0;
+	if (str_eq(server->name, "block")) {
+		start->data_start = disk0_module.start;
+		start->data_end = disk0_module.end;
+	}
 	start->space = 0;
 	start->stack = 0;
 	start->launched = 0;

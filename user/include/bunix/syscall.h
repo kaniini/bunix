@@ -14,6 +14,7 @@ enum {
 	BUNIX_SYSCALL_IPC_RECV = -13,
 	BUNIX_SYSCALL_IPC_CALL = -14,
 	BUNIX_SYSCALL_HANDLE_CLOSE = -16,
+	BUNIX_SYSCALL_BOOT_MODULE_READ = -18,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_RIGHT_SEND = 1 << 0,
 	BUNIX_RIGHT_RECV = 1 << 1,
@@ -151,6 +152,17 @@ static inline long bunix_ipc_call(u64 port, const struct bunix_msg *request,
 static inline long bunix_handle_close(u64 handle)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_HANDLE_CLOSE, handle);
+}
+
+static inline long bunix_boot_module_read(u64 offset, void *buffer, u64 len)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_BOOT_MODULE_READ, offset,
+			      (u64)buffer, len);
+}
+
+static inline u64 bunix_boot_module_size(void)
+{
+	return (u64)bunix_syscall3(BUNIX_SYSCALL_BOOT_MODULE_READ, 0, 0, 0);
 }
 
 static inline long bunix_console_write(const char *text, usize len)

@@ -27,6 +27,7 @@ enum {
 	SYSCALL_IPC_RECV = -13,
 	SYSCALL_IPC_CALL = -14,
 	SYSCALL_HANDLE_CLOSE = -16,
+	SYSCALL_BOOT_MODULE_READ = -18,
 	USER_IPC_WORDS = 4,
 	USER_FOURCC_CONS = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	USER_CONSOLE_WRITE = 1,
@@ -259,6 +260,11 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 				       TASK_RIGHT_DUP);
 	case SYSCALL_HANDLE_CLOSE:
 		return (u64)task_close_handle(task_current(), arg0);
+	case SYSCALL_BOOT_MODULE_READ:
+		if (arg1 == 0) {
+			return server_boot_module_size();
+		}
+		return (u64)server_boot_module_read(arg0, (void *)arg1, arg2);
 	case SYSCALL_IPC_SEND: {
 		const struct user_ipc_message *user_message =
 			(const struct user_ipc_message *)arg1;
