@@ -58,6 +58,33 @@ struct vm_space *vm_rpc_create_space(const char *owner)
 	return space;
 }
 
+void vm_rpc_destroy_space(struct vm_space *space)
+{
+	if (space == 0 || space == &kernel_space) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&vm_spaces_lock);
+	struct vm_space **link = &spaces;
+
+	while (*link != 0) {
+		if (*link == space) {
+			*link = space->next;
+			break;
+		}
+		link = &(*link)->next;
+	}
+	spin_unlock_irqrestore(&vm_spaces_lock, flags);
+
+	console_printf("vm: destroy space id=%u owner=%s\n", space->id,
+		       space->owner);
+	arch_vm_space_destroy(&space->arch);
+	space->id = 0;
+	space->owner = 0;
+	space->next = 0;
+	slab_free(space);
+}
+
 void vm_rpc_activate_space(struct vm_space *space)
 {
 	if (space == 0) {

@@ -17,6 +17,8 @@ struct ipc_message_node {
 struct ipc_port {
 	const char *name;
 	u64 id;
+	u32 ref_count;
+	u32 immortal;
 	struct ipc_port *next;
 	struct ipc_message_node *head;
 	struct ipc_message_node *tail;
@@ -87,6 +89,20 @@ void ipc_init(void)
 	kernel_reply_port = ipc_port_create("kernel-rpc");
 }
 
+static void ipc_port_remove_locked(struct ipc_port *port)
+{
+	struct ipc_port **link = &ports;
+
+	while (*link != 0) {
+		if (*link == port) {
+			*link = port->next;
+			port->next = 0;
+			return;
+		}
+		link = &(*link)->next;
+	}
+}
+
 static struct ipc_port *ipc_port_alloc(const char *name, u32 reuse_named)
 {
 	const u64 flags = spin_lock_irqsave(&ipc_lock);
@@ -102,6 +118,8 @@ static struct ipc_port *ipc_port_alloc(const char *name, u32 reuse_named)
 	if (port != 0) {
 		port->id = next_port_id++;
 		port->name = name;
+		port->ref_count = 0;
+		port->immortal = reuse_named;
 		port->next = ports;
 		ports = port;
 		console_printf("ipc: port create %s id=%u\n", name,
@@ -132,6 +150,44 @@ struct ipc_port *ipc_port_find(const char *name)
 
 	spin_unlock_irqrestore(&ipc_lock, flags);
 	return port;
+}
+
+void ipc_port_retain(struct ipc_port *port)
+{
+	if (port == 0) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&ipc_lock);
+
+	port->ref_count++;
+	spin_unlock_irqrestore(&ipc_lock, flags);
+}
+
+void ipc_port_release(struct ipc_port *port)
+{
+	if (port == 0) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&ipc_lock);
+
+	if (port->ref_count > 0) {
+		port->ref_count--;
+	}
+	if (port->immortal || port->ref_count != 0 || port->queued != 0 ||
+	    port->receiver != 0) {
+		spin_unlock_irqrestore(&ipc_lock, flags);
+		return;
+	}
+
+	const char *name = port->name;
+	ipc_port_remove_locked(port);
+	port->id = 0;
+	port->name = 0;
+	spin_unlock_irqrestore(&ipc_lock, flags);
+	slab_free(port);
+	console_printf("ipc: port destroy %s\n", name);
 }
 
 const char *ipc_port_name(const struct ipc_port *port)

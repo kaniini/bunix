@@ -440,14 +440,14 @@ static int linux_vfs_read_file(struct task *task, const char *path,
 		    reply.words[0] != 0 ||
 		    reply.words[1] != chunk ||
 		    buffer_read(buffer, 0, image + offset, chunk) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			(void)linux_vfs_close(task, file);
 			return -1;
 		}
 		offset += chunk;
 	}
 
-	buffer_destroy(buffer);
+	buffer_release(buffer);
 	if (linux_vfs_close(task, file) != 0) {
 		return -1;
 	}
@@ -867,15 +867,15 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		request.cap_object = buffer;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
 		if ((i64)reply.words[0] > 0 &&
 		    buffer_read(buffer, 0, (void *)arg1, reply.words[0]) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
-		buffer_destroy(buffer);
+		buffer_release(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_WRITE: {
@@ -888,7 +888,7 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		buffer = buffer_create(arg2 == 0 ? 1 : arg2);
 		if (buffer == 0 ||
 		    buffer_write(buffer, 0, (const void *)arg1, arg2) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
 
@@ -902,10 +902,10 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		request.cap_object = buffer;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
-		buffer_destroy(buffer);
+		buffer_release(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_GETPID:
@@ -950,16 +950,16 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		request.words[3] = 0;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
 		if ((i64)reply.words[0] > 0 && arg1 != 0 &&
 		    buffer_read(buffer, 0, (void *)arg1,
 				LINUX_WAIT_STATUS_SIZE) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
-		buffer_destroy(buffer);
+		buffer_release(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_FSTAT: {
@@ -984,15 +984,15 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		request.cap_object = buffer;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
 		if (reply.words[0] == 0 &&
 		    buffer_read(buffer, 0, (void *)arg1, LINUX_STAT_SIZE) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
-		buffer_destroy(buffer);
+		buffer_release(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_CLOSE:
@@ -1022,7 +1022,7 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		buffer = buffer_create(len);
 		if (buffer == 0 ||
 		    buffer_write(buffer, 0, path, len) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
 
@@ -1036,10 +1036,10 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		request.cap_object = buffer;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
-		buffer_destroy(buffer);
+		buffer_release(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_NEWFSTATAT: {
@@ -1077,15 +1077,15 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		request.cap_object = buffer;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
 		if (reply.words[0] == 0 &&
 		    buffer_read(buffer, 0, (void *)arg2, LINUX_STAT_SIZE) != 0) {
-			buffer_destroy(buffer);
+			buffer_release(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
-		buffer_destroy(buffer);
+		buffer_release(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_EXIT_GROUP:
@@ -1379,11 +1379,15 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 						 arg2);
 	case SYSCALL_BUFFER_CREATE: {
 		struct shared_buffer *buffer = buffer_create(arg0);
+		if (buffer == 0) {
+			return (u64)-1;
+		}
 		const u64 handle =
 			task_grant_buffer(task_current(), buffer,
 					  TASK_RIGHT_SEND | TASK_RIGHT_RECV |
 					  TASK_RIGHT_DUP);
 
+		buffer_release(buffer);
 		return handle != 0 ? handle : (u64)-1;
 	}
 	case SYSCALL_BUFFER_READ: {

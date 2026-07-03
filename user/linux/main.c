@@ -47,6 +47,8 @@ static struct linux_process processes[LINUX_MAX_PROCESSES];
 static char write_buffer[LINUX_MAX_WRITE];
 static u64 next_pid = 1;
 
+static void linux_process_reset(struct linux_process *process);
+
 static long register_service(u64 service)
 {
 	struct bunix_msg request = {
@@ -286,12 +288,14 @@ static long linux_wait4(struct linux_process *parent, long pid, u64 options,
 
 		candidate = &processes[i];
 		if (candidate->exited) {
+			const u64 waited_pid = candidate->pid;
 			if (linux_store_wait_status(status_buffer,
 						    candidate->exit_status) != 0) {
 				return -LINUX_EINVAL;
 			}
 			candidate->waited = 1;
-			return (long)candidate->pid;
+			linux_process_reset(candidate);
+			return (long)waited_pid;
 		}
 	}
 
@@ -334,6 +338,7 @@ static void linux_wake_parent(struct linux_process *child)
 		child->waited = 1;
 		bunix_console_write(wait4_ok, sizeof(wait4_ok) - 1);
 		bunix_ipc_send(parent->waiter, &reply);
+		linux_process_reset(child);
 	}
 	if (parent->wait_buffer != 0) {
 		bunix_handle_close(parent->wait_buffer);
@@ -507,6 +512,45 @@ static long linux_close(struct linux_process *process, u64 fd)
 	process->fds[fd].offset = 0;
 	process->fds[fd].size = 0;
 	return 0;
+}
+
+static void linux_close_process_fds(struct linux_process *process)
+{
+	if (process == 0) {
+		return;
+	}
+
+	for (u64 fd = 3; fd < LINUX_MAX_FDS; fd++) {
+		if (process->fds[fd].kind != 0) {
+			(void)linux_close(process, fd);
+		}
+	}
+}
+
+static void linux_process_reset(struct linux_process *process)
+{
+	if (process == 0) {
+		return;
+	}
+
+	linux_close_process_fds(process);
+	process->pid = 0;
+	process->tid = 0;
+	process->ppid = 0;
+	process->bunix_task = 0;
+	process->bunix_thread = 0;
+	process->exited = 0;
+	process->exit_status = 0;
+	process->waited = 0;
+	process->waiter = 0;
+	process->wait_buffer = 0;
+	process->wait_pid = 0;
+	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
+		process->fds[fd].handle = 0;
+		process->fds[fd].kind = 0;
+		process->fds[fd].offset = 0;
+		process->fds[fd].size = 0;
+	}
 }
 
 int main(void)
@@ -702,6 +746,7 @@ int main(void)
 			}
 			break;
 		case BUNIX_LINUX_EXIT_GROUP:
+			linux_close_process_fds(process);
 			process->exited = 1;
 			process->exit_status = message.words[0];
 			bunix_console_write(exit_group, sizeof(exit_group) - 1);

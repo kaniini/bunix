@@ -35,6 +35,8 @@ struct task {
 	u32 pid;
 	const char *name;
 	struct task *next;
+	u32 ref_count;
+	u32 dead;
 	u32 thread_count;
 	struct vm_space *vm_space;
 	u64 linux_brk;
@@ -93,6 +95,9 @@ static struct spinlock task_table_lock = SPINLOCK_INIT("task-table");
 static struct spinlock thread_table_lock = SPINLOCK_INIT("thread-table");
 static struct spinlock placement_lock = SPINLOCK_INIT("sched-placement");
 static struct spinlock sleep_lock = SPINLOCK_INIT("sched-sleep");
+
+static void task_handle_release(enum task_handle_type type, void *object);
+static void task_release(struct task *task);
 
 static struct cpu_sched *sched_current_cpu(void)
 {
@@ -179,6 +184,10 @@ static void sched_reap_thread(struct thread *thread)
 	}
 
 	const u32 remaining = task->thread_count;
+	const u32 teardown = remaining == 0 && task != &kernel_task;
+	if (teardown) {
+		task->dead = 1;
+	}
 
 	spin_unlock_irqrestore(&task->lock, task_flags);
 
@@ -202,6 +211,9 @@ static void sched_reap_thread(struct thread *thread)
 	console_printf("sched: reap tid=%u task=%u name=%s remaining=%u\n",
 		       tid, pid, name, remaining);
 	slab_free(thread);
+	if (teardown) {
+		task_release(task);
+	}
 }
 
 static u32 sched_select_auto_cpu(void)
@@ -259,6 +271,8 @@ void sched_init(void)
 	kernel_task.pid = 0;
 	kernel_task.name = "kernel";
 	kernel_task.next = 0;
+	kernel_task.ref_count = 1;
+	kernel_task.dead = 0;
 	kernel_task.thread_count = 1;
 	kernel_task.vm_space = vm_kernel_space();
 	kernel_task.linux_brk = 0;
@@ -340,6 +354,8 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	task->pid = next_pid++;
 	task->name = name;
 	task->next = tasks;
+	task->ref_count = 1;
+	task->dead = 0;
 	task->thread_count = 0;
 	task->vm_space = vm_space;
 	task->linux_brk = 0x900000;
@@ -459,6 +475,7 @@ u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights)
 		task->handles[i].type = TASK_HANDLE_PORT;
 		task->handles[i].rights = rights;
 		task->handles[i].object = port;
+		ipc_port_retain(port);
 		console_printf("sched: grant task=%u handle=%u type=port rights=0x%x\n",
 			       task->pid, i + 1, rights);
 		spin_unlock_irqrestore(&task->lock, flags);
@@ -496,6 +513,7 @@ u64 task_grant_buffer(struct task *task, struct shared_buffer *buffer,
 		task->handles[i].type = TASK_HANDLE_BUFFER;
 		task->handles[i].rights = rights;
 		task->handles[i].object = buffer;
+		buffer_retain(buffer);
 		console_printf("sched: grant task=%u handle=%u type=buffer rights=0x%x target=%u\n",
 			       task->pid, i + 1, rights, (u32)buffer_id(buffer));
 		spin_unlock_irqrestore(&task->lock, flags);
@@ -509,7 +527,7 @@ u64 task_grant_buffer(struct task *task, struct shared_buffer *buffer,
 
 u64 task_grant_task(struct task *owner, struct task *target, u32 rights)
 {
-	if (owner == 0 || target == 0 || rights == 0) {
+	if (owner == 0 || target == 0 || rights == 0 || target->dead) {
 		return 0;
 	}
 
@@ -532,6 +550,14 @@ u64 task_grant_task(struct task *owner, struct task *target, u32 rights)
 		owner->handles[i].type = TASK_HANDLE_TASK;
 		owner->handles[i].rights = rights;
 		owner->handles[i].object = target;
+		const u64 target_flags = spin_lock_irqsave(&target->lock);
+		if (target->dead) {
+			spin_unlock_irqrestore(&target->lock, target_flags);
+			spin_unlock_irqrestore(&owner->lock, flags);
+			return 0;
+		}
+		target->ref_count++;
+		spin_unlock_irqrestore(&target->lock, target_flags);
 		console_printf("sched: grant task=%u handle=%u type=task rights=0x%x target=%u\n",
 			       owner->pid, i + 1, rights, target->pid);
 		spin_unlock_irqrestore(&owner->lock, flags);
@@ -553,6 +579,7 @@ struct task *task_from_handle(struct task *owner, u64 handle, u32 rights)
 	const struct task_handle task_handle = owner->handles[handle - 1];
 
 	if (task_handle.type != TASK_HANDLE_TASK ||
+	    ((struct task *)task_handle.object)->dead ||
 	    (task_handle.rights & rights) != rights) {
 		spin_unlock_irqrestore(&owner->lock, flags);
 		console_printf("sched: task handle denied task=%u handle=%u need=0x%x rights=0x%x\n",
@@ -714,12 +741,14 @@ int task_close_handle(struct task *task, u64 handle)
 
 	const enum task_handle_type type = task_handle->type;
 	const u32 rights = task_handle->rights;
+	void *object = task_handle->object;
 
 	task_handle->type = TASK_HANDLE_EMPTY;
 	task_handle->rights = 0;
 	task_handle->object = 0;
 	spin_unlock_irqrestore(&task->lock, flags);
 
+	task_handle_release(type, object);
 	console_printf("sched: close task=%u handle=%u type=%s rights=0x%x\n",
 		       task->pid, (u32)handle,
 		       type == TASK_HANDLE_PORT ? "port" :
@@ -727,6 +756,101 @@ int task_close_handle(struct task *task, u64 handle)
 		       type == TASK_HANDLE_BUFFER ? "buffer" : "unknown",
 		       rights);
 	return 0;
+}
+
+static void task_handle_release(enum task_handle_type type, void *object)
+{
+	if (type == TASK_HANDLE_PORT) {
+		ipc_port_release((struct ipc_port *)object);
+	} else if (type == TASK_HANDLE_BUFFER) {
+		buffer_release((struct shared_buffer *)object);
+	} else if (type == TASK_HANDLE_TASK) {
+		task_release((struct task *)object);
+	}
+}
+
+static void task_remove_from_list(struct task *task)
+{
+	const u64 flags = spin_lock_irqsave(&task_table_lock);
+	struct task **link = &tasks;
+
+	while (*link != 0) {
+		if (*link == task) {
+			*link = task->next;
+			break;
+		}
+		link = &(*link)->next;
+	}
+	spin_unlock_irqrestore(&task_table_lock, flags);
+}
+
+static void task_teardown(struct task *task)
+{
+	if (task == 0 || task == &kernel_task) {
+		return;
+	}
+
+	struct task_handle handles[MAX_TASK_HANDLES];
+	struct ipc_port *reply_port;
+	struct vm_space *space;
+	const u32 pid = task->pid;
+	const char *name = task->name;
+
+	while (task_vm_region_count(task) != 0) {
+		const struct task_vm_region *region = task_vm_region_at(task, 0);
+		if (region == 0) {
+			break;
+		}
+		const u64 base = region->base;
+		const u64 len = region->len;
+
+		(void)vm_unmap_user_range(task->vm_space, base, len);
+		(void)task_remove_vm_region(task, base, len);
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
+		handles[i] = task->handles[i];
+		task->handles[i].type = TASK_HANDLE_EMPTY;
+		task->handles[i].rights = 0;
+		task->handles[i].object = 0;
+	}
+	reply_port = task->reply_port;
+	task->reply_port = 0;
+	space = task->vm_space;
+	task->vm_space = 0;
+	spin_unlock_irqrestore(&task->lock, flags);
+
+	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
+		task_handle_release(handles[i].type, handles[i].object);
+	}
+	ipc_port_release(reply_port);
+	vm_rpc_destroy_space(space);
+	task_remove_from_list(task);
+	console_printf("sched: task pid=%u name=%s destroyed\n", pid, name);
+}
+
+static void task_release(struct task *task)
+{
+	if (task == 0 || task == &kernel_task) {
+		return;
+	}
+
+	u32 free_task = 0;
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
+	if (task->ref_count > 0) {
+		task->ref_count--;
+	}
+	if (task->ref_count == 0 && task->dead) {
+		free_task = 1;
+	}
+	spin_unlock_irqrestore(&task->lock, flags);
+
+	if (free_task) {
+		task_teardown(task);
+		slab_free(task);
+	}
 }
 
 struct ipc_port *task_reply_port(struct task *task)
@@ -739,6 +863,7 @@ struct ipc_port *task_reply_port(struct task *task)
 
 	if (task->reply_port == 0) {
 		task->reply_port = ipc_port_create_private("reply");
+		ipc_port_retain(task->reply_port);
 	}
 
 	struct ipc_port *port = task->reply_port;

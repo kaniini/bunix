@@ -451,6 +451,9 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 		if (file.handle != 0) {
 			vfs_close(vfs, file.handle);
 		}
+		if (io_buffer > 0) {
+			bunix_handle_close((u64)io_buffer);
+		}
 		return -1;
 	}
 	exec.entry = ehdr.entry;
@@ -461,6 +464,7 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 	task = bunix_task_create(task_name);
 	if (task < 0) {
 		vfs_close(vfs, file.handle);
+		bunix_handle_close((u64)io_buffer);
 		return -1;
 	}
 
@@ -468,6 +472,8 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 		if (bunix_task_grant((u64)task, caps[i].handle,
 				     caps[i].rights) != 0) {
 			vfs_close(vfs, file.handle);
+			bunix_handle_close((u64)io_buffer);
+			bunix_handle_close((u64)task);
 			return -1;
 		}
 	}
@@ -488,25 +494,34 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 				   segment_buffer, phdr->filesz, phdr->memsz,
 				   (phdr->flags & PF_W) != 0) != 0) {
 			vfs_close(vfs, file.handle);
+			bunix_handle_close((u64)io_buffer);
+			bunix_handle_close((u64)task);
 			return -1;
 		}
 	}
 
 	if (build_initial_stack((u64)task, path, &exec, &stack) != 0) {
 		vfs_close(vfs, file.handle);
+		bunix_handle_close((u64)io_buffer);
+		bunix_handle_close((u64)task);
 		return -1;
 	}
 	vfs_close(vfs, file.handle);
+	bunix_handle_close((u64)io_buffer);
 	if (str_eq(path, "/bin/lxtest")) {
 		const long bunix_id = bunix_task_id((u64)task);
 
 		if (bunix_id <= 0 ||
 		    register_linux_process((u64)bunix_id, linux_parent_pid,
 					   linux_pid) != 0) {
+			bunix_handle_close((u64)task);
 			return -1;
 		}
 	}
-	return bunix_task_start_at((u64)task, ehdr.entry, stack);
+	const long started = bunix_task_start_at((u64)task, ehdr.entry, stack);
+
+	bunix_handle_close((u64)task);
+	return started;
 }
 
 static void reply_status(u64 reply_handle, u64 pid, u64 status)
@@ -522,6 +537,19 @@ static void reply_status(u64 reply_handle, u64 pid, u64 status)
 	};
 
 	bunix_ipc_send(reply_handle, &reply);
+}
+
+static void process_reset(struct process *process)
+{
+	if (process == 0) {
+		return;
+	}
+
+	process->pid = 0;
+	process->linux_pid = 0;
+	process->status = 0;
+	process->exited = 0;
+	process->waiter = 0;
 }
 
 static struct process *process_find(u64 pid)
@@ -667,6 +695,7 @@ int main(void)
 				reply.words[1] = process->pid;
 				reply.words[2] = process->status;
 				bunix_console_write(waited, sizeof(waited) - 1);
+				process_reset(process);
 			} else if (message.reply != 0) {
 				process->waiter = message.reply;
 				should_reply = 0;
@@ -690,6 +719,7 @@ int main(void)
 					process->waiter = 0;
 					bunix_console_write(waited,
 							    sizeof(waited) - 1);
+					process_reset(process);
 				}
 			} else {
 				reply.words[0] = (u64)-1;

@@ -10,6 +10,7 @@ enum {
 struct shared_buffer {
 	u64 id;
 	u64 size;
+	u32 ref_count;
 	struct spinlock lock;
 	u8 data[BUFFER_MAX_SIZE];
 };
@@ -46,6 +47,7 @@ struct shared_buffer *buffer_create(u64 size)
 
 	buffer->id = next_buffer_id++;
 	buffer->size = size;
+	buffer->ref_count = 1;
 	spinlock_init(&buffer->lock, "buffer");
 	spin_unlock_irqrestore(&buffer_table_lock, flags);
 	console_printf("buffer: create id=%u size=%u\n",
@@ -61,11 +63,46 @@ void buffer_destroy(struct shared_buffer *buffer)
 
 	const u64 flags = spin_lock_irqsave(&buffer_table_lock);
 
+	if (buffer->ref_count != 0) {
+		spin_unlock_irqrestore(&buffer_table_lock, flags);
+		return;
+	}
 	buffer->id = 0;
 	buffer->size = 0;
 	spin_unlock_irqrestore(&buffer_table_lock, flags);
 	slab_free(buffer);
 	console_printf("buffer: destroy\n");
+}
+
+void buffer_retain(struct shared_buffer *buffer)
+{
+	if (buffer == 0) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&buffer_table_lock);
+
+	buffer->ref_count++;
+	spin_unlock_irqrestore(&buffer_table_lock, flags);
+}
+
+void buffer_release(struct shared_buffer *buffer)
+{
+	if (buffer == 0) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&buffer_table_lock);
+
+	if (buffer->ref_count > 0) {
+		buffer->ref_count--;
+	}
+	const u32 refs = buffer->ref_count;
+	spin_unlock_irqrestore(&buffer_table_lock, flags);
+
+	if (refs == 0) {
+		buffer_destroy(buffer);
+	}
 }
 
 u64 buffer_id(const struct shared_buffer *buffer)

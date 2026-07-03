@@ -133,6 +133,50 @@ int arch_vm_space_init(struct arch_vm_space *space)
 	return 0;
 }
 
+void arch_vm_space_destroy(struct arch_vm_space *space)
+{
+	if (space == 0 || space->cr3 == 0 || space->cr3 == (u64)arch_boot_pml4) {
+		return;
+	}
+
+	u64 *pml4 = (u64 *)space->cr3;
+
+	for (u64 pml4_index = 0; pml4_index < PAGE_ENTRIES; pml4_index++) {
+		u64 pml4e = pml4[pml4_index];
+
+		if ((pml4e & PTE_PRESENT) == 0 || (pml4e & PTE_LARGE) != 0) {
+			continue;
+		}
+
+		u64 *pdpt = (u64 *)(pml4e & ~0xfffull);
+		for (u64 pdpt_index = 0; pdpt_index < PAGE_ENTRIES; pdpt_index++) {
+			u64 pdpte = pdpt[pdpt_index];
+
+			if ((pdpte & PTE_PRESENT) == 0 ||
+			    (pdpte & PTE_LARGE) != 0) {
+				continue;
+			}
+
+			u64 *pd = (u64 *)(pdpte & ~0xfffull);
+			for (u64 pd_index = 0; pd_index < PAGE_ENTRIES; pd_index++) {
+				u64 pde = pd[pd_index];
+
+				if ((pde & PTE_PRESENT) == 0 ||
+				    (pde & PTE_LARGE) != 0) {
+					continue;
+				}
+
+				pmm_page_free_addr(pde & ~0xfffull);
+			}
+			pmm_page_free_addr(pdpte & ~0xfffull);
+		}
+		pmm_page_free_addr(pml4e & ~0xfffull);
+	}
+
+	pmm_page_free_addr(space->cr3);
+	space->cr3 = 0;
+}
+
 int arch_vm_map_page(struct arch_vm_space *space, u64 vaddr, u64 phys,
 		     u32 writable, u32 user)
 {

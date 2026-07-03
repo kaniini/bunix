@@ -484,6 +484,14 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: reap tid=11 task=11 name=lxtest remaining=0" $(BUILD_DIR)/serial.log
 	grep -E "sched: reap tid=12 task=[0-9]+ name=lxtest remaining=0" $(BUILD_DIR)/serial.log
 	grep -E "sched: reap tid=13 task=[0-9]+ name=lxtest remaining=0" $(BUILD_DIR)/serial.log
+	grep -F "vm: destroy space id=8 owner=first" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=8 name=first destroyed" $(BUILD_DIR)/serial.log
+	grep -F "vm: destroy space id=3 owner=init" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=3 name=init destroyed" $(BUILD_DIR)/serial.log
+	grep -E "vm: destroy space id=[0-9]+ owner=lxtest" $(BUILD_DIR)/serial.log
+	grep -F "name=lxtest destroyed" $(BUILD_DIR)/serial.log
+	grep -F "ipc: port destroy lxtest" $(BUILD_DIR)/serial.log
+	grep -F "buffer: destroy" $(BUILD_DIR)/serial.log
 
 check-tools:
 	@command -v $(CC)
