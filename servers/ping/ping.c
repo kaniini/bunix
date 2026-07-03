@@ -1,6 +1,6 @@
 #include "../../kernel/console.h"
 #include "../../kernel/ipc.h"
-#include "../../kernel/sched.h"
+#include "../../kernel/timer.h"
 #include "../vm/vm_server.h"
 
 void ping_server_start(void)
@@ -17,6 +17,11 @@ void ping_server_start(void)
 	if (vm_port != 0) {
 		ipc_send(vm_port, &message);
 	}
-	thread_yield();
+
+	const u64 start = timer_ticks();
+	while (timer_ticks() == start) {
+		__asm__ volatile ("pause");
+	}
+
 	console_printf("ping: two\n");
 }

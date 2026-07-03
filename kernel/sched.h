@@ -27,6 +27,8 @@ void sched_run(void);
 void thread_yield(void);
 void thread_block(void);
 void thread_unblock(struct thread *thread);
+void sched_enable_preemption(void);
+void sched_tick(void);
 void thread_exit(void) __attribute__((noreturn));
 
 u32 task_id(const struct task *task);

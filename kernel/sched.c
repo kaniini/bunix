@@ -50,6 +50,7 @@ static struct cpu_sched cpus[MAX_CPUS];
 static u32 boot_cpu_id;
 static u32 next_pid = 1;
 static u32 next_tid = 1;
+static u32 preemption_enabled;
 
 static struct cpu_sched *sched_current_cpu(void)
 {
@@ -240,6 +241,29 @@ void thread_yield(void)
 	}
 
 	console_printf("sched: yield tid=%u cpu=%u\n", prev->tid, cpu->id);
+	sched_enqueue_on(cpu, prev);
+	cpu->current = &cpu->scheduler_thread;
+	sched_activate_thread_space(cpu->current);
+	arch_thread_switch(&prev->context, &cpu->scheduler_thread.context);
+}
+
+void sched_enable_preemption(void)
+{
+	preemption_enabled = 1;
+	console_printf("sched: preemption enabled\n");
+}
+
+void sched_tick(void)
+{
+	struct cpu_sched *cpu = sched_current_cpu();
+	struct thread *prev = cpu->current;
+
+	if (!preemption_enabled || prev == &cpu->scheduler_thread ||
+	    cpu->runq.count == 0) {
+		return;
+	}
+
+	console_printf("sched: preempt tid=%u cpu=%u\n", prev->tid, cpu->id);
 	sched_enqueue_on(cpu, prev);
 	cpu->current = &cpu->scheduler_thread;
 	sched_activate_thread_space(cpu->current);

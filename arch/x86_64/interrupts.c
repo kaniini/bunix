@@ -1,6 +1,7 @@
 #include <arch/interrupts.h>
 #include <arch/io.h>
 #include "console.h"
+#include "sched.h"
 
 enum {
 	IDT_ENTRIES = 256,
@@ -104,6 +105,11 @@ static void pic_eoi(u64 vector)
 	arch_outb(PIC1_COMMAND, PIC_EOI);
 }
 
+u64 arch_timer_ticks(void)
+{
+	return timer_ticks;
+}
+
 void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 {
 	if (frame->vector == IRQ_TIMER_VECTOR) {
@@ -112,6 +118,7 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 			console_printf("timer: tick %u\n", (u32)timer_ticks);
 		}
 		pic_eoi(frame->vector);
+		sched_tick();
 		return;
 	}
 

@@ -66,8 +66,9 @@ is exercised.
 ## Interrupts
 
 x86_64 installs an IDT, remaps the legacy PIC, and starts the PIT at 100 Hz.
-Timer interrupts are currently counted and acknowledged only; scheduler
-preemption is intentionally left for the next slice.
+Timer interrupts drive scheduler ticks, and the cooperative scheduler can now
+preempt a running thread when another thread is ready on the current CPU's run
+queue.
 
 ## Build
 
