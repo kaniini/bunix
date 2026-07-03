@@ -251,6 +251,9 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: thread tid=2 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=3 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=4 exited" $(BUILD_DIR)/serial.log
+	grep -F "sched: reap tid=2 task=2 name=init remaining=0" $(BUILD_DIR)/serial.log
+	grep -F "sched: reap tid=3 task=3 name=hello remaining=0" $(BUILD_DIR)/serial.log
+	grep -F "sched: reap tid=4 task=4 name=ping remaining=0" $(BUILD_DIR)/serial.log
 
 check-tools:
 	@command -v $(CC)

@@ -78,10 +78,11 @@ syscalls.
 
 ## Scheduler shape
 
-Tasks are resource containers that will map naturally to Linux processes.
-Threads are schedulable contexts that will map naturally to Linux LWPs. The
-current scheduler is FIFO, with `thread_yield()`, `thread_block()`,
-`thread_unblock()`, and timer-driven preemption once enabled.
+Tasks are low-level resource containers: they own handles and VM spaces, but
+they are not process lifetime objects. Threads are schedulable contexts that
+will map naturally to Linux LWPs. The current scheduler is FIFO, with
+`thread_yield()`, `thread_block()`, `thread_unblock()`, timer-driven
+preemption, and thread-slot reaping after exit.
 
 The scheduler state is split into per-CPU structures with per-CPU run queues,
 and the shared kernel structures used by the current server path now have
@@ -101,6 +102,12 @@ placement over the least-loaded CPU with round-robin tie breaking. The current
 boot flow lets VM, init, hello, and ping all use automatic placement, which
 exercises user entry, syscalls, IPC wakeups, server work, and scheduling across
 both CPUs.
+
+Exited threads switch back to the per-CPU scheduler thread, which reaps them
+from the scheduler stack, decrements the owning task's thread count, and returns
+the thread-table slot to the empty pool. A task with no threads remains a valid
+low-level container until a future higher-level process/session layer decides
+what destruction means.
 
 Each task owns a `vm_space` granted by the VM server facade. On x86_64, a VM
 space contains a real PML4, PDPT, and page directory, currently identity-mapping

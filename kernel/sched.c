@@ -52,6 +52,7 @@ struct cpu_sched {
 	u32 id;
 	struct run_queue runq;
 	struct thread *current;
+	struct thread *reap;
 	struct thread scheduler_thread;
 	u32 quantum_left;
 };
@@ -140,6 +141,43 @@ static u32 sched_cpu_load(struct cpu_sched *cpu)
 	return load;
 }
 
+static void sched_reap_thread(struct thread *thread)
+{
+	if (thread == 0 || thread->state != THREAD_DEAD ||
+	    thread->task == 0) {
+		return;
+	}
+
+	struct task *task = thread->task;
+	const u64 task_flags = spin_lock_irqsave(&task->lock);
+
+	if (task->thread_count > 0) {
+		task->thread_count--;
+	}
+
+	const u32 remaining = task->thread_count;
+
+	spin_unlock_irqrestore(&task->lock, task_flags);
+
+	const u64 thread_flags = spin_lock_irqsave(&thread_table_lock);
+	const u32 tid = thread->tid;
+	const char *name = thread->name;
+	const u32 pid = task->pid;
+
+	thread->tid = 0;
+	thread->name = 0;
+	thread->task = 0;
+	thread->entry = 0;
+	thread->arg = 0;
+	thread->cpu_id = 0;
+	thread->run_next = 0;
+	thread->state = THREAD_EMPTY;
+	spin_unlock_irqrestore(&thread_table_lock, thread_flags);
+
+	console_printf("sched: reap tid=%u task=%u name=%s remaining=%u\n",
+		       tid, pid, name, remaining);
+}
+
 static u32 sched_select_auto_cpu(void)
 {
 	const u64 flags = spin_lock_irqsave(&placement_lock);
@@ -215,6 +253,7 @@ void sched_init(void)
 		cpus[i].scheduler_thread.state = THREAD_RUNNING;
 		cpus[i].scheduler_thread.cpu_id = i;
 		cpus[i].current = &cpus[i].scheduler_thread;
+		cpus[i].reap = 0;
 		cpus[i].quantum_left = SCHED_QUANTUM_TICKS;
 	}
 
@@ -286,7 +325,8 @@ static struct thread *thread_create_placed(struct task *task, const char *name,
 		return 0;
 	}
 
-	const u64 flags = spin_lock_irqsave(&thread_table_lock);
+	const u64 task_flags = spin_lock_irqsave(&task->lock);
+	const u64 thread_flags = spin_lock_irqsave(&thread_table_lock);
 
 	for (u32 i = 0; i < MAX_THREADS; i++) {
 		if (threads[i].state != THREAD_EMPTY) {
@@ -307,12 +347,14 @@ static struct thread *thread_create_placed(struct task *task, const char *name,
 			       threads[i].tid, task->pid, name);
 		console_printf("sched: place tid=%u cpu=%u policy=%s\n",
 			       threads[i].tid, cpu_id, placement_policy);
-		spin_unlock_irqrestore(&thread_table_lock, flags);
+		spin_unlock_irqrestore(&thread_table_lock, thread_flags);
+		spin_unlock_irqrestore(&task->lock, task_flags);
 		sched_enqueue_on(&cpus[cpu_id], &threads[i]);
 		return &threads[i];
 	}
 
-	spin_unlock_irqrestore(&thread_table_lock, flags);
+	spin_unlock_irqrestore(&thread_table_lock, thread_flags);
+	spin_unlock_irqrestore(&task->lock, task_flags);
 	console_printf("sched: thread table full for %s\n", name);
 	return 0;
 }
@@ -433,6 +475,9 @@ void sched_run(void)
 		sched_activate_thread_space(next);
 		arch_thread_switch(&prev->context, &next->context);
 		sched_activate_thread_space(cpu->current);
+		struct thread *dead = cpu->reap;
+		cpu->reap = 0;
+		sched_reap_thread(dead);
 	}
 }
 
@@ -548,6 +593,7 @@ void thread_exit(void)
 
 	console_printf("sched: thread tid=%u exited\n", prev->tid);
 	prev->state = THREAD_DEAD;
+	cpu->reap = prev;
 	cpu->current = &cpu->scheduler_thread;
 	sched_activate_thread_space(cpu->current);
 	arch_thread_switch(&prev->context, &cpu->scheduler_thread.context);
