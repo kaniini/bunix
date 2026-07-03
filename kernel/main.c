@@ -1,6 +1,7 @@
 #include "console.h"
 #include "ipc.h"
 #include "multiboot2.h"
+#include "name.h"
 #include "sched.h"
 #include "server.h"
 #include "types.h"
@@ -30,10 +31,10 @@ void kernel_main(u32 magic, u64 multiboot_info)
 	arch_interrupts_init();
 	arch_user_init();
 	ipc_init();
+	name_service_init();
 	vm_server_init();
 	sched_init();
 	server_start_boot_modules(multiboot_info);
-	sched_enable_preemption();
 	sched_run();
 
 	console_printf("kernel: idle\n");

@@ -1,5 +1,6 @@
 #include "../../kernel/console.h"
 #include "../../kernel/ipc.h"
+#include "../../kernel/name.h"
 #include "../../kernel/vm.h"
 #include "vm_server.h"
 
@@ -24,6 +25,7 @@ static struct vm_space *grant_space(const char *owner)
 void vm_server_init(void)
 {
 	vm_port = ipc_port_create("vm");
+	name_service_register("vm", NAME_SERVICE_IPC_PORT, (u64)vm_port);
 }
 
 struct vm_space *vm_server_bootstrap_space(const char *owner)

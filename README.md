@@ -3,9 +3,9 @@
 An experimental microkernel-oriented operating system in C.
 
 This first slice boots a freestanding x86_64 kernel through Multiboot2,
-initializes serial and VGA text consoles, parses Multiboot2 modules, creates a
-task/thread for each requested boot server, and starts a hello server requested
-by a boot module:
+initializes serial and VGA text consoles, parses Multiboot2 modules, starts the
+kernel-hosted VM server, and enters a user-space init server which launches
+other user servers:
 
 ```text
 hello: world <3
@@ -15,16 +15,17 @@ hello: world <3
 
 - `arch/x86_64/`: x86_64 Multiboot2 entry code and low-level I/O.
 - `boot/`: GRUB config.
-- `kernel/`: bootstrap, console, PMM/VM mechanisms, cooperative scheduler, and initial server registry.
+- `kernel/`: bootstrap, console, PMM/VM mechanisms, scheduler, name registry, and boot module launcher.
 - `modules/`: raw Multiboot2 boot modules.
 - `servers/`: initial server stubs, including the skeletal VM server.
 - `Makefile`: build, EFI ISO, and QEMU/KVM targets.
 
-The hello and ping modules are standalone ELF images loaded into their tasks and
-entered in ring 3. The VM server remains kernel-hosted and owns memory policy
-shape through RPC hooks. The next microkernel steps are to replace bootstrap
-shortcuts with capability-checked IPC and move more server functionality behind
-the same user-mode ABI.
+The init, hello, and ping modules are freestanding C ELF images loaded into
+their tasks and entered in ring 3. The VM server remains kernel-hosted for the
+current performance-oriented design, but still exposes a VM IPC port for events.
+The next microkernel steps are to replace bootstrap shortcuts with
+capability-checked IPC and move more server functionality behind the same
+user-mode ABI.
 
 The tree is split so future ports can add a sibling such as `arch/arm64/` with
 its own boot path, interrupt setup, MMU setup, and device I/O while reusing the
@@ -40,24 +41,30 @@ fixed-size messages, and receivers block when a port is empty. This is intended
 to grow toward lightweight kernel-thread/event-port style server communication
 rather than forcing every interaction into a synchronous syscall shape.
 
-VM space grants now travel through VM server RPC messages. The VM server still
-uses a bootstrap space for itself, then receives `VM_RPC_CREATE_SPACE` messages
-for other module-backed servers and replies over the caller's reply port.
+The VM server owns the memory authority policy, but module task spaces are now
+granted through direct kernel VM calls during launch. That avoids a synchronous
+scheduler re-entry path while VM remains kernel-hosted. VM still receives
+event-port style IPC, currently exercised by ping.
 
 ## User Mode
 
-User modules are built as freestanding x86_64 ELFs at `0x400000`. The kernel
-loads their `PT_LOAD` segments, enters ring 3 with `iretq`, and exposes a small
-negative-number syscall namespace over `syscall/sysret`: `-1` writes to the
-console, `-2` exits the thread, `-3` sends a VM ping event, and `-4` reads timer
-ticks.
+User modules are built as freestanding C x86_64 ELFs with a tiny `crt0.S` and
+inline syscall wrappers. Until the VM loader maps private pages, the modules use
+distinct fixed bases: init at `0x400000`, hello at `0x800000`, and ping at
+`0xc00000`.
+
+The kernel loads their `PT_LOAD` segments, enters ring 3 with `iretq`, and
+exposes a small negative-number syscall namespace over `syscall/sysret`.
+Current calls include console write, thread exit, timer ticks, name lookup/name
+registration, service writes, VM ping-by-service, module launch, and explicit
+preemption enable.
 
 ## Scheduler shape
 
 Tasks are resource containers that will map naturally to Linux processes.
 Threads are schedulable contexts that will map naturally to Linux LWPs. The
-current scheduler is cooperative and FIFO, with `thread_yield()`,
-`thread_block()`, and `thread_unblock()`.
+current scheduler is FIFO, with `thread_yield()`, `thread_block()`,
+`thread_unblock()`, and timer-driven preemption once enabled.
 
 The scheduler state is already split into per-CPU structures with a per-CPU run
 queue. `MAX_CPUS` is still `1`, but the model avoids baking a single global run
@@ -73,9 +80,9 @@ is exercised.
 ## Interrupts
 
 x86_64 installs an IDT, remaps the legacy PIC, and starts the PIT at 100 Hz.
-Timer interrupts drive scheduler ticks, and the cooperative scheduler can now
-preempt a running thread when another thread is ready on the current CPU's run
-queue.
+Timer interrupts drive scheduler ticks. User threads have separate trap stacks
+for ring-3 interrupts, and ping explicitly enables preemption before yielding
+CPU time to the VM server through the timer path.
 
 ## Build
 
@@ -92,10 +99,10 @@ make test
 ```
 
 `make test` boots through OVMF/GRUB with KVM, captures serial output in
-`build/serial.log`, and checks that GRUB passed a Multiboot2 module which
-creates tasks/threads and starts the hello, ping, and VM servers. The ping
-server exercises cooperative `thread_yield()` on the FIFO run queue, and the VM
-server exercises the temporary `vm_rpc_*` frame allocation boundary.
+`build/serial.log`, and checks that GRUB passed Multiboot2 modules, the kernel
+started VM plus init, and init launched the hello and ping C servers. Ping
+resolves VM by name, sends a VM event, and exercises timer-driven preemption
+while the VM server handles the event.
 
 For an interactive serial console:
 

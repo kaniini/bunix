@@ -5,10 +5,13 @@ ESP_DIR := $(BUILD_DIR)/esp
 EFI_BOOT_IMG := $(BUILD_DIR)/bunixos-efi.iso
 EFI_BOOT_APP := $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 KERNEL := $(BUILD_DIR)/bunixos.kernel
+INIT_MODULE := $(BUILD_DIR)/modules/init.server
+USER_CRT0_OBJ := $(BUILD_DIR)/user/crt0.S.o
+INIT_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/init/main.c.o
 HELLO_MODULE := $(BUILD_DIR)/modules/hello.server
-HELLO_MODULE_OBJ := $(BUILD_DIR)/user/hello/start.S.o
+HELLO_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/hello/main.c.o
 PING_MODULE := $(BUILD_DIR)/modules/ping.server
-PING_MODULE_OBJ := $(BUILD_DIR)/user/ping/start.S.o
+PING_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/ping/main.c.o
 
 CC ?= gcc
 LD ?= ld
@@ -24,6 +27,11 @@ CFLAGS := -m64 -std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 	-Wall -Wextra -Werror -MMD -MP
 ASFLAGS := -m64 -g -ffreestanding -Iarch/$(ARCH)/include -Ikernel -MMD -MP
 LDFLAGS := -m elf_x86_64 -nostdlib -T linker.ld
+USER_CFLAGS := -m64 -std=c11 -O2 -g -ffreestanding -fno-stack-protector \
+	-fno-pic -fno-pie -fno-builtin -mno-red-zone \
+	-Iuser/include -Wall -Wextra -Werror -MMD -MP
+USER_ASFLAGS := -m64 -g -ffreestanding -fno-pic -fno-pie \
+	-Iuser/include -MMD -MP
 
 KERNEL_SRCS := \
 	arch/$(ARCH)/boot/multiboot2.S \
@@ -39,6 +47,7 @@ KERNEL_SRCS := \
 	kernel/elf.c \
 	kernel/ipc.c \
 	kernel/multiboot2.c \
+	kernel/name.c \
 	kernel/pmm.c \
 	kernel/sched.c \
 	kernel/server.c \
@@ -47,7 +56,9 @@ KERNEL_SRCS := \
 	servers/vm/vm.c
 
 KERNEL_OBJS := $(KERNEL_SRCS:%=$(BUILD_DIR)/%.o)
-DEPS := $(KERNEL_OBJS:.o=.d)
+USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/init/main.c.o \
+	$(BUILD_DIR)/user/hello/main.c.o $(BUILD_DIR)/user/ping/main.c.o
+DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
 .PHONY: all clean run run-kernel run-iso test iso esp check-tools
 
@@ -69,23 +80,30 @@ iso: $(EFI_BOOT_IMG)
 
 esp: $(EFI_BOOT_APP)
 
-$(HELLO_MODULE_OBJ): user/hello/start.S
+$(BUILD_DIR)/user/%.c.o: user/%.c
 	mkdir -p $(dir $@)
-	$(CC) -m64 -ffreestanding -fno-pic -fno-pie -c $< -o $@
+	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(HELLO_MODULE): $(HELLO_MODULE_OBJ) user/user.ld
+$(BUILD_DIR)/user/%.S.o: user/%.S
 	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(HELLO_MODULE_OBJ)
+	$(CC) $(USER_ASFLAGS) -c $< -o $@
 
-$(PING_MODULE_OBJ): user/ping/start.S
+$(INIT_MODULE): $(INIT_MODULE_OBJS) user/user.ld
 	mkdir -p $(dir $@)
-	$(CC) -m64 -ffreestanding -fno-pic -fno-pie -c $< -o $@
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld \
+		--defsym USER_BASE=0x400000 -o $@ $(INIT_MODULE_OBJS)
 
-$(PING_MODULE): $(PING_MODULE_OBJ) user/user.ld
+$(HELLO_MODULE): $(HELLO_MODULE_OBJS) user/user.ld
 	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PING_MODULE_OBJ)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld \
+		--defsym USER_BASE=0x800000 -o $@ $(HELLO_MODULE_OBJS)
 
-$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(HELLO_MODULE) $(PING_MODULE) modules/vm.server
+$(PING_MODULE): $(PING_MODULE_OBJS) user/user.ld
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld \
+		--defsym USER_BASE=0xc00000 -o $@ $(PING_MODULE_OBJS)
+
+$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(HELLO_MODULE) $(PING_MODULE) modules/vm.server
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -94,11 +112,12 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(HELLO_MODULE) $(PING_MODUL
 	$(GRUB_MKSTANDALONE) -O x86_64-efi -o $@ \
 		"boot/grub/grub.cfg=boot/grub-standalone.cfg" \
 		"boot/bunixos.kernel=$(KERNEL)" \
+		"modules/init.server=$(INIT_MODULE)" \
 		"modules/hello.server=$(HELLO_MODULE)" \
 		"modules/ping.server=$(PING_MODULE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(HELLO_MODULE) $(PING_MODULE) modules/vm.server
+$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(HELLO_MODULE) $(PING_MODULE) modules/vm.server
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -109,6 +128,7 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(HELLO_MODULE) $(PING_MODULE) modules/
 	mkdir -p $(ISO_ROOT)/modules
 	cp $(KERNEL) $(ISO_ROOT)/boot/bunixos.kernel
 	cp boot/grub.cfg $(ISO_ROOT)/boot/grub/grub.cfg
+	cp $(INIT_MODULE) $(ISO_ROOT)/modules/init.server
 	cp $(HELLO_MODULE) $(ISO_ROOT)/modules/hello.server
 	cp $(PING_MODULE) $(ISO_ROOT)/modules/ping.server
 	cp modules/vm.server $(ISO_ROOT)/modules/vm.server
@@ -145,40 +165,56 @@ test: $(EFI_BOOT_APP)
 	grep -F "interrupts: enabled" $(BUILD_DIR)/serial.log
 	grep -F "timer: tick 1" $(BUILD_DIR)/serial.log
 	grep -F "user: gdt/tss/syscall ready" $(BUILD_DIR)/serial.log
+	grep -F "names: init entries=32" $(BUILD_DIR)/serial.log
+	grep -F "names: register name=vm id=1 kind=2" $(BUILD_DIR)/serial.log
+	grep -F "names: register name=console id=2 kind=1" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=vm id=1" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=hello id=2" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=ping id=3" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: grant_space owner=init id=2" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: grant_space owner=hello id=3" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: grant_space owner=ping id=4" $(BUILD_DIR)/serial.log
 	grep -F "sched: task pid=1 name=vm vm=1" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=1 task=1 name=vm" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=2 name=hello vm=2" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=2 task=2 name=hello" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=3 name=ping vm=3" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=3 task=3 name=ping" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=2 name=init vm=2" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=2 task=2 name=init" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=3 name=hello vm=3" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=3 task=3 name=hello" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=4 name=ping vm=4" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=4 task=4 name=ping" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server vm" $(BUILD_DIR)/serial.log
+	grep -F "kernel: starting module server init" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: memory authority online" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: rpc free_frame" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create vm" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=vm" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=vm type=2 sender=0" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv port=vm type=2 sender=0" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=kernel-rpc type=2 sender=1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv port=kernel-rpc type=2 sender=1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=vm type=1 sender=3" $(BUILD_DIR)/serial.log
+	grep -F "ipc: send port=vm type=1 sender=4" $(BUILD_DIR)/serial.log
 	grep -F "sched: preemption enabled" $(BUILD_DIR)/serial.log
-	grep -F "sched: preempt tid=3 cpu=0" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: ipc event type=1 sender=3 word0=0x2a" $(BUILD_DIR)/serial.log
+	grep -F "sched: preempt tid=4 cpu=0" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: ipc event type=1 sender=4 word0=0x2a" $(BUILD_DIR)/serial.log
+	grep -F "init: launching servers" $(BUILD_DIR)/serial.log
+	grep -F "init: done" $(BUILD_DIR)/serial.log
+	grep -F "kernel: launching module server hello" $(BUILD_DIR)/serial.log
+	grep -F "kernel: launching module server ping" $(BUILD_DIR)/serial.log
+	grep -F "names: lookup name=console id=2" $(BUILD_DIR)/serial.log
+	grep -F "names: lookup name=vm id=1" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server hello" $(BUILD_DIR)/serial.log
 	grep -F "elf: entry=0x0000000000400000" $(BUILD_DIR)/serial.log
+	grep -F "elf: entry=0x0000000000800000" $(BUILD_DIR)/serial.log
+	grep -F "elf: entry=0x0000000000c00000" $(BUILD_DIR)/serial.log
 	grep -F "user: enter rip=0x0000000000400000" $(BUILD_DIR)/serial.log
+	grep -F "user: enter rip=0x0000000000800000" $(BUILD_DIR)/serial.log
+	grep -F "user: enter rip=0x0000000000c00000" $(BUILD_DIR)/serial.log
 	grep -F "hello: world <3" $(BUILD_DIR)/serial.log
 	grep -F "syscall: exit status=0" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping image=0x" $(BUILD_DIR)/serial.log
-	grep -F "elf: load vaddr=0x0000000000400000 filesz=102" $(BUILD_DIR)/serial.log
+	grep -F "elf: load vaddr=0x0000000000400000" $(BUILD_DIR)/serial.log
+	grep -F "elf: load vaddr=0x0000000000800000" $(BUILD_DIR)/serial.log
+	grep -F "elf: load vaddr=0x0000000000c00000" $(BUILD_DIR)/serial.log
 	grep -F "ping: one" $(BUILD_DIR)/serial.log
 	grep -F "ping: two" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=2 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=3 exited" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=4 exited" $(BUILD_DIR)/serial.log
 
 check-tools:
 	@command -v $(CC)

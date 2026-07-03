@@ -1,8 +1,9 @@
 ENTRY(_start)
+PROVIDE(USER_BASE = 0x400000);
 
 SECTIONS
 {
-	. = 0x400000;
+	. = USER_BASE;
 
 	.text ALIGN(4K) : {
 		*(.text .text.*)

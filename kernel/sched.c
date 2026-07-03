@@ -2,6 +2,7 @@
 #include "sched.h"
 #include "vm.h"
 #include <arch/thread.h>
+#include <arch/user.h>
 
 enum {
 	MAX_CPUS = 1,
@@ -28,6 +29,7 @@ struct thread {
 	struct thread *run_next;
 	struct arch_thread_context context;
 	u8 kernel_stack[KERNEL_STACK_SIZE] __attribute__((aligned(16)));
+	u8 trap_stack[KERNEL_STACK_SIZE] __attribute__((aligned(16)));
 };
 
 struct run_queue {
@@ -101,6 +103,13 @@ static void sched_activate_thread_space(struct thread *thread)
 {
 	if (thread == 0 || thread->task == 0 || thread->task->vm_space == 0) {
 		return;
+	}
+
+	if (thread == &sched_current_cpu()->scheduler_thread) {
+		arch_user_set_kernel_stack(0);
+	} else {
+		arch_user_set_kernel_stack((u64)(thread->trap_stack +
+						 KERNEL_STACK_SIZE));
 	}
 
 	vm_rpc_activate_space(thread->task->vm_space);

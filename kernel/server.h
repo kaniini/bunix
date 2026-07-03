@@ -12,6 +12,7 @@ struct server {
 
 void server_start_all(void);
 void server_start_boot_modules(u64 multiboot_info);
+int server_launch_module(const char *name);
 void vm_server_start(void);
 
 #endif

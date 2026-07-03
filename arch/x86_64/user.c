@@ -2,8 +2,10 @@
 #include <arch/io.h>
 #include "console.h"
 #include "ipc.h"
+#include "name.h"
 #include "sched.h"
 #include "timer.h"
+#include "server.h"
 #include "../servers/vm/vm_server.h"
 
 enum {
@@ -21,6 +23,12 @@ enum {
 	SYSCALL_EXIT = -2,
 	SYSCALL_VM_PING = -3,
 	SYSCALL_TIMER_TICKS = -4,
+	SYSCALL_NAME_LOOKUP = -5,
+	SYSCALL_SERVICE_WRITE = -6,
+	SYSCALL_SERVICE_VM_PING = -7,
+	SYSCALL_LAUNCH_MODULE = -8,
+	SYSCALL_NAME_REGISTER = -9,
+	SYSCALL_ENABLE_PREEMPTION = -10,
 };
 
 struct gdt_ptr {
@@ -91,6 +99,11 @@ void arch_user_init(void)
 	console_printf("user: gdt/tss/syscall ready\n");
 }
 
+void arch_user_set_kernel_stack(u64 stack)
+{
+	kernel_tss.rsp0 = stack;
+}
+
 void arch_user_enter(u64 entry, u64 stack)
 {
 	console_printf("user: enter rip=%p rsp=%p\n",
@@ -152,6 +165,41 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 	}
 	case SYSCALL_TIMER_TICKS:
 		return timer_ticks();
+	case SYSCALL_NAME_LOOKUP:
+		return name_service_lookup((const char *)arg0);
+	case SYSCALL_SERVICE_WRITE:
+		if (name_service_kind(arg0) != NAME_SERVICE_CONSOLE) {
+			return (u64)-1;
+		}
+		for (u64 i = 0; i < arg2; i++) {
+			console_putc(((const char *)arg1)[i]);
+		}
+		return arg2;
+	case SYSCALL_SERVICE_VM_PING: {
+		if (name_service_kind(arg0) != NAME_SERVICE_IPC_PORT) {
+			return (u64)-1;
+		}
+
+		struct ipc_port *vm_port =
+			(struct ipc_port *)name_service_object(arg0);
+		struct ipc_message message = {
+			.type = VM_IPC_EVENT_PING,
+			.sender = 0,
+			.reply_port = 0,
+			.words = { arg1, 0, 0, 0 },
+		};
+
+		return (u64)ipc_send(vm_port, &message);
+	}
+	case SYSCALL_LAUNCH_MODULE:
+		return (u64)server_launch_module((const char *)arg0);
+	case SYSCALL_NAME_REGISTER:
+		return name_service_register((const char *)arg0,
+					     NAME_SERVICE_TASK,
+					     task_id(task_current()));
+	case SYSCALL_ENABLE_PREEMPTION:
+		sched_enable_preemption();
+		return 0;
 	default:
 		console_printf("syscall: unknown number=%u\n", (u32)number);
 		return (u64)-1;
