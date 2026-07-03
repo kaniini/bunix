@@ -164,7 +164,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "user: gdt/tss/syscall ready" $(BUILD_DIR)/serial.log
 	grep -F "names: init entries=32" $(BUILD_DIR)/serial.log
 	grep -F "names: register name=vm id=1 kind=2" $(BUILD_DIR)/serial.log
-	grep -F "names: register name=console id=2 kind=1" $(BUILD_DIR)/serial.log
+	grep -F "names: register name=console id=2 kind=2" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=vm id=1" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=init id=2" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=hello id=3" $(BUILD_DIR)/serial.log
@@ -182,20 +182,31 @@ test: $(EFI_BOOT_APP)
 	grep -F "vm-server: memory authority online" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: rpc free_frame" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create vm" $(BUILD_DIR)/serial.log
+	grep -F "ipc: port create console" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create init" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create hello" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create ping" $(BUILD_DIR)/serial.log
+	grep -F "ipc: port create reply" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=2 handle=1" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=2 handle=2" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=3 handle=1" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=4 handle=1" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=4 handle=2" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=4 handle=3" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=4 handle=4" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=vm" $(BUILD_DIR)/serial.log
+	grep -F "ipc: recv block port=reply" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=ping type=1 sender=2 queued=1" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv port=ping type=1 sender=2 queued=0" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=vm type=1 sender=4" $(BUILD_DIR)/serial.log
+	grep -F "ipc: send port=reply type=2 sender=4 queued=1" $(BUILD_DIR)/serial.log
+	grep -F "ipc: recv port=reply type=2 sender=4 queued=0" $(BUILD_DIR)/serial.log
 	grep -F "sched: preemption enabled" $(BUILD_DIR)/serial.log
 	grep -F "sched: preempt tid=4 cpu=0" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: ipc event type=1 sender=4 word0=0x2a" $(BUILD_DIR)/serial.log
 	grep -F "init: launching servers" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server hello" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server ping" $(BUILD_DIR)/serial.log
-	grep -F "names: lookup name=vm id=1" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server hello" $(BUILD_DIR)/serial.log
 	grep -F "elf: entry=0x0000000000400000" $(BUILD_DIR)/serial.log
 	grep -F "user: enter rip=0x0000000000400000" $(BUILD_DIR)/serial.log

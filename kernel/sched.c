@@ -1,4 +1,5 @@
 #include "console.h"
+#include "ipc.h"
 #include "sched.h"
 #include "vm.h"
 #include <arch/thread.h>
@@ -8,6 +9,7 @@ enum {
 	MAX_CPUS = 1,
 	MAX_TASKS = 16,
 	MAX_THREADS = 32,
+	MAX_TASK_HANDLES = 32,
 	KERNEL_STACK_SIZE = 16384,
 	SCHED_QUANTUM_TICKS = 5,
 };
@@ -17,6 +19,8 @@ struct task {
 	const char *name;
 	u32 thread_count;
 	struct vm_space *vm_space;
+	struct ipc_port *reply_port;
+	struct ipc_port *handles[MAX_TASK_HANDLES];
 };
 
 struct thread {
@@ -172,6 +176,10 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 		tasks[i].name = name;
 		tasks[i].thread_count = 0;
 		tasks[i].vm_space = vm_space;
+		tasks[i].reply_port = 0;
+		for (u32 handle = 0; handle < MAX_TASK_HANDLES; handle++) {
+			tasks[i].handles[handle] = 0;
+		}
 		console_printf("sched: task pid=%u name=%s vm=%u\n",
 			       tasks[i].pid, name, tasks[i].vm_space->id);
 		return &tasks[i];
@@ -223,6 +231,55 @@ struct task *task_current(void)
 struct thread *thread_current(void)
 {
 	return sched_current_cpu()->current;
+}
+
+u64 task_grant_port(struct task *task, struct ipc_port *port)
+{
+	if (task == 0 || port == 0) {
+		return 0;
+	}
+
+	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
+		if (task->handles[i] == port) {
+			return i + 1;
+		}
+	}
+
+	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
+		if (task->handles[i] != 0) {
+			continue;
+		}
+
+		task->handles[i] = port;
+		console_printf("sched: grant task=%u handle=%u\n",
+			       task->pid, i + 1);
+		return i + 1;
+	}
+
+	console_printf("sched: handle table full task=%u\n", task->pid);
+	return 0;
+}
+
+struct ipc_port *task_port_from_handle(struct task *task, u64 handle)
+{
+	if (task == 0 || handle == 0 || handle > MAX_TASK_HANDLES) {
+		return 0;
+	}
+
+	return task->handles[handle - 1];
+}
+
+struct ipc_port *task_reply_port(struct task *task)
+{
+	if (task == 0) {
+		return 0;
+	}
+
+	if (task->reply_port == 0) {
+		task->reply_port = ipc_port_create_private("reply");
+	}
+
+	return task->reply_port;
 }
 
 void sched_run(void)

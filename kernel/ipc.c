@@ -80,10 +80,10 @@ void ipc_init(void)
 	kernel_reply_port = ipc_port_create("kernel-rpc");
 }
 
-struct ipc_port *ipc_port_create(const char *name)
+static struct ipc_port *ipc_port_alloc(const char *name, u32 reuse_named)
 {
-	struct ipc_port *existing = ipc_port_find(name);
-	if (existing != 0) {
+	struct ipc_port *existing = reuse_named ? ipc_port_find(name) : 0;
+	if (reuse_named && existing != 0) {
 		console_printf("ipc: port existing %s id=%u\n", name,
 			       (u32)existing->id);
 		return existing;
@@ -104,6 +104,16 @@ struct ipc_port *ipc_port_create(const char *name)
 	return 0;
 }
 
+struct ipc_port *ipc_port_create(const char *name)
+{
+	return ipc_port_alloc(name, 1);
+}
+
+struct ipc_port *ipc_port_create_private(const char *name)
+{
+	return ipc_port_alloc(name, 0);
+}
+
 struct ipc_port *ipc_port_find(const char *name)
 {
 	for (u32 i = 0; i < MAX_PORTS; i++) {
@@ -113,6 +123,11 @@ struct ipc_port *ipc_port_find(const char *name)
 	}
 
 	return 0;
+}
+
+const char *ipc_port_name(const struct ipc_port *port)
+{
+	return port != 0 ? port->name : "(null)";
 }
 
 u64 ipc_port_id(const struct ipc_port *port)

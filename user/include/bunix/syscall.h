@@ -6,19 +6,16 @@ typedef signed long isize;
 typedef unsigned long u64;
 
 enum {
-	BUNIX_SYSCALL_WRITE = -1,
 	BUNIX_SYSCALL_EXIT = -2,
-	BUNIX_SYSCALL_VM_PING = -3,
 	BUNIX_SYSCALL_TIMER_TICKS = -4,
 	BUNIX_SYSCALL_NAME_LOOKUP = -5,
-	BUNIX_SYSCALL_SERVICE_WRITE = -6,
-	BUNIX_SYSCALL_SERVICE_VM_PING = -7,
 	BUNIX_SYSCALL_LAUNCH_MODULE = -8,
 	BUNIX_SYSCALL_NAME_REGISTER = -9,
 	BUNIX_SYSCALL_PORT_CREATE = -10,
 	BUNIX_SYSCALL_PORT_LOOKUP = -11,
 	BUNIX_SYSCALL_IPC_SEND = -12,
 	BUNIX_SYSCALL_IPC_RECV = -13,
+	BUNIX_SYSCALL_IPC_CALL = -14,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_CONSOLE_WRITE = 1,
 };
@@ -26,6 +23,7 @@ enum {
 struct bunix_msg {
 	unsigned int type;
 	unsigned int sender;
+	u64 reply;
 	u64 words[BUNIX_IPC_WORDS];
 };
 
@@ -91,11 +89,6 @@ static inline long bunix_name_lookup(const char *name)
 	return bunix_syscall1(BUNIX_SYSCALL_NAME_LOOKUP, (u64)name);
 }
 
-static inline long bunix_service_write(u64 service, const char *text, usize len)
-{
-	return bunix_syscall3(BUNIX_SYSCALL_SERVICE_WRITE, service, (u64)text, len);
-}
-
 static inline long bunix_launch_module(const char *name)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_LAUNCH_MODULE, (u64)name);
@@ -104,11 +97,6 @@ static inline long bunix_launch_module(const char *name)
 static inline u64 bunix_timer_ticks(void)
 {
 	return (u64)bunix_syscall0(BUNIX_SYSCALL_TIMER_TICKS);
-}
-
-static inline long bunix_service_vm_ping(u64 service, u64 word)
-{
-	return bunix_syscall2(BUNIX_SYSCALL_SERVICE_VM_PING, service, word);
 }
 
 static inline long bunix_port_create(const char *name)
@@ -131,15 +119,24 @@ static inline long bunix_ipc_recv(u64 port, struct bunix_msg *message)
 	return bunix_syscall2(BUNIX_SYSCALL_IPC_RECV, port, (u64)message);
 }
 
+static inline long bunix_ipc_call(u64 port, const struct bunix_msg *request,
+				  struct bunix_msg *reply)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_IPC_CALL, port, (u64)request,
+			      (u64)reply);
+}
+
 static inline long bunix_console_write(const char *text, usize len)
 {
+	const u64 console = (u64)bunix_port_lookup("console");
 	const struct bunix_msg message = {
 		.type = BUNIX_CONSOLE_WRITE,
 		.sender = 0,
+		.reply = 0,
 		.words = { (u64)text, len, 0, 0 },
 	};
 
-	return bunix_ipc_send(0, &message);
+	return bunix_ipc_send(console, &message);
 }
 
 #endif

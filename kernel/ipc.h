@@ -18,7 +18,9 @@ struct ipc_message {
 
 void ipc_init(void);
 struct ipc_port *ipc_port_create(const char *name);
+struct ipc_port *ipc_port_create_private(const char *name);
 struct ipc_port *ipc_port_find(const char *name);
+const char *ipc_port_name(const struct ipc_port *port);
 u64 ipc_port_id(const struct ipc_port *port);
 struct ipc_port *ipc_port_from_id(u64 id);
 int ipc_send(struct ipc_port *port, const struct ipc_message *message);

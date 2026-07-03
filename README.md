@@ -41,10 +41,13 @@ fixed-size messages, and receivers block when a port is empty. This is intended
 to grow toward lightweight kernel-thread/event-port style server communication
 rather than forcing every interaction into a synchronous syscall shape.
 
-User mode can now create/lookup ports and send/receive fixed-size
-`struct bunix_msg` messages. Port handles are small integer IDs rather than
-kernel pointers. `recv` blocks the current thread and wakes when a sender queues
-an event.
+User mode can create/lookup ports and send/receive fixed-size
+`struct bunix_msg` messages. Port handles are task-local capabilities rather
+than global object IDs or kernel pointers. Name lookup grants a handle into the
+calling task's handle table. `recv` blocks the current thread and wakes when a
+sender queues an event. `ipc_call` uses a per-task private reply port, and
+received messages can carry a reply handle that the server can use without
+learning anything else about the caller.
 
 The VM server owns the memory authority policy, but module task spaces are now
 granted through direct kernel VM calls during launch. That avoids a synchronous
@@ -61,8 +64,12 @@ The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with
 `iretq`, and exposes a small negative-number syscall namespace over
 `syscall/sysret`. Current calls include console write, thread exit, timer ticks,
-name lookup/name registration, service writes, VM ping-by-service, module
-launch, port create/lookup, and IPC send/receive.
+name lookup/name registration, module launch, port create/lookup, IPC
+send/receive, and IPC call.
+
+Syscall entry uses the current thread's kernel/trap stack, so a syscall that
+blocks in the scheduler keeps its return frame isolated from other user threads'
+syscalls.
 
 ## Scheduler shape
 
@@ -109,9 +116,9 @@ make test
 `make test` boots through OVMF/GRUB with KVM, captures serial output in
 `build/serial.log`, and checks that GRUB passed Multiboot2 modules, the kernel
 started VM plus init, and init launched the hello and ping C servers. Init sends
-ping a queued user IPC message, ping receives it through blocking `recv`, then
-sends a VM event and exercises timer-driven preemption while the VM server
-handles the event.
+ping a synchronous user IPC call, ping receives it through blocking `recv`,
+sends a VM event, exercises timer-driven preemption while the VM server handles
+the event, and replies to init through the granted reply capability.
 
 For an interactive serial console:
 

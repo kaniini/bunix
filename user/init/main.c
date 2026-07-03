@@ -6,8 +6,10 @@ int main(void)
 	struct bunix_msg ping_message = {
 		.type = 1,
 		.sender = 0,
+		.reply = 0,
 		.words = { 0x2a, 0, 0, 0 },
 	};
+	struct bunix_msg ping_reply;
 	u64 ping_port = 0;
 
 	bunix_name_register("init");
@@ -17,7 +19,7 @@ int main(void)
 	while (ping_port == 0) {
 		ping_port = (u64)bunix_port_lookup("ping");
 	}
-	bunix_ipc_send(ping_port, &ping_message);
+	bunix_ipc_call(ping_port, &ping_message, &ping_reply);
 
 	return 0;
 }

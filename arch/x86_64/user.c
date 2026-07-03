@@ -19,19 +19,16 @@ enum {
 	MSR_LSTAR = 0xc0000082,
 	MSR_FMASK = 0xc0000084,
 	EFER_SCE = 1,
-	SYSCALL_WRITE = -1,
 	SYSCALL_EXIT = -2,
-	SYSCALL_VM_PING = -3,
 	SYSCALL_TIMER_TICKS = -4,
 	SYSCALL_NAME_LOOKUP = -5,
-	SYSCALL_SERVICE_WRITE = -6,
-	SYSCALL_SERVICE_VM_PING = -7,
 	SYSCALL_LAUNCH_MODULE = -8,
 	SYSCALL_NAME_REGISTER = -9,
 	SYSCALL_PORT_CREATE = -10,
 	SYSCALL_PORT_LOOKUP = -11,
 	SYSCALL_IPC_SEND = -12,
 	SYSCALL_IPC_RECV = -13,
+	SYSCALL_IPC_CALL = -14,
 	USER_IPC_WORDS = 4,
 	USER_CONSOLE_WRITE = 1,
 };
@@ -39,8 +36,33 @@ enum {
 struct user_ipc_message {
 	u32 type;
 	u32 sender;
+	u64 reply;
 	u64 words[USER_IPC_WORDS];
 };
+
+static void user_message_to_ipc(const struct user_ipc_message *user_message,
+				struct ipc_message *message)
+{
+	message->type = user_message->type;
+	message->sender = 0;
+	message->reply_port = task_port_from_handle(task_current(),
+						    user_message->reply);
+	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
+		message->words[i] = user_message->words[i];
+	}
+}
+
+static void ipc_message_to_user(const struct ipc_message *message,
+				struct user_ipc_message *user_message)
+{
+	user_message->type = message->type;
+	user_message->sender = message->sender;
+	user_message->reply = task_grant_port(task_current(),
+					      message->reply_port);
+	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
+		user_message->words[i] = message->words[i];
+	}
+}
 
 struct gdt_ptr {
 	u16 limit;
@@ -62,8 +84,20 @@ struct tss {
 static u64 gdt[7];
 static struct tss kernel_tss;
 static u8 interrupt_stack[16384] __attribute__((aligned(16)));
+u64 arch_current_syscall_stack;
 
 extern void arch_syscall_entry(void);
+
+static int str_eq(const char *left, const char *right)
+{
+	while (*left != '\0' && *right != '\0') {
+		if (*left++ != *right++) {
+			return 0;
+		}
+	}
+
+	return *left == *right;
+}
 
 static void gdt_set_tss(u32 index, u64 base, u32 limit)
 {
@@ -113,6 +147,7 @@ void arch_user_init(void)
 void arch_user_set_kernel_stack(u64 stack)
 {
 	kernel_tss.rsp0 = stack;
+	arch_current_syscall_stack = stack;
 }
 
 void arch_user_enter(u64 entry, u64 stack)
@@ -146,63 +181,15 @@ void arch_user_enter(u64 entry, u64 stack)
 
 u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 {
-	(void)arg2;
-
 	switch ((i64)number) {
-	case SYSCALL_WRITE: {
-		const char *text = (const char *)arg0;
-		for (u64 i = 0; i < arg1; i++) {
-			console_putc(text[i]);
-		}
-		return arg1;
-	}
 	case SYSCALL_EXIT:
 		console_printf("syscall: exit status=%u\n", (u32)arg0);
 		__asm__ volatile ("sti");
 		thread_exit();
-	case SYSCALL_VM_PING: {
-		struct ipc_port *vm_port = ipc_port_find("vm");
-		struct ipc_message message = {
-			.type = VM_IPC_EVENT_PING,
-			.sender = 0,
-			.reply_port = 0,
-			.words = { arg0, 0, 0, 0 },
-		};
-
-		if (vm_port == 0) {
-			return (u64)-1;
-		}
-
-		return (u64)ipc_send(vm_port, &message);
-	}
 	case SYSCALL_TIMER_TICKS:
 		return timer_ticks();
 	case SYSCALL_NAME_LOOKUP:
 		return name_service_lookup((const char *)arg0);
-	case SYSCALL_SERVICE_WRITE:
-		if (name_service_kind(arg0) != NAME_SERVICE_CONSOLE) {
-			return (u64)-1;
-		}
-		for (u64 i = 0; i < arg2; i++) {
-			console_putc(((const char *)arg1)[i]);
-		}
-		return arg2;
-	case SYSCALL_SERVICE_VM_PING: {
-		if (name_service_kind(arg0) != NAME_SERVICE_IPC_PORT) {
-			return (u64)-1;
-		}
-
-		struct ipc_port *vm_port =
-			(struct ipc_port *)name_service_object(arg0);
-		struct ipc_message message = {
-			.type = VM_IPC_EVENT_PING,
-			.sender = 0,
-			.reply_port = 0,
-			.words = { arg1, 0, 0, 0 },
-		};
-
-		return (u64)ipc_send(vm_port, &message);
-	}
 	case SYSCALL_LAUNCH_MODULE:
 		return (u64)server_launch_module((const char *)arg0);
 	case SYSCALL_NAME_REGISTER:
@@ -214,24 +201,27 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		struct ipc_port *existing = ipc_port_find(current_name);
 
 		if (existing != 0) {
-			return ipc_port_id(existing);
+			return task_grant_port(task_current(), existing);
 		}
 
-		return ipc_port_id(ipc_port_create((const char *)arg0));
+		return task_grant_port(task_current(),
+				       ipc_port_create((const char *)arg0));
 	}
 	case SYSCALL_PORT_LOOKUP: {
 		struct ipc_port *port = ipc_port_find((const char *)arg0);
-		return ipc_port_id(port);
+		return task_grant_port(task_current(), port);
 	}
 	case SYSCALL_IPC_SEND: {
 		const struct user_ipc_message *user_message =
 			(const struct user_ipc_message *)arg1;
+		struct ipc_port *port = task_port_from_handle(task_current(), arg0);
 
 		if (user_message == 0) {
 			return (u64)-1;
 		}
 
-		if (arg0 == 0 && user_message->type == USER_CONSOLE_WRITE) {
+		if (port != 0 && user_message->type == USER_CONSOLE_WRITE &&
+		    str_eq(ipc_port_name(port), "console")) {
 			const char *text = (const char *)user_message->words[0];
 			const u64 len = user_message->words[1];
 			for (u64 i = 0; i < len; i++) {
@@ -240,36 +230,50 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 			return 0;
 		}
 
-		struct ipc_port *port = ipc_port_from_id(arg0);
 		struct ipc_message message = {
-			.type = user_message->type,
-			.sender = 0,
-			.reply_port = 0,
-			.words = {
-				user_message->words[0],
-				user_message->words[1],
-				user_message->words[2],
-				user_message->words[3],
-			},
+			.type = 0,
 		};
 
+		user_message_to_ipc(user_message, &message);
 		return (u64)ipc_send(port, &message);
 	}
 	case SYSCALL_IPC_RECV: {
 		struct user_ipc_message *user_message =
 			(struct user_ipc_message *)arg1;
+		struct ipc_port *port = task_port_from_handle(task_current(), arg0);
 		struct ipc_message message;
 
 		if (user_message == 0 ||
-		    ipc_recv(ipc_port_from_id(arg0), &message) != 0) {
+		    ipc_recv(port, &message) != 0) {
 			return (u64)-1;
 		}
 
-		user_message->type = message.type;
-		user_message->sender = message.sender;
-		for (u64 i = 0; i < USER_IPC_WORDS; i++) {
-			user_message->words[i] = message.words[i];
+		ipc_message_to_user(&message, user_message);
+		return 0;
+	}
+	case SYSCALL_IPC_CALL: {
+		const struct user_ipc_message *request =
+			(const struct user_ipc_message *)arg1;
+		struct user_ipc_message *user_reply =
+			(struct user_ipc_message *)arg2;
+		struct ipc_port *port = task_port_from_handle(task_current(), arg0);
+		struct ipc_port *reply_port = task_reply_port(task_current());
+		struct ipc_message message = { .type = 0 };
+		struct ipc_message reply;
+
+		if (request == 0 || user_reply == 0 || port == 0 ||
+		    reply_port == 0) {
+			return (u64)-1;
 		}
+
+		user_message_to_ipc(request, &message);
+		message.reply_port = reply_port;
+		if (ipc_send(port, &message) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-1;
+		}
+
+		ipc_message_to_user(&reply, user_reply);
 		return 0;
 	}
 	default:

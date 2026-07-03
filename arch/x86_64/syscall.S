@@ -1,23 +1,15 @@
-.section .bss, "aw", @nobits
-.align 16
-syscall_stack_bottom:
-	.skip 16384
-syscall_stack_top:
-
-.section .data, "aw"
-.align 8
-syscall_user_rsp:
-	.quad 0
-
 .section .text, "ax"
+.extern arch_current_syscall_stack
 .global arch_syscall_entry
 .type arch_syscall_entry, @function
 arch_syscall_entry:
-	movq %rsp, syscall_user_rsp(%rip)
-	movq $syscall_stack_top, %rsp
+	movq %rsp, %r10
+	movq arch_current_syscall_stack(%rip), %rsp
 
+	pushq %r10
 	pushq %rcx
 	pushq %r11
+	subq $8, %rsp
 
 	movq %rdx, %rcx
 	movq %rsi, %rdx
@@ -25,7 +17,9 @@ arch_syscall_entry:
 	movq %rax, %rdi
 	call arch_syscall_dispatch
 
+	addq $8, %rsp
 	popq %r11
 	popq %rcx
-	movq syscall_user_rsp(%rip), %rsp
+	popq %r10
+	movq %r10, %rsp
 	sysretq

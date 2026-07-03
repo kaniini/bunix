@@ -189,7 +189,9 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 
 void server_start_boot_modules(u64 multiboot_info)
 {
-	name_service_register("console", NAME_SERVICE_CONSOLE, 0);
+	struct ipc_port *console_port = ipc_port_create("console");
+	name_service_register("console", NAME_SERVICE_IPC_PORT,
+			      (u64)console_port);
 	multiboot2_for_each_module(multiboot_info, record_boot_module, 0);
 	server_launch_module("vm");
 	sched_run();
