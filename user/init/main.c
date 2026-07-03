@@ -105,6 +105,19 @@ static void unpack_bytes(char *out, const u64 *words, u64 len)
 	}
 }
 
+static void pack_path(u64 *words, const char *path)
+{
+	words[0] = 0;
+	words[1] = 0;
+
+	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
+		const u64 slot = i / 8;
+		const u64 shift = (i % 8) * 8;
+
+		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
+	}
+}
+
 int main(void)
 {
 	const char launching[] = "init: launching servers\n";
@@ -114,10 +127,10 @@ int main(void)
 	const char fs_ready[] = "init: fs ready\n";
 	struct bunix_msg vfs_request = {
 		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_READ,
+		.type = BUNIX_VFS_READ_PATH,
 		.sender = 0,
 		.reply = 0,
-		.words = { 0, 16, 0, 0 },
+		.words = { 0, 0, 0, 16 },
 	};
 	struct bunix_msg vfs_reply;
 	char file[17];
@@ -186,6 +199,7 @@ int main(void)
 	vfs = resolve_service_in_namespace(fs_namespace, BUNIX_SERVICE_VFS,
 					   BUNIX_RIGHT_SEND);
 	bunix_console_write(fs_ready, sizeof(fs_ready) - 1);
+	pack_path(&vfs_request.words[0], "/hello.txt");
 	if (bunix_ipc_call(vfs, &vfs_request, &vfs_reply) == 0 &&
 	    vfs_reply.words[0] == 0 && vfs_reply.words[1] <= 16) {
 		unpack_bytes(file, &vfs_reply.words[2], vfs_reply.words[1]);
@@ -195,7 +209,7 @@ int main(void)
 
 	struct bunix_msg proc_request = {
 		.protocol = BUNIX_PROTO_PROC,
-		.type = BUNIX_PROC_SPAWN_FIRST,
+		.type = BUNIX_PROC_SPAWN,
 		.sender = 0,
 		.reply = 0,
 		.words = { 0, 0, 0, 0 },
@@ -203,6 +217,7 @@ int main(void)
 	struct bunix_msg proc_reply;
 	const char first_done[] = "init: first process exited\n";
 
+	pack_path(&proc_request.words[0], "/bin/first");
 	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
 	    proc_reply.words[0] != 0) {
 		return 1;

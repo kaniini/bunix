@@ -29,7 +29,7 @@ static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
 	words[0] = 0;
 	words[1] = 0;
 
-	for (u64 i = 0; i < len && i < 16; i++) {
+	for (u64 i = 0; i < len && i < BUNIX_IPC_DATA_BYTES; i++) {
 		const u64 slot = i / 8;
 		const u64 shift = (i % 8) * 8;
 
@@ -72,15 +72,15 @@ int main(void)
 		case BUNIX_BLOCK_READ: {
 			const u64 offset = message.words[0];
 			u64 len = message.words[1];
-			unsigned char buffer[16];
+			unsigned char buffer[BUNIX_IPC_DATA_BYTES];
 
 			if (offset >= disk_size) {
 				len = 0;
 			} else if (len > disk_size - offset) {
 				len = disk_size - offset;
 			}
-			if (len > 16) {
-				len = 16;
+			if (len > BUNIX_IPC_DATA_BYTES) {
+				len = BUNIX_IPC_DATA_BYTES;
 			}
 
 			reply.words[0] = 0;

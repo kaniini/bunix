@@ -17,7 +17,6 @@ static const struct server boot_servers[] = {
 	{ "proc", 0 },
 	{ "block", 0 },
 	{ "vfs", 0 },
-	{ "first", 0 },
 	{ "ping", 0 },
 	{ "vm", vm_server_start },
 };
@@ -43,8 +42,19 @@ static struct module_server_start module_starts[16];
 static u32 module_start_count;
 static struct boot_data_module disk0_module;
 
+struct task_start {
+	u64 entry;
+	u64 stack;
+};
+
+static struct task_start task_starts[16];
+static u32 task_start_count;
+static char task_names[16][32];
+static u32 task_name_count;
+
 static int str_eq(const char *left, const char *right);
 static const struct server *find_boot_server(const char *name);
+static void grant_bootstrap_caps(struct task *task, const char *server_name);
 
 void server_start_all(void)
 {
@@ -80,6 +90,106 @@ static void module_server_thread(void *arg)
 	}
 }
 
+static int validate_inherited_caps(const char *name, struct task *parent,
+				   const struct task_launch_cap *caps,
+				   u64 cap_count)
+{
+	enum {
+		MAX_INHERITED_HANDLES = 8,
+	};
+
+	if (cap_count > MAX_INHERITED_HANDLES) {
+		console_printf("kernel: too many inherited caps for %s count=%u\n",
+			       name, (u32)cap_count);
+		return -1;
+	}
+
+	for (u64 cap = 0; cap < cap_count; cap++) {
+		if (caps == 0 ||
+		    caps[cap].reserved != 0 ||
+		    task_can_inherit_handle(parent, caps[cap].handle,
+					    caps[cap].rights) != 0) {
+			console_printf("kernel: invalid inherited cap handle=%u rights=0x%x for %s\n",
+				       caps != 0 ? (u32)caps[cap].handle : 0,
+				       caps != 0 ? caps[cap].rights : 0,
+				       name);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+static u64 launch_user_image(const char *name, struct task *parent,
+			     const struct task_launch_cap *caps, u64 cap_count,
+			     struct module_server_start *start)
+{
+	enum {
+		USER_STACK_TOP = 0x800000,
+		USER_STACK_PAGES = 16,
+	};
+
+	struct vm_space *space = vm_server_bootstrap_space(name);
+	if (space == 0) {
+		return (u64)-1;
+	}
+
+	struct task *task = task_create(name, space);
+	if (task == 0) {
+		return (u64)-1;
+	}
+
+	struct ipc_port *service_port = ipc_port_create(name);
+	const u64 child_self =
+		task_grant_port(task, service_port,
+				TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+				TASK_RIGHT_DUP);
+	if (child_self == 0) {
+		return (u64)-1;
+	}
+
+	for (u64 cap = 0; cap < cap_count; cap++) {
+		if (task_grant_inherited_handle(task, parent,
+						caps[cap].handle,
+						caps[cap].rights) == 0) {
+			console_printf("kernel: invalid inherited cap handle=%u rights=0x%x for %s\n",
+				       (u32)caps[cap].handle,
+				       caps[cap].rights, name);
+			return (u64)-1;
+		}
+	}
+
+	if (parent == 0) {
+		grant_bootstrap_caps(task, name);
+	}
+
+	for (u64 page = 0; page < USER_STACK_PAGES; page++) {
+		const u64 vaddr = USER_STACK_TOP - (page + 1) * VM_PAGE_SIZE;
+		if (vm_alloc_user_page(space, vaddr, 1).addr == 0) {
+			console_printf("kernel: failed to map stack for %s\n",
+				       name);
+			return (u64)-1;
+		}
+	}
+
+	start->space = space;
+	start->stack = USER_STACK_TOP;
+
+	if (thread_create(task, name, module_server_thread, start) == 0) {
+		console_printf("kernel: failed to create server thread %s\n",
+			       name);
+		return (u64)-1;
+	}
+
+	if (!str_eq(name, "vm")) {
+		name_service_register(name, NAME_SERVICE_TASK, task_id(task));
+	}
+
+	return parent != 0 ?
+	       task_grant_port(parent, service_port,
+			       TASK_RIGHT_SEND | TASK_RIGHT_DUP) : 0;
+}
+
 static const struct server *find_boot_server(const char *name)
 {
 	const u32 count = sizeof(boot_servers) / sizeof(boot_servers[0]);
@@ -111,6 +221,62 @@ static void mem_copy(u8 *dst, const u8 *src, u64 len)
 	}
 }
 
+static void mem_zero(u8 *dst, u64 len)
+{
+	for (u64 i = 0; i < len; i++) {
+		dst[i] = 0;
+	}
+}
+
+static u64 align_down(u64 value, u64 align)
+{
+	return value & ~(align - 1);
+}
+
+static u64 align_up(u64 value, u64 align)
+{
+	return (value + align - 1) & ~(align - 1);
+}
+
+static u64 min_u64(u64 left, u64 right)
+{
+	return left < right ? left : right;
+}
+
+static u64 max_u64(u64 left, u64 right)
+{
+	return left > right ? left : right;
+}
+
+static const char *copy_task_name(const char *name)
+{
+	if (name == 0 || task_name_count >= sizeof(task_names) / sizeof(task_names[0])) {
+		return 0;
+	}
+
+	char *dst = task_names[task_name_count];
+	u64 i = 0;
+
+	for (; i < sizeof(task_names[0]) - 1 && name[i] != '\0'; i++) {
+		dst[i] = name[i];
+	}
+
+	dst[i] = '\0';
+	if (i == 0 || name[i] != '\0') {
+		return 0;
+	}
+
+	task_name_count++;
+	return dst;
+}
+
+static void task_entry_thread(void *arg)
+{
+	const struct task_start *start = (const struct task_start *)arg;
+
+	arch_user_enter(start->entry, start->stack);
+}
+
 int server_launch_module(const char *name)
 {
 	return server_launch_module_with_caps(name, 0, 0, 0) == (u64)-1 ? -1 : 0;
@@ -140,17 +306,6 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 				   const struct task_launch_cap *caps,
 				   u64 cap_count)
 {
-	enum {
-		USER_STACK_TOP = 0x800000,
-		USER_STACK_PAGES = 4,
-		MAX_INHERITED_HANDLES = 8,
-	};
-	if (cap_count > MAX_INHERITED_HANDLES) {
-		console_printf("kernel: too many inherited caps for %s count=%u\n",
-			       name, (u32)cap_count);
-		return (u64)-1;
-	}
-
 	for (u32 i = 0; i < module_start_count; i++) {
 		struct module_server_start *start = &module_starts[i];
 
@@ -165,90 +320,139 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 			return -1;
 		}
 
-		for (u64 cap = 0; cap < cap_count; cap++) {
-			if (caps == 0 ||
-			    caps[cap].reserved != 0 ||
-			    task_can_inherit_handle(parent, caps[cap].handle,
-						    caps[cap].rights) != 0) {
-				console_printf("kernel: invalid inherited cap handle=%u rights=0x%x for %s\n",
-					       caps != 0 ? (u32)caps[cap].handle : 0,
-					       caps != 0 ? caps[cap].rights : 0,
-					       name);
-				return (u64)-1;
-			}
+		if (validate_inherited_caps(name, parent, caps, cap_count) != 0) {
+			return (u64)-1;
 		}
 
 		console_printf("kernel: launching module server %s\n",
 			       server_name);
-
-		struct vm_space *space = vm_server_bootstrap_space(server_name);
-		if (space == 0) {
-			return -1;
-		}
-
-		struct task *task = task_create(server_name, space);
-		if (task == 0) {
-			return (u64)-1;
-		}
-
 		start->launched = 1;
-
-		struct ipc_port *service_port = ipc_port_create(server_name);
-		const u64 child_self =
-			task_grant_port(task, service_port,
-					TASK_RIGHT_SEND | TASK_RIGHT_RECV |
-					TASK_RIGHT_DUP);
-		if (child_self == 0) {
-			return (u64)-1;
-		}
-
-		for (u64 cap = 0; cap < cap_count; cap++) {
-			if (task_grant_inherited_handle(task, parent,
-							caps[cap].handle,
-							caps[cap].rights) == 0) {
-				console_printf("kernel: invalid inherited cap handle=%u rights=0x%x for %s\n",
-					       (u32)caps[cap].handle,
-					       caps[cap].rights, name);
-				return (u64)-1;
-			}
-		}
-
-		if (parent == 0) {
-			grant_bootstrap_caps(task, server_name);
-		}
-
-		for (u64 page = 0; page < USER_STACK_PAGES; page++) {
-			const u64 vaddr = USER_STACK_TOP -
-					  (page + 1) * VM_PAGE_SIZE;
-			if (vm_alloc_user_page(space, vaddr, 1).addr == 0) {
-				console_printf("kernel: failed to map stack for %s\n",
-					       server_name);
-				return (u64)-1;
-			}
-		}
-
-		start->space = space;
-		start->stack = USER_STACK_TOP;
-
-		if (thread_create(task, server_name, module_server_thread,
-				  start) == 0) {
-			console_printf("kernel: failed to create server thread %s\n",
-				       server_name);
-			return (u64)-1;
-		}
-
-		if (!str_eq(server_name, "vm")) {
-			name_service_register(server_name, NAME_SERVICE_TASK,
-					      task_id(task));
-		}
-
-		return parent != 0 ?
-		       task_grant_port(parent, service_port,
-				       TASK_RIGHT_SEND | TASK_RIGHT_DUP) : 0;
+		return launch_user_image(server_name, parent, caps, cap_count,
+					 start);
 	}
 
 	console_printf("kernel: no module server named %s\n", name);
 	return (u64)-1;
+}
+
+u64 server_task_create(struct task *parent, const char *name)
+{
+	enum {
+		USER_STACK_TOP = 0x800000,
+		USER_STACK_PAGES = 16,
+	};
+
+	const char *task_name = copy_task_name(name);
+	if (parent == 0 || task_name == 0) {
+		return (u64)-1;
+	}
+
+	struct vm_space *space = vm_server_bootstrap_space(task_name);
+	if (space == 0) {
+		return (u64)-1;
+	}
+
+	struct task *task = task_create(task_name, space);
+	if (task == 0) {
+		return (u64)-1;
+	}
+
+	struct ipc_port *service_port = ipc_port_create_private(task_name);
+	if (task_grant_port(task, service_port,
+			    TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+			    TASK_RIGHT_DUP) == 0) {
+		return (u64)-1;
+	}
+
+	for (u64 page = 0; page < USER_STACK_PAGES; page++) {
+		const u64 vaddr = USER_STACK_TOP - (page + 1) * VM_PAGE_SIZE;
+		if (vm_alloc_user_page(space, vaddr, 1).addr == 0) {
+			console_printf("kernel: failed to map stack for %s\n",
+				       task_name);
+			return (u64)-1;
+		}
+	}
+
+	name_service_register(task_name, NAME_SERVICE_TASK, task_id(task));
+	return task_grant_task(parent, task, TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+}
+
+int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
+		    const void *src, u64 filesz, u64 memsz, u32 writable)
+{
+	struct task *task = task_from_handle(parent, task_handle,
+					    TASK_RIGHT_SEND);
+	if (task == 0 || src == 0 || filesz > memsz ||
+	    vaddr + memsz < vaddr) {
+		return -1;
+	}
+
+	struct vm_space *space = task_vm_space(task);
+	const u64 page_start = align_down(vaddr, VM_PAGE_SIZE);
+	const u64 page_end = align_up(vaddr + memsz, VM_PAGE_SIZE);
+
+	for (u64 page = page_start; page < page_end; page += VM_PAGE_SIZE) {
+		struct vm_frame frame = vm_alloc_user_page(space, page, writable);
+		const u64 page_end_addr = page + VM_PAGE_SIZE;
+		const u64 copy_start = max_u64(page, vaddr);
+		const u64 copy_end = min_u64(page_end_addr, vaddr + filesz);
+
+		if (frame.addr == 0) {
+			return -1;
+		}
+
+		mem_zero((u8 *)frame.addr, VM_PAGE_SIZE);
+		if (copy_start < copy_end) {
+			const u64 dst_offset = copy_start - page;
+			const u64 src_offset = copy_start - vaddr;
+
+			mem_copy((u8 *)(frame.addr + dst_offset),
+				 (const u8 *)src + src_offset,
+				 copy_end - copy_start);
+		}
+	}
+
+	console_printf("kernel: task map task=%u vaddr=%p filesz=%u memsz=%u\n",
+		       task_id(task), (const void *)vaddr, (u32)filesz,
+		       (u32)memsz);
+	return 0;
+}
+
+int server_task_grant(struct task *parent, u64 task_handle, u64 handle,
+		      u32 rights)
+{
+	struct task *task = task_from_handle(parent, task_handle,
+					    TASK_RIGHT_SEND);
+
+	if (task == 0) {
+		return -1;
+	}
+
+	return task_grant_inherited_handle(task, parent, handle, rights) == 0 ?
+	       -1 : 0;
+}
+
+int server_task_start(struct task *parent, u64 task_handle, u64 entry)
+{
+	enum {
+		USER_STACK_TOP = 0x800000,
+	};
+
+	struct task *task = task_from_handle(parent, task_handle,
+					    TASK_RIGHT_SEND);
+	if (task == 0 ||
+	    task_start_count >= sizeof(task_starts) / sizeof(task_starts[0])) {
+		return -1;
+	}
+
+	struct task_start *start = &task_starts[task_start_count++];
+	start->entry = entry;
+	start->stack = USER_STACK_TOP;
+
+	console_printf("kernel: task start task=%u entry=%p\n", task_id(task),
+		       (const void *)entry);
+	return thread_create(task, task_name(task), task_entry_thread, start) != 0 ?
+	       0 : -1;
 }
 
 static struct module_server_start *current_module_start(void)

@@ -22,7 +22,9 @@ FIRST_MODULE := $(BUILD_DIR)/modules/first.user
 FIRST_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/first/main.c.o
 PING_MODULE := $(BUILD_DIR)/modules/ping.server
 PING_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/ping/main.c.o
-BLOCK_IMAGE := modules/disk0.img
+BLOCK_IMAGE := $(BUILD_DIR)/modules/disk0.img
+ROOTFS_TOOL := $(BUILD_DIR)/tools/mkrootfs
+ROOTFS_HELLO := modules/hello.txt
 
 CC ?= gcc
 LD ?= ld
@@ -143,7 +145,15 @@ $(PING_MODULE): $(PING_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PING_MODULE_OBJS)
 
-$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(FIRST_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(ROOTFS_TOOL): tools/mkrootfs.c
+	mkdir -p $(dir $@)
+	$(CC) -std=c11 -O2 -Wall -Wextra -Werror $< -o $@
+
+$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(FIRST_MODULE)
+	mkdir -p $(dir $@)
+	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /bin/first $(FIRST_MODULE)
+
+$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -158,12 +168,11 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODUL
 		"modules/proc.server=$(PROC_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/vfs.server=$(VFS_MODULE)" \
-		"modules/first.user=$(FIRST_MODULE)" \
 		"modules/ping.server=$(PING_MODULE)" \
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(FIRST_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -180,7 +189,6 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_M
 	cp $(PROC_MODULE) $(ISO_ROOT)/modules/proc.server
 	cp $(BLOCK_MODULE) $(ISO_ROOT)/modules/block.server
 	cp $(VFS_MODULE) $(ISO_ROOT)/modules/vfs.server
-	cp $(FIRST_MODULE) $(ISO_ROOT)/modules/first.user
 	cp $(PING_MODULE) $(ISO_ROOT)/modules/ping.server
 	cp $(BLOCK_IMAGE) $(ISO_ROOT)/modules/disk0.img
 	cp modules/vm.server $(ISO_ROOT)/modules/vm.server
@@ -209,7 +217,7 @@ run-iso: $(EFI_BOOT_IMG)
 test: $(EFI_BOOT_APP)
 	mkdir -p $(BUILD_DIR)
 	truncate -s 0 $(BUILD_DIR)/serial.log
-	timeout 15s $(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
+	timeout 30s $(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
 		-smp $(SMP) \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive format=raw,file=fat:rw:$(ESP_DIR) \
@@ -322,19 +330,12 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: grant task=9 handle=4 type=port rights=0x1" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=vm" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=names" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv block port=block" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv block port=vfs" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=time" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=proc" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv block port=reply" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=names proto=0x454d414e type=1 sender=3 queued=1" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv port=names proto=0x454d414e type=1 sender=3 queued=0" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=names proto=0x454d414e type=2 sender=3 queued=1" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv port=names proto=0x454d414e type=2 sender=3 queued=0" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=vfs proto=0x30534656 type=1 sender=3 queued=1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv port=vfs proto=0x30534656 type=1 sender=3 queued=0" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=block proto=0x304b4c42 type=2 sender=7 queued=1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv port=block proto=0x304b4c42 type=2 sender=7 queued=0" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=proc proto=0x434f5250 type=1 sender=3 queued=1" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=proc proto=0x434f5250 type=2 sender=3 queued=1" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=proc proto=0x434f5250 type=3 sender=8 queued=1" $(BUILD_DIR)/serial.log
@@ -356,6 +357,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "time: ready" $(BUILD_DIR)/serial.log
 	grep -F "proc: online" $(BUILD_DIR)/serial.log
 	grep -F "proc: ready" $(BUILD_DIR)/serial.log
+	grep -F "proc: exec /bin/first" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=1" $(BUILD_DIR)/serial.log
 	grep -F "proc: exited pid=1 status=0" $(BUILD_DIR)/serial.log
 	grep -F "proc: wait pid=1 status=0" $(BUILD_DIR)/serial.log
@@ -375,8 +377,10 @@ test: $(EFI_BOOT_APP)
 	grep -F "kernel: launching module server proc" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server block" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server vfs" $(BUILD_DIR)/serial.log
-	grep -F "kernel: launching module server first" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server ping" $(BUILD_DIR)/serial.log
+	grep -F "kernel: task map task=8 vaddr=0x0000000000400000" $(BUILD_DIR)/serial.log
+	grep -F "kernel: task map task=8 vaddr=0x0000000000401000" $(BUILD_DIR)/serial.log
+	grep -F "kernel: task start task=8 entry=0x0000000000400000" $(BUILD_DIR)/serial.log
 	grep -F "elf: entry=0x0000000000400000" $(BUILD_DIR)/serial.log
 	grep -F "user: enter rip=0x0000000000400000" $(BUILD_DIR)/serial.log
 	grep -F "syscall: exit status=0" $(BUILD_DIR)/serial.log

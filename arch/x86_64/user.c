@@ -30,6 +30,10 @@ enum {
 	SYSCALL_BOOT_MODULE_READ = -18,
 	SYSCALL_CLOCK_MONOTONIC_NS = -20,
 	SYSCALL_SLEEP_NS = -22,
+	SYSCALL_TASK_CREATE = -24,
+	SYSCALL_TASK_MAP = -26,
+	SYSCALL_TASK_GRANT = -28,
+	SYSCALL_TASK_START = -30,
 	USER_IPC_WORDS = 4,
 	USER_FOURCC_CONS = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	USER_CONSOLE_WRITE = 1,
@@ -260,6 +264,24 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 						      task_current(),
 						      (const struct task_launch_cap *)arg1,
 						      arg2);
+	case SYSCALL_TASK_CREATE:
+		return server_task_create(task_current(), (const char *)arg0);
+	case SYSCALL_TASK_MAP: {
+		const u64 *args = (const u64 *)arg0;
+
+		if (args == 0) {
+			return (u64)-1;
+		}
+
+		return (u64)server_task_map(task_current(), args[0], args[1],
+					    (const void *)args[2], args[3],
+					    args[4], (u32)args[5]);
+	}
+	case SYSCALL_TASK_GRANT:
+		return (u64)server_task_grant(task_current(), arg0, arg1,
+					      (u32)arg2);
+	case SYSCALL_TASK_START:
+		return (u64)server_task_start(task_current(), arg0, arg1);
 	case SYSCALL_PORT_CREATE:
 		return task_grant_port(task_current(),
 				       ipc_port_create_private((const char *)arg0),

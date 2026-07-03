@@ -20,6 +20,7 @@ enum {
 enum task_handle_type {
 	TASK_HANDLE_EMPTY = 0,
 	TASK_HANDLE_PORT,
+	TASK_HANDLE_TASK,
 };
 
 struct task_handle {
@@ -336,6 +337,11 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	return 0;
 }
 
+struct vm_space *task_vm_space(struct task *task)
+{
+	return task != 0 ? task->vm_space : 0;
+}
+
 static struct thread *thread_create_placed(struct task *task, const char *name,
 					   thread_entry_t entry, void *arg,
 					   u32 cpu_id,
@@ -445,6 +451,66 @@ u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights)
 	return 0;
 }
 
+u64 task_grant_task(struct task *owner, struct task *target, u32 rights)
+{
+	if (owner == 0 || target == 0 || rights == 0) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&owner->lock);
+
+	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
+		if (owner->handles[i].type == TASK_HANDLE_TASK &&
+		    owner->handles[i].object == target &&
+		    owner->handles[i].rights == rights) {
+			spin_unlock_irqrestore(&owner->lock, flags);
+			return i + 1;
+		}
+	}
+
+	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
+		if (owner->handles[i].type != TASK_HANDLE_EMPTY) {
+			continue;
+		}
+
+		owner->handles[i].type = TASK_HANDLE_TASK;
+		owner->handles[i].rights = rights;
+		owner->handles[i].object = target;
+		console_printf("sched: grant task=%u handle=%u type=task rights=0x%x target=%u\n",
+			       owner->pid, i + 1, rights, target->pid);
+		spin_unlock_irqrestore(&owner->lock, flags);
+		return i + 1;
+	}
+
+	spin_unlock_irqrestore(&owner->lock, flags);
+	console_printf("sched: handle table full task=%u\n", owner->pid);
+	return 0;
+}
+
+struct task *task_from_handle(struct task *owner, u64 handle, u32 rights)
+{
+	if (owner == 0 || handle == 0 || handle > MAX_TASK_HANDLES) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&owner->lock);
+	const struct task_handle task_handle = owner->handles[handle - 1];
+
+	if (task_handle.type != TASK_HANDLE_TASK ||
+	    (task_handle.rights & rights) != rights) {
+		spin_unlock_irqrestore(&owner->lock, flags);
+		console_printf("sched: task handle denied task=%u handle=%u need=0x%x rights=0x%x\n",
+			       owner->pid, (u32)handle, rights,
+			       task_handle.rights);
+		return 0;
+	}
+
+	struct task *target = (struct task *)task_handle.object;
+
+	spin_unlock_irqrestore(&owner->lock, flags);
+	return target;
+}
+
 int task_can_inherit_handle(struct task *src, u64 handle, u32 rights)
 {
 	if (src == 0 || handle == 0 || handle > MAX_TASK_HANDLES ||
@@ -538,7 +604,8 @@ int task_close_handle(struct task *task, u64 handle)
 
 	console_printf("sched: close task=%u handle=%u type=%s rights=0x%x\n",
 		       task->pid, (u32)handle,
-		       type == TASK_HANDLE_PORT ? "port" : "unknown", rights);
+		       type == TASK_HANDLE_PORT ? "port" :
+		       type == TASK_HANDLE_TASK ? "task" : "unknown", rights);
 	return 0;
 }
 
@@ -669,7 +736,7 @@ void sched_tick(void)
 	arch_thread_switch(&prev->context, &cpu->scheduler_thread.context);
 }
 
-void thread_block(void)
+void thread_prepare_block(void)
 {
 	struct cpu_sched *cpu = sched_current_cpu();
 	struct thread *prev = cpu->current;
@@ -680,9 +747,26 @@ void thread_block(void)
 
 	console_printf("sched: block tid=%u cpu=%u\n", prev->tid, cpu->id);
 	prev->state = THREAD_BLOCKED;
+}
+
+void thread_block_prepared(void)
+{
+	struct cpu_sched *cpu = sched_current_cpu();
+	struct thread *prev = cpu->current;
+
+	if (prev == &cpu->scheduler_thread) {
+		return;
+	}
+
 	cpu->current = &cpu->scheduler_thread;
 	sched_activate_thread_space(cpu->current);
 	arch_thread_switch(&prev->context, &cpu->scheduler_thread.context);
+}
+
+void thread_block(void)
+{
+	thread_prepare_block();
+	thread_block_prepared();
 }
 
 void thread_sleep_ticks(u64 ticks)

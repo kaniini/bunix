@@ -6,7 +6,7 @@ This first slice boots a freestanding x86_64 kernel through Multiboot2,
 initializes serial and VGA text consoles, parses Multiboot2 modules, starts the
 kernel-hosted VM server, and enters a user-space init server which launches
 other user servers. The current boot proves a synthetic filesystem read, a
-module-backed first process with stdout/exit status, and a user-space heartbeat
+VFS-backed first process with stdout/exit status, and a user-space heartbeat
 server:
 
 ```text
@@ -25,13 +25,14 @@ ping: heartbeat
 - `servers/`: initial server stubs, including the skeletal VM server.
 - `Makefile`: build, EFI ISO, and QEMU/KVM targets.
 
-The init, names, time, proc, block, VFS, first, and ping modules are
-freestanding C ELF images loaded into their tasks and entered in ring 3. The VM
-server remains kernel-hosted for the current performance-oriented design, but
-still exposes a VM IPC port for events. The next microkernel steps are to make
-process image loading come from VFS instead of Multiboot2 modules while
-continuing to shrink the kernel bootstrap policy into explicit capability
-handoff.
+The init, names, time, proc, block, VFS, and ping servers are freestanding C ELF
+images loaded as Multiboot2 modules and entered in ring 3. The first process is
+also a freestanding ELF, but it is packaged into the generated rootfs and loaded
+by proc through VFS as `/bin/first`. The VM server remains kernel-hosted for the
+current performance-oriented design, but still exposes a VM IPC port for
+events. The next microkernel steps are to replace the toy rootfs with a real
+filesystem format while continuing to shrink the kernel bootstrap policy into
+explicit capability handoff.
 
 The tree is split so future ports can add a sibling such as `arch/arm64/` with
 its own boot path, interrupt setup, MMU setup, and device I/O while reusing the
@@ -73,12 +74,12 @@ of its own handles, which clears only that task-local capability slot; the
 underlying object and any other task's capabilities remain untouched.
 
 The proc server is the first higher-level lifetime authority above low-level
-tasks. It currently owns PID assignment for one module-backed first process,
-spawns that process with fd-like stdout mapped to a console send capability, and
-implements wait/exit over the `PROC` FourCC protocol. This is intentionally
-still not VFS exec: the first process image is a Multiboot2 module named
-`first`, and the next loader slice should replace that special module spawn
-with a VFS-backed executable image.
+tasks. It owns PID assignment for the first process, asks VFS for `/bin/first`,
+parses the ELF program headers in user space, maps loadable segments through
+generic task syscalls, starts the task at the ELF entry point, and implements
+wait/exit over the `PROC` FourCC protocol. The first process starts with
+fd-like stdout mapped to a console send capability plus time and proc
+capabilities.
 
 Names are scoped by namespace objects. The names server starts with a root
 namespace for boot services, and clients can request new namespace IDs. Register
@@ -98,19 +99,21 @@ event-port style IPC, currently exercised by the ping heartbeat server.
 
 ## Filesystem Path
 
-The first filesystem slice is a server-to-server read flow. GRUB loads a
-`disk0` Multiboot2 data module from `modules/disk0.img`, and the kernel assigns
-that boot module only to the block server. Init launches a block server and a
-VFS server with only console and names capabilities. The block server registers
-`BLK0` in the root namespace and serves read-only bytes from its assigned disk
-image. VFS resolves `BLK0`, registers `VFS0`, and proxies a read request to
-block. Init creates a filesystem namespace, re-exports `VFS0` there, resolves it
-from that namespace, reads the synthetic root file, and prints `rootfs: module`.
+The first filesystem slice is a server-to-server read flow. The build generates
+a tiny `disk0` image containing `/hello.txt` and `/bin/first`, then GRUB loads
+that image as a Multiboot2 data module. The kernel assigns that boot module only
+to the block server. Init launches a block server and a VFS server with only
+console and names capabilities. The block server registers `BLK0` in the root
+namespace and serves read-only bytes from its assigned disk image. VFS resolves
+`BLK0`, registers `VFS0`, and serves fixed pathname reads for the generated
+rootfs entries. Init creates a filesystem namespace, re-exports `VFS0` there,
+resolves it from that namespace, reads `/hello.txt`, and prints `rootfs:
+module`.
 
 This is intentionally not a real disk filesystem yet. The useful primitive is
-the capability-shaped chain `init -> names -> vfs -> block -> disk0`, which is
-the path that can later point at a real disk image and then at an Alpine root
-filesystem format.
+the capability-shaped chain `init/proc -> names -> vfs -> block -> disk0`,
+which is the path that can later point at a real disk image and then at an
+Alpine root filesystem format.
 
 ## User Mode
 
@@ -120,7 +123,8 @@ all link at the normal `0x400000` user base and enter with the same `0x800000`
 user stack top. The
 small user ABI exposes negative-number syscalls for thread exit, timer ticks,
 monotonic nanosecond time, blocking nanosecond sleep, module launch with
-inherited handles, private port creation, IPC send/receive, and IPC call. The
+inherited handles, private port creation, IPC send/receive, IPC call, and
+generic task create/map/grant/start operations used by proc's ELF loader. The
 kernel still has an internal bootstrap name registry, but it is no longer
 exposed as a normal user authority path.
 
@@ -133,7 +137,9 @@ that a task was explicitly given.
 
 Syscall entry uses the current thread's kernel/trap stack, so a syscall that
 blocks in the scheduler keeps its return frame isolated from other user threads'
-syscalls.
+syscalls. Blocking IPC marks the receiver blocked before dropping the IPC lock,
+then switches after unlocking, so a fast reply cannot be lost between publishing
+the receiver and entering the scheduler.
 
 ## Scheduler shape
 
@@ -208,10 +214,11 @@ The test checks namespace creation, VFS re-export into the filesystem namespace,
 the `VFS0 -> BLK0 -> disk0` read, and the resulting `rootfs: module` console
 output. Init also proves the OCAP launch rule by asking for a receive right it
 does not hold, which the kernel rejects before the module is marked launched.
-Init asks proc to spawn the first process, waits for its exit status, and then
-launches ping with console, VM, and time capabilities. Ping asks the time server
-to sleep for two-second intervals, logs `ping: heartbeat`, and forwards an
-incrementing heartbeat value plus the time server's monotonic timestamp as a
+Init asks proc to spawn `/bin/first`; proc reads that ELF through VFS, maps its
+loadable segments, starts the task, and init waits for its exit status before
+launching ping with console, VM, and time capabilities. Ping asks the time
+server to sleep for two-second intervals, logs `ping: heartbeat`, and forwards
+an incrementing heartbeat value plus the time server's monotonic timestamp as a
 VMEM FourCC event through its inherited VM capability.
 
 For an interactive serial console:

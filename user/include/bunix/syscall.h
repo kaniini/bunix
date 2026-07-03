@@ -17,7 +17,12 @@ enum {
 	BUNIX_SYSCALL_BOOT_MODULE_READ = -18,
 	BUNIX_SYSCALL_CLOCK_MONOTONIC_NS = -20,
 	BUNIX_SYSCALL_SLEEP_NS = -22,
+	BUNIX_SYSCALL_TASK_CREATE = -24,
+	BUNIX_SYSCALL_TASK_MAP = -26,
+	BUNIX_SYSCALL_TASK_GRANT = -28,
+	BUNIX_SYSCALL_TASK_START = -30,
 	BUNIX_IPC_WORDS = 4,
+	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
 	BUNIX_RIGHT_SEND = 1 << 0,
 	BUNIX_RIGHT_RECV = 1 << 1,
 	BUNIX_RIGHT_DUP = 1 << 2,
@@ -37,9 +42,11 @@ enum {
 	BUNIX_BLOCK_GET_INFO = 1,
 	BUNIX_BLOCK_READ = 2,
 	BUNIX_VFS_READ = 1,
+	BUNIX_VFS_READ_PATH = 2,
 	BUNIX_TIME_NOW_MONOTONIC = 1,
 	BUNIX_TIME_SLEEP_NS = 2,
-	BUNIX_PROC_SPAWN_FIRST = 1,
+	BUNIX_PROC_SPAWN = 1,
+	BUNIX_PROC_SPAWN_FIRST = BUNIX_PROC_SPAWN,
 	BUNIX_PROC_WAIT = 2,
 	BUNIX_PROC_EXIT = 3,
 	BUNIX_SERVICE_CONSOLE = BUNIX_PROTO_CONSOLE,
@@ -176,6 +183,29 @@ static inline long bunix_ipc_call(u64 port, const struct bunix_msg *request,
 static inline long bunix_handle_close(u64 handle)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_HANDLE_CLOSE, handle);
+}
+
+static inline long bunix_task_create(const char *name)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_TASK_CREATE, (u64)name);
+}
+
+static inline long bunix_task_map(u64 task, u64 vaddr, const void *src,
+				  u64 filesz, u64 memsz, u64 writable)
+{
+	const u64 args[] = { task, vaddr, (u64)src, filesz, memsz, writable };
+
+	return bunix_syscall3(BUNIX_SYSCALL_TASK_MAP, (u64)args, 0, 0);
+}
+
+static inline long bunix_task_grant(u64 task, u64 handle, unsigned int rights)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_TASK_GRANT, task, handle, rights);
+}
+
+static inline long bunix_task_start(u64 task, u64 entry)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_TASK_START, task, entry);
 }
 
 static inline long bunix_boot_module_read(u64 offset, void *buffer, u64 len)

@@ -28,6 +28,7 @@ void sched_init(void);
 u32 sched_current_cpu_id(void);
 void sched_secondary_start(u32 cpu_id) __attribute__((noreturn));
 struct task *task_create(const char *name, struct vm_space *vm_space);
+struct vm_space *task_vm_space(struct task *task);
 struct thread *thread_create(struct task *task, const char *name,
 			     thread_entry_t entry, void *arg);
 struct thread *thread_create_on_cpu(struct task *task, const char *name,
@@ -36,6 +37,8 @@ struct thread *thread_create_on_cpu(struct task *task, const char *name,
 struct task *task_current(void);
 struct thread *thread_current(void);
 u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights);
+u64 task_grant_task(struct task *owner, struct task *target, u32 rights);
+struct task *task_from_handle(struct task *owner, u64 handle, u32 rights);
 int task_can_inherit_handle(struct task *src, u64 handle, u32 rights);
 u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
 				u32 rights);
@@ -46,6 +49,8 @@ struct ipc_port *task_reply_port(struct task *task);
 void sched_run(void);
 void sched_idle_loop(void) __attribute__((noreturn));
 void thread_yield(void);
+void thread_prepare_block(void);
+void thread_block_prepared(void);
 void thread_block(void);
 void thread_sleep_ticks(u64 ticks);
 void thread_sleep_ns(u64 ns);
