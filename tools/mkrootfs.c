@@ -8,6 +8,8 @@ enum {
 	ROOTFS_MAGIC = 0x30534652,
 	ROOTFS_MAX_PATH = 32,
 	ROOTFS_MAX_ENTRIES = 16,
+	ROOTFS_TYPE_REGULAR = 1,
+	ROOTFS_TYPE_DIRECTORY = 2,
 };
 
 struct rootfs_header {
@@ -22,8 +24,40 @@ struct rootfs_entry {
 	uint32_t uid;
 	uint32_t gid;
 	uint32_t mode;
-	uint32_t reserved;
+	uint32_t type;
 };
+
+static int path_exists(const struct rootfs_entry *entries, size_t count,
+		       const char *path)
+{
+	for (size_t i = 0; i < count; i++) {
+		if (strcmp(entries[i].path, path) == 0) {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+static int add_directory(struct rootfs_entry *entries, size_t *count,
+			 const char *path)
+{
+	if (path_exists(entries, *count, path)) {
+		return 0;
+	}
+	if (*count >= ROOTFS_MAX_ENTRIES) {
+		fprintf(stderr, "mkrootfs: too many entries adding %s\n", path);
+		return -1;
+	}
+
+	strcpy(entries[*count].path, path);
+	entries[*count].uid = 0;
+	entries[*count].gid = 0;
+	entries[*count].mode = 0555;
+	entries[*count].type = ROOTFS_TYPE_DIRECTORY;
+	(*count)++;
+	return 0;
+}
 
 static long file_size(FILE *file)
 {
@@ -82,30 +116,44 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	const size_t entry_count = (size_t)(argc - 2) / 2;
-	if (entry_count > ROOTFS_MAX_ENTRIES) {
+	const size_t file_count = (size_t)(argc - 2) / 2;
+	if (file_count + 3 > ROOTFS_MAX_ENTRIES) {
 		fprintf(stderr, "mkrootfs: too many entries: %zu\n",
-			entry_count);
+			file_count + 3);
 		return 1;
 	}
 
 	const char *out_path = argv[1];
 	struct rootfs_header header = {
 		.magic = ROOTFS_MAGIC,
-		.entries = (uint32_t)entry_count,
+		.entries = 0,
 	};
 	struct rootfs_entry entries[ROOTFS_MAX_ENTRIES];
-	uint64_t offset = sizeof(header) + entry_count * sizeof(entries[0]);
+	size_t entry_count = 0;
 
 	memset(entries, 0, sizeof(entries));
-	for (size_t i = 0; i < entry_count; i++) {
+	if (add_directory(entries, &entry_count, "/") != 0 ||
+	    add_directory(entries, &entry_count, "/bin") != 0 ||
+	    add_directory(entries, &entry_count, "/dev") != 0) {
+		return 1;
+	}
+	for (size_t i = 0; i < file_count; i++) {
 		const char *path = argv[2 + i * 2];
 		const char *file = argv[3 + i * 2];
 		FILE *in;
 		long size;
 
+		if (entry_count >= ROOTFS_MAX_ENTRIES) {
+			fprintf(stderr, "mkrootfs: too many entries\n");
+			return 1;
+		}
 		if (strlen(path) >= ROOTFS_MAX_PATH) {
 			fprintf(stderr, "mkrootfs: path too long: %s\n", path);
+			return 1;
+		}
+		if (path[0] != '/' || path_exists(entries, entry_count, path)) {
+			fprintf(stderr, "mkrootfs: invalid duplicate path: %s\n",
+				path);
 			return 1;
 		}
 
@@ -123,17 +171,26 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-		strcpy(entries[i].path, path);
-		entries[i].offset = offset;
-		entries[i].size = (uint64_t)size;
-		entries[i].uid = 0;
-		entries[i].gid = 0;
-		entries[i].mode = strncmp(path, "/bin/", 5) == 0 ?
+		strcpy(entries[entry_count].path, path);
+		entries[entry_count].size = (uint64_t)size;
+		entries[entry_count].uid = 0;
+		entries[entry_count].gid = 0;
+		entries[entry_count].mode = strncmp(path, "/bin/", 5) == 0 ?
 				  0555 : 0444;
 		if (strcmp(path, "/secret.txt") == 0) {
-			entries[i].mode = 0400;
+			entries[entry_count].mode = 0400;
 		}
-		offset += (uint64_t)size;
+		entries[entry_count].type = ROOTFS_TYPE_REGULAR;
+		entry_count++;
+	}
+
+	header.entries = (uint32_t)entry_count;
+	uint64_t offset = sizeof(header) + entry_count * sizeof(entries[0]);
+	for (size_t i = 0; i < entry_count; i++) {
+		if (entries[i].type == ROOTFS_TYPE_REGULAR) {
+			entries[i].offset = offset;
+			offset += entries[i].size;
+		}
 	}
 
 	FILE *out = fopen(out_path, "wb");
@@ -150,7 +207,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	for (size_t i = 0; i < entry_count; i++) {
+	for (size_t i = 0; i < file_count; i++) {
 		if (copy_file(out, argv[3 + i * 2]) != 0) {
 			fclose(out);
 			return 1;

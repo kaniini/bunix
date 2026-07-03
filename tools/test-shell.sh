@@ -53,24 +53,14 @@ while ! grep -F "/ # " "$log" >/dev/null 2>&1; do
 done
 
 sleep 3
-printf 'busybox uptime\nbusybox id\nbusybox stat /hello.txt\nbusybox echo BUSYBOX_ARGV_OK\ndmesg\necho AFTER\nexit\n' > "$pipe.in"
+exec 3>"$pipe.in"
+printf 'busybox uptime\nbusybox id\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\n' >&3
 
 i=0
 while ! grep -F "load average" "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
 		echo "busybox uptime did not run through applet argv" >&2
-		tail -n 120 "$log" >&2 || true
-		exit 1
-	fi
-	sleep 1
-done
-
-i=0
-while ! grep -F "BUSYBOX_ARGV_OK" "$log" >/dev/null 2>&1; do
-	i=$((i + 1))
-	if [ "$i" -gt 45 ]; then
-		echo "busybox argv regression command did not complete" >&2
 		tail -n 120 "$log" >&2 || true
 		exit 1
 	fi
@@ -103,6 +93,38 @@ if grep -F "can't stat '/hello.txt'" "$log" >/dev/null 2>&1; then
 	tail -n 120 "$log" >&2 || true
 	exit 1
 fi
+
+for expected in "hello.txt" "secret.txt" "musl-hello" "busybox" "File: /bin" "/bin"; do
+	i=0
+	while ! grep -F "$expected" "$log" >/dev/null 2>&1; do
+		i=$((i + 1))
+		if [ "$i" -gt 45 ]; then
+			echo "busybox directory regression missing: $expected" >&2
+			tail -n 160 "$log" >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+done
+if grep -F "can't stat '/bin'" "$log" >/dev/null 2>&1 ||
+   grep -F "can't stat 'busybox'" "$log" >/dev/null 2>&1; then
+	echo "busybox directory stat failed" >&2
+	tail -n 160 "$log" >&2 || true
+	exit 1
+fi
+
+printf 'busybox echo BUSYBOX_ARGV_OK\ndmesg\necho AFTER\nexit\n' >&3
+
+i=0
+while ! grep -F "BUSYBOX_ARGV_OK" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox argv regression command did not complete" >&2
+		tail -n 160 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
 
 i=0
 while ! grep -F "AFTER" "$log" >/dev/null 2>&1; do

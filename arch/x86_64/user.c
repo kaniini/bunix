@@ -98,6 +98,7 @@ enum {
 	LINUX_SYSCALL_GETPID = 39,
 	LINUX_SYSCALL_WAIT4 = 61,
 	LINUX_SYSCALL_GETTID = 186,
+	LINUX_SYSCALL_GETDENTS64 = 217,
 	LINUX_SYSCALL_NEWFSTATAT = 262,
 	LINUX_SYSCALL_SET_ROBUST_LIST = 273,
 	LINUX_SYSCALL_OPENAT = 257,
@@ -179,6 +180,7 @@ enum {
 	USER_LINUX_FCNTL = 72,
 	USER_LINUX_WAIT4 = 61,
 	USER_LINUX_GETTID = 186,
+	USER_LINUX_GETDENTS64 = 217,
 	USER_LINUX_OPENAT = 257,
 	USER_LINUX_NEWFSTATAT = 262,
 	USER_LINUX_EXIT_GROUP = 231,
@@ -1127,6 +1129,8 @@ static const char *linux_syscall_name(u64 number)
 		return "wait4";
 	case LINUX_SYSCALL_GETTID:
 		return "gettid";
+	case LINUX_SYSCALL_GETDENTS64:
+		return "getdents64";
 	case LINUX_SYSCALL_NEWFSTATAT:
 		return "newfstatat";
 	case LINUX_SYSCALL_SET_ROBUST_LIST:
@@ -1522,7 +1526,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		       sizeof(cwd) : (u64)-LINUX_EINVAL;
 	}
 	case LINUX_SYSCALL_CHDIR:
-		return 0;
+		return (u64)-LINUX_EINVAL;
 	case LINUX_SYSCALL_SET_ROBUST_LIST:
 	case LINUX_SYSCALL_RT_SIGPROCMASK:
 		return 0;
@@ -1755,6 +1759,37 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		request.words[3] = 0;
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP;
+		request.cap_object = buffer;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_ENOSYS;
+		}
+		if ((i64)reply.words[0] > 0 &&
+		    buffer_read(buffer, 0, (void *)arg1, reply.words[0]) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+		buffer_release(buffer);
+		return reply.words[0];
+	}
+	case LINUX_SYSCALL_GETDENTS64: {
+		struct shared_buffer *buffer;
+
+		if (arg1 == 0 || arg2 == 0 || arg2 > LINUX_MAX_SYSCALL_BUFFER) {
+			return (u64)-LINUX_EINVAL;
+		}
+		buffer = buffer_create(arg2);
+		if (buffer == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		request.type = USER_LINUX_GETDENTS64;
+		request.words[0] = arg0;
+		request.words[1] = arg2;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_SEND;
 		request.cap_object = buffer;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
