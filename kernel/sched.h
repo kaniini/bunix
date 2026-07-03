@@ -21,6 +21,8 @@ void sched_init(void);
 struct task *task_create(const char *name, struct vm_space *vm_space);
 struct thread *thread_create(struct task *task, const char *name,
 			     thread_entry_t entry, void *arg);
+struct task *task_current(void);
+struct thread *thread_current(void);
 void sched_run(void);
 void thread_yield(void);
 void thread_block(void);

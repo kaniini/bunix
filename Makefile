@@ -28,6 +28,7 @@ KERNEL_SRCS := \
 	arch/$(ARCH)/vm.c \
 	kernel/main.c \
 	kernel/console.c \
+	kernel/ipc.c \
 	kernel/multiboot2.c \
 	kernel/pmm.c \
 	kernel/sched.c \
@@ -127,6 +128,10 @@ test: $(EFI_BOOT_APP)
 	grep -F "kernel: starting module server vm" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: memory authority online" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: rpc free_frame" $(BUILD_DIR)/serial.log
+	grep -F "ipc: port create vm" $(BUILD_DIR)/serial.log
+	grep -F "ipc: recv block port=vm" $(BUILD_DIR)/serial.log
+	grep -F "ipc: send port=vm type=1 sender=3" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: ipc event type=1 sender=3 word0=0x2a" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server hello" $(BUILD_DIR)/serial.log
 	grep -F "hello: world <3" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping" $(BUILD_DIR)/serial.log

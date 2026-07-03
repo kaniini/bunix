@@ -34,6 +34,13 @@ common kernel and server code.
 Kernel logging uses `console_printf`, a small freestanding formatter supporting
 `%s`, `%c`, `%d`, `%i`, `%u`, `%x`, `%p`, and `%%`.
 
+## IPC shape
+
+IPC is port-based and event-oriented. Servers create named ports, senders queue
+fixed-size messages, and receivers block when a port is empty. This is intended
+to grow toward lightweight kernel-thread/event-port style server communication
+rather than forcing every interaction into a synchronous syscall shape.
+
 ## Scheduler shape
 
 Tasks are resource containers that will map naturally to Linux processes.

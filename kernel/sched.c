@@ -195,6 +195,18 @@ struct thread *thread_create(struct task *task, const char *name,
 	return 0;
 }
 
+struct task *task_current(void)
+{
+	struct thread *thread = thread_current();
+
+	return thread != 0 ? thread->task : 0;
+}
+
+struct thread *thread_current(void)
+{
+	return sched_current_cpu()->current;
+}
+
 void sched_run(void)
 {
 	struct cpu_sched *cpu = sched_current_cpu();

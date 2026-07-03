@@ -1,4 +1,5 @@
 #include "console.h"
+#include "ipc.h"
 #include "multiboot2.h"
 #include "sched.h"
 #include "server.h"
@@ -23,6 +24,7 @@ void kernel_main(u32 magic, u64 multiboot_info)
 	multiboot2_dump(multiboot_info);
 	vm_init(multiboot_info);
 	vm_self_test();
+	ipc_init();
 	sched_init();
 	server_start_boot_modules(multiboot_info);
 	sched_run();
