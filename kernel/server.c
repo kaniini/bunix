@@ -101,8 +101,10 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 		return;
 	}
 
-	task_grant_port(task, ipc_port_find("console"));
-	task_grant_port(task, ipc_port_find("vm"));
+	task_grant_port(task, ipc_port_find("console"),
+			TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+	task_grant_port(task, ipc_port_find("vm"),
+			TASK_RIGHT_SEND | TASK_RIGHT_DUP);
 }
 
 u64 server_launch_module_with_caps(const char *name, struct task *parent,
@@ -113,22 +115,10 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 		USER_STACK_PAGES = 4,
 		MAX_INHERITED_HANDLES = 8,
 	};
-	struct ipc_port *inherited_ports[MAX_INHERITED_HANDLES];
-
 	if (handle_count > MAX_INHERITED_HANDLES) {
 		console_printf("kernel: too many inherited caps for %s count=%u\n",
 			       name, (u32)handle_count);
 		return (u64)-1;
-	}
-
-	for (u64 handle = 0; handle < handle_count; handle++) {
-		inherited_ports[handle] = task_port_from_handle(parent,
-								handles[handle]);
-		if (inherited_ports[handle] == 0) {
-			console_printf("kernel: invalid inherited cap %u for %s\n",
-				       (u32)handles[handle], name);
-			return (u64)-1;
-		}
 	}
 
 	for (u32 i = 0; i < module_start_count; i++) {
@@ -160,13 +150,19 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 		}
 
 		struct ipc_port *service_port = ipc_port_create(server_name);
-		const u64 child_self = task_grant_port(task, service_port);
+		const u64 child_self =
+			task_grant_port(task, service_port,
+					TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+					TASK_RIGHT_DUP);
 		if (child_self == 0) {
 			return (u64)-1;
 		}
 
 		for (u64 handle = 0; handle < handle_count; handle++) {
-			if (task_grant_port(task, inherited_ports[handle]) == 0) {
+			if (task_grant_inherited_handle(task, parent,
+							handles[handle]) == 0) {
+				console_printf("kernel: invalid inherited cap %u for %s\n",
+					       (u32)handles[handle], name);
 				return (u64)-1;
 			}
 		}
@@ -200,7 +196,9 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 					      task_id(task));
 		}
 
-		return parent != 0 ? task_grant_port(parent, service_port) : 0;
+		return parent != 0 ?
+		       task_grant_port(parent, service_port,
+				       TASK_RIGHT_SEND | TASK_RIGHT_DUP) : 0;
 	}
 
 	console_printf("kernel: no module server named %s\n", name);

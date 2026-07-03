@@ -42,16 +42,21 @@ to grow toward lightweight kernel-thread/event-port style server communication
 rather than forcing every interaction into a synchronous syscall shape.
 
 User mode can create private ports and send/receive fixed-size
-`struct bunix_msg` messages through task-local port handles. Handles are
-capabilities rather than global object IDs or kernel pointers. Module launch
-accepts an explicit list of parent handles to inherit; the child receives its
-own service port as handle 1, then inherited handles in caller-specified order.
+`struct bunix_msg` messages through task-local handles. Handles are typed
+capabilities rather than global object IDs or kernel pointers. The current
+handle type is `port`, with `SEND`, `RECV`, and `DUP` rights checked by the IPC
+syscall path. Module launch accepts an explicit list of parent handles to
+inherit; the parent must hold `DUP`, and the child receives the same type and
+rights. The child receives its own service port as handle 1, then inherited
+handles in caller-specified order.
+
 The boot policy grants init `self`, `console`, and `vm`; init launches hello
 with only `console` and ping with `console` plus `vm`. The returned launch value
-is a handle to the child's service port in the parent task. `recv` blocks the
-current thread and wakes when a sender queues an event. `ipc_call` uses a
-per-task private reply port, and received messages can carry a reply handle
-that the server can use without learning anything else about the caller.
+is a send-capability to the child's service port in the parent task. `recv`
+blocks the current thread and wakes when a sender queues an event. `ipc_call`
+uses a per-task private reply port, and received messages can carry a
+send-capability reply handle that the server can use without learning anything
+else about the caller.
 
 The VM server owns the memory authority policy, but module task spaces are now
 granted through direct kernel VM calls during launch. That avoids a synchronous
@@ -146,7 +151,9 @@ hello and ping C servers with explicit inherited handles. Init sends ping a
 synchronous user IPC call through the returned service-port handle, ping
 receives it through blocking `recv`, sends a VM event through its inherited VM
 capability, exercises automatic CPU placement across both CPUs, and replies to
-init through the granted reply capability.
+init through the granted reply capability. Hello receives only console rights;
+the test also checks that its attempt to use the conventional VM handle is
+denied.
 
 For an interactive serial console:
 

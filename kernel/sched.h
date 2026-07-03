@@ -18,6 +18,12 @@ struct thread;
 struct vm_space;
 struct ipc_port;
 
+enum task_handle_rights {
+	TASK_RIGHT_SEND = 1 << 0,
+	TASK_RIGHT_RECV = 1 << 1,
+	TASK_RIGHT_DUP = 1 << 2,
+};
+
 void sched_init(void);
 u32 sched_current_cpu_id(void);
 void sched_secondary_start(u32 cpu_id) __attribute__((noreturn));
@@ -29,8 +35,10 @@ struct thread *thread_create_on_cpu(struct task *task, const char *name,
 				    u32 cpu_id);
 struct task *task_current(void);
 struct thread *thread_current(void);
-u64 task_grant_port(struct task *task, struct ipc_port *port);
-struct ipc_port *task_port_from_handle(struct task *task, u64 handle);
+u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights);
+u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle);
+struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
+				       u32 rights);
 struct ipc_port *task_reply_port(struct task *task);
 void sched_run(void);
 void sched_idle_loop(void) __attribute__((noreturn));

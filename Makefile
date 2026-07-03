@@ -216,16 +216,18 @@ test: $(EFI_BOOT_APP)
 	grep -F "ipc: port create hello" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create ping" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create reply" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=2 handle=1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=2 handle=2" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=2 handle=3" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=3 handle=1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=3 handle=2" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=4 handle=1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=4 handle=2" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=4 handle=3" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=4 handle=4" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=2 handle=5" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=1 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=2 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=2 handle=2 type=port rights=0x5" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=2 handle=3 type=port rights=0x5" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=3 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=3 handle=2 type=port rights=0x5" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=2 handle=4 type=port rights=0x5" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=4 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=4 handle=2 type=port rights=0x5" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=4 handle=3 type=port rights=0x5" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=4 handle=4 type=port rights=0x1" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=2 handle=5 type=port rights=0x5" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=vm" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=reply" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=ping type=1 sender=2 queued=1" $(BUILD_DIR)/serial.log
@@ -242,6 +244,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "elf: entry=0x0000000000400000" $(BUILD_DIR)/serial.log
 	grep -F "user: enter rip=0x0000000000400000" $(BUILD_DIR)/serial.log
 	grep -F "hello: world <3" $(BUILD_DIR)/serial.log
+	grep -F "hello: vm denied" $(BUILD_DIR)/serial.log
+	grep -F "sched: handle denied task=3 handle=3 need=0x1 rights=0x0" $(BUILD_DIR)/serial.log
 	grep -F "syscall: exit status=0" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping image=0x" $(BUILD_DIR)/serial.log

@@ -44,7 +44,8 @@ static void user_message_to_ipc(const struct user_ipc_message *user_message,
 	message->type = user_message->type;
 	message->sender = 0;
 	message->reply_port = task_port_from_handle(task_current(),
-						    user_message->reply);
+						    user_message->reply,
+						    TASK_RIGHT_SEND);
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
 		message->words[i] = user_message->words[i];
 	}
@@ -55,8 +56,8 @@ static void ipc_message_to_user(const struct ipc_message *message,
 {
 	user_message->type = message->type;
 	user_message->sender = message->sender;
-	user_message->reply = task_grant_port(task_current(),
-					      message->reply_port);
+	user_message->reply = task_grant_port(task_current(), message->reply_port,
+					      TASK_RIGHT_SEND);
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
 		user_message->words[i] = message->words[i];
 	}
@@ -218,11 +219,15 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 						      arg2);
 	case SYSCALL_PORT_CREATE:
 		return task_grant_port(task_current(),
-				       ipc_port_create_private((const char *)arg0));
+				       ipc_port_create_private((const char *)arg0),
+				       TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+				       TASK_RIGHT_DUP);
 	case SYSCALL_IPC_SEND: {
 		const struct user_ipc_message *user_message =
 			(const struct user_ipc_message *)arg1;
-		struct ipc_port *port = task_port_from_handle(task_current(), arg0);
+		struct ipc_port *port =
+			task_port_from_handle(task_current(), arg0,
+					      TASK_RIGHT_SEND);
 
 		if (user_message == 0) {
 			return (u64)-1;
@@ -247,7 +252,9 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 	case SYSCALL_IPC_RECV: {
 		struct user_ipc_message *user_message =
 			(struct user_ipc_message *)arg1;
-		struct ipc_port *port = task_port_from_handle(task_current(), arg0);
+		struct ipc_port *port =
+			task_port_from_handle(task_current(), arg0,
+					      TASK_RIGHT_RECV);
 		struct ipc_message message;
 
 		if (user_message == 0 ||
@@ -263,7 +270,9 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 			(const struct user_ipc_message *)arg1;
 		struct user_ipc_message *user_reply =
 			(struct user_ipc_message *)arg2;
-		struct ipc_port *port = task_port_from_handle(task_current(), arg0);
+		struct ipc_port *port =
+			task_port_from_handle(task_current(), arg0,
+					      TASK_RIGHT_SEND);
 		struct ipc_port *reply_port = task_reply_port(task_current());
 		struct ipc_message message = { .type = 0 };
 		struct ipc_message reply;

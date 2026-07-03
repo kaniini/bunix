@@ -16,13 +16,24 @@ enum {
 	SCHED_QUANTUM_TICKS = 5,
 };
 
+enum task_handle_type {
+	TASK_HANDLE_EMPTY = 0,
+	TASK_HANDLE_PORT,
+};
+
+struct task_handle {
+	enum task_handle_type type;
+	u32 rights;
+	void *object;
+};
+
 struct task {
 	u32 pid;
 	const char *name;
 	u32 thread_count;
 	struct vm_space *vm_space;
 	struct ipc_port *reply_port;
-	struct ipc_port *handles[MAX_TASK_HANDLES];
+	struct task_handle handles[MAX_TASK_HANDLES];
 	struct spinlock lock;
 };
 
@@ -303,7 +314,9 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 		tasks[i].reply_port = 0;
 		spinlock_init(&tasks[i].lock, "task");
 		for (u32 handle = 0; handle < MAX_TASK_HANDLES; handle++) {
-			tasks[i].handles[handle] = 0;
+			tasks[i].handles[handle].type = TASK_HANDLE_EMPTY;
+			tasks[i].handles[handle].rights = 0;
+			tasks[i].handles[handle].object = 0;
 		}
 		console_printf("sched: task pid=%u name=%s vm=%u\n",
 			       tasks[i].pid, name, tasks[i].vm_space->id);
@@ -389,7 +402,7 @@ struct thread *thread_current(void)
 	return sched_current_cpu()->current;
 }
 
-u64 task_grant_port(struct task *task, struct ipc_port *port)
+u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights)
 {
 	if (task == 0 || port == 0) {
 		return 0;
@@ -398,20 +411,24 @@ u64 task_grant_port(struct task *task, struct ipc_port *port)
 	const u64 flags = spin_lock_irqsave(&task->lock);
 
 	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
-		if (task->handles[i] == port) {
+		if (task->handles[i].type == TASK_HANDLE_PORT &&
+		    task->handles[i].object == port &&
+		    task->handles[i].rights == rights) {
 			spin_unlock_irqrestore(&task->lock, flags);
 			return i + 1;
 		}
 	}
 
 	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
-		if (task->handles[i] != 0) {
+		if (task->handles[i].type != TASK_HANDLE_EMPTY) {
 			continue;
 		}
 
-		task->handles[i] = port;
-		console_printf("sched: grant task=%u handle=%u\n",
-			       task->pid, i + 1);
+		task->handles[i].type = TASK_HANDLE_PORT;
+		task->handles[i].rights = rights;
+		task->handles[i].object = port;
+		console_printf("sched: grant task=%u handle=%u type=port rights=0x%x\n",
+			       task->pid, i + 1, rights);
 		spin_unlock_irqrestore(&task->lock, flags);
 		return i + 1;
 	}
@@ -421,14 +438,53 @@ u64 task_grant_port(struct task *task, struct ipc_port *port)
 	return 0;
 }
 
-struct ipc_port *task_port_from_handle(struct task *task, u64 handle)
+u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle)
+{
+	if (dst == 0 || src == 0 || handle == 0 || handle > MAX_TASK_HANDLES) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&src->lock);
+	const struct task_handle src_handle = src->handles[handle - 1];
+
+	if (src_handle.type == TASK_HANDLE_EMPTY ||
+	    (src_handle.rights & TASK_RIGHT_DUP) == 0) {
+		spin_unlock_irqrestore(&src->lock, flags);
+		console_printf("sched: inherit denied task=%u handle=%u rights=0x%x\n",
+			       src->pid, (u32)handle, src_handle.rights);
+		return 0;
+	}
+
+	spin_unlock_irqrestore(&src->lock, flags);
+
+	if (src_handle.type == TASK_HANDLE_PORT) {
+		return task_grant_port(dst, (struct ipc_port *)src_handle.object,
+				       src_handle.rights);
+	}
+
+	return 0;
+}
+
+struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
+				       u32 rights)
 {
 	if (task == 0 || handle == 0 || handle > MAX_TASK_HANDLES) {
 		return 0;
 	}
 
 	const u64 flags = spin_lock_irqsave(&task->lock);
-	struct ipc_port *port = task->handles[handle - 1];
+	const struct task_handle task_handle = task->handles[handle - 1];
+
+	if (task_handle.type != TASK_HANDLE_PORT ||
+	    (task_handle.rights & rights) != rights) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		console_printf("sched: handle denied task=%u handle=%u need=0x%x rights=0x%x\n",
+			       task->pid, (u32)handle, rights,
+			       task_handle.rights);
+		return 0;
+	}
+
+	struct ipc_port *port = (struct ipc_port *)task_handle.object;
 
 	spin_unlock_irqrestore(&task->lock, flags);
 	return port;
