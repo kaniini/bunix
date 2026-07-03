@@ -15,9 +15,10 @@ enum thread_state {
 
 struct task;
 struct thread;
+struct vm_space;
 
 void sched_init(void);
-struct task *task_create(const char *name);
+struct task *task_create(const char *name, struct vm_space *vm_space);
 struct thread *thread_create(struct task *task, const char *name,
 			     thread_entry_t entry, void *arg);
 void sched_run(void);

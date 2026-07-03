@@ -1,5 +1,23 @@
 #include "../../kernel/console.h"
 #include "../../kernel/vm.h"
+#include "vm_server.h"
+
+static u32 granted_spaces;
+
+struct vm_space *vm_server_create_space(const char *owner)
+{
+	struct vm_space *space = vm_rpc_create_space(owner);
+
+	if (space == 0) {
+		console_printf("vm-server: failed to grant space owner=%s\n", owner);
+		return 0;
+	}
+
+	granted_spaces++;
+	console_printf("vm-server: grant_space owner=%s id=%u grants=%u\n",
+		       owner, space->id, granted_spaces);
+	return space;
+}
 
 void vm_server_start(void)
 {
@@ -10,6 +28,7 @@ void vm_server_start(void)
 
 	console_printf("vm-server: memory authority online total=%u free=%u\n",
 		       (u32)total, (u32)free_before);
+	console_printf("vm-server: spaces granted=%u\n", granted_spaces);
 	console_printf("vm-server: rpc alloc_frame addr=%p free=%u\n",
 		       (const void *)probe.addr, (u32)free_after);
 	vm_rpc_free_frame(probe);

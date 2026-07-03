@@ -138,8 +138,13 @@ void sched_init(void)
 	console_printf("sched: init cpus=%u boot_cpu=%u\n", MAX_CPUS, boot_cpu_id);
 }
 
-struct task *task_create(const char *name)
+struct task *task_create(const char *name, struct vm_space *vm_space)
 {
+	if (vm_space == 0) {
+		console_printf("sched: refusing task %s without vm space\n", name);
+		return 0;
+	}
+
 	for (u32 i = 0; i < MAX_TASKS; i++) {
 		if (tasks[i].pid != 0) {
 			continue;
@@ -148,11 +153,7 @@ struct task *task_create(const char *name)
 		tasks[i].pid = next_pid++;
 		tasks[i].name = name;
 		tasks[i].thread_count = 0;
-		tasks[i].vm_space = vm_rpc_create_space(name);
-		if (tasks[i].vm_space == 0) {
-			tasks[i].pid = 0;
-			return 0;
-		}
+		tasks[i].vm_space = vm_space;
 		console_printf("sched: task pid=%u name=%s vm=%u\n",
 			       tasks[i].pid, name, tasks[i].vm_space->id);
 		return &tasks[i];

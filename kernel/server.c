@@ -3,6 +3,7 @@
 #include "sched.h"
 #include "server.h"
 #include "types.h"
+#include "../servers/vm/vm_server.h"
 
 static const struct server boot_servers[] = {
 	{ "hello", hello_server_start },
@@ -75,7 +76,12 @@ static void start_boot_module(const struct multiboot2_module *module, void *ctx)
 		start->image_start = module->start;
 		start->image_end = module->end;
 
-		struct task *task = task_create(boot_servers[i].name);
+		struct vm_space *space = vm_server_create_space(boot_servers[i].name);
+		if (space == 0) {
+			return;
+		}
+
+		struct task *task = task_create(boot_servers[i].name, space);
 		if (task == 0) {
 			return;
 		}

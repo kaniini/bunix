@@ -47,9 +47,10 @@ queue into callers. Real SMP will need CPU discovery, per-CPU current-thread
 lookup, locking around run queues, inter-processor wakeups, and timer
 preemption.
 
-Each task owns a `vm_space`. On x86_64, task creation allocates a real PML4,
-PDPT, and page directory, currently identity-mapping the low 1 GiB so the
-existing kernel-thread servers can run while CR3 switching is exercised.
+Each task owns a `vm_space` granted by the VM server facade. On x86_64, a VM
+space contains a real PML4, PDPT, and page directory, currently identity-mapping
+the low 1 GiB so the existing kernel-thread servers can run while CR3 switching
+is exercised.
 
 ## Build
 

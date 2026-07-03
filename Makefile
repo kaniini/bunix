@@ -115,15 +115,15 @@ test: $(EFI_BOOT_APP)
 		-serial file:$(BUILD_DIR)/serial.log -display none -no-reboot; \
 		status=$$?; test $$status -eq 0 -o $$status -eq 124
 	grep -F "multiboot2: module" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=1 name=hello" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=1 task=1 name=hello" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=2 name=ping" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=2 task=2 name=ping" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=3 name=vm" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=3 task=3 name=vm" $(BUILD_DIR)/serial.log
-	grep -F "vm: create space id=1 owner=hello" $(BUILD_DIR)/serial.log
-	grep -F "vm: create space id=2 owner=ping" $(BUILD_DIR)/serial.log
-	grep -F "vm: create space id=3 owner=vm" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: grant_space owner=vm id=1" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: grant_space owner=hello id=2" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: grant_space owner=ping id=3" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=1 name=vm vm=1" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=1 task=1 name=vm" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=2 name=hello vm=2" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=2 task=2 name=hello" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=3 name=ping vm=3" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=3 task=3 name=ping" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server vm" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: memory authority online" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: rpc free_frame" $(BUILD_DIR)/serial.log
@@ -131,7 +131,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "hello: world <3" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping" $(BUILD_DIR)/serial.log
 	grep -F "ping: one" $(BUILD_DIR)/serial.log
-	grep -F "sched: yield tid=2 cpu=0" $(BUILD_DIR)/serial.log
+	grep -F "sched: yield tid=3 cpu=0" $(BUILD_DIR)/serial.log
 	grep -F "ping: two" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=1 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=2 exited" $(BUILD_DIR)/serial.log
