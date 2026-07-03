@@ -22,6 +22,11 @@ enum {
 	AT_PAGESZ = 6,
 	AT_ENTRY = 9,
 	AT_EXECFN = 31,
+	EXEC_HANDLE_SELF = 1,
+	EXEC_HANDLE_STDOUT = 2,
+	EXEC_HANDLE_STDERR = EXEC_HANDLE_STDOUT,
+	EXEC_HANDLE_TIME = 3,
+	EXEC_HANDLE_PROC = 4,
 };
 
 struct process {
@@ -301,7 +306,7 @@ static long build_initial_stack(u64 task, const char *path,
 				const struct exec_info *exec, u64 *stack)
 {
 	enum {
-		AUXV_PAIRS = 7,
+		AUXV_PAIRS = 11,
 		STACK_WORDS = 4 + AUXV_PAIRS * 2,
 	};
 
@@ -349,8 +354,16 @@ static long build_initial_stack(u64 task, const char *path,
 	words[13] = exec->phnum;
 	words[14] = AT_EXECFN;
 	words[15] = argv0;
-	words[16] = AT_NULL;
-	words[17] = 0;
+	words[16] = BUNIX_AT_STDOUT;
+	words[17] = EXEC_HANDLE_STDOUT;
+	words[18] = BUNIX_AT_STDERR;
+	words[19] = EXEC_HANDLE_STDERR;
+	words[20] = BUNIX_AT_TIME;
+	words[21] = EXEC_HANDLE_TIME;
+	words[22] = BUNIX_AT_PROC;
+	words[23] = EXEC_HANDLE_PROC;
+	words[24] = AT_NULL;
+	words[25] = 0;
 
 	if (bunix_task_write(task, stack_base + sp, init_stack + sp,
 			     PROC_INIT_STACK_MAX - sp) != 0) {

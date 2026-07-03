@@ -133,8 +133,11 @@ to VFS, VFS forwards write-only authority to block, block fills it from the
 rootfs module, and proc copies the bytes back through its read authority. Proc
 also builds a minimal exec stack for the new task: `argc`, `argv[]`, null
 `envp`, and auxv entries for page size, entry point, program headers, and
-`AT_EXECFN`. The kernel still has an internal bootstrap name registry, but it is
-no longer exposed as a normal user authority path.
+`AT_EXECFN`. Bunix-private auxv entries publish startup service capabilities
+for stdout, stderr, time, and proc, so a process consumes delegated handles from
+its initial image instead of baking in ambient handle numbers. The kernel still
+has an internal bootstrap name registry, but it is no longer exposed as a normal
+user authority path.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with

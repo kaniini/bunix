@@ -2,9 +2,6 @@
 
 enum {
 	FIRST_PID = 1,
-	FIRST_FD_STDOUT = 2,
-	FIRST_HANDLE_TIME = 3,
-	FIRST_HANDLE_PROC = 4,
 	AT_NULL = 0,
 	AT_PHDR = 3,
 	AT_PHENT = 4,
@@ -13,6 +10,20 @@ enum {
 	AT_ENTRY = 9,
 	AT_EXECFN = 31,
 };
+
+struct startup_aux {
+	u64 pagesz;
+	u64 entry;
+	u64 phdr;
+	u64 phent;
+	u64 phnum;
+	const char *execfn;
+};
+
+static u64 stdout_handle;
+static u64 stderr_handle;
+static u64 time_handle;
+static u64 proc_handle;
 
 static void stdout_write(const char *text, u64 len)
 {
@@ -26,7 +37,9 @@ static void stdout_write(const char *text, u64 len)
 		.words = { (u64)text, len, 0, 0 },
 	};
 
-	bunix_ipc_send(FIRST_FD_STDOUT, &message);
+	if (stdout_handle != 0) {
+		bunix_ipc_send(stdout_handle, &message);
+	}
 }
 
 static void time_sleep(u64 ns)
@@ -42,7 +55,9 @@ static void time_sleep(u64 ns)
 	};
 	struct bunix_msg reply;
 
-	bunix_ipc_call(FIRST_HANDLE_TIME, &request, &reply);
+	if (time_handle != 0) {
+		bunix_ipc_call(time_handle, &request, &reply);
+	}
 }
 
 static void proc_exit(u64 status)
@@ -58,7 +73,9 @@ static void proc_exit(u64 status)
 	};
 	struct bunix_msg reply;
 
-	bunix_ipc_call(FIRST_HANDLE_PROC, &request, &reply);
+	if (proc_handle != 0) {
+		bunix_ipc_call(proc_handle, &request, &reply);
+	}
 }
 
 static void stdout_write_argv0(const char *value)
@@ -139,15 +156,20 @@ static void stdout_write_aux_hex(const char *name, u64 value)
 	stdout_write(line, cursor);
 }
 
-static void inspect_auxv(char **envp)
+static void load_auxv(char **envp, struct startup_aux *aux)
 {
 	u64 *auxv;
-	u64 pagesz = 0;
-	u64 entry = 0;
-	u64 phdr = 0;
-	u64 phent = 0;
-	u64 phnum = 0;
-	const char *execfn = 0;
+
+	aux->pagesz = 0;
+	aux->entry = 0;
+	aux->phdr = 0;
+	aux->phent = 0;
+	aux->phnum = 0;
+	aux->execfn = 0;
+
+	if (envp == 0) {
+		return;
+	}
 
 	while (*envp != 0) {
 		envp++;
@@ -162,28 +184,43 @@ static void inspect_auxv(char **envp)
 			break;
 		}
 		if (type == AT_PAGESZ) {
-			pagesz = value;
+			aux->pagesz = value;
 		} else if (type == AT_ENTRY) {
-			entry = value;
+			aux->entry = value;
 		} else if (type == AT_PHDR) {
-			phdr = value;
+			aux->phdr = value;
 		} else if (type == AT_PHENT) {
-			phent = value;
+			aux->phent = value;
 		} else if (type == AT_PHNUM) {
-			phnum = value;
+			aux->phnum = value;
 		} else if (type == AT_EXECFN) {
-			execfn = (const char *)value;
+			aux->execfn = (const char *)value;
+		} else if (type == BUNIX_AT_STDOUT) {
+			stdout_handle = value;
+		} else if (type == BUNIX_AT_STDERR) {
+			stderr_handle = value;
+		} else if (type == BUNIX_AT_TIME) {
+			time_handle = value;
+		} else if (type == BUNIX_AT_PROC) {
+			proc_handle = value;
 		}
 		auxv += 2;
 	}
+}
 
-	stdout_write_aux_dec("first: aux pagesz=", pagesz);
-	stdout_write_aux_hex("first: aux entry=", entry);
-	stdout_write_aux_hex("first: aux phdr=", phdr);
-	stdout_write_aux_dec("first: aux phent=", phent);
-	stdout_write_aux_dec("first: aux phnum=", phnum);
-	if (execfn != 0) {
-		stdout_write_argv0(execfn);
+static void inspect_auxv(const struct startup_aux *aux)
+{
+	stdout_write_aux_dec("first: aux pagesz=", aux->pagesz);
+	stdout_write_aux_hex("first: aux entry=", aux->entry);
+	stdout_write_aux_hex("first: aux phdr=", aux->phdr);
+	stdout_write_aux_dec("first: aux phent=", aux->phent);
+	stdout_write_aux_dec("first: aux phnum=", aux->phnum);
+	stdout_write_aux_dec("first: aux stdout=", stdout_handle);
+	stdout_write_aux_dec("first: aux stderr=", stderr_handle);
+	stdout_write_aux_dec("first: aux time=", time_handle);
+	stdout_write_aux_dec("first: aux proc=", proc_handle);
+	if (aux->execfn != 0) {
+		stdout_write_argv0(aux->execfn);
 	}
 }
 
@@ -192,15 +229,15 @@ int main(int argc, char **argv, char **envp)
 	const char started[] = "first: stdout ready\n";
 	const char argc_ok[] = "first: argc=1\n";
 	const char exiting[] = "first: exit 0\n";
+	struct startup_aux aux;
 
+	load_auxv(envp, &aux);
 	stdout_write(started, sizeof(started) - 1);
 	if (argc == 1 && argv != 0 && argv[0] != 0) {
 		stdout_write(argc_ok, sizeof(argc_ok) - 1);
 		stdout_write_argv0(argv[0]);
 	}
-	if (envp != 0) {
-		inspect_auxv(envp);
-	}
+	inspect_auxv(&aux);
 	time_sleep(100000000ULL);
 	stdout_write(exiting, sizeof(exiting) - 1);
 	proc_exit(0);

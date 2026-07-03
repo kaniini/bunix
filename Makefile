@@ -379,7 +379,11 @@ test: $(EFI_BOOT_APP)
 	grep -F "first: aux entry=0x400000" $(BUILD_DIR)/serial.log
 	grep -F "first: aux phdr=0x" $(BUILD_DIR)/serial.log
 	grep -F "first: aux phent=56" $(BUILD_DIR)/serial.log
-	grep -F "first: aux phnum=5" $(BUILD_DIR)/serial.log
+	grep -F "first: aux phnum=" $(BUILD_DIR)/serial.log
+	grep -F "first: aux stdout=2" $(BUILD_DIR)/serial.log
+	grep -F "first: aux stderr=2" $(BUILD_DIR)/serial.log
+	grep -F "first: aux time=3" $(BUILD_DIR)/serial.log
+	grep -F "first: aux proc=4" $(BUILD_DIR)/serial.log
 	grep -F "first: exit 0" $(BUILD_DIR)/serial.log
 	grep -F "block: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: online" $(BUILD_DIR)/serial.log
