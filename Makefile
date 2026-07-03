@@ -12,6 +12,8 @@ NAMES_MODULE := $(BUILD_DIR)/modules/names.server
 NAMES_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/names/main.c.o
 TIME_MODULE := $(BUILD_DIR)/modules/time.server
 TIME_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/time/main.c.o
+LINUX_SERVER_MODULE := $(BUILD_DIR)/modules/linux.server
+LINUX_SERVER_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/linux/main.c.o
 PROC_MODULE := $(BUILD_DIR)/modules/proc.server
 PROC_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/proc/main.c.o
 BLOCK_MODULE := $(BUILD_DIR)/modules/block.server
@@ -20,6 +22,8 @@ VFS_MODULE := $(BUILD_DIR)/modules/vfs.server
 VFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/vfs/main.c.o
 FIRST_MODULE := $(BUILD_DIR)/modules/first.user
 FIRST_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/first/main.c.o
+LXTEST_MODULE := $(BUILD_DIR)/modules/lxtest.user
+LXTEST_MODULE_OBJS := $(BUILD_DIR)/user/lxtest/main.S.o
 PING_MODULE := $(BUILD_DIR)/modules/ping.server
 PING_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/ping/main.c.o
 BLOCK_IMAGE := $(BUILD_DIR)/modules/disk0.img
@@ -79,10 +83,12 @@ KERNEL_OBJS := $(KERNEL_SRCS:%=$(BUILD_DIR)/%.o)
 USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/init/main.c.o \
 	$(BUILD_DIR)/user/names/main.c.o \
 	$(BUILD_DIR)/user/time/main.c.o \
+	$(BUILD_DIR)/user/linux/main.c.o \
 	$(BUILD_DIR)/user/proc/main.c.o \
 	$(BUILD_DIR)/user/block/main.c.o \
 	$(BUILD_DIR)/user/vfs/main.c.o \
 	$(BUILD_DIR)/user/first/main.c.o \
+	$(BUILD_DIR)/user/lxtest/main.S.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
@@ -126,6 +132,10 @@ $(TIME_MODULE): $(TIME_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(TIME_MODULE_OBJS)
 
+$(LINUX_SERVER_MODULE): $(LINUX_SERVER_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(LINUX_SERVER_MODULE_OBJS)
+
 $(PROC_MODULE): $(PROC_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PROC_MODULE_OBJS)
@@ -142,6 +152,10 @@ $(FIRST_MODULE): $(FIRST_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(FIRST_MODULE_OBJS)
 
+$(LXTEST_MODULE): $(LXTEST_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(LXTEST_MODULE_OBJS)
+
 $(PING_MODULE): $(PING_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PING_MODULE_OBJS)
@@ -150,11 +164,11 @@ $(ROOTFS_TOOL): tools/mkrootfs.c
 	mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror $< -o $@
 
-$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(FIRST_MODULE)
+$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(FIRST_MODULE) $(LXTEST_MODULE)
 	mkdir -p $(dir $@)
-	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /bin/first $(FIRST_MODULE)
+	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /bin/first $(FIRST_MODULE) /bin/lxtest $(LXTEST_MODULE)
 
-$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -166,6 +180,7 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODUL
 		"modules/names.server=$(NAMES_MODULE)" \
 		"modules/init.server=$(INIT_MODULE)" \
 		"modules/time.server=$(TIME_MODULE)" \
+		"modules/linux.server=$(LINUX_SERVER_MODULE)" \
 		"modules/proc.server=$(PROC_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/vfs.server=$(VFS_MODULE)" \
@@ -173,7 +188,7 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODUL
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -187,6 +202,7 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_M
 	cp $(NAMES_MODULE) $(ISO_ROOT)/modules/names.server
 	cp $(INIT_MODULE) $(ISO_ROOT)/modules/init.server
 	cp $(TIME_MODULE) $(ISO_ROOT)/modules/time.server
+	cp $(LINUX_SERVER_MODULE) $(ISO_ROOT)/modules/linux.server
 	cp $(PROC_MODULE) $(ISO_ROOT)/modules/proc.server
 	cp $(BLOCK_MODULE) $(ISO_ROOT)/modules/block.server
 	cp $(VFS_MODULE) $(ISO_ROOT)/modules/vfs.server
@@ -277,6 +293,10 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: thread tid=8 task=8 name=first" $(BUILD_DIR)/serial.log
 	grep -F "sched: task pid=9 name=ping vm=9" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=9 task=9 name=ping" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=10 name=linux vm=10" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=10 task=10 name=linux" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=11 name=lxtest vm=11" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=11 task=11 name=lxtest" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server vm" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server names" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server init" $(BUILD_DIR)/serial.log
@@ -369,7 +389,9 @@ test: $(EFI_BOOT_APP)
 	grep -F "buffer: read id=1 offset=0 len=" $(BUILD_DIR)/serial.log
 	grep -F "kernel: task write task=8 vaddr=0x" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/first" $(BUILD_DIR)/serial.log
+	grep -F "proc: exec /bin/lxtest" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=1" $(BUILD_DIR)/serial.log
+	grep -F "proc: spawned pid=2" $(BUILD_DIR)/serial.log
 	grep -F "proc: exited pid=1 status=0" $(BUILD_DIR)/serial.log
 	grep -F "proc: wait pid=1 status=0" $(BUILD_DIR)/serial.log
 	grep -F "first: stdout ready" $(BUILD_DIR)/serial.log
@@ -385,6 +407,11 @@ test: $(EFI_BOOT_APP)
 	grep -F "first: aux time=3" $(BUILD_DIR)/serial.log
 	grep -F "first: aux proc=4" $(BUILD_DIR)/serial.log
 	grep -F "first: exit 0" $(BUILD_DIR)/serial.log
+	grep -F "linux-server: online" $(BUILD_DIR)/serial.log
+	grep -F "linux syscall" $(BUILD_DIR)/serial.log
+	grep -F "linux-server: write" $(BUILD_DIR)/serial.log
+	grep -F "linux-server: exit_group" $(BUILD_DIR)/serial.log
+	grep -F "linux: exit_group status=0" $(BUILD_DIR)/serial.log
 	grep -F "block: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: mounted block" $(BUILD_DIR)/serial.log
@@ -393,9 +420,11 @@ test: $(EFI_BOOT_APP)
 	grep -F "init: fs namespace" $(BUILD_DIR)/serial.log
 	grep -F "init: fs ready" $(BUILD_DIR)/serial.log
 	grep -F "init: first process exited" $(BUILD_DIR)/serial.log
+	grep -F "init: linux process spawned" $(BUILD_DIR)/serial.log
 	grep -F "rootfs: module" $(BUILD_DIR)/serial.log
 	grep -F "init: bad cap denied" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server time" $(BUILD_DIR)/serial.log
+	grep -F "kernel: launching module server linux" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server proc" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server block" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server vfs" $(BUILD_DIR)/serial.log
@@ -413,8 +442,10 @@ test: $(EFI_BOOT_APP)
 	grep -F "ping: heartbeat" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=3 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=8 exited" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=11 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: reap tid=3 task=3 name=init remaining=0" $(BUILD_DIR)/serial.log
 	grep -F "sched: reap tid=8 task=8 name=first remaining=0" $(BUILD_DIR)/serial.log
+	grep -F "sched: reap tid=11 task=11 name=lxtest remaining=0" $(BUILD_DIR)/serial.log
 
 check-tools:
 	@command -v $(CC)

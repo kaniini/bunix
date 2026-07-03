@@ -40,9 +40,16 @@ enum {
 	SYSCALL_BUFFER_WRITE = -36,
 	SYSCALL_TASK_WRITE = -38,
 	SYSCALL_TASK_START_AT = -40,
+	LINUX_SYSCALL_WRITE = 1,
+	LINUX_SYSCALL_EXIT_GROUP = 231,
+	LINUX_EINVAL = 22,
+	LINUX_ENOSYS = 38,
 	USER_IPC_WORDS = 4,
 	USER_FOURCC_CONS = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
+	USER_FOURCC_LINX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
 	USER_CONSOLE_WRITE = 1,
+	USER_LINUX_WRITE = 1,
+	USER_LINUX_EXIT_GROUP = 231,
 	ARCH_USER_MAX_CPUS = 8,
 };
 
@@ -125,6 +132,61 @@ static void ipc_message_to_user(const struct ipc_message *message,
 	}
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
 		user_message->words[i] = message->words[i];
+	}
+}
+
+static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
+{
+	struct ipc_port *linux = ipc_port_find("linux");
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = (u32)number,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = 0,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { arg0, arg1, arg2, 0 },
+	};
+
+	if (linux == 0) {
+		return (u64)-LINUX_ENOSYS;
+	}
+
+	switch (number) {
+	case LINUX_SYSCALL_WRITE: {
+		const char *src = (const char *)arg1;
+
+		if (src == 0 || arg2 > 16) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = USER_LINUX_WRITE;
+		request.words[0] = arg0;
+		request.words[1] = arg2;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		for (u64 i = 0; i < arg2; i++) {
+			const u64 slot = 2 + i / 8;
+			const u64 shift = (i % 8) * 8;
+
+			request.words[slot] |= ((u64)(u8)src[i]) << shift;
+		}
+		if (ipc_send(linux, &request) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return arg2;
+	}
+	case LINUX_SYSCALL_EXIT_GROUP:
+		request.type = USER_LINUX_EXIT_GROUP;
+		request.words[0] = arg0;
+		(void)ipc_send(linux, &request);
+		console_printf("linux: exit_group status=%u\n", (u32)arg0);
+		__asm__ volatile ("sti");
+		thread_exit();
+	default:
+		console_printf("linux: unknown syscall=%u\n", (u32)number);
+		return (u64)-1;
 	}
 }
 
@@ -270,6 +332,10 @@ void arch_user_enter(u64 entry, u64 stack)
 
 u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 {
+	if ((i64)number >= 0) {
+		return linux_syscall_dispatch(number, arg0, arg1, arg2);
+	}
+
 	switch ((i64)number) {
 	case SYSCALL_EXIT:
 		console_printf("syscall: exit status=%u\n", (u32)arg0);

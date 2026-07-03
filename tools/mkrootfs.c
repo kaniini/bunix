@@ -7,6 +7,7 @@
 enum {
 	ROOTFS_MAGIC = 0x30534652,
 	ROOTFS_MAX_PATH = 32,
+	ROOTFS_MAX_ENTRIES = 16,
 };
 
 struct rootfs_header {
@@ -71,47 +72,54 @@ static int copy_file(FILE *out, const char *path)
 
 int main(int argc, char **argv)
 {
-	if (argc != 6) {
+	if (argc < 4 || (argc % 2) != 0) {
 		fprintf(stderr,
-			"usage: mkrootfs OUT PATH0 FILE0 PATH1 FILE1\n");
+			"usage: mkrootfs OUT PATH0 FILE0 [PATH1 FILE1 ...]\n");
+		return 1;
+	}
+
+	const size_t entry_count = (size_t)(argc - 2) / 2;
+	if (entry_count > ROOTFS_MAX_ENTRIES) {
+		fprintf(stderr, "mkrootfs: too many entries: %zu\n",
+			entry_count);
 		return 1;
 	}
 
 	const char *out_path = argv[1];
-	const char *paths[] = { argv[2], argv[4] };
-	const char *files[] = { argv[3], argv[5] };
 	struct rootfs_header header = {
 		.magic = ROOTFS_MAGIC,
-		.entries = 2,
+		.entries = (uint32_t)entry_count,
 	};
-	struct rootfs_entry entries[2];
-	uint64_t offset = sizeof(header) + sizeof(entries);
+	struct rootfs_entry entries[ROOTFS_MAX_ENTRIES];
+	uint64_t offset = sizeof(header) + entry_count * sizeof(entries[0]);
 
 	memset(entries, 0, sizeof(entries));
-	for (size_t i = 0; i < 2; i++) {
+	for (size_t i = 0; i < entry_count; i++) {
+		const char *path = argv[2 + i * 2];
+		const char *file = argv[3 + i * 2];
 		FILE *in;
 		long size;
 
-		if (strlen(paths[i]) >= ROOTFS_MAX_PATH) {
-			fprintf(stderr, "mkrootfs: path too long: %s\n", paths[i]);
+		if (strlen(path) >= ROOTFS_MAX_PATH) {
+			fprintf(stderr, "mkrootfs: path too long: %s\n", path);
 			return 1;
 		}
 
-		in = fopen(files[i], "rb");
+		in = fopen(file, "rb");
 		if (in == NULL) {
-			fprintf(stderr, "mkrootfs: open %s: %s\n", files[i],
+			fprintf(stderr, "mkrootfs: open %s: %s\n", file,
 				strerror(errno));
 			return 1;
 		}
 		size = file_size(in);
 		fclose(in);
 		if (size < 0) {
-			fprintf(stderr, "mkrootfs: size %s: %s\n", files[i],
+			fprintf(stderr, "mkrootfs: size %s: %s\n", file,
 				strerror(errno));
 			return 1;
 		}
 
-		strcpy(entries[i].path, paths[i]);
+		strcpy(entries[i].path, path);
 		entries[i].offset = offset;
 		entries[i].size = (uint64_t)size;
 		offset += (uint64_t)size;
@@ -125,14 +133,14 @@ int main(int argc, char **argv)
 	}
 
 	if (fwrite(&header, sizeof(header), 1, out) != 1 ||
-	    fwrite(entries, sizeof(entries), 1, out) != 1) {
+	    fwrite(entries, sizeof(entries[0]), entry_count, out) != entry_count) {
 		fprintf(stderr, "mkrootfs: write header: %s\n", strerror(errno));
 		fclose(out);
 		return 1;
 	}
 
-	for (size_t i = 0; i < 2; i++) {
-		if (copy_file(out, files[i]) != 0) {
+	for (size_t i = 0; i < entry_count; i++) {
+		if (copy_file(out, argv[3 + i * 2]) != 0) {
 			fclose(out);
 			return 1;
 		}

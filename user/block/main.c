@@ -1,4 +1,4 @@
-#include <bunix/syscall.h>
+#include <bunix/libbunix.h>
 
 enum {
 	BLOCK_HANDLE_NAMES = 3,

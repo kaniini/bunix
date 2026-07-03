@@ -1,4 +1,4 @@
-#include <bunix/syscall.h>
+#include <bunix/libbunix.h>
 
 enum {
 	PROC_HANDLE_CONSOLE = 2,
@@ -152,6 +152,17 @@ static unsigned int read_magic(const unsigned char *ident)
 	       ((unsigned int)ident[1] << 8) |
 	       ((unsigned int)ident[2] << 16) |
 	       ((unsigned int)ident[3] << 24);
+}
+
+static int str_eq(const char *left, const char *right)
+{
+	while (*left != '\0' && *right != '\0') {
+		if (*left++ != *right++) {
+			return 0;
+		}
+	}
+
+	return *left == *right;
 }
 
 static u64 str_len(const char *text)
@@ -430,7 +441,6 @@ static long exec_path(u64 vfs, const char *path, const char *task_name)
 			return -1;
 		}
 	}
-
 	for (u64 i = 0; i < ehdr.phnum; i++) {
 		const struct elf64_phdr *phdr = &phdrs[i];
 
@@ -479,7 +489,7 @@ static long spawn_process(const char *path)
 {
 	u64 vfs;
 
-	if (first_process.pid != 0) {
+	if (first_process.pid != 0 && !first_process.exited) {
 		return -1;
 	}
 
@@ -493,7 +503,7 @@ static long spawn_process(const char *path)
 	first_process.exited = 0;
 	first_process.waiter = 0;
 
-	if (exec_path(vfs, path, "first") != 0) {
+	if (exec_path(vfs, path, str_eq(path, "/bin/lxtest") ? "lxtest" : "first") != 0) {
 		first_process.pid = 0;
 		return -1;
 	}
@@ -506,7 +516,9 @@ int main(void)
 	const char online[] = "proc: online\n";
 	const char ready[] = "proc: ready\n";
 	const char exec[] = "proc: exec /bin/first\n";
+	const char exec_linux[] = "proc: exec /bin/lxtest\n";
 	const char spawned[] = "proc: spawned pid=1\n";
+	const char spawned_linux[] = "proc: spawned pid=2\n";
 	const char exited[] = "proc: exited pid=1 status=0\n";
 	const char waited[] = "proc: wait pid=1 status=0\n";
 	struct bunix_msg message;
@@ -547,8 +559,16 @@ int main(void)
 			if (spawn_process(path) == 0) {
 				reply.words[0] = 0;
 				reply.words[1] = first_process.pid;
-				bunix_console_write(exec, sizeof(exec) - 1);
-				bunix_console_write(spawned, sizeof(spawned) - 1);
+				if (str_eq(path, "/bin/lxtest")) {
+					bunix_console_write(exec_linux,
+							    sizeof(exec_linux) - 1);
+					bunix_console_write(spawned_linux,
+							    sizeof(spawned_linux) - 1);
+				} else {
+					bunix_console_write(exec, sizeof(exec) - 1);
+					bunix_console_write(spawned,
+							    sizeof(spawned) - 1);
+				}
 			} else {
 				reply.words[0] = (u64)-1;
 			}

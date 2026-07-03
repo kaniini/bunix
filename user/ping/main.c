@@ -1,4 +1,4 @@
-#include <bunix/syscall.h>
+#include <bunix/libbunix.h>
 
 enum {
 	PING_HANDLE_TIME = 4,

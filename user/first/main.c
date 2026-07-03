@@ -1,4 +1,4 @@
-#include <bunix/syscall.h>
+#include <bunix/libbunix.h>
 
 enum {
 	FIRST_PID = 1,

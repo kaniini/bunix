@@ -1,4 +1,4 @@
-#include <bunix/syscall.h>
+#include <bunix/libbunix.h>
 
 enum {
 	MAX_NAMES = 16,

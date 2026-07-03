@@ -1,12 +1,16 @@
-#include <bunix/syscall.h>
+#include <bunix/libbunix.h>
 
 enum {
 	VFS_HANDLE_NAMES = 3,
+	ROOTFS_MAGIC = 0x30534652,
 	ROOTFS_MAX_PATH = 32,
 	ROOTFS_MAX_ENTRIES = 8,
 	VFS_MAX_OPEN_FILES = 16,
-	ROOTFS_DATA_OFFSET = 104,
-	ROOTFS_HELLO_SIZE = 15,
+};
+
+struct rootfs_header {
+	unsigned int magic;
+	unsigned int entries;
 };
 
 struct rootfs_entry {
@@ -168,12 +172,18 @@ static int rootfs_mount(u64 block)
 		.words = { 0, 0, 0, 0 },
 	};
 	struct bunix_msg reply;
-	const char hello[] = "/hello.txt";
-	const char first[] = "/bin/first";
+	struct rootfs_header header;
 
 	if (bunix_ipc_call(block, &request, &reply) != 0 ||
 	    reply.words[0] != 0 ||
-	    reply.words[1] <= ROOTFS_DATA_OFFSET + ROOTFS_HELLO_SIZE) {
+	    reply.words[1] < sizeof(header) ||
+	    block_read_bytes(block, 0, (unsigned char *)&header,
+			     sizeof(header)) != 0 ||
+	    header.magic != ROOTFS_MAGIC ||
+	    header.entries == 0 ||
+	    header.entries > ROOTFS_MAX_ENTRIES ||
+	    reply.words[1] < sizeof(header) +
+	    (u64)header.entries * sizeof(root_entries[0])) {
 		return -1;
 	}
 
@@ -183,18 +193,20 @@ static int rootfs_mount(u64 block)
 		}
 	}
 
-	for (u64 i = 0; hello[i] != '\0'; i++) {
-		root_entries[0].path[i] = hello[i];
+	if (block_read_bytes(block, sizeof(header),
+			     (unsigned char *)root_entries,
+			     (u64)header.entries * sizeof(root_entries[0])) != 0) {
+		return -1;
 	}
-	root_entries[0].offset = ROOTFS_DATA_OFFSET;
-	root_entries[0].size = ROOTFS_HELLO_SIZE;
 
-	for (u64 i = 0; first[i] != '\0'; i++) {
-		root_entries[1].path[i] = first[i];
+	for (u64 i = 0; i < header.entries; i++) {
+		if (root_entries[i].offset > reply.words[1] ||
+		    root_entries[i].size > reply.words[1] - root_entries[i].offset) {
+			return -1;
+		}
 	}
-	root_entries[1].offset = ROOTFS_DATA_OFFSET + ROOTFS_HELLO_SIZE;
-	root_entries[1].size = reply.words[1] - root_entries[1].offset;
-	root_entry_count = 2;
+
+	root_entry_count = header.entries;
 	return 0;
 }
 

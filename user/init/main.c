@@ -1,4 +1,4 @@
-#include <bunix/syscall.h>
+#include <bunix/libbunix.h>
 
 static long register_service_in_namespace(u64 namespace, u64 service, u64 handle)
 {
@@ -216,6 +216,7 @@ int main(void)
 	};
 	struct bunix_msg proc_reply;
 	const char first_done[] = "init: first process exited\n";
+	const char linux_spawned[] = "init: linux process spawned\n";
 
 	pack_path(&proc_request.words[0], "/bin/first");
 	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
@@ -242,6 +243,20 @@ int main(void)
 	};
 	bunix_launch_module_with_caps("ping", ping_caps,
 				      sizeof(ping_caps) / sizeof(ping_caps[0]));
+
+	const struct bunix_launch_cap linux_caps[] = {
+		{ console, BUNIX_RIGHT_SEND, 0 },
+	};
+	bunix_launch_module_with_caps("linux", linux_caps,
+				      sizeof(linux_caps) / sizeof(linux_caps[0]));
+
+	proc_request.type = BUNIX_PROC_SPAWN;
+	pack_path(&proc_request.words[0], "/bin/lxtest");
+	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
+	    proc_reply.words[0] != 0) {
+		return 1;
+	}
+	bunix_console_write(linux_spawned, sizeof(linux_spawned) - 1);
 
 	return 0;
 }

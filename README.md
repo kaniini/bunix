@@ -25,14 +25,15 @@ ping: heartbeat
 - `servers/`: initial server stubs, including the skeletal VM server.
 - `Makefile`: build, EFI ISO, and QEMU/KVM targets.
 
-The init, names, time, proc, block, VFS, and ping servers are freestanding C ELF
-images loaded as Multiboot2 modules and entered in ring 3. The first process is
-also a freestanding ELF, but it is packaged into the generated rootfs and loaded
-by proc through VFS as `/bin/first`. The VM server remains kernel-hosted for the
-current performance-oriented design, but still exposes a VM IPC port for
-events. The next microkernel steps are to replace the toy rootfs with a real
-filesystem format while continuing to shrink the kernel bootstrap policy into
-explicit capability handoff.
+The init, names, time, linux, proc, block, VFS, and ping servers are
+freestanding C ELF images loaded as Multiboot2 modules and entered in ring 3.
+The first native process and a tiny Linux-syscall smoke test are packaged into
+the generated rootfs and loaded by proc through VFS as `/bin/first` and
+`/bin/lxtest`. The VM server remains kernel-hosted for the current
+performance-oriented design, but still exposes a VM IPC port for events. The
+next microkernel steps are to replace the toy rootfs with a real filesystem
+format while continuing to shrink the kernel bootstrap policy into explicit
+capability handoff.
 
 The tree is split so future ports can add a sibling such as `arch/arm64/` with
 its own boot path, interrupt setup, MMU setup, and device I/O while reusing the
@@ -62,7 +63,8 @@ attenuated inherited handles in caller-specified order.
 
 The boot policy grants init `self`, `console`, `vm`, and `names`; init registers
 console and VM with the user-space names server, resolves them back as
-delegable capabilities, then launches time, proc, block, VFS, and ping with
+delegable capabilities, then launches time, proc, block, VFS, ping, and the
+Linux personality server with
 attenuated caps. Init waits for the time server to register `TIME`, then passes
 that capability to proc so proc can delegate sleep authority to the first
 process. The returned launch value is a send-capability to the child's service
@@ -100,15 +102,15 @@ event-port style IPC, currently exercised by the ping heartbeat server.
 ## Filesystem Path
 
 The first filesystem slice is a server-to-server read flow. The build generates
-a tiny `disk0` image containing `/hello.txt` and `/bin/first`, then GRUB loads
-that image as a Multiboot2 data module. The kernel assigns that boot module only
-to the block server. Init launches a block server and a VFS server with only
-console and names capabilities. The block server registers `BLK0` in the root
-namespace and serves read-only bytes from its assigned disk image. VFS resolves
-`BLK0`, registers `VFS0`, and serves fixed pathname reads for the generated
-rootfs entries. Init creates a filesystem namespace, re-exports `VFS0` there,
-resolves it from that namespace, reads `/hello.txt`, and prints `rootfs:
-module`.
+a tiny `disk0` image containing `/hello.txt`, `/bin/first`, and `/bin/lxtest`,
+then GRUB loads that image as a Multiboot2 data module. The kernel assigns that
+boot module only to the block server. Init launches a block server and a VFS
+server with only console and names capabilities. The block server registers
+`BLK0` in the root namespace and serves read-only bytes from its assigned disk
+image. VFS resolves `BLK0`, registers `VFS0`, parses the generated rootfs entry
+table, and serves pathname reads. Init creates a filesystem namespace,
+re-exports `VFS0` there, resolves it from that namespace, reads `/hello.txt`,
+and prints `rootfs: module`.
 
 This is intentionally not a real disk filesystem yet. The useful primitive is
 the capability-shaped chain `init/proc -> names -> vfs -> block -> disk0`,
@@ -118,9 +120,9 @@ Alpine root filesystem format.
 ## User Mode
 
 User modules are built as freestanding C x86_64 ELFs with a tiny `crt0.S` and
-inline syscall wrappers. Init, names, time, proc, block, VFS, first, and ping
-all link at the normal `0x400000` user base and enter with the same `0x800000`
-user stack top. The
+the native `libbunix` header surface over inline syscall wrappers. Init, names,
+time, linux, proc, block, VFS, first, and ping all link at the normal
+`0x400000` user base and enter with the same `0x800000` user stack top. The
 small user ABI exposes negative-number syscalls for thread exit, timer ticks,
 monotonic nanosecond time, blocking nanosecond sleep, module launch with
 inherited handles, private port creation, IPC send/receive, IPC call, and
@@ -138,6 +140,16 @@ for stdout, stderr, time, and proc, so a process consumes delegated handles from
 its initial image instead of baking in ambient handle numbers. The kernel still
 has an internal bootstrap name registry, but it is no longer exposed as a normal
 user authority path.
+
+Linux syscall numbers are kept separate from the native negative Bunix syscall
+space. For the current MVP, nonnegative syscall numbers trap into the kernel
+and are marshalled as `LINX` protocol events to the user-space linux
+personality server. `/bin/lxtest` contains no Bunix headers or crt0; it issues
+raw x86_64 Linux syscall numbers for `write` and `exit_group`. The personality
+server handles the write event using its delegated console capability and logs
+the exit event. This path is intentionally small and asynchronous for now; the
+next Linux slices need a real syscall reply/wait object, fd table ownership in
+the personality server, and shared-buffer transfer for larger user buffers.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with
