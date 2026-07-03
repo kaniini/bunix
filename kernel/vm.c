@@ -2,6 +2,7 @@
 #include "pmm.h"
 #include "spinlock.h"
 #include "vm.h"
+#include <arch/smp.h>
 
 enum {
 	MAX_VM_SPACES = 32,
@@ -35,6 +36,12 @@ struct vm_space *vm_rpc_create_space(const char *owner)
 		}
 
 		if (arch_vm_space_init(&spaces[i].arch) != 0) {
+			spin_unlock_irqrestore(&vm_spaces_lock, flags);
+			return 0;
+		}
+		const u64 lapic = arch_smp_lapic_address();
+		if (lapic != 0 &&
+		    arch_vm_map_page(&spaces[i].arch, lapic, lapic, 1, 0) != 0) {
 			spin_unlock_irqrestore(&vm_spaces_lock, flags);
 			return 0;
 		}

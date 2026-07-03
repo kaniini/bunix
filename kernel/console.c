@@ -105,6 +105,17 @@ void console_write(const char *text)
 	spin_unlock_irqrestore(&console_lock, flags);
 }
 
+void console_write_len(const char *text, u64 len)
+{
+	const u64 flags = spin_lock_irqsave(&console_lock);
+
+	for (u64 i = 0; i < len; i++) {
+		console_putc_raw(text[i]);
+	}
+
+	spin_unlock_irqrestore(&console_lock, flags);
+}
+
 static void console_write_hex32_raw(u32 value)
 {
 	static const char digits[] = "0123456789abcdef";

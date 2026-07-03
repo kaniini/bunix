@@ -105,6 +105,7 @@ static struct thread *runq_pop(struct run_queue *runq)
 
 static void sched_enqueue_on(struct cpu_sched *cpu, struct thread *thread)
 {
+	const u32 remote = cpu->id != sched_current_cpu_id();
 	const u64 flags = spin_lock_irqsave(&cpu->runq.lock);
 
 	thread->cpu_id = cpu->id;
@@ -113,6 +114,10 @@ static void sched_enqueue_on(struct cpu_sched *cpu, struct thread *thread)
 	console_printf("sched: enqueue tid=%u cpu=%u runq=%u\n",
 		       thread->tid, cpu->id, cpu->runq.count);
 	spin_unlock_irqrestore(&cpu->runq.lock, flags);
+
+	if (remote) {
+		arch_smp_send_scheduler_ipi(cpu->id);
+	}
 }
 
 static void sched_activate_thread_space(struct thread *thread)
@@ -194,7 +199,7 @@ void sched_secondary_start(u32 cpu_id)
 
 	for (;;) {
 		sched_run();
-		__asm__ volatile ("cli; hlt");
+		__asm__ volatile ("pause");
 	}
 }
 
@@ -232,11 +237,16 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	return 0;
 }
 
-struct thread *thread_create(struct task *task, const char *name,
-			     thread_entry_t entry, void *arg)
+struct thread *thread_create_on_cpu(struct task *task, const char *name,
+				    thread_entry_t entry, void *arg,
+				    u32 cpu_id)
 {
 	if (task == 0 || entry == 0) {
 		return 0;
+	}
+
+	if (cpu_id >= sched_cpu_count) {
+		cpu_id = 0;
 	}
 
 	const u64 flags = spin_lock_irqsave(&thread_table_lock);
@@ -259,13 +269,19 @@ struct thread *thread_create(struct task *task, const char *name,
 		console_printf("sched: thread tid=%u task=%u name=%s\n",
 			       threads[i].tid, task->pid, name);
 		spin_unlock_irqrestore(&thread_table_lock, flags);
-		sched_enqueue_on(sched_current_cpu(), &threads[i]);
+		sched_enqueue_on(&cpus[cpu_id], &threads[i]);
 		return &threads[i];
 	}
 
 	spin_unlock_irqrestore(&thread_table_lock, flags);
 	console_printf("sched: thread table full for %s\n", name);
 	return 0;
+}
+
+struct thread *thread_create(struct task *task, const char *name,
+			     thread_entry_t entry, void *arg)
+{
+	return thread_create_on_cpu(task, name, entry, arg, sched_current_cpu_id());
 }
 
 struct task *task_current(void)

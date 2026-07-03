@@ -4,7 +4,10 @@
 .type arch_syscall_entry, @function
 arch_syscall_entry:
 	movq %rsp, %r10
-	movq arch_current_syscall_stack(%rip), %rsp
+	movq %rax, %r8
+	movl %gs:0, %eax
+	leaq arch_current_syscall_stack(%rip), %rsp
+	movq (%rsp,%rax,8), %rsp
 
 	pushq %r10
 	pushq %rcx
@@ -14,7 +17,7 @@ arch_syscall_entry:
 	movq %rdx, %rcx
 	movq %rsi, %rdx
 	movq %rdi, %rsi
-	movq %rax, %rdi
+	movq %r8, %rdi
 	call arch_syscall_dispatch
 
 	addq $8, %rsp

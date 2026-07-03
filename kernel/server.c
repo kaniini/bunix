@@ -7,6 +7,7 @@
 #include "server.h"
 #include "types.h"
 #include "vm.h"
+#include <arch/smp.h>
 #include <arch/user.h>
 #include "../servers/vm/vm_server.h"
 
@@ -31,6 +32,19 @@ static u32 module_start_count;
 
 static int str_eq(const char *left, const char *right);
 static const struct server *find_boot_server(const char *name);
+
+static u32 module_cpu_id(const struct server *server)
+{
+	if (arch_smp_cpu_count() < 2) {
+		return 0;
+	}
+
+	if (server->start != 0 || str_eq(server->name, "hello")) {
+		return 1;
+	}
+
+	return 0;
+}
 
 void server_start_all(void)
 {
@@ -188,7 +202,9 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 		start->space = space;
 		start->stack = USER_STACK_TOP;
 
-		if (thread_create(task, server_name, module_server_thread, start) == 0) {
+		const u32 cpu_id = module_cpu_id(start->server);
+		if (thread_create_on_cpu(task, server_name, module_server_thread,
+					 start, cpu_id) == 0) {
 			console_printf("kernel: failed to create server thread %s\n",
 				       server_name);
 			return (u64)-1;

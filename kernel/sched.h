@@ -24,6 +24,9 @@ void sched_secondary_start(u32 cpu_id) __attribute__((noreturn));
 struct task *task_create(const char *name, struct vm_space *vm_space);
 struct thread *thread_create(struct task *task, const char *name,
 			     thread_entry_t entry, void *arg);
+struct thread *thread_create_on_cpu(struct task *task, const char *name,
+				    thread_entry_t entry, void *arg,
+				    u32 cpu_id);
 struct task *task_current(void);
 struct thread *thread_current(void);
 u64 task_grant_port(struct task *task, struct ipc_port *port);

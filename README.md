@@ -86,14 +86,19 @@ current scheduler is FIFO, with `thread_yield()`, `thread_block()`,
 The scheduler state is split into per-CPU structures with per-CPU run queues,
 and the shared kernel structures used by the current server path now have
 spinlock/IRQ-save protection: run queues, task handles, IPC queues/message
-pools, the name registry, PMM, and VM space allocation. QEMU tests boot with
-`-smp 2`, and x86_64 discovers CPUs through the Multiboot2 ACPI RSDP and MADT.
-The BSP maps and enables the local APIC, copies a low-memory AP trampoline, and
-starts the second CPU with INIT/SIPI. APs enter 64-bit C code, then the BSP
-releases them into the common scheduler's secondary idle loop after scheduler
-initialization. User/server threads are still effectively BSP-pinned until the
-next SMP slice adds per-CPU user TSS/syscall state, IPI wakeups, and load
-distribution.
+pools, the name registry, PMM, VM space allocation, and console writes. QEMU
+tests boot with `-smp 2`, and x86_64 discovers CPUs through the Multiboot2 ACPI
+RSDP and MADT. The BSP maps and enables the local APIC, copies a low-memory AP
+trampoline, and starts the second CPU with INIT/SIPI. APs enter 64-bit C code,
+load their own IDT, GDT, TSS, syscall MSRs, and syscall stack slot, then the BSP
+releases them into the common scheduler's secondary loop.
+
+Remote run-queue enqueue sends a scheduler IPI to the target CPU. The current
+boot policy pins init and ping to CPU 0 while running the kernel-hosted VM
+server and hello user module on CPU 1, which exercises user entry, syscalls, IPC
+wakeups, and server work across CPUs. AP idle currently polls with `pause` to
+avoid a lost wakeup race; a proper idle state protocol and local APIC timer are
+the next pieces needed for fully efficient SMP scheduling.
 
 Each task owns a `vm_space` granted by the VM server facade. On x86_64, a VM
 space contains a real PML4, PDPT, and page directory, currently identity-mapping

@@ -1,5 +1,6 @@
 #include <arch/interrupts.h>
 #include <arch/io.h>
+#include <arch/smp.h>
 #include "console.h"
 #include "sched.h"
 
@@ -19,6 +20,7 @@ enum {
 	PIT_BASE_HZ = 1193182,
 
 	IRQ_TIMER_VECTOR = 32,
+	IRQ_SCHED_IPI_VECTOR = 64,
 };
 
 struct idt_entry {
@@ -45,6 +47,7 @@ extern void isr_stub_8(void);
 extern void isr_stub_13(void);
 extern void isr_stub_14(void);
 extern void isr_stub_32(void);
+extern void isr_stub_64(void);
 
 static void idt_set_gate_flags(u8 vector, void (*handler)(void), u8 flags)
 {
@@ -64,7 +67,7 @@ static void idt_set_gate(u8 vector, void (*handler)(void))
 	idt_set_gate_flags(vector, handler, 0x8e);
 }
 
-static void idt_load(void)
+void arch_interrupts_load(void)
 {
 	const struct idt_ptr ptr = {
 		.limit = sizeof(idt) - 1,
@@ -129,6 +132,11 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 		return;
 	}
 
+	if (frame->vector == IRQ_SCHED_IPI_VECTOR) {
+		arch_smp_handle_scheduler_ipi();
+		return;
+	}
+
 	console_printf("interrupts: vector=%u error=0x%x rip=%p\n",
 		       (u32)frame->vector, (u32)frame->error_code,
 		       (const void *)frame->rip);
@@ -146,7 +154,8 @@ void arch_interrupts_init(void)
 	idt_set_gate(13, isr_stub_13);
 	idt_set_gate(14, isr_stub_14);
 	idt_set_gate(IRQ_TIMER_VECTOR, isr_stub_32);
-	idt_load();
+	idt_set_gate(IRQ_SCHED_IPI_VECTOR, isr_stub_64);
+	arch_interrupts_load();
 	console_printf("interrupts: idt loaded\n");
 
 	pic_remap();

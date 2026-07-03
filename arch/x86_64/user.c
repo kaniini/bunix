@@ -1,5 +1,6 @@
 #include <arch/user.h>
 #include <arch/io.h>
+#include <arch/smp.h>
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
@@ -27,6 +28,7 @@ enum {
 	SYSCALL_IPC_CALL = -14,
 	USER_IPC_WORDS = 4,
 	USER_CONSOLE_WRITE = 1,
+	ARCH_USER_MAX_CPUS = 8,
 };
 
 struct user_ipc_message {
@@ -77,10 +79,14 @@ struct tss {
 	u16 iomap_base;
 } __attribute__((packed));
 
-static u64 gdt[7];
-static struct tss kernel_tss;
-static u8 interrupt_stack[16384] __attribute__((aligned(16)));
-u64 arch_current_syscall_stack;
+struct arch_user_cpu {
+	u64 gdt[7];
+	struct tss tss;
+	u8 interrupt_stack[16384] __attribute__((aligned(16)));
+};
+
+static struct arch_user_cpu user_cpus[ARCH_USER_MAX_CPUS];
+u64 arch_current_syscall_stack[ARCH_USER_MAX_CPUS];
 
 extern void arch_syscall_entry(void);
 
@@ -95,32 +101,34 @@ static int str_eq(const char *left, const char *right)
 	return *left == *right;
 }
 
-static void gdt_set_tss(u32 index, u64 base, u32 limit)
+static void gdt_set_tss(struct arch_user_cpu *cpu, u32 index, u64 base,
+			u32 limit)
 {
-	gdt[index] = ((u64)(limit & 0xffff)) |
-		     ((base & 0xffffff) << 16) |
-		     ((u64)0x89 << 40) |
-		     ((u64)((limit >> 16) & 0x0f) << 48) |
-		     (((base >> 24) & 0xff) << 56);
-	gdt[index + 1] = base >> 32;
+	cpu->gdt[index] = ((u64)(limit & 0xffff)) |
+			  ((base & 0xffffff) << 16) |
+			  ((u64)0x89 << 40) |
+			  ((u64)((limit >> 16) & 0x0f) << 48) |
+			  (((base >> 24) & 0xff) << 56);
+	cpu->gdt[index + 1] = base >> 32;
 }
 
-void arch_user_init(void)
+void arch_user_init_cpu(u32 cpu_id)
 {
+	struct arch_user_cpu *cpu = &user_cpus[cpu_id];
 	const struct gdt_ptr ptr = {
-		.limit = sizeof(gdt) - 1,
-		.base = (u64)gdt,
+		.limit = sizeof(cpu->gdt) - 1,
+		.base = (u64)cpu->gdt,
 	};
 
-	gdt[0] = 0;
-	gdt[1] = 0x00af9a000000ffff;
-	gdt[2] = 0x00af92000000ffff;
-	gdt[3] = 0x00aff2000000ffff;
-	gdt[4] = 0x00affa000000ffff;
+	cpu->gdt[0] = 0;
+	cpu->gdt[1] = 0x00af9a000000ffff;
+	cpu->gdt[2] = 0x00af92000000ffff;
+	cpu->gdt[3] = 0x00aff2000000ffff;
+	cpu->gdt[4] = 0x00affa000000ffff;
 
-	kernel_tss.rsp0 = (u64)(interrupt_stack + sizeof(interrupt_stack));
-	kernel_tss.iomap_base = sizeof(kernel_tss);
-	gdt_set_tss(5, (u64)&kernel_tss, sizeof(kernel_tss) - 1);
+	cpu->tss.rsp0 = (u64)(cpu->interrupt_stack + sizeof(cpu->interrupt_stack));
+	cpu->tss.iomap_base = sizeof(cpu->tss);
+	gdt_set_tss(cpu, 5, (u64)&cpu->tss, sizeof(cpu->tss) - 1);
 
 	__asm__ volatile ("lgdt %0" : : "m"(ptr));
 	__asm__ volatile (
@@ -137,13 +145,22 @@ void arch_user_init(void)
 	arch_wrmsr(MSR_FMASK, 0x200);
 	arch_wrmsr(MSR_EFER, arch_rdmsr(MSR_EFER) | EFER_SCE);
 
-	console_printf("user: gdt/tss/syscall ready\n");
+	if (cpu_id == 0) {
+		console_printf("user: gdt/tss/syscall ready\n");
+	}
+}
+
+void arch_user_init(void)
+{
+	arch_user_init_cpu(arch_smp_current_cpu_id());
 }
 
 void arch_user_set_kernel_stack(u64 stack)
 {
-	kernel_tss.rsp0 = stack;
-	arch_current_syscall_stack = stack;
+	const u32 cpu_id = arch_smp_current_cpu_id();
+
+	user_cpus[cpu_id].tss.rsp0 = stack;
+	arch_current_syscall_stack[cpu_id] = stack;
 }
 
 void arch_user_enter(u64 entry, u64 stack)
@@ -205,9 +222,8 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		    str_eq(ipc_port_name(port), "console")) {
 			const char *text = (const char *)user_message->words[0];
 			const u64 len = user_message->words[1];
-			for (u64 i = 0; i < len; i++) {
-				console_putc(text[i]);
-			}
+
+			console_write_len(text, len);
 			return 0;
 		}
 

@@ -1,5 +1,7 @@
 #include <arch/smp.h>
+#include <arch/interrupts.h>
 #include <arch/io.h>
+#include <arch/user.h>
 #include "console.h"
 #include "multiboot2.h"
 #include "sched.h"
@@ -22,9 +24,11 @@ enum {
 	LAPIC_ICR_DELIVERY_STATUS = 1 << 12,
 	LAPIC_ICR_INIT = 5 << 8,
 	LAPIC_ICR_STARTUP = 6 << 8,
+	LAPIC_ICR_FIXED = 0,
 	LAPIC_ICR_LEVEL_ASSERT = 1 << 14,
 	LAPIC_ICR_TRIGGER_LEVEL = 1 << 15,
 	MSR_GS_BASE = 0xc0000101,
+	IRQ_SCHED_IPI_VECTOR = 64,
 };
 
 struct cpu_local {
@@ -217,11 +221,25 @@ static void lapic_write(u32 reg, u32 value)
 	(void)lapic_read(LAPIC_REG_ID);
 }
 
-static void lapic_wait_delivery(void)
+static int lapic_wait_delivery(const char *stage)
 {
+	u32 spins = 1000000;
+
 	while ((lapic_read(LAPIC_REG_ICR_LOW) & LAPIC_ICR_DELIVERY_STATUS) != 0) {
+		if (spins-- == 0) {
+			console_printf("smp: lapic delivery timeout stage=%s\n",
+				       stage);
+			return -1;
+		}
 		__asm__ volatile ("pause");
 	}
+
+	return 0;
+}
+
+static void lapic_eoi(void)
+{
+	lapic_write(LAPIC_REG_EOI, 0);
 }
 
 static void delay_ticks(u64 ticks)
@@ -275,17 +293,23 @@ static int start_ap(u32 cpu_index)
 	lapic_write(LAPIC_REG_ICR_LOW,
 		    LAPIC_ICR_INIT | LAPIC_ICR_LEVEL_ASSERT |
 		    LAPIC_ICR_TRIGGER_LEVEL);
-	lapic_wait_delivery();
+	if (lapic_wait_delivery("init") != 0) {
+		return -1;
+	}
 	delay_ticks(1);
 
 	lapic_write(LAPIC_REG_ICR_HIGH, apic_id << 24);
 	lapic_write(LAPIC_REG_ICR_LOW, LAPIC_ICR_STARTUP | vector);
-	lapic_wait_delivery();
+	if (lapic_wait_delivery("sipi1") != 0) {
+		return -1;
+	}
 	delay_ticks(1);
 
 	lapic_write(LAPIC_REG_ICR_HIGH, apic_id << 24);
 	lapic_write(LAPIC_REG_ICR_LOW, LAPIC_ICR_STARTUP | vector);
-	lapic_wait_delivery();
+	if (lapic_wait_delivery("sipi2") != 0) {
+		return -1;
+	}
 
 	while (timer_ticks() < deadline) {
 		if (ap_online[cpu_index] != 0) {
@@ -379,6 +403,29 @@ u32 arch_smp_lapic_id(u32 cpu_index)
 	return cpu_index < cpu_count ? lapic_ids[cpu_index] : 0;
 }
 
+u64 arch_smp_lapic_address(void)
+{
+	return lapic_mmio_address;
+}
+
+void arch_smp_send_scheduler_ipi(u32 cpu_index)
+{
+	if (!lapic_ready || cpu_index >= cpu_count ||
+	    cpu_index == arch_smp_current_cpu_id()) {
+		return;
+	}
+
+	lapic_write(LAPIC_REG_ICR_HIGH, lapic_ids[cpu_index] << 24);
+	lapic_write(LAPIC_REG_ICR_LOW, LAPIC_ICR_FIXED | IRQ_SCHED_IPI_VECTOR);
+	(void)lapic_wait_delivery("sched");
+	console_printf("sched: ipi cpu=%u\n", cpu_index);
+}
+
+void arch_smp_handle_scheduler_ipi(void)
+{
+	lapic_eoi();
+}
+
 u32 arch_smp_started_count(void)
 {
 	return ap_started_count;
@@ -403,14 +450,16 @@ void arch_smp_release_aps(void)
 
 void arch_smp_ap_entry(u32 cpu_index)
 {
-	set_current_cpu_id(cpu_index);
 	ap_online[cpu_index] = 1;
 	__sync_fetch_and_add(&ap_started_count, 1);
+	set_current_cpu_id(cpu_index);
 
 	while (!release_aps) {
 		__asm__ volatile ("pause");
 	}
 
+	arch_interrupts_load();
+	arch_user_init_cpu(cpu_index);
 	__sync_fetch_and_add(&ap_scheduler_count, 1);
 	sched_secondary_start(cpu_index);
 }
