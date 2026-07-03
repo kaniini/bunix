@@ -13,7 +13,9 @@ struct ipc_message {
 	u32 protocol;
 	u32 type;
 	u32 sender;
+	u32 cap_rights;
 	struct ipc_port *reply_port;
+	struct ipc_port *cap_port;
 	u64 words[IPC_WORDS];
 };
 

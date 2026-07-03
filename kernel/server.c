@@ -11,6 +11,7 @@
 #include "../servers/vm/vm_server.h"
 
 static const struct server boot_servers[] = {
+	{ "names", 0 },
 	{ "init", 0 },
 	{ "hello", 0 },
 	{ "ping", 0 },
@@ -97,6 +98,12 @@ int server_launch_module(const char *name)
 
 static void grant_bootstrap_caps(struct task *task, const char *server_name)
 {
+	if (str_eq(server_name, "names")) {
+		task_grant_port(task, ipc_port_find("console"),
+				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+		return;
+	}
+
 	if (!str_eq(server_name, "init")) {
 		return;
 	}
@@ -104,6 +111,8 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 	task_grant_port(task, ipc_port_find("console"),
 			TASK_RIGHT_SEND | TASK_RIGHT_DUP);
 	task_grant_port(task, ipc_port_find("vm"),
+			TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+	task_grant_port(task, ipc_port_find("names"),
 			TASK_RIGHT_SEND | TASK_RIGHT_DUP);
 }
 
@@ -260,5 +269,6 @@ void server_start_boot_modules(u64 multiboot_info)
 	multiboot2_for_each_module(multiboot_info, record_boot_module, 0);
 	server_launch_module("vm");
 	sched_run();
+	server_launch_module("names");
 	server_launch_module("init");
 }

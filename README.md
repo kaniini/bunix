@@ -43,23 +43,27 @@ rather than forcing every interaction into a synchronous syscall shape.
 
 User mode can create private ports and send/receive fixed-size
 `struct bunix_msg` messages through task-local handles. Each message carries a
-FourCC protocol ID plus a protocol-local type. Handles are typed capabilities
-rather than global object IDs or kernel pointers. The current handle type is
-`port`, with `SEND`, `RECV`, and `DUP` rights checked by the IPC syscall path.
+FourCC protocol ID plus a protocol-local type, and may transfer one attached
+port capability. Handles are typed capabilities rather than global object IDs or
+kernel pointers. The current handle type is `port`, with `SEND`, `RECV`, and
+`DUP` rights checked by the IPC syscall path. Attached capability transfer
+requires `DUP`, and the receiver gets only the requested subset of rights.
 Module launch accepts an explicit list of parent handles plus requested child
-rights. The parent must hold `DUP`, and the requested rights must be a subset
-of the parent's rights. The child receives its own service port as handle 1,
-then attenuated inherited handles in caller-specified order.
+rights. The parent must hold `DUP`, and the requested rights must be a subset of
+the parent's rights. The child receives its own service port as handle 1, then
+attenuated inherited handles in caller-specified order.
 
-The boot policy grants init `self`, `console`, and `vm`; init launches hello
-with only send rights to `console` and ping with send rights to `console` plus
-`vm`. The returned launch value is a send-capability to the child's service port
-in the parent task. `recv` blocks the current thread and wakes when a sender
-queues an event. `ipc_call` uses a per-task private reply port, and received
-messages can carry a send-capability reply handle that the server can use
-without learning anything else about the caller. A task can also close one of
-its own handles, which clears only that task-local capability slot; the
-underlying object and any other task's capabilities remain untouched.
+The boot policy grants init `self`, `console`, `vm`, and `names`; init registers
+console and VM with the user-space names server, resolves them back as
+delegable capabilities, then launches hello with only send rights to `console`
+and ping with send rights to `console` plus `vm`. The returned launch value is a
+send-capability to the child's service port in the parent task. `recv` blocks
+the current thread and wakes when a sender queues an event. `ipc_call` uses a
+per-task private reply port, and received messages can carry a send-capability
+reply handle that the server can use without learning anything else about the
+caller. A task can also close one of its own handles, which clears only that
+task-local capability slot; the underlying object and any other task's
+capabilities remain untouched.
 
 The VM server owns the memory authority policy, but module task spaces are now
 granted through direct kernel VM calls during launch. That avoids a synchronous
@@ -78,7 +82,10 @@ is no longer exposed as a normal user authority path.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with
-`iretq`, and exposes the syscall namespace over `syscall/sysret`.
+`iretq`, and exposes the syscall namespace over `syscall/sysret`. The kernel
+still keeps a small internal boot registry for recorded module bookkeeping, but
+normal service discovery now goes through the user-space names server authority
+that a task was explicitly given.
 
 Syscall entry uses the current thread's kernel/trap stack, so a syscall that
 blocks in the scheduler keeps its return frame isolated from other user threads'
@@ -149,11 +156,12 @@ make test
 
 `make test` boots through OVMF/GRUB with KVM, captures serial output in
 `build/serial.log`, and checks that GRUB passed Multiboot2 modules, the kernel
-started VM plus init, init received its boot capabilities, and init launched the
-hello and ping C servers with attenuated inherited handles. Init first proves
-the OCAP launch rule by asking for a receive right it does not hold, which the
-kernel rejects before the module is marked launched. Init sends ping a
-synchronous user IPC call through the returned service-port handle, ping
+started VM, names, and init, init received its boot capabilities, and init
+registered and resolved services through the user-space names server before
+launching the hello and ping C servers with attenuated inherited handles. Init
+first proves the OCAP launch rule by asking for a receive right it does not
+hold, which the kernel rejects before the module is marked launched. Init sends
+ping a synchronous user IPC call through the returned service-port handle, ping
 receives it through blocking `recv`, sends a VMEM FourCC event through its
 inherited VM capability, exercises automatic CPU placement across both CPUs, and
 replies to init through the granted reply capability. Hello receives only

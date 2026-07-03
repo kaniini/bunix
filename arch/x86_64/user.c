@@ -37,22 +37,49 @@ struct user_ipc_message {
 	u32 protocol;
 	u32 type;
 	u32 sender;
+	u32 cap_rights;
 	u64 reply;
+	u64 cap;
 	u64 words[USER_IPC_WORDS];
 };
 
-static void user_message_to_ipc(const struct user_ipc_message *user_message,
-				struct ipc_message *message)
+static int user_message_to_ipc(const struct user_ipc_message *user_message,
+			       struct ipc_message *message)
 {
 	message->protocol = user_message->protocol;
 	message->type = user_message->type;
 	message->sender = 0;
+	message->cap_rights = user_message->cap_rights;
 	message->reply_port = task_port_from_handle(task_current(),
 						    user_message->reply,
 						    TASK_RIGHT_SEND);
+	message->cap_port = 0;
+	if (user_message->cap == 0 && user_message->cap_rights != 0) {
+		return -1;
+	}
+
+	if (user_message->cap != 0) {
+		const u32 valid_rights = TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+					 TASK_RIGHT_DUP;
+		const u32 rights = user_message->cap_rights | TASK_RIGHT_DUP;
+
+		if ((user_message->cap_rights & ~valid_rights) != 0) {
+			return -1;
+		}
+
+		message->cap_port =
+			task_port_from_handle(task_current(), user_message->cap,
+					      rights);
+		if (message->cap_port == 0 || user_message->cap_rights == 0) {
+			return -1;
+		}
+	}
+
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
 		message->words[i] = user_message->words[i];
 	}
+
+	return 0;
 }
 
 static void ipc_message_to_user(const struct ipc_message *message,
@@ -61,8 +88,11 @@ static void ipc_message_to_user(const struct ipc_message *message,
 	user_message->protocol = message->protocol;
 	user_message->type = message->type;
 	user_message->sender = message->sender;
+	user_message->cap_rights = message->cap_rights;
 	user_message->reply = task_grant_port(task_current(), message->reply_port,
 					      TASK_RIGHT_SEND);
+	user_message->cap = task_grant_port(task_current(), message->cap_port,
+					    message->cap_rights);
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
 		user_message->words[i] = message->words[i];
 	}
@@ -256,7 +286,10 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 			.type = 0,
 		};
 
-		user_message_to_ipc(user_message, &message);
+		if (user_message_to_ipc(user_message, &message) != 0) {
+			return (u64)-1;
+		}
+
 		return (u64)ipc_send(port, &message);
 	}
 	case SYSCALL_IPC_RECV: {
@@ -292,7 +325,10 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 			return (u64)-1;
 		}
 
-		user_message_to_ipc(request, &message);
+		if (user_message_to_ipc(request, &message) != 0) {
+			return (u64)-1;
+		}
+
 		message.reply_port = reply_port;
 		if (ipc_send(port, &message) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {

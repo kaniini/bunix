@@ -21,17 +21,25 @@ enum {
 	BUNIX_PROTO_CONSOLE = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	BUNIX_PROTO_VM = ('V') | ('M' << 8) | ('E' << 16) | ('M' << 24),
 	BUNIX_PROTO_PING = ('P') | ('I' << 8) | ('N' << 16) | ('G' << 24),
+	BUNIX_PROTO_NAMES = ('N') | ('A' << 8) | ('M' << 16) | ('E' << 24),
+	BUNIX_NAMES_REGISTER = 1,
+	BUNIX_NAMES_RESOLVE = 2,
+	BUNIX_SERVICE_CONSOLE = BUNIX_PROTO_CONSOLE,
+	BUNIX_SERVICE_VM = BUNIX_PROTO_VM,
 	BUNIX_CONSOLE_WRITE = 1,
 	BUNIX_HANDLE_SELF = 1,
 	BUNIX_HANDLE_CONSOLE = 2,
 	BUNIX_HANDLE_VM = 3,
+	BUNIX_HANDLE_NAMES = 4,
 };
 
 struct bunix_msg {
 	unsigned int protocol;
 	unsigned int type;
 	unsigned int sender;
+	unsigned int cap_rights;
 	u64 reply;
+	u64 cap;
 	u64 words[BUNIX_IPC_WORDS];
 };
 
@@ -144,7 +152,9 @@ static inline long bunix_console_write(const char *text, usize len)
 		.protocol = BUNIX_PROTO_CONSOLE,
 		.type = BUNIX_CONSOLE_WRITE,
 		.sender = 0,
+		.cap_rights = 0,
 		.reply = 0,
+		.cap = 0,
 		.words = { (u64)text, len, 0, 0 },
 	};
 
