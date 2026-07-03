@@ -1,6 +1,7 @@
 #include "console.h"
 #include "multiboot2.h"
 #include "pmm.h"
+#include "spinlock.h"
 
 enum {
 	MAX_PHYS_PAGES = 32768,
@@ -14,6 +15,7 @@ static struct pmm_page pages[MAX_PHYS_PAGES];
 static struct pmm_page *free_pages;
 static u64 total_pages;
 static u64 free_pages_count;
+static struct spinlock pmm_lock = SPINLOCK_INIT("pmm");
 
 static u64 align_up(u64 value, u64 align)
 {
@@ -130,9 +132,11 @@ void pmm_init(u64 multiboot_info)
 
 struct pmm_page *pmm_page_alloc(void)
 {
+	const u64 flags = spin_lock_irqsave(&pmm_lock);
 	struct pmm_page *page = free_pages;
 
 	if (page == 0) {
+		spin_unlock_irqrestore(&pmm_lock, flags);
 		return 0;
 	}
 
@@ -140,16 +144,21 @@ struct pmm_page *pmm_page_alloc(void)
 	page->is_free = 0;
 	page->next = 0;
 	free_pages_count--;
+	spin_unlock_irqrestore(&pmm_lock, flags);
 	return page;
 }
 
 void pmm_page_free(struct pmm_page *page)
 {
+	const u64 flags = spin_lock_irqsave(&pmm_lock);
+
 	if (page == 0 || find_page(page->addr) != page || page->is_free) {
+		spin_unlock_irqrestore(&pmm_lock, flags);
 		return;
 	}
 
 	page_list_push(page);
+	spin_unlock_irqrestore(&pmm_lock, flags);
 }
 
 void pmm_page_free_addr(u64 addr)
@@ -164,10 +173,18 @@ u64 pmm_page_addr(const struct pmm_page *page)
 
 u64 pmm_free_page_count(void)
 {
-	return free_pages_count;
+	const u64 flags = spin_lock_irqsave(&pmm_lock);
+	const u64 count = free_pages_count;
+
+	spin_unlock_irqrestore(&pmm_lock, flags);
+	return count;
 }
 
 u64 pmm_total_page_count(void)
 {
-	return total_pages;
+	const u64 flags = spin_lock_irqsave(&pmm_lock);
+	const u64 count = total_pages;
+
+	spin_unlock_irqrestore(&pmm_lock, flags);
+	return count;
 }

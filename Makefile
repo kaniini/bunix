@@ -17,6 +17,7 @@ CC ?= gcc
 LD ?= ld
 OBJDUMP ?= objdump
 QEMU ?= qemu-system-x86_64
+SMP ?= 2
 GRUB_MKRESCUE ?= grub-mkrescue
 GRUB_MKSTANDALONE ?= grub-mkstandalone
 OVMF_CODE ?= /usr/share/OVMF/OVMF_CODE.fd
@@ -36,6 +37,7 @@ USER_ASFLAGS := -m64 -g -ffreestanding -fno-pic -fno-pie \
 KERNEL_SRCS := \
 	arch/$(ARCH)/boot/multiboot2.S \
 	arch/$(ARCH)/interrupts.c \
+	arch/$(ARCH)/smp.c \
 	arch/$(ARCH)/interrupts.S \
 	arch/$(ARCH)/thread.c \
 	arch/$(ARCH)/thread.S \
@@ -51,6 +53,7 @@ KERNEL_SRCS := \
 	kernel/pmm.c \
 	kernel/sched.c \
 	kernel/server.c \
+	kernel/spinlock.c \
 	kernel/timer.c \
 	kernel/vm.c \
 	servers/vm/vm.c
@@ -133,18 +136,21 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(HELLO_MODULE) $(PING_M
 
 run: $(EFI_BOOT_APP)
 	$(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
+		-smp $(SMP) \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive format=raw,file=fat:rw:$(ESP_DIR) \
 		-serial stdio -display none -no-reboot
 
 run-kernel: $(EFI_BOOT_APP)
 	$(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
+		-smp $(SMP) \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive format=raw,file=fat:rw:$(ESP_DIR) \
 		-serial stdio -display none -no-reboot
 
 run-iso: $(EFI_BOOT_IMG)
 	$(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
+		-smp $(SMP) \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-cdrom $(EFI_BOOT_IMG) -serial stdio -display none -no-reboot
 
@@ -152,6 +158,7 @@ test: $(EFI_BOOT_APP)
 	mkdir -p $(BUILD_DIR)
 	truncate -s 0 $(BUILD_DIR)/serial.log
 	timeout 10s $(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
+		-smp $(SMP) \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive format=raw,file=fat:rw:$(ESP_DIR) \
 		-serial file:$(BUILD_DIR)/serial.log -display none -no-reboot; \
@@ -162,6 +169,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "interrupts: enabled" $(BUILD_DIR)/serial.log
 	grep -F "timer: tick 1" $(BUILD_DIR)/serial.log
 	grep -F "user: gdt/tss/syscall ready" $(BUILD_DIR)/serial.log
+	grep -F "multiboot2: acpi rsdp=" $(BUILD_DIR)/serial.log
+	grep -F "smp: discovered cpus=2" $(BUILD_DIR)/serial.log
 	grep -F "names: init entries=32" $(BUILD_DIR)/serial.log
 	grep -F "names: register name=vm id=1 kind=2" $(BUILD_DIR)/serial.log
 	grep -F "names: register name=console id=2 kind=2" $(BUILD_DIR)/serial.log

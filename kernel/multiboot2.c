@@ -5,6 +5,8 @@ enum {
 	MULTIBOOT2_TAG_END = 0,
 	MULTIBOOT2_TAG_MODULE = 3,
 	MULTIBOOT2_TAG_MMAP = 6,
+	MULTIBOOT2_TAG_ACPI_OLD = 14,
+	MULTIBOOT2_TAG_ACPI_NEW = 15,
 };
 
 struct multiboot2_info {
@@ -31,6 +33,12 @@ struct multiboot2_tag_mmap {
 	u32 entry_size;
 	u32 entry_version;
 	u8 entries[];
+};
+
+struct multiboot2_tag_acpi {
+	u32 type;
+	u32 size;
+	u8 rsdp[];
 };
 
 struct multiboot2_raw_mmap_entry {
@@ -129,6 +137,38 @@ void multiboot2_for_each_mmap(u64 info_addr, multiboot2_mmap_fn fn, void *ctx)
 	}
 }
 
+const void *multiboot2_acpi_rsdp(u64 info_addr)
+{
+	const struct multiboot2_info *info = (const struct multiboot2_info *)info_addr;
+	u64 cursor = info_addr + sizeof(*info);
+	const u64 end = info_addr + info->total_size;
+	const void *old_rsdp = 0;
+
+	while (cursor + sizeof(struct multiboot2_tag) <= end) {
+		const struct multiboot2_tag *tag = (const struct multiboot2_tag *)cursor;
+
+		if (tag->type == MULTIBOOT2_TAG_END) {
+			return old_rsdp;
+		}
+
+		if (tag->type == MULTIBOOT2_TAG_ACPI_NEW) {
+			const struct multiboot2_tag_acpi *acpi =
+				(const struct multiboot2_tag_acpi *)tag;
+			return acpi->rsdp;
+		}
+
+		if (tag->type == MULTIBOOT2_TAG_ACPI_OLD) {
+			const struct multiboot2_tag_acpi *acpi =
+				(const struct multiboot2_tag_acpi *)tag;
+			old_rsdp = acpi->rsdp;
+		}
+
+		cursor = align_up_u64(cursor + tag->size, 8);
+	}
+
+	return old_rsdp;
+}
+
 static void dump_module(const struct multiboot2_module *module, void *ctx)
 {
 	(void)ctx;
@@ -156,6 +196,10 @@ void multiboot2_dump(u64 info_addr)
 	console_printf("multiboot2: total_size=0x%x\n", info->total_size);
 
 	multiboot2_for_each_mmap(info_addr, dump_mmap, 0);
+	if (multiboot2_acpi_rsdp(info_addr) != 0) {
+		console_printf("multiboot2: acpi rsdp=%p\n",
+			       multiboot2_acpi_rsdp(info_addr));
+	}
 	multiboot2_for_each_module(info_addr, dump_module, 0);
 }
 

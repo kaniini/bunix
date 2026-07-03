@@ -19,6 +19,7 @@ struct vm_space;
 struct ipc_port;
 
 void sched_init(void);
+u32 sched_current_cpu_id(void);
 struct task *task_create(const char *name, struct vm_space *vm_space);
 struct thread *thread_create(struct task *task, const char *name,
 			     thread_entry_t entry, void *arg);

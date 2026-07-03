@@ -1,6 +1,7 @@
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
+#include "spinlock.h"
 
 enum {
 	MAX_PORTS = 16,
@@ -27,6 +28,7 @@ static struct ipc_port ports[MAX_PORTS];
 static struct ipc_message_node messages[MAX_MESSAGES];
 static struct ipc_port *kernel_reply_port;
 static u64 next_port_id = 1;
+static struct spinlock ipc_lock = SPINLOCK_INIT("ipc");
 
 static int str_eq(const char *left, const char *right)
 {
@@ -37,6 +39,17 @@ static int str_eq(const char *left, const char *right)
 	}
 
 	return *left == *right;
+}
+
+static struct ipc_port *ipc_port_find_locked(const char *name)
+{
+	for (u32 i = 0; i < MAX_PORTS; i++) {
+		if (ports[i].in_use && str_eq(ports[i].name, name)) {
+			return &ports[i];
+		}
+	}
+
+	return 0;
 }
 
 static struct ipc_message_node *message_alloc(void)
@@ -82,10 +95,12 @@ void ipc_init(void)
 
 static struct ipc_port *ipc_port_alloc(const char *name, u32 reuse_named)
 {
-	struct ipc_port *existing = reuse_named ? ipc_port_find(name) : 0;
+	const u64 flags = spin_lock_irqsave(&ipc_lock);
+	struct ipc_port *existing = reuse_named ? ipc_port_find_locked(name) : 0;
 	if (reuse_named && existing != 0) {
 		console_printf("ipc: port existing %s id=%u\n", name,
 			       (u32)existing->id);
+		spin_unlock_irqrestore(&ipc_lock, flags);
 		return existing;
 	}
 
@@ -96,10 +111,12 @@ static struct ipc_port *ipc_port_alloc(const char *name, u32 reuse_named)
 			ports[i].name = name;
 			console_printf("ipc: port create %s id=%u\n", name,
 				       (u32)ports[i].id);
+			spin_unlock_irqrestore(&ipc_lock, flags);
 			return &ports[i];
 		}
 	}
 
+	spin_unlock_irqrestore(&ipc_lock, flags);
 	console_printf("ipc: port table full for %s\n", name);
 	return 0;
 }
@@ -116,13 +133,11 @@ struct ipc_port *ipc_port_create_private(const char *name)
 
 struct ipc_port *ipc_port_find(const char *name)
 {
-	for (u32 i = 0; i < MAX_PORTS; i++) {
-		if (ports[i].in_use && str_eq(ports[i].name, name)) {
-			return &ports[i];
-		}
-	}
+	const u64 flags = spin_lock_irqsave(&ipc_lock);
+	struct ipc_port *port = ipc_port_find_locked(name);
 
-	return 0;
+	spin_unlock_irqrestore(&ipc_lock, flags);
+	return port;
 }
 
 const char *ipc_port_name(const struct ipc_port *port)
@@ -141,12 +156,16 @@ struct ipc_port *ipc_port_from_id(u64 id)
 		return 0;
 	}
 
+	const u64 flags = spin_lock_irqsave(&ipc_lock);
+
 	for (u32 i = 0; i < MAX_PORTS; i++) {
 		if (ports[i].in_use && ports[i].id == id) {
+			spin_unlock_irqrestore(&ipc_lock, flags);
 			return &ports[i];
 		}
 	}
 
+	spin_unlock_irqrestore(&ipc_lock, flags);
 	return 0;
 }
 
@@ -158,9 +177,11 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 		return -1;
 	}
 
+	const u64 flags = spin_lock_irqsave(&ipc_lock);
 	node = message_alloc();
 	if (node == 0) {
 		console_printf("ipc: message pool exhausted port=%s\n", port->name);
+		spin_unlock_irqrestore(&ipc_lock, flags);
 		return -1;
 	}
 
@@ -179,12 +200,13 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 		       port->name, node->message.type, node->message.sender,
 		       port->queued);
 
+	struct thread *receiver = port->receiver;
 	if (port->receiver != 0) {
-		struct thread *receiver = port->receiver;
 		port->receiver = 0;
-		thread_unblock(receiver);
 	}
 
+	spin_unlock_irqrestore(&ipc_lock, flags);
+	thread_unblock(receiver);
 	return 0;
 }
 
@@ -194,10 +216,13 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 		return -1;
 	}
 
+	u64 flags = spin_lock_irqsave(&ipc_lock);
 	while (port->head == 0) {
 		port->receiver = thread_current();
 		console_printf("ipc: recv block port=%s\n", port->name);
+		spin_unlock_irqrestore(&ipc_lock, flags);
 		thread_block();
+		flags = spin_lock_irqsave(&ipc_lock);
 	}
 
 	struct ipc_message_node *node = port->head;
@@ -212,6 +237,7 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 
 	console_printf("ipc: recv port=%s type=%u sender=%u queued=%u\n",
 		       port->name, message->type, message->sender, port->queued);
+	spin_unlock_irqrestore(&ipc_lock, flags);
 	return 0;
 }
 

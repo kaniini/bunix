@@ -1,6 +1,7 @@
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
+#include "spinlock.h"
 #include "vm.h"
 #include <arch/thread.h>
 #include <arch/user.h>
@@ -21,6 +22,7 @@ struct task {
 	struct vm_space *vm_space;
 	struct ipc_port *reply_port;
 	struct ipc_port *handles[MAX_TASK_HANDLES];
+	struct spinlock lock;
 };
 
 struct thread {
@@ -41,6 +43,7 @@ struct run_queue {
 	struct thread *head;
 	struct thread *tail;
 	u32 count;
+	struct spinlock lock;
 };
 
 struct cpu_sched {
@@ -56,13 +59,16 @@ static struct thread threads[MAX_THREADS];
 static struct task kernel_task;
 static struct cpu_sched cpus[MAX_CPUS];
 static u32 boot_cpu_id;
+static u32 current_cpu_id;
 static u32 next_pid = 1;
 static u32 next_tid = 1;
 static u32 preemption_enabled;
+static struct spinlock task_table_lock = SPINLOCK_INIT("task-table");
+static struct spinlock thread_table_lock = SPINLOCK_INIT("thread-table");
 
 static struct cpu_sched *sched_current_cpu(void)
 {
-	return &cpus[boot_cpu_id];
+	return &cpus[current_cpu_id];
 }
 
 static void runq_push(struct run_queue *runq, struct thread *thread)
@@ -98,11 +104,14 @@ static struct thread *runq_pop(struct run_queue *runq)
 
 static void sched_enqueue_on(struct cpu_sched *cpu, struct thread *thread)
 {
+	const u64 flags = spin_lock_irqsave(&cpu->runq.lock);
+
 	thread->cpu_id = cpu->id;
 	thread->state = THREAD_READY;
 	runq_push(&cpu->runq, thread);
 	console_printf("sched: enqueue tid=%u cpu=%u runq=%u\n",
 		       thread->tid, cpu->id, cpu->runq.count);
+	spin_unlock_irqrestore(&cpu->runq.lock, flags);
 }
 
 static void sched_activate_thread_space(struct thread *thread)
@@ -146,6 +155,7 @@ void sched_init(void)
 		cpus[i].runq.head = 0;
 		cpus[i].runq.tail = 0;
 		cpus[i].runq.count = 0;
+		spinlock_init(&cpus[i].runq.lock, "runq");
 
 		cpus[i].scheduler_thread.tid = 0;
 		cpus[i].scheduler_thread.name = "scheduler";
@@ -157,7 +167,13 @@ void sched_init(void)
 	}
 
 	boot_cpu_id = 0;
+	current_cpu_id = boot_cpu_id;
 	console_printf("sched: init cpus=%u boot_cpu=%u\n", MAX_CPUS, boot_cpu_id);
+}
+
+u32 sched_current_cpu_id(void)
+{
+	return sched_current_cpu()->id;
 }
 
 struct task *task_create(const char *name, struct vm_space *vm_space)
@@ -166,6 +182,8 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 		console_printf("sched: refusing task %s without vm space\n", name);
 		return 0;
 	}
+
+	const u64 flags = spin_lock_irqsave(&task_table_lock);
 
 	for (u32 i = 0; i < MAX_TASKS; i++) {
 		if (tasks[i].pid != 0) {
@@ -177,14 +195,17 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 		tasks[i].thread_count = 0;
 		tasks[i].vm_space = vm_space;
 		tasks[i].reply_port = 0;
+		spinlock_init(&tasks[i].lock, "task");
 		for (u32 handle = 0; handle < MAX_TASK_HANDLES; handle++) {
 			tasks[i].handles[handle] = 0;
 		}
 		console_printf("sched: task pid=%u name=%s vm=%u\n",
 			       tasks[i].pid, name, tasks[i].vm_space->id);
+		spin_unlock_irqrestore(&task_table_lock, flags);
 		return &tasks[i];
 	}
 
+	spin_unlock_irqrestore(&task_table_lock, flags);
 	console_printf("sched: task table full for %s\n", name);
 	return 0;
 }
@@ -195,6 +216,8 @@ struct thread *thread_create(struct task *task, const char *name,
 	if (task == 0 || entry == 0) {
 		return 0;
 	}
+
+	const u64 flags = spin_lock_irqsave(&thread_table_lock);
 
 	for (u32 i = 0; i < MAX_THREADS; i++) {
 		if (threads[i].state != THREAD_EMPTY) {
@@ -213,10 +236,12 @@ struct thread *thread_create(struct task *task, const char *name,
 		task->thread_count++;
 		console_printf("sched: thread tid=%u task=%u name=%s\n",
 			       threads[i].tid, task->pid, name);
+		spin_unlock_irqrestore(&thread_table_lock, flags);
 		sched_enqueue_on(sched_current_cpu(), &threads[i]);
 		return &threads[i];
 	}
 
+	spin_unlock_irqrestore(&thread_table_lock, flags);
 	console_printf("sched: thread table full for %s\n", name);
 	return 0;
 }
@@ -239,8 +264,11 @@ u64 task_grant_port(struct task *task, struct ipc_port *port)
 		return 0;
 	}
 
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
 	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
 		if (task->handles[i] == port) {
+			spin_unlock_irqrestore(&task->lock, flags);
 			return i + 1;
 		}
 	}
@@ -253,9 +281,11 @@ u64 task_grant_port(struct task *task, struct ipc_port *port)
 		task->handles[i] = port;
 		console_printf("sched: grant task=%u handle=%u\n",
 			       task->pid, i + 1);
+		spin_unlock_irqrestore(&task->lock, flags);
 		return i + 1;
 	}
 
+	spin_unlock_irqrestore(&task->lock, flags);
 	console_printf("sched: handle table full task=%u\n", task->pid);
 	return 0;
 }
@@ -266,7 +296,11 @@ struct ipc_port *task_port_from_handle(struct task *task, u64 handle)
 		return 0;
 	}
 
-	return task->handles[handle - 1];
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	struct ipc_port *port = task->handles[handle - 1];
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	return port;
 }
 
 struct ipc_port *task_reply_port(struct task *task)
@@ -275,11 +309,16 @@ struct ipc_port *task_reply_port(struct task *task)
 		return 0;
 	}
 
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
 	if (task->reply_port == 0) {
 		task->reply_port = ipc_port_create_private("reply");
 	}
 
-	return task->reply_port;
+	struct ipc_port *port = task->reply_port;
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	return port;
 }
 
 void sched_run(void)
@@ -287,11 +326,14 @@ void sched_run(void)
 	struct cpu_sched *cpu = sched_current_cpu();
 
 	for (;;) {
+		const u64 flags = spin_lock_irqsave(&cpu->runq.lock);
 		struct thread *next = runq_pop(&cpu->runq);
 
 		if (next == 0) {
+			spin_unlock_irqrestore(&cpu->runq.lock, flags);
 			return;
 		}
+		spin_unlock_irqrestore(&cpu->runq.lock, flags);
 
 		struct thread *prev = cpu->current;
 		next->state = THREAD_RUNNING;
@@ -332,9 +374,18 @@ void sched_tick(void)
 {
 	struct cpu_sched *cpu = sched_current_cpu();
 	struct thread *prev = cpu->current;
+	u32 runnable;
 
 	if (!preemption_enabled || prev == &cpu->scheduler_thread ||
-	    cpu->runq.count == 0) {
+	    prev->state != THREAD_RUNNING) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&cpu->runq.lock);
+	runnable = cpu->runq.count;
+	spin_unlock_irqrestore(&cpu->runq.lock, flags);
+
+	if (runnable == 0) {
 		return;
 	}
 

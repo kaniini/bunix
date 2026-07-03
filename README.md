@@ -83,11 +83,13 @@ Threads are schedulable contexts that will map naturally to Linux LWPs. The
 current scheduler is FIFO, with `thread_yield()`, `thread_block()`,
 `thread_unblock()`, and timer-driven preemption once enabled.
 
-The scheduler state is already split into per-CPU structures with a per-CPU run
-queue. `MAX_CPUS` is still `1`, but the model avoids baking a single global run
-queue into callers. Real SMP will need CPU discovery, per-CPU current-thread
-lookup, locking around run queues, inter-processor wakeups, and timer
-preemption.
+The scheduler state is split into per-CPU structures with per-CPU run queues,
+and the shared kernel structures used by the current server path now have
+spinlock/IRQ-save protection: run queues, task handles, IPC queues/message
+pools, the name registry, PMM, and VM space allocation. QEMU tests boot with
+`-smp 2`, and x86_64 discovers CPUs through the Multiboot2 ACPI RSDP and MADT.
+The second CPU is discovered but not started yet; the next SMP slice is LAPIC
+mapping, AP trampoline startup, per-CPU current-thread state, and IPI wakeups.
 
 Each task owns a `vm_space` granted by the VM server facade. On x86_64, a VM
 space contains a real PML4, PDPT, and page directory, currently identity-mapping

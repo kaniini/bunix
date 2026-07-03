@@ -25,6 +25,7 @@ typedef void (*multiboot2_mmap_fn)(const struct multiboot2_mmap_entry *entry,
 void multiboot2_dump(u64 info_addr);
 void multiboot2_for_each_module(u64 info_addr, multiboot2_module_fn fn,
 				void *ctx);
+const void *multiboot2_acpi_rsdp(u64 info_addr);
 u64 multiboot2_total_size(u64 info_addr);
 void multiboot2_for_each_mmap(u64 info_addr, multiboot2_mmap_fn fn, void *ctx);
 

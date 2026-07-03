@@ -1,5 +1,6 @@
 #include "console.h"
 #include "pmm.h"
+#include "spinlock.h"
 #include "vm.h"
 
 enum {
@@ -9,6 +10,7 @@ enum {
 static struct vm_space kernel_space;
 static struct vm_space spaces[MAX_VM_SPACES];
 static u32 next_space_id = 1;
+static struct spinlock vm_spaces_lock = SPINLOCK_INIT("vm-spaces");
 
 void vm_init(u64 multiboot_info)
 {
@@ -25,12 +27,15 @@ struct vm_space *vm_kernel_space(void)
 
 struct vm_space *vm_rpc_create_space(const char *owner)
 {
+	const u64 flags = spin_lock_irqsave(&vm_spaces_lock);
+
 	for (u32 i = 0; i < MAX_VM_SPACES; i++) {
 		if (spaces[i].id != 0) {
 			continue;
 		}
 
 		if (arch_vm_space_init(&spaces[i].arch) != 0) {
+			spin_unlock_irqrestore(&vm_spaces_lock, flags);
 			return 0;
 		}
 
@@ -39,9 +44,11 @@ struct vm_space *vm_rpc_create_space(const char *owner)
 		console_printf("vm: create space id=%u owner=%s cr3=%p\n",
 			       spaces[i].id, owner,
 			       (const void *)spaces[i].arch.cr3);
+		spin_unlock_irqrestore(&vm_spaces_lock, flags);
 		return &spaces[i];
 	}
 
+	spin_unlock_irqrestore(&vm_spaces_lock, flags);
 	console_printf("vm: space table full for %s\n", owner);
 	return 0;
 }
