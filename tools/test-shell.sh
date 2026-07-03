@@ -53,7 +53,29 @@ while ! grep -F "/ # " "$log" >/dev/null 2>&1; do
 done
 
 sleep 3
-printf 'dmesg\necho AFTER\nexit\n' > "$pipe.in"
+printf 'busybox uptime\nbusybox echo BUSYBOX_ARGV_OK\ndmesg\necho AFTER\nexit\n' > "$pipe.in"
+
+i=0
+while ! grep -F "load average" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox uptime did not run through applet argv" >&2
+		tail -n 120 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+i=0
+while ! grep -F "BUSYBOX_ARGV_OK" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox argv regression command did not complete" >&2
+		tail -n 120 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
 
 i=0
 while ! grep -F "AFTER" "$log" >/dev/null 2>&1; do

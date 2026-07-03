@@ -66,6 +66,7 @@ enum {
 	LINUX_SYSCALL_FCNTL = 72,
 	LINUX_SYSCALL_GETCWD = 79,
 	LINUX_SYSCALL_CHDIR = 80,
+	LINUX_SYSCALL_SYSINFO = 99,
 	LINUX_SYSCALL_GETUID = 102,
 	LINUX_SYSCALL_SYSLOG = 103,
 	LINUX_SYSCALL_GETGID = 104,
@@ -116,6 +117,8 @@ enum {
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
 	LINUX_EXEC_MAX_IMAGE = 2 * 1024 * 1024,
 	LINUX_EXEC_MAX_PATH = 32,
+	LINUX_EXEC_MAX_ARGS = 8,
+	LINUX_EXEC_MAX_ARG = 64,
 	LINUX_EXEC_STACK_TOP = 0x800000,
 	LINUX_EXEC_STACK_PAGES = 16,
 	LINUX_STAT_SIZE = 144,
@@ -210,6 +213,11 @@ struct elf64_phdr {
 	u64 memsz;
 	u64 align;
 } __attribute__((packed));
+
+struct linux_exec_args {
+	u64 argc;
+	char values[LINUX_EXEC_MAX_ARGS][LINUX_EXEC_MAX_ARG];
+};
 
 static u8 syscall_copy_buffer[LINUX_MAX_SYSCALL_BUFFER];
 static u8 console_input_buffer[LINUX_MAX_SYSCALL_BUFFER];
@@ -787,29 +795,108 @@ static int linux_exec_push_word(u8 *stack, u64 *sp, u64 word)
 	return 0;
 }
 
-static int linux_exec_build_stack(const char *path, u8 *stack_page,
-				  u64 *new_sp)
+static int linux_exec_collect_args(const char *path, u64 user_argv,
+				   struct linux_exec_args *args)
 {
-	const u64 path_len = str_len(path) + 1;
-	u64 sp = VM_PAGE_SIZE;
-	u64 path_vaddr;
-
-	mem_zero(stack_page, VM_PAGE_SIZE);
-	if (path_len >= VM_PAGE_SIZE / 2) {
+	if (path == 0 || args == 0) {
 		return -1;
 	}
 
-	sp -= path_len;
-	mem_copy(stack_page + sp, (const u8 *)path, path_len);
-	path_vaddr = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
+	args->argc = 0;
+	for (u64 i = 0; i < LINUX_EXEC_MAX_ARGS; i++) {
+		args->values[i][0] = '\0';
+	}
+
+	if (user_argv == 0) {
+		if (str_len(path) >= LINUX_EXEC_MAX_ARG) {
+			return -1;
+		}
+		mem_copy((u8 *)args->values[0], (const u8 *)path,
+			 str_len(path) + 1);
+		args->argc = 1;
+		return 0;
+	}
+
+	for (u64 i = 0; i < LINUX_EXEC_MAX_ARGS; i++) {
+		u64 arg_ptr = 0;
+
+		if (read_current_user(user_argv + i * sizeof(arg_ptr),
+				      &arg_ptr, sizeof(arg_ptr)) != 0) {
+			return -1;
+		}
+		if (arg_ptr == 0) {
+			break;
+		}
+		if (copy_cstr_from_user(args->values[i],
+					(const char *)arg_ptr,
+					LINUX_EXEC_MAX_ARG) != 0) {
+			return -1;
+		}
+		args->argc++;
+	}
+
+	if (args->argc == LINUX_EXEC_MAX_ARGS) {
+		u64 next_arg = 0;
+
+		if (read_current_user(user_argv + args->argc * sizeof(next_arg),
+				      &next_arg, sizeof(next_arg)) != 0 ||
+		    next_arg != 0) {
+			return -1;
+		}
+	}
+
+	if (args->argc == 0) {
+		if (str_len(path) >= LINUX_EXEC_MAX_ARG) {
+			return -1;
+		}
+		mem_copy((u8 *)args->values[0], (const u8 *)path,
+			 str_len(path) + 1);
+		args->argc = 1;
+	}
+
+	return 0;
+}
+
+static int linux_exec_build_stack(const struct linux_exec_args *args,
+				  u8 *stack_page, u64 *new_sp)
+{
+	u64 argv_addrs[LINUX_EXEC_MAX_ARGS];
+	u64 sp = VM_PAGE_SIZE;
+
+	mem_zero(stack_page, VM_PAGE_SIZE);
+	if (args == 0 || args->argc == 0 ||
+	    args->argc > LINUX_EXEC_MAX_ARGS) {
+		return -1;
+	}
+
+	for (u64 i = args->argc; i > 0; i--) {
+		const u64 index = i - 1;
+		const u64 len = str_len(args->values[index]) + 1;
+
+		if (len > LINUX_EXEC_MAX_ARG || sp < len) {
+			return -1;
+		}
+		sp -= len;
+		mem_copy(stack_page + sp, (const u8 *)args->values[index],
+			 len);
+		argv_addrs[index] = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
+	}
+
 	sp = align_down(sp, 16);
 
 	if (linux_exec_push_word(stack_page, &sp, 0) != 0 ||
 	    linux_exec_push_word(stack_page, &sp, 0) != 0 ||
 	    linux_exec_push_word(stack_page, &sp, 0) != 0 ||
-	    linux_exec_push_word(stack_page, &sp, 0) != 0 ||
-	    linux_exec_push_word(stack_page, &sp, path_vaddr) != 0 ||
-	    linux_exec_push_word(stack_page, &sp, 1) != 0) {
+	    linux_exec_push_word(stack_page, &sp, 0) != 0) {
+		return -1;
+	}
+	for (u64 i = args->argc; i > 0; i--) {
+		if (linux_exec_push_word(stack_page, &sp,
+					 argv_addrs[i - 1]) != 0) {
+			return -1;
+		}
+	}
+	if (linux_exec_push_word(stack_page, &sp, args->argc) != 0) {
 		return -1;
 	}
 
@@ -824,6 +911,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			const char *user_path)
 {
 	char path[LINUX_EXEC_MAX_PATH];
+	struct linux_exec_args args;
 	u64 image_size = 0;
 	const struct elf64_ehdr *ehdr;
 	u8 stack_page[VM_PAGE_SIZE];
@@ -833,7 +921,8 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		LINUX_EXEC_STACK_TOP - LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE;
 
 	if (copy_cstr_from_user(path, user_path, sizeof(path)) != 0 ||
-	    str_len(path) >= 16) {
+	    str_len(path) >= 16 ||
+	    linux_exec_collect_args(path, frame->arg1, &args) != 0) {
 		return (u64)-LINUX_EINVAL;
 	}
 
@@ -845,7 +934,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	if (linux_vfs_read_file(task, path, image, LINUX_EXEC_MAX_IMAGE,
 				&image_size) != 0 ||
 	    linux_exec_validate(image, image_size, &ehdr) != 0 ||
-	    linux_exec_build_stack(path, stack_page, &new_sp) != 0) {
+	    linux_exec_build_stack(&args, stack_page, &new_sp) != 0) {
 		slab_free(image);
 		return (u64)-LINUX_EINVAL;
 	}
@@ -953,6 +1042,8 @@ static const char *linux_syscall_name(u64 number)
 		return "getcwd";
 	case LINUX_SYSCALL_CHDIR:
 		return "chdir";
+	case LINUX_SYSCALL_SYSINFO:
+		return "sysinfo";
 	case LINUX_SYSCALL_GETUID:
 		return "getuid";
 	case LINUX_SYSCALL_SYSLOG:
@@ -1261,6 +1352,42 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		default:
 			return (u64)-LINUX_EINVAL;
 		}
+	}
+	case LINUX_SYSCALL_SYSINFO: {
+		u8 info[112];
+		u64 value;
+		u16 procs;
+		u32 mem_unit;
+
+		if (arg0 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		mem_zero(info, sizeof(info));
+		value = timer_monotonic_ns() / 1000000000ull;
+		mem_copy(info + 0, (const u8 *)&value, sizeof(value));
+		value = 0;
+		mem_copy(info + 8, (const u8 *)&value, sizeof(value));
+		mem_copy(info + 16, (const u8 *)&value, sizeof(value));
+		mem_copy(info + 24, (const u8 *)&value, sizeof(value));
+		value = 128ull * 1024ull * 1024ull;
+		mem_copy(info + 32, (const u8 *)&value, sizeof(value));
+		value = 64ull * 1024ull * 1024ull;
+		mem_copy(info + 40, (const u8 *)&value, sizeof(value));
+		value = 0;
+		mem_copy(info + 48, (const u8 *)&value, sizeof(value));
+		mem_copy(info + 56, (const u8 *)&value, sizeof(value));
+		mem_copy(info + 64, (const u8 *)&value, sizeof(value));
+		mem_copy(info + 72, (const u8 *)&value, sizeof(value));
+		procs = 1;
+		mem_copy(info + 80, (const u8 *)&procs, sizeof(procs));
+		value = 0;
+		mem_copy(info + 88, (const u8 *)&value, sizeof(value));
+		mem_copy(info + 96, (const u8 *)&value, sizeof(value));
+		mem_unit = 1;
+		mem_copy(info + 104, (const u8 *)&mem_unit, sizeof(mem_unit));
+		return write_current_user(arg0, info, sizeof(info)) == 0 ?
+		       0 : (u64)-LINUX_EINVAL;
 	}
 	case LINUX_SYSCALL_KILL:
 		return 0;
