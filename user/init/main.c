@@ -220,6 +220,8 @@ int main(void)
 	const char first_done[] = "init: first process exited\n";
 	const char linux_spawned[] = "init: linux process spawned\n";
 	const char linux_spawned_again[] = "init: second linux process spawned\n";
+	const char musl_spawned[] = "init: musl process spawned\n";
+	const char musl_done[] = "init: musl process exited\n";
 
 	pack_path(&proc_request.words[0], "/bin/first");
 	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
@@ -271,6 +273,21 @@ int main(void)
 	}
 	bunix_console_write(linux_spawned_again,
 			    sizeof(linux_spawned_again) - 1);
+
+	proc_request.type = BUNIX_PROC_SPAWN;
+	pack_path(&proc_request.words[0], "/bin/musl-hello");
+	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
+	    proc_reply.words[0] != 0) {
+		return 1;
+	}
+	bunix_console_write(musl_spawned, sizeof(musl_spawned) - 1);
+	proc_request.type = BUNIX_PROC_WAIT;
+	proc_request.words[0] = proc_reply.words[1];
+	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
+	    proc_reply.words[0] != 0) {
+		return 1;
+	}
+	bunix_console_write(musl_done, sizeof(musl_done) - 1);
 
 	return 0;
 }

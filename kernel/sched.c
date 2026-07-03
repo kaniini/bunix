@@ -41,6 +41,7 @@ struct task {
 	struct vm_space *vm_space;
 	u64 linux_brk;
 	u64 linux_mmap_next;
+	u64 linux_fs_base;
 	struct task_vm_region vm_regions[MAX_TASK_VM_REGIONS];
 	u32 vm_region_count;
 	struct ipc_port *reply_port;
@@ -245,9 +246,11 @@ static void sched_activate_thread_space(struct thread *thread)
 
 	if (thread == &sched_current_cpu()->scheduler_thread) {
 		arch_user_set_kernel_stack(0);
+		arch_user_set_fs_base(0);
 	} else {
 		arch_user_set_kernel_stack((u64)(thread->trap_stack +
 						 KERNEL_STACK_SIZE));
+		arch_user_set_fs_base(task_linux_fs_base(thread->task));
 	}
 
 	vm_rpc_activate_space(thread->task->vm_space);
@@ -277,6 +280,7 @@ void sched_init(void)
 	kernel_task.vm_space = vm_kernel_space();
 	kernel_task.linux_brk = 0;
 	kernel_task.linux_mmap_next = 0;
+	kernel_task.linux_fs_base = 0;
 	kernel_task.vm_region_count = 0;
 	kernel_task.reply_port = 0;
 	spinlock_init(&kernel_task.lock, "task");
@@ -360,6 +364,7 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	task->vm_space = vm_space;
 	task->linux_brk = 0x900000;
 	task->linux_mmap_next = 0x10000000;
+	task->linux_fs_base = 0;
 	task->vm_region_count = 0;
 	task->reply_port = 0;
 	spinlock_init(&task->lock, "task");
@@ -1168,6 +1173,18 @@ void task_set_linux_mmap_next(struct task *task, u64 next)
 {
 	if (task != 0) {
 		task->linux_mmap_next = next;
+	}
+}
+
+u64 task_linux_fs_base(const struct task *task)
+{
+	return task != 0 ? task->linux_fs_base : 0;
+}
+
+void task_set_linux_fs_base(struct task *task, u64 fs_base)
+{
+	if (task != 0) {
+		task->linux_fs_base = fs_base;
 	}
 }
 

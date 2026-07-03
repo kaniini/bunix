@@ -236,13 +236,17 @@ int vm_alloc_user_range(struct vm_space *space, u64 vaddr, u64 len,
 	}
 
 	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
-		struct vm_frame frame = vm_alloc_user_page(space, page, writable);
+		struct vm_frame frame = vm_rpc_alloc_frame();
 
 		if (frame.addr == 0) {
 			return -1;
 		}
 
 		mem_zero((u8 *)frame.addr, VM_PAGE_SIZE);
+		if (vm_map_user_page(space, page, frame, writable) != 0) {
+			vm_rpc_free_frame(frame);
+			return -1;
+		}
 	}
 
 	return 0;

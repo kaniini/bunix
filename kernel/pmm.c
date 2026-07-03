@@ -6,6 +6,8 @@
 enum {
 	MAX_PHYS_PAGES = 32768,
 	MULTIBOOT_MEMORY_AVAILABLE = 1,
+	LOW_USER_IMAGE_START = 0x400000,
+	LOW_USER_IMAGE_END = 0x1000000,
 };
 
 extern char __kernel_start[];
@@ -139,6 +141,7 @@ void pmm_init(u64 multiboot_info)
 	reserve_range((u64)__kernel_start, (u64)__kernel_end);
 	reserve_range(multiboot_info, multiboot_info + multiboot2_total_size(multiboot_info));
 	multiboot2_for_each_module(multiboot_info, reserve_module, 0);
+	reserve_range(LOW_USER_IMAGE_START, LOW_USER_IMAGE_END);
 
 	console_printf("pmm: pages total=%u free=%u\n",
 		       (u32)total_pages, (u32)free_pages_count);

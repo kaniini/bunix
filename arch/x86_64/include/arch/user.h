@@ -23,6 +23,7 @@ struct arch_syscall_frame {
 void arch_user_init(void);
 void arch_user_init_cpu(u32 cpu_id);
 void arch_user_set_kernel_stack(u64 stack);
+void arch_user_set_fs_base(u64 fs_base);
 void arch_user_enter(u64 entry, u64 stack) __attribute__((noreturn));
 void arch_user_resume(const struct arch_syscall_frame *frame)
 	__attribute__((noreturn));

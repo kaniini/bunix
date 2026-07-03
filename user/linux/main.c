@@ -69,6 +69,45 @@ static long register_service(u64 service)
 	return reply.words[0] == 0 ? 0 : -1;
 }
 
+static u64 resolve_service(u64 service, unsigned int rights)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_WAIT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { BUNIX_NAMES_ROOT, service, rights, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(LINUX_HANDLE_NAMES, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return 0;
+	}
+
+	return reply.cap;
+}
+
+static void notify_proc_exit(u64 linux_pid, u64 status)
+{
+	const u64 proc = resolve_service(BUNIX_SERVICE_PROC, BUNIX_RIGHT_SEND);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = BUNIX_PROC_EXIT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { linux_pid, status, 0, 0 },
+	};
+
+	if (proc != 0) {
+		(void)bunix_ipc_send(proc, &request);
+	}
+}
+
 static void zero_bytes(char *buffer, u64 len)
 {
 	for (u64 i = 0; i < len; i++) {
@@ -751,6 +790,7 @@ int main(void)
 			process->exit_status = message.words[0];
 			bunix_console_write(exit_group, sizeof(exit_group) - 1);
 			bunix_console_write(exited_ok, sizeof(exited_ok) - 1);
+			notify_proc_exit(process->pid, process->exit_status);
 			linux_wake_parent(process);
 			reply.words[0] = 0;
 			break;

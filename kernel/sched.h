@@ -115,6 +115,8 @@ u64 task_linux_brk(const struct task *task);
 void task_set_linux_brk(struct task *task, u64 brk);
 u64 task_linux_mmap_next(const struct task *task);
 void task_set_linux_mmap_next(struct task *task, u64 next);
+u64 task_linux_fs_base(const struct task *task);
+void task_set_linux_fs_base(struct task *task, u64 fs_base);
 int task_add_vm_region(struct task *task, u64 base, u64 len, u32 writable,
 		       u32 kind);
 int task_add_or_extend_vm_region(struct task *task, u64 base, u64 len,

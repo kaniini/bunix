@@ -6,7 +6,7 @@ enum {
 	PROC_HANDLE_TIME = 4,
 	PROC_SEGMENT_MAX = 4096,
 	PROC_INIT_STACK_MAX = 4096,
-	PROC_MAX_PHDRS = 8,
+	PROC_MAX_PHDRS = 16,
 	USER_STACK_TOP = 0x800000,
 	ELF_MAGIC = 0x464c457f,
 	ELFCLASS64 = 2,
@@ -20,6 +20,13 @@ enum {
 	AT_PHENT = 4,
 	AT_PHNUM = 5,
 	AT_PAGESZ = 6,
+	AT_UID = 11,
+	AT_EUID = 12,
+	AT_GID = 13,
+	AT_EGID = 14,
+	AT_CLKTCK = 17,
+	AT_SECURE = 23,
+	AT_RANDOM = 25,
 	AT_ENTRY = 9,
 	AT_EXECFN = 31,
 	EXEC_HANDLE_SELF = 1,
@@ -84,6 +91,18 @@ static u64 next_pid = 1;
 static u64 first_linux_pid;
 static unsigned char segment_buffer[PROC_SEGMENT_MAX];
 static unsigned char init_stack[PROC_INIT_STACK_MAX];
+static const char proc_online[] = "proc: online\n";
+static const char proc_ready[] = "proc: ready\n";
+static const char proc_exec[] = "proc: exec /bin/first\n";
+static const char proc_exec_linux[] = "proc: exec /bin/lxtest\n";
+static const char proc_exec_musl[] = "proc: exec /bin/musl-hello\n";
+static const char proc_spawned[] = "proc: spawned pid=1\n";
+static const char proc_spawned_linux[] = "proc: spawned pid=2\n";
+static const char proc_spawned_linux_again[] = "proc: spawned pid=3\n";
+static const char proc_spawned_musl[] = "proc: spawned pid=4\n";
+static const char proc_exited[] = "proc: exited pid=1 status=0\n";
+static const char proc_waited[] = "proc: wait pid=1 status=0\n";
+static const char proc_register_failed[] = "proc: register failed\n";
 
 static long register_service(u64 service, u64 handle)
 {
@@ -168,6 +187,22 @@ static int str_eq(const char *left, const char *right)
 	return *left == *right;
 }
 
+static int is_linux_path(const char *path)
+{
+	return str_eq(path, "/bin/lxtest") || str_eq(path, "/bin/musl-hello");
+}
+
+static const char *task_name_for_path(const char *path)
+{
+	if (str_eq(path, "/bin/lxtest")) {
+		return "lxtest";
+	}
+	if (str_eq(path, "/bin/musl-hello")) {
+		return "musl-hello";
+	}
+	return "first";
+}
+
 static u64 str_len(const char *text)
 {
 	u64 len = 0;
@@ -182,6 +217,16 @@ static u64 str_len(const char *text)
 static u64 align_down(u64 value, u64 align)
 {
 	return value & ~(align - 1);
+}
+
+static u64 min_u64(u64 left, u64 right)
+{
+	return left < right ? left : right;
+}
+
+static u64 max_u64(u64 left, u64 right)
+{
+	return left > right ? left : right;
 }
 
 static void mem_zero(unsigned char *dst, u64 len)
@@ -320,13 +365,17 @@ static long build_initial_stack(u64 task, const char *path,
 				const struct exec_info *exec, u64 *stack)
 {
 	enum {
-		AUXV_PAIRS = 11,
+		AUXV_PAIRS = 18,
 		STACK_WORDS = 4 + AUXV_PAIRS * 2,
 	};
 
 	const u64 stack_base = USER_STACK_TOP - PROC_INIT_STACK_MAX;
 	const u64 path_len = str_len(path);
 	const u64 phdr_size = exec != 0 ? exec->phnum * exec->phent : 0;
+	const unsigned char random_bytes[16] = {
+		0x62, 0x75, 0x6e, 0x69, 0x78, 0x2d, 0x6d, 0x75,
+		0x73, 0x6c, 0x2d, 0x72, 0x61, 0x6e, 0x64, 0x00,
+	};
 	u64 sp = PROC_INIT_STACK_MAX;
 
 	if (exec == 0 ||
@@ -341,6 +390,11 @@ static long build_initial_stack(u64 task, const char *path,
 	sp -= path_len + 1;
 	const u64 argv0 = stack_base + sp;
 	mem_copy(init_stack + sp, (const unsigned char *)path, path_len + 1);
+
+	sp = align_down(sp, 16);
+	sp -= sizeof(random_bytes);
+	const u64 random_addr = stack_base + sp;
+	mem_copy(init_stack + sp, random_bytes, sizeof(random_bytes));
 
 	sp = align_down(sp, 8);
 	sp -= phdr_size;
@@ -368,16 +422,30 @@ static long build_initial_stack(u64 task, const char *path,
 	words[13] = exec->phnum;
 	words[14] = AT_EXECFN;
 	words[15] = argv0;
-	words[16] = BUNIX_AT_STDOUT;
-	words[17] = EXEC_HANDLE_STDOUT;
-	words[18] = BUNIX_AT_STDERR;
-	words[19] = EXEC_HANDLE_STDERR;
-	words[20] = BUNIX_AT_TIME;
-	words[21] = EXEC_HANDLE_TIME;
-	words[22] = BUNIX_AT_PROC;
-	words[23] = EXEC_HANDLE_PROC;
-	words[24] = AT_NULL;
+	words[16] = AT_UID;
+	words[17] = 0;
+	words[18] = AT_EUID;
+	words[19] = 0;
+	words[20] = AT_GID;
+	words[21] = 0;
+	words[22] = AT_EGID;
+	words[23] = 0;
+	words[24] = AT_SECURE;
 	words[25] = 0;
+	words[26] = AT_RANDOM;
+	words[27] = random_addr;
+	words[28] = AT_CLKTCK;
+	words[29] = 100;
+	words[30] = BUNIX_AT_STDOUT;
+	words[31] = EXEC_HANDLE_STDOUT;
+	words[32] = BUNIX_AT_STDERR;
+	words[33] = EXEC_HANDLE_STDERR;
+	words[34] = BUNIX_AT_TIME;
+	words[35] = EXEC_HANDLE_TIME;
+	words[36] = BUNIX_AT_PROC;
+	words[37] = EXEC_HANDLE_PROC;
+	words[38] = AT_NULL;
+	words[39] = 0;
 
 	if (bunix_task_write(task, stack_base + sp, init_stack + sp,
 			     PROC_INIT_STACK_MAX - sp) != 0) {
@@ -485,18 +553,46 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 		}
 
 		if (phdr->filesz > phdr->memsz ||
-		    phdr->filesz > sizeof(segment_buffer) ||
-		    phdr->vaddr + phdr->memsz < phdr->vaddr ||
-		    vfs_read_file(vfs, file.handle, file.size, phdr->offset,
-				  segment_buffer, phdr->filesz,
-				  (u64)io_buffer) != 0 ||
-		    bunix_task_map((u64)task, phdr->vaddr,
-				   segment_buffer, phdr->filesz, phdr->memsz,
-				   (phdr->flags & PF_W) != 0) != 0) {
+		    phdr->vaddr + phdr->memsz < phdr->vaddr) {
 			vfs_close(vfs, file.handle);
 			bunix_handle_close((u64)io_buffer);
 			bunix_handle_close((u64)task);
 			return -1;
+		}
+
+		const u64 page_start = align_down(phdr->vaddr, 4096);
+		const u64 page_end = ((phdr->vaddr + phdr->memsz + 4095) &
+				      ~4095ull);
+
+		for (u64 page = page_start; page < page_end; page += 4096) {
+			const u64 page_end_addr = page + 4096;
+			const u64 copy_start = max_u64(page, phdr->vaddr);
+			const u64 copy_end = min_u64(page_end_addr,
+						     phdr->vaddr + phdr->filesz);
+			const u64 dst_offset = copy_start - page;
+			const u64 src_offset = copy_start - phdr->vaddr;
+			const u64 filesz = copy_start < copy_end ?
+					   copy_end - copy_start : 0;
+
+			mem_zero(segment_buffer, sizeof(segment_buffer));
+			if (filesz != 0 &&
+			    vfs_read_file(vfs, file.handle, file.size,
+					  phdr->offset + src_offset,
+					  segment_buffer + dst_offset,
+					  filesz, (u64)io_buffer) != 0) {
+				vfs_close(vfs, file.handle);
+				bunix_handle_close((u64)io_buffer);
+				bunix_handle_close((u64)task);
+				return -1;
+			}
+			if (bunix_task_map((u64)task, page, segment_buffer,
+					   4096, 4096,
+					   (phdr->flags & PF_W) != 0) != 0) {
+				vfs_close(vfs, file.handle);
+				bunix_handle_close((u64)io_buffer);
+				bunix_handle_close((u64)task);
+				return -1;
+			}
 		}
 	}
 
@@ -508,7 +604,7 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 	}
 	vfs_close(vfs, file.handle);
 	bunix_handle_close((u64)io_buffer);
-	if (str_eq(path, "/bin/lxtest")) {
+	if (is_linux_path(path)) {
 		const long bunix_id = bunix_task_id((u64)task);
 
 		if (bunix_id <= 0 ||
@@ -563,6 +659,21 @@ static struct process *process_find(u64 pid)
 	return 0;
 }
 
+static struct process *process_find_linux_pid(u64 linux_pid)
+{
+	if (linux_pid == 0) {
+		return 0;
+	}
+
+	for (u64 i = 0; i < PROC_MAX_PROCESSES; i++) {
+		if (processes[i].linux_pid == linux_pid) {
+			return &processes[i];
+		}
+	}
+
+	return 0;
+}
+
 static struct process *process_alloc(void)
 {
 	for (u64 i = 0; i < PROC_MAX_PROCESSES; i++) {
@@ -597,11 +708,11 @@ static long spawn_process(const char *path, u64 *pid)
 	process->waiter = 0;
 	*pid = process->pid;
 
-	if (str_eq(path, "/bin/lxtest") && first_linux_pid != 0) {
+	if (is_linux_path(path) && first_linux_pid != 0) {
 		linux_parent_pid = first_linux_pid;
 	}
 
-	if (exec_path(vfs, path, str_eq(path, "/bin/lxtest") ? "lxtest" : "first",
+	if (exec_path(vfs, path, task_name_for_path(path),
 		      linux_parent_pid, &linux_pid) != 0) {
 		process->pid = 0;
 		*pid = 0;
@@ -617,22 +728,15 @@ static long spawn_process(const char *path, u64 *pid)
 
 int main(void)
 {
-	const char online[] = "proc: online\n";
-	const char ready[] = "proc: ready\n";
-	const char exec[] = "proc: exec /bin/first\n";
-	const char exec_linux[] = "proc: exec /bin/lxtest\n";
-	const char spawned[] = "proc: spawned pid=1\n";
-	const char spawned_linux[] = "proc: spawned pid=2\n";
-	const char spawned_linux_again[] = "proc: spawned pid=3\n";
-	const char exited[] = "proc: exited pid=1 status=0\n";
-	const char waited[] = "proc: wait pid=1 status=0\n";
 	struct bunix_msg message;
 
-	bunix_console_write(online, sizeof(online) - 1);
+	bunix_console_write(proc_online, sizeof(proc_online) - 1);
 	if (register_service(BUNIX_SERVICE_PROC, BUNIX_HANDLE_SELF) != 0) {
+		bunix_console_write(proc_register_failed,
+				    sizeof(proc_register_failed) - 1);
 		return 1;
 	}
-	bunix_console_write(ready, sizeof(ready) - 1);
+	bunix_console_write(proc_ready, sizeof(proc_ready) - 1);
 
 	for (;;) {
 		struct bunix_msg reply = {
@@ -666,19 +770,25 @@ int main(void)
 				reply.words[0] = 0;
 				reply.words[1] = pid;
 				if (str_eq(path, "/bin/lxtest")) {
-					bunix_console_write(exec_linux,
-							    sizeof(exec_linux) - 1);
+					bunix_console_write(proc_exec_linux,
+							    sizeof(proc_exec_linux) - 1);
 					if (pid == 2) {
-						bunix_console_write(spawned_linux,
-								    sizeof(spawned_linux) - 1);
+						bunix_console_write(proc_spawned_linux,
+								    sizeof(proc_spawned_linux) - 1);
 					} else if (pid == 3) {
-						bunix_console_write(spawned_linux_again,
-								    sizeof(spawned_linux_again) - 1);
+						bunix_console_write(proc_spawned_linux_again,
+								    sizeof(proc_spawned_linux_again) - 1);
 					}
+				} else if (str_eq(path, "/bin/musl-hello")) {
+					bunix_console_write(proc_exec_musl,
+							    sizeof(proc_exec_musl) - 1);
+					bunix_console_write(proc_spawned_musl,
+							    sizeof(proc_spawned_musl) - 1);
 				} else {
-					bunix_console_write(exec, sizeof(exec) - 1);
-					bunix_console_write(spawned,
-							    sizeof(spawned) - 1);
+					bunix_console_write(proc_exec,
+							    sizeof(proc_exec) - 1);
+					bunix_console_write(proc_spawned,
+							    sizeof(proc_spawned) - 1);
 				}
 			} else {
 				reply.words[0] = (u64)-1;
@@ -694,7 +804,8 @@ int main(void)
 				reply.words[0] = 0;
 				reply.words[1] = process->pid;
 				reply.words[2] = process->status;
-				bunix_console_write(waited, sizeof(waited) - 1);
+				bunix_console_write(proc_waited,
+						    sizeof(proc_waited) - 1);
 				process_reset(process);
 			} else if (message.reply != 0) {
 				process->waiter = message.reply;
@@ -707,18 +818,22 @@ int main(void)
 		case BUNIX_PROC_EXIT: {
 			struct process *process = process_find(message.words[0]);
 
+			if (process == 0) {
+				process = process_find_linux_pid(message.words[0]);
+			}
 			if (process != 0) {
 				process->status = message.words[1];
 				process->exited = 1;
 				reply.words[0] = 0;
-				bunix_console_write(exited, sizeof(exited) - 1);
+				bunix_console_write(proc_exited,
+						    sizeof(proc_exited) - 1);
 				if (process->waiter != 0) {
 					reply_status(process->waiter,
 						     process->pid,
 						     process->status);
 					process->waiter = 0;
-					bunix_console_write(waited,
-							    sizeof(waited) - 1);
+					bunix_console_write(proc_waited,
+							    sizeof(proc_waited) - 1);
 					process_reset(process);
 				}
 			} else {

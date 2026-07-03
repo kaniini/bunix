@@ -183,8 +183,15 @@ static u64 launch_user_image(const char *name, struct task *parent,
 				 USER_STACK_PAGES * VM_PAGE_SIZE, 1,
 				 TASK_VM_REGION_STACK);
 
+	const u64 argc = 0;
+	if (vm_write_user(space, USER_STACK_TOP - sizeof(argc), &argc,
+			  sizeof(argc)) != 0) {
+		console_printf("kernel: failed to seed stack for %s\n", name);
+		return (u64)-1;
+	}
+
 	start->space = space;
-	start->stack = USER_STACK_TOP;
+	start->stack = USER_STACK_TOP - sizeof(argc);
 
 	if (thread_create(task, name, module_server_thread, start) == 0) {
 		console_printf("kernel: failed to create server thread %s\n",
@@ -395,6 +402,14 @@ u64 server_task_create(struct task *parent, const char *name)
 				 USER_STACK_PAGES * VM_PAGE_SIZE, 1,
 				 TASK_VM_REGION_STACK);
 
+	const u64 argc = 0;
+	if (vm_write_user(space, USER_STACK_TOP - sizeof(argc), &argc,
+			  sizeof(argc)) != 0) {
+		console_printf("kernel: failed to seed stack for %s\n",
+			       task_name);
+		return (u64)-1;
+	}
+
 	name_service_register(task_name, NAME_SERVICE_TASK, task_id(task));
 	return task_grant_task(parent, task, TASK_RIGHT_SEND | TASK_RIGHT_DUP);
 }
@@ -414,7 +429,7 @@ int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
 	const u64 page_end = align_up(vaddr + memsz, VM_PAGE_SIZE);
 
 	for (u64 page = page_start; page < page_end; page += VM_PAGE_SIZE) {
-		struct vm_frame frame = vm_alloc_user_page(space, page, writable);
+		struct vm_frame frame = vm_rpc_alloc_frame();
 		const u64 page_end_addr = page + VM_PAGE_SIZE;
 		const u64 copy_start = max_u64(page, vaddr);
 		const u64 copy_end = min_u64(page_end_addr, vaddr + filesz);
@@ -431,6 +446,10 @@ int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
 			mem_copy((u8 *)(frame.addr + dst_offset),
 				 (const u8 *)src + src_offset,
 				 copy_end - copy_start);
+		}
+		if (vm_map_user_page(space, page, frame, writable) != 0) {
+			vm_rpc_free_frame(frame);
+			return -1;
 		}
 	}
 
@@ -543,7 +562,7 @@ int server_task_start(struct task *parent, u64 task_handle, u64 entry)
 
 	struct task_start *start = &task_starts[task_start_count++];
 	start->entry = entry;
-	start->stack = USER_STACK_TOP;
+	start->stack = USER_STACK_TOP - sizeof(u64);
 
 	console_printf("kernel: task start task=%u entry=%p\n", task_id(task),
 		       (const void *)entry);
@@ -611,8 +630,10 @@ struct task *server_task_fork_current(const struct arch_syscall_frame *frame)
 
 	const u64 brk = task_linux_brk(parent);
 	const u64 mmap_next = task_linux_mmap_next(parent);
+	const u64 fs_base = task_linux_fs_base(parent);
 	task_set_linux_brk(child, brk);
 	task_set_linux_mmap_next(child, mmap_next);
+	task_set_linux_fs_base(child, fs_base);
 
 	struct fork_start *start = &fork_starts[fork_start_count++];
 	start->frame = *frame;

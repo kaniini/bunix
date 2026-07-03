@@ -153,9 +153,16 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 		return;
 	}
 
-	console_printf("interrupts: vector=%u error=0x%x rip=%p task=%u thread=%u task_name=%s thread_name=%s\n",
+	u64 cr2 = 0;
+
+	if (frame->vector == 14) {
+		__asm__ volatile ("movq %%cr2, %0" : "=r"(cr2));
+	}
+	console_printf("interrupts: vector=%u error=0x%x rip=%p cr2=%p rsp=%p rflags=0x%x task=%u thread=%u task_name=%s thread_name=%s\n",
 		       (u32)frame->vector, (u32)frame->error_code,
-		       (const void *)frame->rip, task_id(task_current()),
+		       (const void *)frame->rip, (const void *)cr2,
+		       (const void *)frame->rsp, (u32)frame->rflags,
+		       task_id(task_current()),
 		       thread_id(thread_current()), task_name(task_current()),
 		       thread_name(thread_current()));
 

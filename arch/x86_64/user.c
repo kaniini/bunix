@@ -22,6 +22,7 @@ enum {
 	MSR_STAR = 0xc0000081,
 	MSR_LSTAR = 0xc0000082,
 	MSR_FMASK = 0xc0000084,
+	MSR_FS_BASE = 0xc0000100,
 	EFER_SCE = 1,
 	SYSCALL_EXIT = -2,
 	SYSCALL_TIMER_TICKS = -4,
@@ -51,20 +52,39 @@ enum {
 	LINUX_SYSCALL_CLOSE = 3,
 	LINUX_SYSCALL_FSTAT = 5,
 	LINUX_SYSCALL_MMAP = 9,
+	LINUX_SYSCALL_MPROTECT = 10,
 	LINUX_SYSCALL_MUNMAP = 11,
 	LINUX_SYSCALL_BRK = 12,
+	LINUX_SYSCALL_RT_SIGACTION = 13,
+	LINUX_SYSCALL_RT_SIGPROCMASK = 14,
+	LINUX_SYSCALL_IOCTL = 16,
+	LINUX_SYSCALL_WRITEV = 20,
 	LINUX_SYSCALL_FORK = 57,
+	LINUX_SYSCALL_EXIT = 60,
+	LINUX_SYSCALL_UNAME = 63,
+	LINUX_SYSCALL_ARCH_PRCTL = 158,
+	LINUX_SYSCALL_FUTEX = 202,
+	LINUX_SYSCALL_SET_TID_ADDRESS = 218,
+	LINUX_SYSCALL_CLOCK_GETTIME = 228,
 	LINUX_SYSCALL_EXECVE = 59,
 	LINUX_SYSCALL_GETPID = 39,
 	LINUX_SYSCALL_WAIT4 = 61,
 	LINUX_SYSCALL_GETTID = 186,
 	LINUX_SYSCALL_NEWFSTATAT = 262,
+	LINUX_SYSCALL_SET_ROBUST_LIST = 273,
 	LINUX_SYSCALL_OPENAT = 257,
+	LINUX_SYSCALL_PRLIMIT64 = 302,
+	LINUX_SYSCALL_GETRANDOM = 318,
 	LINUX_SYSCALL_EXIT_GROUP = 231,
 	LINUX_EBADF = 9,
+	LINUX_EAGAIN = 11,
 	LINUX_ENOMEM = 12,
 	LINUX_EINVAL = 22,
 	LINUX_ENOSYS = 38,
+	LINUX_ENOTTY = 25,
+	LINUX_ARCH_SET_FS = 0x1002,
+	LINUX_FUTEX_WAIT = 0,
+	LINUX_FUTEX_WAKE = 1,
 	ARCH_USER_MAX_CPUS = 8,
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
 	LINUX_EXEC_MAX_IMAGE = 65536,
@@ -572,6 +592,81 @@ static int linux_unmap_task_range(struct task *task, u64 base, u64 len)
 	return task_remove_vm_region(task, base, len);
 }
 
+static u64 linux_exit_current(u64 status)
+{
+	struct ipc_port *linux = ipc_port_find("linux");
+	struct ipc_port *reply_port = task_reply_port(task_current());
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = USER_LINUX_EXIT_GROUP,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { status, 0, 0, 0 },
+	};
+	struct ipc_message reply;
+
+	if (linux != 0 && reply_port != 0) {
+		(void)ipc_send(linux, &request);
+		(void)ipc_recv(reply_port, &reply);
+	}
+	console_printf("linux: exit_group status=%u\n", (u32)status);
+	__asm__ volatile ("sti");
+	thread_exit();
+}
+
+static u64 linux_write_one(struct ipc_port *linux, struct ipc_port *reply_port,
+			   u64 fd, u64 user_buffer, u64 len)
+{
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = USER_LINUX_WRITE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { fd, len, 0, 0 },
+	};
+	struct ipc_message reply;
+	struct shared_buffer *buffer;
+	u64 flags;
+
+	if (len > LINUX_MAX_SYSCALL_BUFFER) {
+		return (u64)-LINUX_EINVAL;
+	}
+
+	buffer = buffer_create(len == 0 ? 1 : len);
+	if (buffer == 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_EINVAL;
+	}
+	if (len != 0) {
+		flags = spin_lock_irqsave(&syscall_copy_lock);
+		if (read_current_user(user_buffer, syscall_copy_buffer, len) != 0 ||
+		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
+	}
+
+	request.cap_type = IPC_CAP_BUFFER;
+	request.cap_rights = TASK_RIGHT_RECV;
+	request.cap_object = buffer;
+	if (ipc_send(linux, &request) != 0 ||
+	    ipc_recv(reply_port, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+
+	buffer_release(buffer);
+	return reply.words[0];
+}
+
 static int linux_exec_map_segment(struct task *task, const u8 *image,
 				  const struct elf64_phdr *phdr)
 {
@@ -908,6 +1003,143 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			task_set_linux_brk(task, arg0);
 		}
 		return task_linux_brk(task);
+	case LINUX_SYSCALL_ARCH_PRCTL:
+		if (arg0 != LINUX_ARCH_SET_FS) {
+			return (u64)-LINUX_EINVAL;
+		}
+		task_set_linux_fs_base(task, arg1);
+		arch_user_set_fs_base(arg1);
+		console_printf("linux: arch_prctl set_fs=%p\n",
+			       (const void *)arg1);
+		return 0;
+	case LINUX_SYSCALL_SET_TID_ADDRESS:
+		return thread_id(thread_current());
+	case LINUX_SYSCALL_SET_ROBUST_LIST:
+	case LINUX_SYSCALL_RT_SIGPROCMASK:
+		return 0;
+	case LINUX_SYSCALL_RT_SIGACTION:
+		if (arg2 != 0) {
+			u8 action[32];
+
+			mem_zero(action, sizeof(action));
+			if (write_current_user(arg2, action, sizeof(action)) != 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+		}
+		return 0;
+	case LINUX_SYSCALL_MPROTECT:
+		return 0;
+	case LINUX_SYSCALL_IOCTL:
+		return (u64)-LINUX_ENOTTY;
+	case LINUX_SYSCALL_CLOCK_GETTIME: {
+		u64 timespec[2];
+		const u64 ns = timer_monotonic_ns();
+
+		if (arg1 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		timespec[0] = ns / 1000000000ull;
+		timespec[1] = ns % 1000000000ull;
+		return write_current_user(arg1, timespec, sizeof(timespec)) == 0 ?
+		       0 : (u64)-LINUX_EINVAL;
+	}
+	case LINUX_SYSCALL_GETRANDOM: {
+		u64 done = 0;
+
+		if (arg0 == 0 || arg1 > LINUX_MAX_SYSCALL_BUFFER) {
+			return (u64)-LINUX_EINVAL;
+		}
+		while (done < arg1) {
+			const u8 value = (u8)(0xa5u ^ (u8)done);
+
+			if (write_current_user(arg0 + done, &value, 1) != 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+			done++;
+		}
+		return arg1;
+	}
+	case LINUX_SYSCALL_UNAME: {
+		u8 uts[65 * 6];
+		const char sysname[] = "Linux";
+		const char nodename[] = "bunix";
+		const char release[] = "6.0.0-bunix";
+		const char version[] = "#1";
+		const char machine[] = "x86_64";
+		const char domain[] = "local";
+		const char *fields[] = {
+			sysname, nodename, release, version, machine, domain,
+		};
+
+		if (arg0 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		mem_zero(uts, sizeof(uts));
+		for (u64 field = 0; field < 6; field++) {
+			const char *text = fields[field];
+			u64 i = 0;
+
+			while (text[i] != '\0' && i < 64) {
+				uts[field * 65 + i] = (u8)text[i];
+				i++;
+			}
+		}
+		return write_current_user(arg0, uts, sizeof(uts)) == 0 ?
+		       0 : (u64)-LINUX_EINVAL;
+	}
+	case LINUX_SYSCALL_PRLIMIT64:
+		if (arg3 != 0) {
+			u64 limit[2] = { 0x800000, 0x800000 };
+
+			if (write_current_user(arg3, limit, sizeof(limit)) != 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+		}
+		return 0;
+	case LINUX_SYSCALL_FUTEX: {
+		const u64 op = arg1 & 0x7f;
+
+		if (op == LINUX_FUTEX_WAKE) {
+			return 0;
+		}
+		if (op == LINUX_FUTEX_WAIT) {
+			u32 value = 0;
+
+			if (arg0 == 0 ||
+			    read_current_user(arg0, &value, sizeof(value)) != 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+			return value != (u32)arg2 ? (u64)-LINUX_EAGAIN : 0;
+		}
+		return (u64)-LINUX_ENOSYS;
+	}
+	case LINUX_SYSCALL_WRITEV: {
+		struct {
+			u64 base;
+			u64 len;
+		} iov;
+		u64 total = 0;
+
+		if (linux == 0 || reply_port == 0 || arg1 == 0 || arg2 > 16) {
+			return (u64)-LINUX_EINVAL;
+		}
+		for (u64 i = 0; i < arg2; i++) {
+			if (read_current_user(arg1 + i * sizeof(iov), &iov,
+					      sizeof(iov)) != 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+			const u64 written = linux_write_one(linux, reply_port,
+							    arg0,
+							    iov.base, iov.len);
+			if ((i64)written < 0) {
+				return total != 0 ? total : written;
+			}
+			total += written;
+		}
+		return total;
+	}
+	case LINUX_SYSCALL_EXIT:
+		return linux_exit_current(arg0);
 	default:
 		break;
 	}
@@ -1162,13 +1394,7 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_EXIT_GROUP:
-		request.type = USER_LINUX_EXIT_GROUP;
-		request.words[0] = arg0;
-		(void)ipc_send(linux, &request);
-		(void)ipc_recv(reply_port, &reply);
-		console_printf("linux: exit_group status=%u\n", (u32)arg0);
-		__asm__ volatile ("sti");
-		thread_exit();
+		return linux_exit_current(arg0);
 	default:
 		console_printf("linux: unknown syscall=%u\n", (u32)number);
 		return (u64)-1;
@@ -1284,6 +1510,11 @@ void arch_user_set_kernel_stack(u64 stack)
 
 	user_cpus[cpu_id].tss.rsp0 = stack;
 	arch_current_syscall_stack[cpu_id] = stack;
+}
+
+void arch_user_set_fs_base(u64 fs_base)
+{
+	arch_wrmsr(MSR_FS_BASE, fs_base);
 }
 
 void arch_user_enter(u64 entry, u64 stack)

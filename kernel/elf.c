@@ -88,8 +88,7 @@ static int load_segment_page(struct vm_space *space, u64 image_start,
 	const u64 page_end = page_vaddr + VM_PAGE_SIZE;
 	const u64 copy_start = max_u64(page_vaddr, segment_file_start);
 	const u64 copy_end = min_u64(page_end, segment_file_end);
-	struct vm_frame frame = vm_alloc_user_page(space, page_vaddr,
-						  (phdr->flags & PF_W) != 0);
+	struct vm_frame frame = vm_rpc_alloc_frame();
 
 	if (frame.addr == 0) {
 		return -1;
@@ -103,6 +102,12 @@ static int load_segment_page(struct vm_space *space, u64 image_start,
 		mem_copy((u8 *)(frame.addr + dst_offset),
 			 (const u8 *)(image_start + src_offset),
 			 copy_end - copy_start);
+	}
+
+	if (vm_map_user_page(space, page_vaddr, frame,
+			     (phdr->flags & PF_W) != 0) != 0) {
+		vm_rpc_free_frame(frame);
+		return -1;
 	}
 
 	return 0;
