@@ -50,6 +50,7 @@ enum {
 	LINUX_SYSCALL_FSTAT = 5,
 	LINUX_SYSCALL_MMAP = 9,
 	LINUX_SYSCALL_BRK = 12,
+	LINUX_SYSCALL_FORK = 57,
 	LINUX_SYSCALL_GETPID = 39,
 	LINUX_SYSCALL_WAIT4 = 61,
 	LINUX_SYSCALL_GETTID = 186,
@@ -87,6 +88,7 @@ enum {
 	USER_LINUX_NEWFSTATAT = 262,
 	USER_LINUX_EXIT_GROUP = 231,
 	USER_LINUX_REGISTER_PROCESS = 1000,
+	USER_LINUX_FORK_PROCESS = 1001,
 	ARCH_USER_MAX_CPUS = 8,
 };
 
@@ -182,10 +184,39 @@ static u64 align_up(u64 value, u64 align)
 	return align_down(value + align - 1, align);
 }
 
-static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2,
-				  u64 arg3)
+static u64 linux_fork_process(struct task *parent, struct task *child)
+{
+	struct ipc_port *linux = ipc_port_find("linux");
+	struct ipc_port *reply_port = task_reply_port(parent);
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = USER_LINUX_FORK_PROCESS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { task_id(parent), task_id(child), 0, 0 },
+	};
+	struct ipc_message reply;
+
+	if (linux == 0 || reply_port == 0 ||
+	    ipc_send(linux, &request) != 0 ||
+	    ipc_recv(reply_port, &reply) != 0) {
+		return (u64)-LINUX_ENOSYS;
+	}
+
+	return reply.words[0];
+}
+
+static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 {
 	struct task *task = task_current();
+	const u64 number = frame->number;
+	const u64 arg0 = frame->arg0;
+	const u64 arg1 = frame->arg1;
+	const u64 arg2 = frame->arg2;
+	const u64 arg3 = frame->arg3;
 	struct ipc_port *linux = ipc_port_find("linux");
 	struct ipc_port *reply_port = task_reply_port(task);
 	struct ipc_message request = {
@@ -241,6 +272,22 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2,
 			       task_id(task), (const void *)base, (u32)len,
 			       (u32)flags);
 		return base;
+	}
+	case LINUX_SYSCALL_FORK: {
+		struct task *child = server_task_fork_current(frame);
+		u64 pid;
+
+		if (child == 0) {
+			return (u64)-LINUX_ENOMEM;
+		}
+
+		pid = linux_fork_process(task, child);
+		if ((i64)pid < 0) {
+			return pid;
+		}
+		console_printf("linux: fork parent=%u child=%u linux_pid=%u\n",
+			       task_id(task), task_id(child), (u32)pid);
+		return pid;
 	}
 	case LINUX_SYSCALL_BRK:
 		if (arg0 == 0) {
@@ -657,10 +704,15 @@ void arch_user_enter(u64 entry, u64 stack)
 	}
 }
 
-u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
+u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 {
+	const u64 number = frame->number;
+	const u64 arg0 = frame->arg0;
+	const u64 arg1 = frame->arg1;
+	const u64 arg2 = frame->arg2;
+
 	if ((i64)number >= 0) {
-		return linux_syscall_dispatch(number, arg0, arg1, arg2, arg3);
+		return linux_syscall_dispatch(frame);
 	}
 
 	switch ((i64)number) {

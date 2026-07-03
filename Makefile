@@ -420,6 +420,9 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux metadata checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux: mmap task=" $(BUILD_DIR)/serial.log
 	grep -F "linux mmap checks ok" $(BUILD_DIR)/serial.log
+	grep -F "kernel: task fork parent=" $(BUILD_DIR)/serial.log
+	grep -F "linux: fork parent=" $(BUILD_DIR)/serial.log
+	grep -F "linux fork child ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: wait4" $(BUILD_DIR)/serial.log
 	grep -F "linux wait checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: read" $(BUILD_DIR)/serial.log
@@ -460,10 +463,12 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: thread tid=8 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=11 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=12 exited" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=13 exited" $(BUILD_DIR)/serial.log
 	grep -F "sched: reap tid=3 task=3 name=init remaining=0" $(BUILD_DIR)/serial.log
 	grep -F "sched: reap tid=8 task=8 name=first remaining=0" $(BUILD_DIR)/serial.log
 	grep -F "sched: reap tid=11 task=11 name=lxtest remaining=0" $(BUILD_DIR)/serial.log
-	grep -F "sched: reap tid=12 task=12 name=lxtest remaining=0" $(BUILD_DIR)/serial.log
+	grep -F "sched: reap tid=12 task=13 name=lxtest remaining=0" $(BUILD_DIR)/serial.log
+	grep -F "sched: reap tid=13 task=12 name=lxtest remaining=0" $(BUILD_DIR)/serial.log
 
 check-tools:
 	@command -v $(CC)

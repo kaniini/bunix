@@ -162,16 +162,17 @@ reply port, then returns the server's Linux-style result value. `/bin/lxtest`
 contains no Bunix headers or crt0; it issues raw x86_64 Linux syscall numbers
 for `write`, `getpid`, `gettid`, `openat`, `fstat`, `newfstatat`, `read`,
 `close`, `mmap`, `wait4`, and `exit_group`, verifies returned byte counts,
-metadata, Linux PID/TID values, `brk`, anonymous writable mappings, fd
-allocation, child waiting, and `-EBADF` for invalid fds, then exits
-successfully. Init launches two `/bin/lxtest` instances to prove their Linux PID
-and fd namespaces are separate and that PID 1 can wait for PID 2. Console
-writes use the server's delegated console capability, while
+metadata, Linux PID/TID values, `brk`, anonymous writable mappings, forked
+child creation, fd allocation, child waiting, and `-EBADF` for invalid fds,
+then exits successfully. Init launches two `/bin/lxtest` instances to prove
+their Linux PID and fd namespaces are separate; the first also forks and waits
+for its child. Console writes use the server's delegated console capability,
+while
 `openat(AT_FDCWD, path, O_RDONLY)`, `fstat`, `newfstatat`, `read`, and `close`
 proxy to VFS using shared-buffer capabilities. Linux `mmap` is currently an
 anonymous/private compatibility path implemented on top of task memory
-allocation; fork/clone can build on the lower-level task range clone primitive
-before it grows into copy-on-write.
+allocation. Linux `fork` is built on a saved syscall frame plus coarse task
+range cloning; exact VMA tracking and copy-on-write are still future work.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with

@@ -48,8 +48,14 @@ struct task_start {
 	u64 stack;
 };
 
+struct fork_start {
+	struct arch_syscall_frame frame;
+};
+
 static struct task_start task_starts[16];
 static u32 task_start_count;
+static struct fork_start fork_starts[16];
+static u32 fork_start_count;
 static char task_names[16][32];
 static u32 task_name_count;
 
@@ -276,6 +282,13 @@ static void task_entry_thread(void *arg)
 	const struct task_start *start = (const struct task_start *)arg;
 
 	arch_user_enter(start->entry, start->stack);
+}
+
+static void fork_entry_thread(void *arg)
+{
+	const struct fork_start *start = (const struct fork_start *)arg;
+
+	arch_user_resume(&start->frame);
 }
 
 int server_launch_module(const char *name)
@@ -532,6 +545,61 @@ int server_task_start_at(struct task *parent, u64 task_handle, u64 entry,
 		       (const void *)stack);
 	return thread_create(task, task_name(task), task_entry_thread, start) != 0 ?
 	       0 : -1;
+}
+
+struct task *server_task_fork_current(const struct arch_syscall_frame *frame)
+{
+	enum {
+		LINUX_IMAGE_START = 0x400000,
+		LINUX_INITIAL_BRK = 0x900000,
+		LINUX_MMAP_BASE = 0x10000000,
+	};
+
+	struct task *parent = task_current();
+	if (parent == 0 || frame == 0 ||
+	    fork_start_count >= sizeof(fork_starts) / sizeof(fork_starts[0])) {
+		return 0;
+	}
+
+	struct vm_space *space = vm_server_bootstrap_space(task_name(parent));
+	if (space == 0) {
+		return 0;
+	}
+
+	struct task *child = task_create(task_name(parent), space);
+	if (child == 0) {
+		return 0;
+	}
+
+	const u64 brk = task_linux_brk(parent);
+	const u64 image_end = align_up(brk > LINUX_INITIAL_BRK ?
+				       brk : LINUX_INITIAL_BRK, VM_PAGE_SIZE);
+	if (vm_clone_user_range(task_vm_space(child), task_vm_space(parent),
+				LINUX_IMAGE_START, image_end - LINUX_IMAGE_START,
+				1) != 0) {
+		return 0;
+	}
+
+	const u64 mmap_next = task_linux_mmap_next(parent);
+	if (mmap_next > LINUX_MMAP_BASE &&
+	    vm_clone_user_range(task_vm_space(child), task_vm_space(parent),
+				LINUX_MMAP_BASE, mmap_next - LINUX_MMAP_BASE,
+				1) != 0) {
+		return 0;
+	}
+
+	task_set_linux_brk(child, brk);
+	task_set_linux_mmap_next(child, mmap_next);
+
+	struct fork_start *start = &fork_starts[fork_start_count++];
+	start->frame = *frame;
+
+	console_printf("kernel: task fork parent=%u child=%u rip=%p rsp=%p\n",
+		       task_id(parent), task_id(child),
+		       (const void *)frame->user_rip,
+		       (const void *)frame->user_rsp);
+	return thread_create(child, task_name(child), fork_entry_thread, start) != 0 ?
+	       child : 0;
 }
 
 static struct module_server_start *current_module_start(void)

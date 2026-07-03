@@ -6,6 +6,7 @@
 typedef void (*server_entry_t)(void);
 
 struct task;
+struct arch_syscall_frame;
 
 struct task_launch_cap {
 	u64 handle;
@@ -38,6 +39,7 @@ int server_task_grant(struct task *parent, u64 task_handle, u64 handle,
 int server_task_start(struct task *parent, u64 task_handle, u64 entry);
 int server_task_start_at(struct task *parent, u64 task_handle, u64 entry,
 			 u64 stack);
+struct task *server_task_fork_current(const struct arch_syscall_frame *frame);
 u64 server_boot_module_size(void);
 int server_boot_module_read(u64 offset, void *buffer, u64 len);
 void vm_server_start(void);

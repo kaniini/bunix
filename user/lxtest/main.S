@@ -37,10 +37,10 @@ _start:
 
 	movq $39, %rax
 	syscall
-	cmpq $1, %rax
-	je 1f
-	cmpq $2, %rax
-	jne fail
+	testq %rax, %rax
+	jle fail
+	cmpq $3, %rax
+	jg fail
 1:
 	movq %rax, %r15
 
@@ -86,6 +86,48 @@ _start:
 	syscall
 	cmpq $mmap_message_end - mmap_message, %rax
 	jne fail
+
+	cmpq $1, %r15
+	jne 2f
+
+	movq $57, %rax
+	syscall
+	testq %rax, %rax
+	js fail
+	jz fork_child
+
+	movq $61, %rax
+	movq $-1, %rdi
+	leaq wait_status(%rip), %rsi
+	xorq %rdx, %rdx
+	syscall
+	testq %rax, %rax
+	jle fail
+	cmpl $0, wait_status(%rip)
+	jne fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq wait_message(%rip), %rsi
+	movq $wait_message_end - wait_message, %rdx
+	syscall
+	cmpq $wait_message_end - wait_message, %rax
+	jne fail
+
+	jmp 2f
+
+fork_child:
+	movq $1, %rax
+	movq $1, %rdi
+	leaq fork_child_message(%rip), %rsi
+	movq $fork_child_message_end - fork_child_message, %rdx
+	syscall
+
+	movq $231, %rax
+	xorq %rdi, %rdi
+	syscall
+
+2:
 
 	movq $5, %rax
 	movq %r12, %rdi
@@ -144,29 +186,6 @@ _start:
 	cmpq $-9, %rax
 	jne fail
 
-	cmpq $1, %r15
-	jne 2f
-
-	movq $61, %rax
-	movq $-1, %rdi
-	leaq wait_status(%rip), %rsi
-	xorq %rdx, %rdx
-	syscall
-	cmpq $2, %rax
-	jne fail
-	cmpl $0, wait_status(%rip)
-	jne fail
-
-	movq $1, %rax
-	movq $1, %rdi
-	leaq wait_message(%rip), %rsi
-	movq $wait_message_end - wait_message, %rdx
-	syscall
-	cmpq $wait_message_end - wait_message, %rax
-	jne fail
-
-2:
-
 	movq $231, %rax
 	xorq %rdi, %rdi
 	syscall
@@ -204,6 +223,9 @@ mmap_message_end:
 wait_message:
 	.ascii "linux wait checks ok\n"
 wait_message_end:
+fork_child_message:
+	.ascii "linux fork child ok\n"
+fork_child_message_end:
 fail_message:
 	.ascii "linux return checks failed\n"
 fail_message_end:

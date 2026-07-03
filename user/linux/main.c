@@ -199,6 +199,40 @@ static long linux_register_process(u64 bunix_task, u64 ppid)
 	return -LINUX_ESRCH;
 }
 
+static long linux_fork_process(u64 parent_task, u64 child_task)
+{
+	struct linux_process *parent = linux_process_find(parent_task);
+
+	if (parent == 0 || child_task == 0 ||
+	    linux_process_find(child_task) != 0) {
+		return -LINUX_EINVAL;
+	}
+
+	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
+		if (processes[i].pid == 0) {
+			const u64 pid = next_pid++;
+
+			processes[i].pid = pid;
+			processes[i].tid = pid;
+			processes[i].ppid = parent->pid;
+			processes[i].bunix_task = child_task;
+			processes[i].bunix_thread = 0;
+			processes[i].exited = 0;
+			processes[i].exit_status = 0;
+			processes[i].waited = 0;
+			processes[i].waiter = 0;
+			processes[i].wait_buffer = 0;
+			processes[i].wait_pid = 0;
+			for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
+				processes[i].fds[fd] = parent->fds[fd];
+			}
+			return (long)pid;
+		}
+	}
+
+	return -LINUX_ESRCH;
+}
+
 static struct linux_process *linux_process_find_pid(u64 pid)
 {
 	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
@@ -517,6 +551,18 @@ int main(void)
 		if (message.type == BUNIX_LINUX_REGISTER_PROCESS) {
 			reply.words[0] = (u64)linux_register_process(message.words[0],
 								     message.words[1]);
+			if ((long)reply.words[0] > 0) {
+				bunix_console_write(registered_ok,
+						    sizeof(registered_ok) - 1);
+			}
+			if (message.reply != 0) {
+				bunix_ipc_send(message.reply, &reply);
+			}
+			continue;
+		}
+		if (message.type == BUNIX_LINUX_FORK_PROCESS) {
+			reply.words[0] = (u64)linux_fork_process(message.words[0],
+								 message.words[1]);
 			if ((long)reply.words[0] > 0) {
 				bunix_console_write(registered_ok,
 						    sizeof(registered_ok) - 1);
