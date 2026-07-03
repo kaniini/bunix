@@ -27,6 +27,8 @@ enum {
 	BUNIX_SYSCALL_TASK_WRITE = -38,
 	BUNIX_SYSCALL_TASK_START_AT = -40,
 	BUNIX_SYSCALL_TASK_ID = -42,
+	BUNIX_SYSCALL_TASK_ALLOC = -44,
+	BUNIX_SYSCALL_TASK_CLONE_RANGE = -46,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
 	BUNIX_RIGHT_SEND = 1 << 0,
@@ -249,6 +251,22 @@ static inline long bunix_task_write(u64 task, u64 vaddr, const void *src,
 	const u64 args[] = { task, vaddr, (u64)src, len };
 
 	return bunix_syscall3(BUNIX_SYSCALL_TASK_WRITE, (u64)args, 0, 0);
+}
+
+static inline long bunix_task_alloc(u64 task, u64 vaddr, u64 len,
+				    u64 writable)
+{
+	const u64 args[] = { task, vaddr, len, writable };
+
+	return bunix_syscall3(BUNIX_SYSCALL_TASK_ALLOC, (u64)args, 0, 0);
+}
+
+static inline long bunix_task_clone_range(u64 dst_task, u64 src_task,
+					  u64 vaddr, u64 len, u64 writable)
+{
+	const u64 args[] = { dst_task, src_task, vaddr, len, writable };
+
+	return bunix_syscall3(BUNIX_SYSCALL_TASK_CLONE_RANGE, (u64)args, 0, 0);
 }
 
 static inline long bunix_task_start_at(u64 task, u64 entry, u64 stack)

@@ -7,6 +7,7 @@
 #include "sched.h"
 #include "timer.h"
 #include "server.h"
+#include "vm.h"
 #include "../servers/vm/vm_server.h"
 
 enum {
@@ -41,10 +42,13 @@ enum {
 	SYSCALL_TASK_WRITE = -38,
 	SYSCALL_TASK_START_AT = -40,
 	SYSCALL_TASK_ID = -42,
+	SYSCALL_TASK_ALLOC = -44,
+	SYSCALL_TASK_CLONE_RANGE = -46,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_CLOSE = 3,
 	LINUX_SYSCALL_FSTAT = 5,
+	LINUX_SYSCALL_MMAP = 9,
 	LINUX_SYSCALL_BRK = 12,
 	LINUX_SYSCALL_GETPID = 39,
 	LINUX_SYSCALL_WAIT4 = 61,
@@ -53,6 +57,7 @@ enum {
 	LINUX_SYSCALL_OPENAT = 257,
 	LINUX_SYSCALL_EXIT_GROUP = 231,
 	LINUX_EBADF = 9,
+	LINUX_ENOMEM = 12,
 	LINUX_EINVAL = 22,
 	LINUX_ENOSYS = 38,
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
@@ -60,6 +65,13 @@ enum {
 	LINUX_WAIT_STATUS_SIZE = 4,
 	LINUX_INITIAL_BRK = 0x900000,
 	LINUX_MAX_BRK = 0x10000000,
+	LINUX_MMAP_BASE = 0x10000000,
+	LINUX_MMAP_LIMIT = 0x20000000,
+	LINUX_MAX_MMAP_SIZE = 0x1000000,
+	LINUX_PROT_WRITE = 0x2,
+	LINUX_MAP_PRIVATE = 0x2,
+	LINUX_MAP_FIXED = 0x10,
+	LINUX_MAP_ANONYMOUS = 0x20,
 	USER_IPC_WORDS = 4,
 	USER_FOURCC_CONS = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	USER_FOURCC_LINX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
@@ -160,7 +172,18 @@ static void ipc_message_to_user(const struct ipc_message *message,
 	}
 }
 
-static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
+static u64 align_down(u64 value, u64 align)
+{
+	return value & ~(align - 1);
+}
+
+static u64 align_up(u64 value, u64 align)
+{
+	return align_down(value + align - 1, align);
+}
+
+static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2,
+				  u64 arg3)
 {
 	struct task *task = task_current();
 	struct ipc_port *linux = ipc_port_find("linux");
@@ -178,6 +201,47 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 	struct ipc_message reply;
 
 	switch (number) {
+	case LINUX_SYSCALL_MMAP: {
+		const u64 prot = arg2;
+		const u64 flags = arg3;
+		const u32 writable = (prot & LINUX_PROT_WRITE) != 0;
+		u64 base = arg0;
+		u64 len = arg1;
+
+		if (len == 0 || len > LINUX_MAX_MMAP_SIZE ||
+		    (flags & LINUX_MAP_ANONYMOUS) == 0 ||
+		    (flags & LINUX_MAP_PRIVATE) == 0 ||
+		    len + VM_PAGE_SIZE - 1 < len) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		len = align_up(len, VM_PAGE_SIZE);
+		if (base == 0) {
+			base = task_linux_mmap_next(task);
+		} else if ((flags & LINUX_MAP_FIXED) == 0) {
+			base = align_up(base, VM_PAGE_SIZE);
+		} else if ((base & (VM_PAGE_SIZE - 1)) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		if (base < LINUX_MMAP_BASE || base + len < base ||
+		    base + len > LINUX_MMAP_LIMIT) {
+			return (u64)-LINUX_ENOMEM;
+		}
+
+		if (vm_alloc_user_range(task_vm_space(task), base, len,
+					writable) != 0) {
+			return (u64)-LINUX_ENOMEM;
+		}
+
+		if (base + len > task_linux_mmap_next(task)) {
+			task_set_linux_mmap_next(task, base + len);
+		}
+		console_printf("linux: mmap task=%u addr=%p len=%u flags=0x%x\n",
+			       task_id(task), (const void *)base, (u32)len,
+			       (u32)flags);
+		return base;
+	}
 	case LINUX_SYSCALL_BRK:
 		if (arg0 == 0) {
 			return task_linux_brk(task);
@@ -593,10 +657,10 @@ void arch_user_enter(u64 entry, u64 stack)
 	}
 }
 
-u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
+u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
 	if ((i64)number >= 0) {
-		return linux_syscall_dispatch(number, arg0, arg1, arg2);
+		return linux_syscall_dispatch(number, arg0, arg1, arg2, arg3);
 	}
 
 	switch ((i64)number) {
@@ -649,6 +713,27 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 
 		return (u64)server_task_write(task_current(), args[0], args[1],
 					      (const void *)args[2], args[3]);
+	}
+	case SYSCALL_TASK_ALLOC: {
+		const u64 *args = (const u64 *)arg0;
+
+		if (args == 0) {
+			return (u64)-1;
+		}
+
+		return (u64)server_task_alloc(task_current(), args[0], args[1],
+					      args[2], (u32)args[3]);
+	}
+	case SYSCALL_TASK_CLONE_RANGE: {
+		const u64 *args = (const u64 *)arg0;
+
+		if (args == 0) {
+			return (u64)-1;
+		}
+
+		return (u64)server_task_clone_range(task_current(), args[0],
+						    args[1], args[2], args[3],
+						    (u32)args[4]);
 	}
 	case SYSCALL_TASK_START_AT:
 		return (u64)server_task_start_at(task_current(), arg0, arg1,

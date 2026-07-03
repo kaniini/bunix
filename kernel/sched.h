@@ -76,6 +76,8 @@ void thread_exit(void) __attribute__((noreturn));
 u32 task_id(const struct task *task);
 u64 task_linux_brk(const struct task *task);
 void task_set_linux_brk(struct task *task, u64 brk);
+u64 task_linux_mmap_next(const struct task *task);
+void task_set_linux_mmap_next(struct task *task, u64 next);
 u32 thread_id(const struct thread *thread);
 enum thread_state thread_state(const struct thread *thread);
 const char *task_name(const struct task *task);

@@ -63,6 +63,30 @@ _start:
 	cmpq %r14, %rax
 	jne fail
 
+	movq $9, %rax
+	xorq %rdi, %rdi
+	movq $4096, %rsi
+	movq $3, %rdx
+	movq $0x22, %r10
+	movq $-1, %r8
+	xorq %r9, %r9
+	syscall
+	testq %rax, %rax
+	js fail
+	movq %rax, %rbx
+	movq $0x6b63656863207061, %rax
+	movq %rax, (%rbx)
+	cmpq %rax, (%rbx)
+	jne fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq mmap_message(%rip), %rsi
+	movq $mmap_message_end - mmap_message, %rdx
+	syscall
+	cmpq $mmap_message_end - mmap_message, %rax
+	jne fail
+
 	movq $5, %rax
 	movq %r12, %rdi
 	leaq stat_buffer(%rip), %rsi
@@ -174,6 +198,9 @@ ok_message_end:
 stat_message:
 	.ascii "linux metadata checks ok\n"
 stat_message_end:
+mmap_message:
+	.ascii "linux mmap checks ok\n"
+mmap_message_end:
 wait_message:
 	.ascii "linux wait checks ok\n"
 wait_message_end:

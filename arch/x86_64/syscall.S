@@ -3,6 +3,7 @@
 .global arch_syscall_entry
 .type arch_syscall_entry, @function
 arch_syscall_entry:
+	movq %r10, %r9
 	movq %rsp, %r10
 	movq %rax, %r8
 	movl %gs:0, %eax
@@ -14,10 +15,13 @@ arch_syscall_entry:
 	pushq %r11
 	subq $8, %rsp
 
+	movq %rdi, %rax
+	movq %rsi, %r11
 	movq %rdx, %rcx
-	movq %rsi, %rdx
-	movq %rdi, %rsi
 	movq %r8, %rdi
+	movq %rax, %rsi
+	movq %r11, %rdx
+	movq %r9, %r8
 	call arch_syscall_dispatch
 
 	addq $8, %rsp

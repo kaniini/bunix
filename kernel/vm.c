@@ -102,9 +102,52 @@ static void mem_copy(u8 *dst, const u8 *src, u64 len)
 	}
 }
 
+static void mem_zero(u8 *dst, u64 len)
+{
+	for (u64 i = 0; i < len; i++) {
+		dst[i] = 0;
+	}
+}
+
 static u64 min_u64(u64 left, u64 right)
 {
 	return left < right ? left : right;
+}
+
+static u64 align_down(u64 value, u64 align)
+{
+	return value & ~(align - 1);
+}
+
+static u64 align_up(u64 value, u64 align)
+{
+	return align_down(value + align - 1, align);
+}
+
+int vm_read_user(struct vm_space *space, u64 vaddr, void *dst, u64 len)
+{
+	u64 done = 0;
+
+	if (space == 0 || dst == 0 || vaddr + len < vaddr) {
+		return -1;
+	}
+
+	while (done < len) {
+		const u64 current = vaddr + done;
+		const u64 phys = arch_vm_translate(&space->arch, current, 0);
+		const u64 page_remaining =
+			VM_PAGE_SIZE - (current & (VM_PAGE_SIZE - 1));
+		const u64 chunk = min_u64(len - done, page_remaining);
+
+		if (phys == 0) {
+			return -1;
+		}
+
+		mem_copy((u8 *)dst + done, (const u8 *)phys, chunk);
+		done += chunk;
+	}
+
+	return 0;
 }
 
 int vm_write_user(struct vm_space *space, u64 vaddr, const void *src, u64 len)
@@ -152,6 +195,59 @@ struct vm_frame vm_alloc_user_page(struct vm_space *space, u64 vaddr,
 	}
 
 	return frame;
+}
+
+int vm_alloc_user_range(struct vm_space *space, u64 vaddr, u64 len,
+			u32 writable)
+{
+	if (space == 0 || len == 0 || vaddr + len < vaddr) {
+		return -1;
+	}
+
+	const u64 start = align_down(vaddr, VM_PAGE_SIZE);
+	const u64 end = align_up(vaddr + len, VM_PAGE_SIZE);
+	if (end <= start) {
+		return -1;
+	}
+
+	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
+		struct vm_frame frame = vm_alloc_user_page(space, page, writable);
+
+		if (frame.addr == 0) {
+			return -1;
+		}
+
+		mem_zero((u8 *)frame.addr, VM_PAGE_SIZE);
+	}
+
+	return 0;
+}
+
+int vm_clone_user_range(struct vm_space *dst, struct vm_space *src,
+			u64 vaddr, u64 len, u32 writable)
+{
+	if (dst == 0 || src == 0 || len == 0 || vaddr + len < vaddr) {
+		return -1;
+	}
+
+	const u64 start = align_down(vaddr, VM_PAGE_SIZE);
+	const u64 end = align_up(vaddr + len, VM_PAGE_SIZE);
+	if (end <= start) {
+		return -1;
+	}
+
+	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
+		struct vm_frame frame = vm_alloc_user_page(dst, page, writable);
+		const u64 src_phys = arch_vm_translate(&src->arch, page, 0);
+
+		if (frame.addr == 0 || src_phys == 0) {
+			return -1;
+		}
+
+		mem_copy((u8 *)frame.addr, (const u8 *)src_phys, VM_PAGE_SIZE);
+	}
+
+	return 0;
 }
 
 u64 vm_rpc_total_frames(void)

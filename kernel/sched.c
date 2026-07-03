@@ -37,6 +37,7 @@ struct task {
 	u32 thread_count;
 	struct vm_space *vm_space;
 	u64 linux_brk;
+	u64 linux_mmap_next;
 	struct ipc_port *reply_port;
 	struct task_handle handles[MAX_TASK_HANDLES];
 	struct spinlock lock;
@@ -323,6 +324,7 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 		tasks[i].thread_count = 0;
 		tasks[i].vm_space = vm_space;
 		tasks[i].linux_brk = 0x900000;
+		tasks[i].linux_mmap_next = 0x10000000;
 		tasks[i].reply_port = 0;
 		spinlock_init(&tasks[i].lock, "task");
 		for (u32 handle = 0; handle < MAX_TASK_HANDLES; handle++) {
@@ -983,6 +985,18 @@ void task_set_linux_brk(struct task *task, u64 brk)
 {
 	if (task != 0) {
 		task->linux_brk = brk;
+	}
+}
+
+u64 task_linux_mmap_next(const struct task *task)
+{
+	return task != 0 ? task->linux_mmap_next : 0;
+}
+
+void task_set_linux_mmap_next(struct task *task, u64 next)
+{
+	if (task != 0) {
+		task->linux_mmap_next = next;
 	}
 }
 

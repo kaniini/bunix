@@ -437,6 +437,45 @@ int server_task_write(struct task *parent, u64 task_handle, u64 vaddr,
 	return 0;
 }
 
+int server_task_alloc(struct task *parent, u64 task_handle, u64 vaddr,
+		      u64 len, u32 writable)
+{
+	struct task *task = task_from_handle(parent, task_handle,
+					    TASK_RIGHT_SEND);
+	if (task == 0 || len == 0 || vaddr + len < vaddr) {
+		return -1;
+	}
+
+	if (vm_alloc_user_range(task_vm_space(task), vaddr, len, writable) != 0) {
+		return -1;
+	}
+
+	console_printf("kernel: task alloc task=%u vaddr=%p len=%u writable=%u\n",
+		       task_id(task), (const void *)vaddr, (u32)len, writable);
+	return 0;
+}
+
+int server_task_clone_range(struct task *parent, u64 dst_handle,
+			    u64 src_handle, u64 vaddr, u64 len, u32 writable)
+{
+	struct task *dst = task_from_handle(parent, dst_handle, TASK_RIGHT_SEND);
+	struct task *src = task_from_handle(parent, src_handle, TASK_RIGHT_SEND);
+
+	if (dst == 0 || src == 0 || len == 0 || vaddr + len < vaddr) {
+		return -1;
+	}
+
+	if (vm_clone_user_range(task_vm_space(dst), task_vm_space(src),
+				vaddr, len, writable) != 0) {
+		return -1;
+	}
+
+	console_printf("kernel: task clone dst=%u src=%u vaddr=%p len=%u writable=%u\n",
+		       task_id(dst), task_id(src), (const void *)vaddr,
+		       (u32)len, writable);
+	return 0;
+}
+
 int server_task_grant(struct task *parent, u64 task_handle, u64 handle,
 		      u32 rights)
 {

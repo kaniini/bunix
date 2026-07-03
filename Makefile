@@ -418,6 +418,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux-server: fstat" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: newfstatat" $(BUILD_DIR)/serial.log
 	grep -F "linux metadata checks ok" $(BUILD_DIR)/serial.log
+	grep -F "linux: mmap task=" $(BUILD_DIR)/serial.log
+	grep -F "linux mmap checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: wait4" $(BUILD_DIR)/serial.log
 	grep -F "linux wait checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: read" $(BUILD_DIR)/serial.log
