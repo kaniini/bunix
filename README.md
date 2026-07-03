@@ -57,7 +57,7 @@ the target task's VM space, allocates private stack pages, enters ring 3 with
 `iretq`, and exposes a small negative-number syscall namespace over
 `syscall/sysret`. Current calls include console write, thread exit, timer ticks,
 name lookup/name registration, service writes, VM ping-by-service, module
-launch, and explicit preemption enable.
+launch.
 
 ## Scheduler shape
 
@@ -83,8 +83,9 @@ the broad user-visible identity map.
 
 x86_64 installs an IDT, remaps the legacy PIC, and starts the PIT at 100 Hz.
 Timer interrupts drive scheduler ticks. User threads have separate trap stacks
-for ring-3 interrupts, and ping explicitly enables preemption before yielding
-CPU time to the VM server through the timer path.
+for ring-3 interrupts, and the kernel enables preemption before normal server
+scheduling. The scheduler preempts only interrupted user-mode frames, leaving
+kernel/syscall critical paths non-preemptible for now.
 
 ## Build
 

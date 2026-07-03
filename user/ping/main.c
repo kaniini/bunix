@@ -10,10 +10,9 @@ int main(void)
 
 	bunix_name_register("ping");
 	bunix_service_write(console, one, sizeof(one) - 1);
-	bunix_enable_preemption();
 	bunix_service_vm_ping(vm, 0x2a);
 
-	while (bunix_timer_ticks() == tick) {
+	while (bunix_timer_ticks() < tick + 8) {
 	}
 
 	bunix_service_write(console, two, sizeof(two) - 1);

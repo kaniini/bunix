@@ -28,7 +28,6 @@ enum {
 	SYSCALL_SERVICE_VM_PING = -7,
 	SYSCALL_LAUNCH_MODULE = -8,
 	SYSCALL_NAME_REGISTER = -9,
-	SYSCALL_ENABLE_PREEMPTION = -10,
 };
 
 struct gdt_ptr {
@@ -110,6 +109,7 @@ void arch_user_enter(u64 entry, u64 stack)
 		       (const void *)entry, (const void *)stack);
 
 	__asm__ volatile (
+		"cli\n"
 		"movw $0x1b, %%ax\n"
 		"movw %%ax, %%ds\n"
 		"movw %%ax, %%es\n"
@@ -197,9 +197,6 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		return name_service_register((const char *)arg0,
 					     NAME_SERVICE_TASK,
 					     task_id(task_current()));
-	case SYSCALL_ENABLE_PREEMPTION:
-		sched_enable_preemption();
-		return 0;
 	default:
 		console_printf("syscall: unknown number=%u\n", (u32)number);
 		return (u64)-1;

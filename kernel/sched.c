@@ -9,6 +9,7 @@ enum {
 	MAX_TASKS = 16,
 	MAX_THREADS = 32,
 	KERNEL_STACK_SIZE = 16384,
+	SCHED_QUANTUM_TICKS = 5,
 };
 
 struct task {
@@ -43,6 +44,7 @@ struct cpu_sched {
 	struct run_queue runq;
 	struct thread *current;
 	struct thread scheduler_thread;
+	u32 quantum_left;
 };
 
 static struct task tasks[MAX_TASKS];
@@ -115,6 +117,11 @@ static void sched_activate_thread_space(struct thread *thread)
 	vm_rpc_activate_space(thread->task->vm_space);
 }
 
+static void sched_reset_quantum(struct cpu_sched *cpu)
+{
+	cpu->quantum_left = SCHED_QUANTUM_TICKS;
+}
+
 static void sched_thread_bootstrap(void)
 {
 	struct thread *thread = sched_current_cpu()->current;
@@ -142,6 +149,7 @@ void sched_init(void)
 		cpus[i].scheduler_thread.state = THREAD_RUNNING;
 		cpus[i].scheduler_thread.cpu_id = i;
 		cpus[i].current = &cpus[i].scheduler_thread;
+		cpus[i].quantum_left = SCHED_QUANTUM_TICKS;
 	}
 
 	boot_cpu_id = 0;
@@ -233,6 +241,7 @@ void sched_run(void)
 		cpu->current = next;
 		console_printf("sched: switch cpu=%u prev=%u next=%u\n",
 			       cpu->id, prev->tid, next->tid);
+		sched_reset_quantum(cpu);
 		sched_activate_thread_space(next);
 		arch_thread_switch(&prev->context, &next->context);
 		sched_activate_thread_space(cpu->current);
@@ -272,7 +281,13 @@ void sched_tick(void)
 		return;
 	}
 
+	if (cpu->quantum_left > 1) {
+		cpu->quantum_left--;
+		return;
+	}
+
 	console_printf("sched: preempt tid=%u cpu=%u\n", prev->tid, cpu->id);
+	sched_reset_quantum(cpu);
 	sched_enqueue_on(cpu, prev);
 	cpu->current = &cpu->scheduler_thread;
 	sched_activate_thread_space(cpu->current);

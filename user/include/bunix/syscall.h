@@ -15,7 +15,6 @@ enum {
 	BUNIX_SYSCALL_SERVICE_VM_PING = -7,
 	BUNIX_SYSCALL_LAUNCH_MODULE = -8,
 	BUNIX_SYSCALL_NAME_REGISTER = -9,
-	BUNIX_SYSCALL_ENABLE_PREEMPTION = -10,
 };
 
 static inline long bunix_syscall0(long number)
@@ -98,11 +97,6 @@ static inline u64 bunix_timer_ticks(void)
 static inline long bunix_service_vm_ping(u64 service, u64 word)
 {
 	return bunix_syscall2(BUNIX_SYSCALL_SERVICE_VM_PING, service, word);
-}
-
-static inline long bunix_enable_preemption(void)
-{
-	return bunix_syscall0(BUNIX_SYSCALL_ENABLE_PREEMPTION);
 }
 
 #endif
