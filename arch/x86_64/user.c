@@ -1119,6 +1119,9 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			u64 len;
 		} iov;
 		u64 total = 0;
+		u64 done = 0;
+		struct shared_buffer *buffer;
+		u64 flags;
 
 		if (linux == 0 || reply_port == 0 || arg1 == 0 || arg2 > 16) {
 			return (u64)-LINUX_EINVAL;
@@ -1128,15 +1131,54 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 					      sizeof(iov)) != 0) {
 				return (u64)-LINUX_EINVAL;
 			}
-			const u64 written = linux_write_one(linux, reply_port,
-							    arg0,
-							    iov.base, iov.len);
-			if ((i64)written < 0) {
-				return total != 0 ? total : written;
+			if (iov.len > LINUX_MAX_SYSCALL_BUFFER - total ||
+			    (iov.base == 0 && iov.len != 0)) {
+				return (u64)-LINUX_EINVAL;
 			}
-			total += written;
+			total += iov.len;
 		}
-		return total;
+
+		buffer = buffer_create(total == 0 ? 1 : total);
+		if (buffer == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		flags = spin_lock_irqsave(&syscall_copy_lock);
+		for (u64 i = 0; i < arg2; i++) {
+			if (read_current_user(arg1 + i * sizeof(iov), &iov,
+					      sizeof(iov)) != 0 ||
+			    (iov.len != 0 &&
+			     read_current_user(iov.base,
+					       syscall_copy_buffer + done,
+					       iov.len) != 0)) {
+				spin_unlock_irqrestore(&syscall_copy_lock, flags);
+				buffer_release(buffer);
+				return (u64)-LINUX_EINVAL;
+			}
+			done += iov.len;
+		}
+		if (buffer_write(buffer, 0, syscall_copy_buffer, total) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
+
+		request.type = USER_LINUX_WRITE;
+		request.words[0] = arg0;
+		request.words[1] = total;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_RECV;
+		request.cap_object = buffer;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_ENOSYS;
+		}
+		buffer_release(buffer);
+		return reply.words[0];
 	}
 	case LINUX_SYSCALL_EXIT:
 		return linux_exit_current(arg0);
@@ -1184,34 +1226,10 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_WRITE: {
-		struct shared_buffer *buffer;
-
 		if (arg1 == 0 || arg2 > LINUX_MAX_SYSCALL_BUFFER) {
 			return (u64)-LINUX_EINVAL;
 		}
-
-		buffer = buffer_create(arg2 == 0 ? 1 : arg2);
-		if (buffer == 0 ||
-		    buffer_write(buffer, 0, (const void *)arg1, arg2) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
-		}
-
-		request.type = USER_LINUX_WRITE;
-		request.words[0] = arg0;
-		request.words[1] = arg2;
-		request.words[2] = 0;
-		request.words[3] = 0;
-		request.cap_type = IPC_CAP_BUFFER;
-		request.cap_rights = TASK_RIGHT_RECV;
-		request.cap_object = buffer;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_ENOSYS;
-		}
-		buffer_release(buffer);
-		return reply.words[0];
+		return linux_write_one(linux, reply_port, arg0, arg1, arg2);
 	}
 	case LINUX_SYSCALL_GETPID:
 		request.type = USER_LINUX_GETPID;

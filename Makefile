@@ -326,7 +326,6 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux munmap checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: wait4" $(BUILD_DIR)/serial.log
 	grep -F "linux wait checks ok" $(BUILD_DIR)/serial.log
-	grep -F "linux-server: write" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: exit_group" $(BUILD_DIR)/serial.log
 	grep -F "block: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: online" $(BUILD_DIR)/serial.log

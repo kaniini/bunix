@@ -595,7 +595,6 @@ static void linux_process_reset(struct linux_process *process)
 int main(void)
 {
 	const char online[] = "linux-server: online\n";
-	const char write_ok[] = "linux-server: write\n";
 	const char bad_fd[] = "linux-server: ebadf\n";
 	const char open_ok[] = "linux-server: openat\n";
 	const char read_ok[] = "linux-server: read\n";
@@ -769,7 +768,6 @@ int main(void)
 
 				bunix_ipc_send(process->fds[fd].handle,
 					       &console_message);
-				bunix_console_write(write_ok, sizeof(write_ok) - 1);
 				reply.words[0] = len;
 			}
 			if (message.cap != 0) {
