@@ -41,11 +41,22 @@ static u64 resolve_service(u64 service, unsigned int rights)
 	return reply.cap;
 }
 
+static void unpack_bytes(char *out, const u64 *words, u64 len)
+{
+	for (u64 i = 0; i < len; i++) {
+		const u64 slot = i / 8;
+		const u64 shift = (i % 8) * 8;
+
+		out[i] = (char)((words[slot] >> shift) & 0xff);
+	}
+}
+
 int main(void)
 {
 	const char launching[] = "init: launching servers\n";
 	const char attenuated[] = "init: bad cap denied\n";
 	const char names_ready[] = "init: names ready\n";
+	const char fs_ready[] = "init: fs ready\n";
 	struct bunix_msg ping_message = {
 		.protocol = BUNIX_PROTO_PING,
 		.type = 1,
@@ -54,8 +65,18 @@ int main(void)
 		.words = { 0x2a, 0, 0, 0 },
 	};
 	struct bunix_msg ping_reply;
+	struct bunix_msg vfs_request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_READ,
+		.sender = 0,
+		.reply = 0,
+		.words = { 0, 16, 0, 0 },
+	};
+	struct bunix_msg vfs_reply;
+	char file[17];
 	u64 console;
 	u64 vm;
+	u64 vfs = 0;
 	const struct bunix_launch_cap bad_caps[] = {
 		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND | BUNIX_RIGHT_RECV, 0 },
 	};
@@ -79,6 +100,25 @@ int main(void)
 		{ console, BUNIX_RIGHT_SEND, 0 },
 		{ vm, BUNIX_RIGHT_SEND, 0 },
 	};
+	const struct bunix_launch_cap fs_caps[] = {
+		{ console, BUNIX_RIGHT_SEND, 0 },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+	};
+
+	bunix_launch_module_with_caps("block", fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	bunix_launch_module_with_caps("vfs", fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	while (vfs == 0) {
+		vfs = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
+	}
+	bunix_console_write(fs_ready, sizeof(fs_ready) - 1);
+	if (bunix_ipc_call(vfs, &vfs_request, &vfs_reply) == 0 &&
+	    vfs_reply.words[0] == 0 && vfs_reply.words[1] <= 16) {
+		unpack_bytes(file, &vfs_reply.words[2], vfs_reply.words[1]);
+		file[vfs_reply.words[1]] = '\0';
+		bunix_console_write(file, vfs_reply.words[1]);
+	}
 
 	if (bunix_launch_module_with_caps("hello", bad_caps,
 					  sizeof(bad_caps) /

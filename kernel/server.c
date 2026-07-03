@@ -13,6 +13,8 @@
 static const struct server boot_servers[] = {
 	{ "names", 0 },
 	{ "init", 0 },
+	{ "block", 0 },
+	{ "vfs", 0 },
 	{ "hello", 0 },
 	{ "ping", 0 },
 	{ "vm", vm_server_start },

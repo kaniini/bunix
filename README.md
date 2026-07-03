@@ -5,9 +5,11 @@ An experimental microkernel-oriented operating system in C.
 This first slice boots a freestanding x86_64 kernel through Multiboot2,
 initializes serial and VGA text consoles, parses Multiboot2 modules, starts the
 kernel-hosted VM server, and enters a user-space init server which launches
-other user servers:
+other user servers. The current boot proves both a synthetic filesystem read and
+the original hello path:
 
 ```text
+rootfs: hello
 hello: world <3
 ```
 
@@ -20,12 +22,12 @@ hello: world <3
 - `servers/`: initial server stubs, including the skeletal VM server.
 - `Makefile`: build, EFI ISO, and QEMU/KVM targets.
 
-The init, hello, and ping modules are freestanding C ELF images loaded into
-their tasks and entered in ring 3. The VM server remains kernel-hosted for the
-current performance-oriented design, but still exposes a VM IPC port for events.
-The next microkernel steps are to move more server functionality behind the
-same user-mode ABI while continuing to shrink the kernel bootstrap policy into
-explicit capability handoff.
+The init, names, block, VFS, hello, and ping modules are freestanding C ELF
+images loaded into their tasks and entered in ring 3. The VM server remains
+kernel-hosted for the current performance-oriented design, but still exposes a
+VM IPC port for events. The next microkernel steps are to move more server
+functionality behind the same user-mode ABI while continuing to shrink the
+kernel bootstrap policy into explicit capability handoff.
 
 The tree is split so future ports can add a sibling such as `arch/arm64/` with
 its own boot path, interrupt setup, MMU setup, and device I/O while reusing the
@@ -55,25 +57,38 @@ attenuated inherited handles in caller-specified order.
 
 The boot policy grants init `self`, `console`, `vm`, and `names`; init registers
 console and VM with the user-space names server, resolves them back as
-delegable capabilities, then launches hello with only send rights to `console`
-and ping with send rights to `console` plus `vm`. The returned launch value is a
-send-capability to the child's service port in the parent task. `recv` blocks
-the current thread and wakes when a sender queues an event. `ipc_call` uses a
-per-task private reply port, and received messages can carry a send-capability
-reply handle that the server can use without learning anything else about the
-caller. A task can also close one of its own handles, which clears only that
-task-local capability slot; the underlying object and any other task's
-capabilities remain untouched.
+delegable capabilities, then launches block, VFS, hello, and ping with
+attenuated caps. The returned launch value is a send-capability to the child's
+service port in the parent task. `recv` blocks the current thread and wakes
+when a sender queues an event. `ipc_call` uses a per-task private reply port,
+and received messages can carry a send-capability reply handle that the server
+can use without learning anything else about the caller. A task can also close
+one of its own handles, which clears only that task-local capability slot; the
+underlying object and any other task's capabilities remain untouched.
 
 The VM server owns the memory authority policy, but module task spaces are now
 granted through direct kernel VM calls during launch. That avoids a synchronous
 scheduler re-entry path while VM remains kernel-hosted. VM still receives
 event-port style IPC, currently exercised by ping.
 
+## Filesystem Path
+
+The first filesystem slice is a server-to-server read flow. Init launches a
+block server and a VFS server with only console and names capabilities. The
+block server registers `BLK0` and serves a fixed read-only byte string from its
+own image. VFS resolves `BLK0`, registers `VFS0`, and proxies a read request to
+block. Init resolves `VFS0`, reads the synthetic root file, and prints
+`rootfs: hello`.
+
+This is intentionally not a real disk filesystem yet. The useful primitive is
+the capability-shaped chain `init -> names -> vfs -> block`, which is the path
+that can later point at a Multiboot2 rootfs image and then at a real Alpine
+root filesystem format.
+
 ## User Mode
 
 User modules are built as freestanding C x86_64 ELFs with a tiny `crt0.S` and
-inline syscall wrappers. Init, hello, and ping all link at the normal
+inline syscall wrappers. Init, names, block, VFS, hello, and ping all link at the normal
 `0x400000` user base and enter with the same `0x800000` user stack top. The
 small user ABI exposes negative-number syscalls for thread exit, timer ticks,
 module launch with inherited handles, private port creation, IPC send/receive,
@@ -158,17 +173,18 @@ make test
 `build/serial.log`, and checks that GRUB passed Multiboot2 modules, the kernel
 started VM, names, and init, init received its boot capabilities, and init
 registered and resolved services through the user-space names server before
-launching the hello and ping C servers with attenuated inherited handles. Init
-first proves the OCAP launch rule by asking for a receive right it does not
-hold, which the kernel rejects before the module is marked launched. Init sends
-ping a synchronous user IPC call through the returned service-port handle, ping
-receives it through blocking `recv`, sends a VMEM FourCC event through its
-inherited VM capability, exercises automatic CPU placement across both CPUs, and
-replies to init through the granted reply capability. Hello receives only
-console send rights; the test also checks that its attempt to use the
-conventional VM handle is denied. Ping closes its VM handle after one successful
-send and proves the local capability has been revoked by attempting a second VM
-send.
+launching block, VFS, hello, and ping with attenuated inherited handles. The
+test checks the `VFS0 -> BLK0` read and the resulting `rootfs: hello` console
+output. Init also proves the OCAP launch rule by asking for a receive right it
+does not hold, which the kernel rejects before the module is marked launched.
+Init sends ping a synchronous user IPC call through the returned service-port
+handle, ping receives it through blocking `recv`, sends a VMEM FourCC event
+through its inherited VM capability, exercises automatic CPU placement across
+both CPUs, and replies to init through the granted reply capability. Hello
+receives only console send rights; the test also checks that its attempt to use
+the conventional VM handle is denied. Ping closes its VM handle after one
+successful send and proves the local capability has been revoked by attempting a
+second VM send.
 
 For an interactive serial console:
 
