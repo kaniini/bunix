@@ -191,16 +191,20 @@ test: $(EFI_BOOT_APP)
 	grep -F "vm-server: grant_space owner=ping id=4" $(BUILD_DIR)/serial.log
 	grep -F "sched: task pid=1 name=vm vm=1" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=1 task=1 name=vm" $(BUILD_DIR)/serial.log
+	grep -F "sched: place tid=1 cpu=1 policy=preferred" $(BUILD_DIR)/serial.log
 	grep -F "sched: enqueue tid=1 cpu=1" $(BUILD_DIR)/serial.log
 	grep -F "sched: switch cpu=1 prev=0 next=1" $(BUILD_DIR)/serial.log
 	grep -F "sched: task pid=2 name=init vm=2" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=2 task=2 name=init" $(BUILD_DIR)/serial.log
+	grep -F "sched: place tid=2 cpu=0 policy=auto" $(BUILD_DIR)/serial.log
 	grep -F "sched: task pid=3 name=hello vm=3" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=3 task=3 name=hello" $(BUILD_DIR)/serial.log
+	grep -F "sched: place tid=3 cpu=1 policy=preferred" $(BUILD_DIR)/serial.log
 	grep -F "sched: enqueue tid=3 cpu=1" $(BUILD_DIR)/serial.log
 	grep -F "sched: switch cpu=1 prev=0 next=3" $(BUILD_DIR)/serial.log
 	grep -F "sched: task pid=4 name=ping vm=4" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=4 task=4 name=ping" $(BUILD_DIR)/serial.log
+	grep -F "sched: place tid=4 cpu=1 policy=preferred" $(BUILD_DIR)/serial.log
 	grep -F "sched: enqueue tid=4 cpu=1" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server vm" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server init" $(BUILD_DIR)/serial.log

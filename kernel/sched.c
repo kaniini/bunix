@@ -65,8 +65,10 @@ static u32 next_pid = 1;
 static u32 next_tid = 1;
 static u32 preemption_enabled;
 static u32 sched_cpu_count = 1;
+static u32 next_auto_cpu;
 static struct spinlock task_table_lock = SPINLOCK_INIT("task-table");
 static struct spinlock thread_table_lock = SPINLOCK_INIT("thread-table");
+static struct spinlock placement_lock = SPINLOCK_INIT("sched-placement");
 
 static struct cpu_sched *sched_current_cpu(void)
 {
@@ -121,6 +123,46 @@ static void sched_enqueue_on(struct cpu_sched *cpu, struct thread *thread)
 	if (remote && was_idle) {
 		arch_smp_send_scheduler_ipi(cpu->id);
 	}
+}
+
+static u32 sched_cpu_load(struct cpu_sched *cpu)
+{
+	u32 load;
+	const u64 flags = spin_lock_irqsave(&cpu->runq.lock);
+
+	load = cpu->runq.count;
+	if (cpu->current != &cpu->scheduler_thread &&
+	    cpu->current->state == THREAD_RUNNING) {
+		load++;
+	}
+
+	spin_unlock_irqrestore(&cpu->runq.lock, flags);
+	return load;
+}
+
+static u32 sched_select_cpu(u32 preferred_cpu)
+{
+	if (preferred_cpu < sched_cpu_count) {
+		return preferred_cpu;
+	}
+
+	const u64 flags = spin_lock_irqsave(&placement_lock);
+	u32 best_cpu = next_auto_cpu % sched_cpu_count;
+	u32 best_load = sched_cpu_load(&cpus[best_cpu]);
+
+	for (u32 scanned = 1; scanned < sched_cpu_count; scanned++) {
+		const u32 cpu_id = (next_auto_cpu + scanned) % sched_cpu_count;
+		const u32 load = sched_cpu_load(&cpus[cpu_id]);
+
+		if (load < best_load) {
+			best_cpu = cpu_id;
+			best_load = load;
+		}
+	}
+
+	next_auto_cpu = (best_cpu + 1) % sched_cpu_count;
+	spin_unlock_irqrestore(&placement_lock, flags);
+	return best_cpu;
 }
 
 static void sched_activate_thread_space(struct thread *thread)
@@ -181,6 +223,7 @@ void sched_init(void)
 	}
 
 	boot_cpu_id = 0;
+	next_auto_cpu = 0;
 	console_printf("sched: init cpus=%u boot_cpu=%u\n", sched_cpu_count,
 		       boot_cpu_id);
 }
@@ -238,17 +281,16 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	return 0;
 }
 
-struct thread *thread_create_on_cpu(struct task *task, const char *name,
-				    thread_entry_t entry, void *arg,
-				    u32 cpu_id)
+static struct thread *thread_create_placed(struct task *task, const char *name,
+					   thread_entry_t entry, void *arg,
+					   u32 preferred_cpu,
+					   const char *placement_policy)
 {
 	if (task == 0 || entry == 0) {
 		return 0;
 	}
 
-	if (cpu_id >= sched_cpu_count) {
-		cpu_id = 0;
-	}
+	const u32 cpu_id = sched_select_cpu(preferred_cpu);
 
 	const u64 flags = spin_lock_irqsave(&thread_table_lock);
 
@@ -269,6 +311,8 @@ struct thread *thread_create_on_cpu(struct task *task, const char *name,
 		task->thread_count++;
 		console_printf("sched: thread tid=%u task=%u name=%s\n",
 			       threads[i].tid, task->pid, name);
+		console_printf("sched: place tid=%u cpu=%u policy=%s\n",
+			       threads[i].tid, cpu_id, placement_policy);
 		spin_unlock_irqrestore(&thread_table_lock, flags);
 		sched_enqueue_on(&cpus[cpu_id], &threads[i]);
 		return &threads[i];
@@ -282,7 +326,27 @@ struct thread *thread_create_on_cpu(struct task *task, const char *name,
 struct thread *thread_create(struct task *task, const char *name,
 			     thread_entry_t entry, void *arg)
 {
-	return thread_create_on_cpu(task, name, entry, arg, sched_current_cpu_id());
+	return thread_create_placed(task, name, entry, arg, SCHED_CPU_ANY, "auto");
+}
+
+struct thread *thread_create_preferred_cpu(struct task *task, const char *name,
+					   thread_entry_t entry, void *arg,
+					   u32 preferred_cpu)
+{
+	return thread_create_placed(task, name, entry, arg, preferred_cpu,
+				    preferred_cpu == SCHED_CPU_ANY ? "auto" :
+				    "preferred");
+}
+
+struct thread *thread_create_on_cpu(struct task *task, const char *name,
+				    thread_entry_t entry, void *arg,
+				    u32 cpu_id)
+{
+	if (cpu_id >= sched_cpu_count) {
+		cpu_id = 0;
+	}
+
+	return thread_create_placed(task, name, entry, arg, cpu_id, "explicit");
 }
 
 struct task *task_current(void)

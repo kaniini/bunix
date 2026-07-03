@@ -96,10 +96,12 @@ releases them into the common scheduler's secondary loop.
 Idle CPUs mark themselves idle under the run-queue lock and then enter
 `sti; hlt` only after a final locked runnable check. Remote run-queue enqueue
 clears that idle state under the same lock and sends a scheduler IPI when the
-target CPU was sleeping. The current boot policy pins init to CPU 0 while
-running the kernel-hosted VM server, hello, and ping user modules on CPU 1,
-which exercises user entry, syscalls, IPC wakeups, server work, and timer
-preemption across CPUs.
+target CPU was sleeping. Normal thread creation uses scheduler-owned automatic
+placement over the least-loaded CPU, while server launch can provide a preferred
+CPU that the scheduler validates. The current boot flow lets init use automatic
+placement and prefers the kernel-hosted VM server, hello, and ping user modules
+on CPU 1, which exercises user entry, syscalls, IPC wakeups, server work, and
+timer preemption across CPUs.
 
 Each task owns a `vm_space` granted by the VM server facade. On x86_64, a VM
 space contains a real PML4, PDPT, and page directory, currently identity-mapping

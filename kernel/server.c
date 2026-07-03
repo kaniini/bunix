@@ -33,10 +33,10 @@ static u32 module_start_count;
 static int str_eq(const char *left, const char *right);
 static const struct server *find_boot_server(const char *name);
 
-static u32 module_cpu_id(const struct server *server)
+static u32 module_preferred_cpu(const struct server *server)
 {
 	if (arch_smp_cpu_count() < 2) {
-		return 0;
+		return SCHED_CPU_ANY;
 	}
 
 	if (server->start != 0 || str_eq(server->name, "hello") ||
@@ -44,7 +44,7 @@ static u32 module_cpu_id(const struct server *server)
 		return 1;
 	}
 
-	return 0;
+	return SCHED_CPU_ANY;
 }
 
 void server_start_all(void)
@@ -203,9 +203,10 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 		start->space = space;
 		start->stack = USER_STACK_TOP;
 
-		const u32 cpu_id = module_cpu_id(start->server);
-		if (thread_create_on_cpu(task, server_name, module_server_thread,
-					 start, cpu_id) == 0) {
+		const u32 preferred_cpu = module_preferred_cpu(start->server);
+		if (thread_create_preferred_cpu(task, server_name,
+						module_server_thread, start,
+						preferred_cpu) == 0) {
 			console_printf("kernel: failed to create server thread %s\n",
 				       server_name);
 			return (u64)-1;
