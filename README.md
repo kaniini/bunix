@@ -125,12 +125,14 @@ small user ABI exposes negative-number syscalls for thread exit, timer ticks,
 monotonic nanosecond time, blocking nanosecond sleep, module launch with
 inherited handles, private port creation, IPC send/receive, IPC call, and
 generic task create/map/grant/start operations used by proc's ELF loader.
-Shared buffer capabilities provide bulk byte transport for servers: proc
-allocates a buffer, sends duplicate/write authority to VFS, VFS forwards
-write-only authority to block, block fills it from the rootfs module, and proc
-copies the bytes back through its read authority. The kernel still has an
-internal bootstrap name registry, but it is no longer exposed as a normal user
-authority path.
+Shared buffer capabilities provide bulk byte transport for servers. VFS exposes
+the exec-facing file operations proc needs now: open a named regular file,
+query its size/type, read positioned byte ranges through a shared buffer, and
+close the open object. Proc allocates a buffer, sends duplicate/write authority
+to VFS, VFS forwards write-only authority to block, block fills it from the
+rootfs module, and proc copies the bytes back through its read authority. The
+kernel still has an internal bootstrap name registry, but it is no longer
+exposed as a normal user authority path.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with

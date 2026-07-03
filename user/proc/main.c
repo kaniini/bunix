@@ -50,6 +50,12 @@ struct elf64_phdr {
 	u64 align;
 } __attribute__((packed));
 
+struct vfs_file {
+	u64 handle;
+	u64 size;
+	u64 type;
+};
+
 static struct process first_process;
 static u64 next_pid = 1;
 static unsigned char segment_buffer[PROC_SEGMENT_MAX];
@@ -126,29 +132,104 @@ static unsigned int read_magic(const unsigned char *ident)
 	       ((unsigned int)ident[3] << 24);
 }
 
-static long vfs_read_path(u64 vfs, const char *path, u64 offset,
+static long vfs_open(u64 vfs, const char *path, struct vfs_file *file)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_OPEN,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (file == 0) {
+		return -1;
+	}
+
+	pack_path(&request.words[0], path);
+	if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[1] == 0 ||
+	    reply.words[3] != BUNIX_VFS_TYPE_REGULAR) {
+		return -1;
+	}
+
+	file->handle = reply.words[1];
+	file->size = reply.words[2];
+	file->type = reply.words[3];
+	return 0;
+}
+
+static long vfs_stat(u64 vfs, struct vfs_file *file)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_STAT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { file != 0 ? file->handle : 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (file == 0 ||
+	    bunix_ipc_call(vfs, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[2] != BUNIX_VFS_TYPE_REGULAR) {
+		return -1;
+	}
+
+	file->size = reply.words[1];
+	file->type = reply.words[2];
+	return 0;
+}
+
+static void vfs_close(u64 vfs, u64 file)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_CLOSE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { file, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	bunix_ipc_call(vfs, &request, &reply);
+}
+
+static long vfs_read_file(u64 vfs, u64 file, u64 file_size, u64 offset,
 			  unsigned char *buffer, u64 len, u64 io_buffer)
 {
 	u64 done = 0;
+
+	if (offset > file_size || len > file_size - offset) {
+		return -1;
+	}
 
 	while (done < len) {
 		u64 chunk = len - done;
 		struct bunix_msg request = {
 			.protocol = BUNIX_PROTO_VFS,
-			.type = BUNIX_VFS_READ_PATH_BUFFER,
+			.type = BUNIX_VFS_READ_FILE_BUFFER,
 			.sender = 0,
 			.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 			.reply = 0,
 			.cap = io_buffer,
-			.words = { 0, 0, offset + done, chunk },
+			.words = { file, offset + done, chunk, 0 },
 		};
 		struct bunix_msg reply;
 
 		if (chunk > PROC_SEGMENT_MAX) {
 			chunk = PROC_SEGMENT_MAX;
 		}
-		request.words[3] = chunk;
-		pack_path(&request.words[0], path);
+		request.words[2] = chunk;
 		if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
 		    reply.words[0] != 0 ||
 		    reply.words[1] > chunk) {
@@ -178,13 +259,17 @@ static long exec_first_path(u64 vfs, const char *path)
 	};
 	struct elf64_ehdr ehdr;
 	struct elf64_phdr phdrs[PROC_MAX_PHDRS];
+	struct vfs_file file = { 0, 0, 0 };
 	long io_buffer;
 	long task;
 
 	io_buffer = bunix_buffer_create(PROC_SEGMENT_MAX);
 	if (io_buffer <= 0 ||
-	    vfs_read_path(vfs, path, 0, (unsigned char *)&ehdr,
-			  sizeof(ehdr), (u64)io_buffer) != 0 ||
+	    vfs_open(vfs, path, &file) != 0 ||
+	    vfs_stat(vfs, &file) != 0 ||
+	    vfs_read_file(vfs, file.handle, file.size, 0,
+			  (unsigned char *)&ehdr, sizeof(ehdr),
+			  (u64)io_buffer) != 0 ||
 	    read_magic(ehdr.ident) != ELF_MAGIC ||
 	    ehdr.ident[4] != ELFCLASS64 ||
 	    ehdr.ident[5] != ELFDATA2LSB ||
@@ -192,20 +277,26 @@ static long exec_first_path(u64 vfs, const char *path)
 	    ehdr.machine != EM_X86_64 ||
 	    ehdr.phnum > PROC_MAX_PHDRS ||
 	    ehdr.phentsize != sizeof(phdrs[0]) ||
-	    vfs_read_path(vfs, path, ehdr.phoff, (unsigned char *)phdrs,
+	    vfs_read_file(vfs, file.handle, file.size, ehdr.phoff,
+			  (unsigned char *)phdrs,
 			  (u64)ehdr.phnum * sizeof(phdrs[0]),
 			  (u64)io_buffer) != 0) {
+		if (file.handle != 0) {
+			vfs_close(vfs, file.handle);
+		}
 		return -1;
 	}
 
 	task = bunix_task_create("first");
 	if (task < 0) {
+		vfs_close(vfs, file.handle);
 		return -1;
 	}
 
 	for (u64 i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {
 		if (bunix_task_grant((u64)task, caps[i].handle,
 				     caps[i].rights) != 0) {
+			vfs_close(vfs, file.handle);
 			return -1;
 		}
 	}
@@ -220,15 +311,18 @@ static long exec_first_path(u64 vfs, const char *path)
 		if (phdr->filesz > phdr->memsz ||
 		    phdr->filesz > sizeof(segment_buffer) ||
 		    phdr->vaddr + phdr->memsz < phdr->vaddr ||
-		    vfs_read_path(vfs, path, phdr->offset, segment_buffer,
-				  phdr->filesz, (u64)io_buffer) != 0 ||
+		    vfs_read_file(vfs, file.handle, file.size, phdr->offset,
+				  segment_buffer, phdr->filesz,
+				  (u64)io_buffer) != 0 ||
 		    bunix_task_map((u64)task, phdr->vaddr,
 				   segment_buffer, phdr->filesz, phdr->memsz,
 				   (phdr->flags & PF_W) != 0) != 0) {
+			vfs_close(vfs, file.handle);
 			return -1;
 		}
 	}
 
+	vfs_close(vfs, file.handle);
 	return bunix_task_start((u64)task, ehdr.entry);
 }
 

@@ -4,6 +4,7 @@ enum {
 	VFS_HANDLE_NAMES = 3,
 	ROOTFS_MAX_PATH = 32,
 	ROOTFS_MAX_ENTRIES = 8,
+	VFS_MAX_OPEN_FILES = 16,
 	ROOTFS_DATA_OFFSET = 104,
 	ROOTFS_HELLO_SIZE = 15,
 };
@@ -16,6 +17,7 @@ struct rootfs_entry {
 
 static struct rootfs_entry root_entries[ROOTFS_MAX_ENTRIES];
 static unsigned int root_entry_count;
+static const struct rootfs_entry *open_files[VFS_MAX_OPEN_FILES];
 
 static long register_service(u64 service, u64 handle)
 {
@@ -208,6 +210,49 @@ static int rootfs_find(const char *path, struct rootfs_entry *entry)
 	return -1;
 }
 
+static const struct rootfs_entry *rootfs_find_ref(const char *path)
+{
+	for (u64 i = 0; i < root_entry_count; i++) {
+		if (path_eq(root_entries[i].path, path)) {
+			return &root_entries[i];
+		}
+	}
+
+	return 0;
+}
+
+static u64 open_file(const struct rootfs_entry *entry)
+{
+	if (entry == 0) {
+		return 0;
+	}
+
+	for (u64 i = 0; i < VFS_MAX_OPEN_FILES; i++) {
+		if (open_files[i] == 0) {
+			open_files[i] = entry;
+			return i + 1;
+		}
+	}
+
+	return 0;
+}
+
+static const struct rootfs_entry *file_from_handle(u64 handle)
+{
+	if (handle == 0 || handle > VFS_MAX_OPEN_FILES) {
+		return 0;
+	}
+
+	return open_files[handle - 1];
+}
+
+static void close_file(u64 handle)
+{
+	if (handle != 0 && handle <= VFS_MAX_OPEN_FILES) {
+		open_files[handle - 1] = 0;
+	}
+}
+
 int main(void)
 {
 	const char online[] = "vfs: online\n";
@@ -220,6 +265,9 @@ int main(void)
 	block = resolve_service(BUNIX_SERVICE_BLOCK, BUNIX_RIGHT_SEND);
 	if (block == 0 || rootfs_mount(block) != 0) {
 		return 1;
+	}
+	for (u64 i = 0; i < VFS_MAX_OPEN_FILES; i++) {
+		open_files[i] = 0;
 	}
 	bunix_console_write(ready, sizeof(ready) - 1);
 
@@ -340,6 +388,84 @@ int main(void)
 			}
 			break;
 		}
+		case BUNIX_VFS_OPEN: {
+			char path[ROOTFS_MAX_PATH];
+			const struct rootfs_entry *entry;
+			u64 file;
+
+			for (u64 i = 0; i < sizeof(path); i++) {
+				path[i] = '\0';
+			}
+			unpack_bytes((unsigned char *)path, &message.words[0], 16);
+			entry = rootfs_find_ref(path);
+			file = open_file(entry);
+			if (entry == 0 || file == 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				reply.words[0] = 0;
+				reply.words[1] = file;
+				reply.words[2] = entry->size;
+				reply.words[3] = BUNIX_VFS_TYPE_REGULAR;
+				bunix_console_write("vfs: open\n", 10);
+			}
+			break;
+		}
+		case BUNIX_VFS_STAT: {
+			const struct rootfs_entry *entry =
+				file_from_handle(message.words[0]);
+
+			if (entry == 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				reply.words[0] = 0;
+				reply.words[1] = entry->size;
+				reply.words[2] = BUNIX_VFS_TYPE_REGULAR;
+			}
+			break;
+		}
+		case BUNIX_VFS_READ_FILE_BUFFER: {
+			const struct rootfs_entry *entry =
+				file_from_handle(message.words[0]);
+			const u64 offset = message.words[1];
+			u64 len = message.words[2];
+			int read_len;
+
+			if (entry == 0 ||
+			    message.cap == 0 ||
+			    (message.cap_rights & (BUNIX_RIGHT_SEND |
+						   BUNIX_RIGHT_DUP)) !=
+			    (BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP)) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
+
+			if (offset >= entry->size) {
+				len = 0;
+			} else if (len > entry->size - offset) {
+				len = entry->size - offset;
+			}
+
+			read_len = block_read_buffer(block, entry->offset + offset,
+						     message.cap, len);
+			if (read_len < 0) {
+				reply.words[0] = (u64)-1;
+				reply.words[1] = 0;
+			} else {
+				reply.words[0] = 0;
+				reply.words[1] = (u64)read_len;
+				bunix_console_write("vfs: read file\n", 15);
+			}
+			break;
+		}
+		case BUNIX_VFS_CLOSE:
+			if (file_from_handle(message.words[0]) == 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				close_file(message.words[0]);
+				reply.words[0] = 0;
+				bunix_console_write("vfs: close\n", 11);
+			}
+			break;
 		default:
 			reply.words[0] = (u64)-1;
 			break;

@@ -362,6 +362,9 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: grant task=5 handle=7 type=buffer rights=0x7 target=1" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=7 handle=7 type=buffer rights=0x5 target=1" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=6 handle=5 type=buffer rights=0x1 target=1" $(BUILD_DIR)/serial.log
+	grep -F "vfs: open" $(BUILD_DIR)/serial.log
+	grep -F "vfs: read file" $(BUILD_DIR)/serial.log
+	grep -F "vfs: close" $(BUILD_DIR)/serial.log
 	grep -F "buffer: write id=1 offset=0 len=450" $(BUILD_DIR)/serial.log
 	grep -F "buffer: read id=1 offset=0 len=450" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/first" $(BUILD_DIR)/serial.log
