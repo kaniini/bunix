@@ -1,0 +1,96 @@
+#include "console.h"
+#include "multiboot2.h"
+#include "sched.h"
+#include "server.h"
+#include "types.h"
+
+static const struct server boot_servers[] = {
+	{ "hello", hello_server_start },
+	{ "ping", ping_server_start },
+};
+
+struct module_server_start {
+	const struct server *server;
+	u64 image_start;
+	u64 image_end;
+};
+
+static struct module_server_start module_starts[16];
+static u32 module_start_count;
+
+void server_start_all(void)
+{
+	const u32 count = sizeof(boot_servers) / sizeof(boot_servers[0]);
+
+	for (u32 i = 0; i < count; i++) {
+		console_printf("kernel: starting server %s\n", boot_servers[i].name);
+		boot_servers[i].start();
+	}
+}
+
+static void module_server_thread(void *arg)
+{
+	const struct module_server_start *start =
+		(const struct module_server_start *)arg;
+
+	console_printf("kernel: starting module server %s image=%p-%p\n",
+		       start->server->name,
+		       (const void *)start->image_start,
+		       (const void *)start->image_end);
+	start->server->start();
+}
+
+static int str_eq(const char *left, const char *right)
+{
+	while (*left != '\0' && *right != '\0') {
+		if (*left++ != *right++) {
+			return 0;
+		}
+	}
+
+	return *left == *right;
+}
+
+static void start_boot_module(const struct multiboot2_module *module, void *ctx)
+{
+	(void)ctx;
+
+	const u32 count = sizeof(boot_servers) / sizeof(boot_servers[0]);
+
+	for (u32 i = 0; i < count; i++) {
+		if (!str_eq(module->cmdline, boot_servers[i].name)) {
+			continue;
+		}
+
+		if (module_start_count >=
+		    sizeof(module_starts) / sizeof(module_starts[0])) {
+			console_printf("kernel: module server table full\n");
+			return;
+		}
+
+		struct module_server_start *start =
+			&module_starts[module_start_count++];
+		start->server = &boot_servers[i];
+		start->image_start = module->start;
+		start->image_end = module->end;
+
+		struct task *task = task_create(boot_servers[i].name);
+		if (task == 0) {
+			return;
+		}
+
+		if (thread_create(task, boot_servers[i].name,
+				  module_server_thread, start) == 0) {
+			console_printf("kernel: failed to create server thread %s\n",
+				       boot_servers[i].name);
+		}
+		return;
+	}
+
+	console_printf("kernel: ignoring unknown module %s\n", module->cmdline);
+}
+
+void server_start_boot_modules(u64 multiboot_info)
+{
+	multiboot2_for_each_module(multiboot_info, start_boot_module, 0);
+}
