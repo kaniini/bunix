@@ -15,6 +15,13 @@ enum {
 	EM_X86_64 = 62,
 	PT_LOAD = 1,
 	PF_W = 1 << 1,
+	AT_NULL = 0,
+	AT_PHDR = 3,
+	AT_PHENT = 4,
+	AT_PHNUM = 5,
+	AT_PAGESZ = 6,
+	AT_ENTRY = 9,
+	AT_EXECFN = 31,
 };
 
 struct process {
@@ -56,6 +63,13 @@ struct vfs_file {
 	u64 handle;
 	u64 size;
 	u64 type;
+};
+
+struct exec_info {
+	u64 entry;
+	u64 phent;
+	u64 phnum;
+	const struct elf64_phdr *phdrs;
 };
 
 static struct process first_process;
@@ -283,17 +297,24 @@ static long vfs_read_file(u64 vfs, u64 file, u64 file_size, u64 offset,
 	return 0;
 }
 
-static long build_initial_stack(u64 task, const char *path, u64 *stack)
+static long build_initial_stack(u64 task, const char *path,
+				const struct exec_info *exec, u64 *stack)
 {
 	enum {
-		STACK_WORDS = 6,
+		AUXV_PAIRS = 7,
+		STACK_WORDS = 4 + AUXV_PAIRS * 2,
 	};
 
 	const u64 stack_base = USER_STACK_TOP - PROC_INIT_STACK_MAX;
 	const u64 path_len = str_len(path);
+	const u64 phdr_size = exec != 0 ? exec->phnum * exec->phent : 0;
 	u64 sp = PROC_INIT_STACK_MAX;
 
-	if (path_len + 1 + STACK_WORDS * sizeof(u64) > PROC_INIT_STACK_MAX) {
+	if (exec == 0 ||
+	    exec->phdrs == 0 ||
+	    phdr_size == 0 ||
+	    path_len + 1 + phdr_size + STACK_WORDS * sizeof(u64) >
+	    PROC_INIT_STACK_MAX) {
 		return -1;
 	}
 
@@ -301,6 +322,12 @@ static long build_initial_stack(u64 task, const char *path, u64 *stack)
 	sp -= path_len + 1;
 	const u64 argv0 = stack_base + sp;
 	mem_copy(init_stack + sp, (const unsigned char *)path, path_len + 1);
+
+	sp = align_down(sp, 8);
+	sp -= phdr_size;
+	const u64 phdr_addr = stack_base + sp;
+	mem_copy(init_stack + sp, (const unsigned char *)exec->phdrs,
+		 phdr_size);
 
 	sp = align_down(sp, 16);
 	sp -= STACK_WORDS * sizeof(u64);
@@ -310,8 +337,20 @@ static long build_initial_stack(u64 task, const char *path, u64 *stack)
 	words[1] = argv0;
 	words[2] = 0;
 	words[3] = 0;
-	words[4] = 0;
-	words[5] = 0;
+	words[4] = AT_PAGESZ;
+	words[5] = 4096;
+	words[6] = AT_ENTRY;
+	words[7] = exec->entry;
+	words[8] = AT_PHDR;
+	words[9] = phdr_addr;
+	words[10] = AT_PHENT;
+	words[11] = exec->phent;
+	words[12] = AT_PHNUM;
+	words[13] = exec->phnum;
+	words[14] = AT_EXECFN;
+	words[15] = argv0;
+	words[16] = AT_NULL;
+	words[17] = 0;
 
 	if (bunix_task_write(task, stack_base + sp, init_stack + sp,
 			     PROC_INIT_STACK_MAX - sp) != 0) {
@@ -331,6 +370,7 @@ static long exec_path(u64 vfs, const char *path, const char *task_name)
 	};
 	struct elf64_ehdr ehdr;
 	struct elf64_phdr phdrs[PROC_MAX_PHDRS];
+	struct exec_info exec;
 	struct vfs_file file = { 0, 0, 0 };
 	long io_buffer;
 	long task;
@@ -359,6 +399,10 @@ static long exec_path(u64 vfs, const char *path, const char *task_name)
 		}
 		return -1;
 	}
+	exec.entry = ehdr.entry;
+	exec.phent = ehdr.phentsize;
+	exec.phnum = ehdr.phnum;
+	exec.phdrs = phdrs;
 
 	task = bunix_task_create(task_name);
 	if (task < 0) {
@@ -395,7 +439,7 @@ static long exec_path(u64 vfs, const char *path, const char *task_name)
 		}
 	}
 
-	if (build_initial_stack((u64)task, path, &stack) != 0) {
+	if (build_initial_stack((u64)task, path, &exec, &stack) != 0) {
 		vfs_close(vfs, file.handle);
 		return -1;
 	}
