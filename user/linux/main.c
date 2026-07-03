@@ -9,6 +9,10 @@ enum {
 	LINUX_EMFILE = 24,
 	LINUX_ESRCH = 3,
 	LINUX_ECHILD = 10,
+	LINUX_WAIT_BLOCK = 0x7fffffff,
+	LINUX_WNOHANG = 1,
+	LINUX_WUNTRACED = 2,
+	LINUX_WCONTINUED = 8,
 	LINUX_MAX_WRITE = 4096,
 	LINUX_MAX_PATH = 32,
 	LINUX_STAT_SIZE = 144,
@@ -339,7 +343,9 @@ static long linux_wait4(struct linux_process *parent, long pid, u64 options,
 {
 	struct linux_process *candidate = 0;
 
-	if (pid != -1 || options != 0) {
+	if ((pid != -1 && pid <= 0) ||
+	    (options & ~(LINUX_WNOHANG | LINUX_WUNTRACED |
+			 LINUX_WCONTINUED)) != 0) {
 		return -LINUX_EINVAL;
 	}
 
@@ -365,6 +371,10 @@ static long linux_wait4(struct linux_process *parent, long pid, u64 options,
 		return -LINUX_ECHILD;
 	}
 
+	if ((options & LINUX_WNOHANG) != 0) {
+		return 0;
+	}
+
 	if (reply == 0) {
 		return -LINUX_EINVAL;
 	}
@@ -372,7 +382,7 @@ static long linux_wait4(struct linux_process *parent, long pid, u64 options,
 	parent->waiter = reply;
 	parent->wait_buffer = status_buffer;
 	parent->wait_pid = (u64)pid;
-	return 0;
+	return LINUX_WAIT_BLOCK;
 }
 
 static void linux_wake_parent(struct linux_process *child)
@@ -751,7 +761,7 @@ int main(void)
 						       message.cap,
 						       message.reply);
 
-			if (waited == 0) {
+			if (waited == LINUX_WAIT_BLOCK) {
 				should_reply = 0;
 			} else {
 				reply.words[0] = (u64)waited;
