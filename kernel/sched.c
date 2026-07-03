@@ -1102,17 +1102,41 @@ int task_remove_vm_region(struct task *task, u64 base, u64 len)
 	}
 
 	const u64 flags = spin_lock_irqsave(&task->lock);
+	const u64 end = base + len;
 
 	for (u32 i = 0; i < task->vm_region_count; i++) {
-		const struct task_vm_region *region = &task->vm_regions[i];
+		struct task_vm_region *region = &task->vm_regions[i];
+		const u64 region_base = region->base;
+		const u64 region_end = region->base + region->len;
 
-		if (region->base != base || region->len != len) {
+		if (base < region_base || end > region_end) {
 			continue;
 		}
 
-		task->vm_regions[i] =
-			task->vm_regions[task->vm_region_count - 1];
-		task->vm_region_count--;
+		if (base == region_base && end == region_end) {
+			task->vm_regions[i] =
+				task->vm_regions[task->vm_region_count - 1];
+			task->vm_region_count--;
+		} else if (base == region_base) {
+			region->base = end;
+			region->len = region_end - end;
+		} else if (end == region_end) {
+			region->len = base - region_base;
+		} else {
+			if (task->vm_region_count >= MAX_TASK_VM_REGIONS) {
+				spin_unlock_irqrestore(&task->lock, flags);
+				console_printf("sched: vma split denied task=%u\n",
+					       task->pid);
+				return -1;
+			}
+
+			struct task_vm_region right = *region;
+
+			right.base = end;
+			right.len = region_end - end;
+			region->len = base - region_base;
+			task->vm_regions[task->vm_region_count++] = right;
+		}
 		spin_unlock_irqrestore(&task->lock, flags);
 		return 0;
 	}

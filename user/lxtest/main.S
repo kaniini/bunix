@@ -65,7 +65,7 @@ _start:
 
 	movq $9, %rax
 	xorq %rdi, %rdi
-	movq $4096, %rsi
+	movq $8192, %rsi
 	movq $3, %rdx
 	movq $0x22, %r10
 	movq $-1, %r8
@@ -77,6 +77,10 @@ _start:
 	movq $0x6b63656863207061, %rax
 	movq %rax, (%rbx)
 	cmpq %rax, (%rbx)
+	jne fail
+	movq $0x65676170206f7774, %rax
+	movq %rax, 4096(%rbx)
+	cmpq %rax, 4096(%rbx)
 	jne fail
 
 	movq $1, %rax
@@ -120,6 +124,9 @@ fork_child:
 	movq $0x6b63656863207061, %rax
 	cmpq %rax, (%rbx)
 	jne fail
+	movq $0x65676170206f7774, %rax
+	cmpq %rax, 4096(%rbx)
+	jne fail
 
 	movq $1, %rax
 	movq $1, %rdi
@@ -133,7 +140,7 @@ fork_child:
 
 2:
 	movq $11, %rax
-	movq %rbx, %rdi
+	leaq 4096(%rbx), %rdi
 	movq $4096, %rsi
 	syscall
 	testq %rax, %rax

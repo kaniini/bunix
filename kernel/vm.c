@@ -223,6 +223,30 @@ int vm_alloc_user_range(struct vm_space *space, u64 vaddr, u64 len,
 	return 0;
 }
 
+int vm_unmap_user_range(struct vm_space *space, u64 vaddr, u64 len)
+{
+	if (space == 0 || len == 0 || vaddr + len < vaddr) {
+		return -1;
+	}
+
+	const u64 start = align_down(vaddr, VM_PAGE_SIZE);
+	const u64 end = align_up(vaddr + len, VM_PAGE_SIZE);
+	if (end <= start) {
+		return -1;
+	}
+
+	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
+		const u64 phys = arch_vm_unmap_page(&space->arch, page);
+
+		if (phys == 0) {
+			return -1;
+		}
+		vm_rpc_free_frame((struct vm_frame){ .addr = phys });
+	}
+
+	return 0;
+}
+
 int vm_clone_user_range(struct vm_space *dst, struct vm_space *src,
 			u64 vaddr, u64 len, u32 writable)
 {

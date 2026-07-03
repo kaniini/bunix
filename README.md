@@ -173,9 +173,10 @@ server's delegated console capability, while
 `openat(AT_FDCWD, path, O_RDONLY)`, `fstat`, `newfstatat`, `read`, and `close`
 proxy to VFS using shared-buffer capabilities. Linux `mmap` is currently an
 anonymous/private compatibility path implemented on top of task memory
-allocation, and `munmap` removes exact VM region records. Linux `fork` is built
-on a saved syscall frame plus task VM region cloning; page-table unmap/free and
-copy-on-write are still future work.
+allocation, and `munmap` removes, trims, or splits VM region records. Linux
+`fork` is built on a saved syscall frame plus task VM region cloning.
+Page-table teardown now clears unmapped pages and returns their frames to the
+PMM; copy-on-write is still future work.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with

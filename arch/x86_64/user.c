@@ -289,6 +289,9 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		}
 
 		len = align_up(len, VM_PAGE_SIZE);
+		if (vm_unmap_user_range(task_vm_space(task), base, len) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
 		if (task_remove_vm_region(task, base, len) != 0) {
 			return (u64)-LINUX_EINVAL;
 		}
