@@ -14,6 +14,7 @@ enum {
 	MAX_TASKS = 16,
 	MAX_THREADS = 32,
 	MAX_TASK_HANDLES = 32,
+	MAX_TASK_VM_REGIONS = 32,
 	KERNEL_STACK_SIZE = 16384,
 	SCHED_QUANTUM_TICKS = 5,
 };
@@ -38,6 +39,8 @@ struct task {
 	struct vm_space *vm_space;
 	u64 linux_brk;
 	u64 linux_mmap_next;
+	struct task_vm_region vm_regions[MAX_TASK_VM_REGIONS];
+	u32 vm_region_count;
 	struct ipc_port *reply_port;
 	struct task_handle handles[MAX_TASK_HANDLES];
 	struct spinlock lock;
@@ -325,6 +328,7 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 		tasks[i].vm_space = vm_space;
 		tasks[i].linux_brk = 0x900000;
 		tasks[i].linux_mmap_next = 0x10000000;
+		tasks[i].vm_region_count = 0;
 		tasks[i].reply_port = 0;
 		spinlock_init(&tasks[i].lock, "task");
 		for (u32 handle = 0; handle < MAX_TASK_HANDLES; handle++) {
@@ -971,6 +975,19 @@ void thread_exit(void)
 	}
 }
 
+static u64 region_end(const struct task_vm_region *region)
+{
+	return region->base + region->len;
+}
+
+static int regions_overlap(u64 a_base, u64 a_len, u64 b_base, u64 b_len)
+{
+	const u64 a_end = a_base + a_len;
+	const u64 b_end = b_base + b_len;
+
+	return a_base < b_end && b_base < a_end;
+}
+
 u32 task_id(const struct task *task)
 {
 	return task != 0 ? task->pid : 0;
@@ -998,6 +1015,125 @@ void task_set_linux_mmap_next(struct task *task, u64 next)
 	if (task != 0) {
 		task->linux_mmap_next = next;
 	}
+}
+
+int task_add_vm_region(struct task *task, u64 base, u64 len, u32 writable,
+		       u32 kind)
+{
+	if (task == 0 || len == 0 || base + len < base) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
+	for (u32 i = 0; i < task->vm_region_count; i++) {
+		struct task_vm_region *region = &task->vm_regions[i];
+
+		if (region->kind == kind &&
+		    region->writable == writable &&
+		    region_end(region) == base) {
+			region->len += len;
+			spin_unlock_irqrestore(&task->lock, flags);
+			return 0;
+		}
+	}
+
+	if (task->vm_region_count >= MAX_TASK_VM_REGIONS) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		console_printf("sched: vma table full task=%u\n", task->pid);
+		return -1;
+	}
+
+	for (u32 i = 0; i < task->vm_region_count; i++) {
+		const struct task_vm_region *region = &task->vm_regions[i];
+
+		if (regions_overlap(base, len, region->base, region->len)) {
+			spin_unlock_irqrestore(&task->lock, flags);
+			console_printf("sched: vma overlap task=%u base=%p len=%u\n",
+				       task->pid, (const void *)base, (u32)len);
+			return -1;
+		}
+	}
+
+	struct task_vm_region *region =
+		&task->vm_regions[task->vm_region_count++];
+	region->base = base;
+	region->len = len;
+	region->writable = writable;
+	region->kind = kind;
+	spin_unlock_irqrestore(&task->lock, flags);
+	return 0;
+}
+
+int task_add_or_extend_vm_region(struct task *task, u64 base, u64 len,
+				 u32 writable, u32 kind)
+{
+	if (task == 0 || len == 0 || base + len < base) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
+	for (u32 i = 0; i < task->vm_region_count; i++) {
+		struct task_vm_region *region = &task->vm_regions[i];
+		const u64 end = region_end(region);
+
+		if (region->kind == kind &&
+		    region->writable == writable &&
+		    region->base <= base &&
+		    base + len >= region->base &&
+		    base <= end) {
+			const u64 new_end = base + len > end ? base + len : end;
+
+			region->len = new_end - region->base;
+			spin_unlock_irqrestore(&task->lock, flags);
+			return 0;
+		}
+	}
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	return task_add_vm_region(task, base, len, writable, kind);
+}
+
+int task_remove_vm_region(struct task *task, u64 base, u64 len)
+{
+	if (task == 0 || len == 0 || base + len < base) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
+	for (u32 i = 0; i < task->vm_region_count; i++) {
+		const struct task_vm_region *region = &task->vm_regions[i];
+
+		if (region->base != base || region->len != len) {
+			continue;
+		}
+
+		task->vm_regions[i] =
+			task->vm_regions[task->vm_region_count - 1];
+		task->vm_region_count--;
+		spin_unlock_irqrestore(&task->lock, flags);
+		return 0;
+	}
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	return -1;
+}
+
+u64 task_vm_region_count(const struct task *task)
+{
+	return task != 0 ? task->vm_region_count : 0;
+}
+
+const struct task_vm_region *task_vm_region_at(const struct task *task,
+					       u64 index)
+{
+	if (task == 0 || index >= task->vm_region_count) {
+		return 0;
+	}
+
+	return &task->vm_regions[index];
 }
 
 u32 thread_id(const struct thread *thread)

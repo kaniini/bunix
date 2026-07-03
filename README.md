@@ -32,9 +32,11 @@ the generated rootfs and loaded by proc through VFS as `/bin/first` and
 `/bin/lxtest`. The VM server remains kernel-hosted for the current
 performance-oriented design, but still exposes a VM IPC port for events and
 the kernel exports low-level task memory primitives for allocation and range
-cloning. The next microkernel steps are to replace the toy rootfs with a real
-filesystem format while continuing to shrink the kernel bootstrap policy into
-explicit capability handoff.
+cloning. Tasks now track simple VM region metadata so fork can clone recorded
+ELF, stack, brk, and mmap regions rather than hardcoded address bands. The
+next microkernel steps are to replace the toy rootfs with a real filesystem
+format while continuing to shrink the kernel bootstrap policy into explicit
+capability handoff.
 
 The tree is split so future ports can add a sibling such as `arch/arm64/` with
 its own boot path, interrupt setup, MMU setup, and device I/O while reusing the
@@ -161,18 +163,19 @@ attaches user buffers as shared-buffer capabilities and blocks the caller on a
 reply port, then returns the server's Linux-style result value. `/bin/lxtest`
 contains no Bunix headers or crt0; it issues raw x86_64 Linux syscall numbers
 for `write`, `getpid`, `gettid`, `openat`, `fstat`, `newfstatat`, `read`,
-`close`, `mmap`, `wait4`, and `exit_group`, verifies returned byte counts,
-metadata, Linux PID/TID values, `brk`, anonymous writable mappings, forked
-child creation, fd allocation, child waiting, and `-EBADF` for invalid fds,
-then exits successfully. Init launches two `/bin/lxtest` instances to prove
-their Linux PID and fd namespaces are separate; the first also forks and waits
-for its child. Console writes use the server's delegated console capability,
-while
+`close`, `mmap`, `munmap`, `wait4`, and `exit_group`, verifies returned byte
+counts, metadata, Linux PID/TID values, page-backed `brk`, anonymous writable
+mappings, forked child creation with cloned mmap contents, fd allocation, child
+waiting, and `-EBADF` for invalid fds, then exits successfully. Init launches
+two `/bin/lxtest` instances to prove their Linux PID and fd namespaces are
+separate; the first also forks and waits for its child. Console writes use the
+server's delegated console capability, while
 `openat(AT_FDCWD, path, O_RDONLY)`, `fstat`, `newfstatat`, `read`, and `close`
 proxy to VFS using shared-buffer capabilities. Linux `mmap` is currently an
 anonymous/private compatibility path implemented on top of task memory
-allocation. Linux `fork` is built on a saved syscall frame plus coarse task
-range cloning; exact VMA tracking and copy-on-write are still future work.
+allocation, and `munmap` removes exact VM region records. Linux `fork` is built
+on a saved syscall frame plus task VM region cloning; page-table unmap/free and
+copy-on-write are still future work.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with

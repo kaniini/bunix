@@ -178,6 +178,10 @@ static u64 launch_user_image(const char *name, struct task *parent,
 			return (u64)-1;
 		}
 	}
+	(void)task_add_vm_region(task, USER_STACK_TOP -
+				 USER_STACK_PAGES * VM_PAGE_SIZE,
+				 USER_STACK_PAGES * VM_PAGE_SIZE, 1,
+				 TASK_VM_REGION_STACK);
 
 	start->space = space;
 	start->stack = USER_STACK_TOP;
@@ -386,6 +390,10 @@ u64 server_task_create(struct task *parent, const char *name)
 			return (u64)-1;
 		}
 	}
+	(void)task_add_vm_region(task, USER_STACK_TOP -
+				 USER_STACK_PAGES * VM_PAGE_SIZE,
+				 USER_STACK_PAGES * VM_PAGE_SIZE, 1,
+				 TASK_VM_REGION_STACK);
 
 	name_service_register(task_name, NAME_SERVICE_TASK, task_id(task));
 	return task_grant_task(parent, task, TASK_RIGHT_SEND | TASK_RIGHT_DUP);
@@ -429,6 +437,10 @@ int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
 	console_printf("kernel: task map task=%u vaddr=%p filesz=%u memsz=%u\n",
 		       task_id(task), (const void *)vaddr, (u32)filesz,
 		       (u32)memsz);
+	if (task_add_vm_region(task, page_start, page_end - page_start,
+			       writable, TASK_VM_REGION_ELF) != 0) {
+		return -1;
+	}
 	return 0;
 }
 
@@ -453,6 +465,13 @@ int server_task_write(struct task *parent, u64 task_handle, u64 vaddr,
 int server_task_alloc(struct task *parent, u64 task_handle, u64 vaddr,
 		      u64 len, u32 writable)
 {
+	return server_task_alloc_kind(parent, task_handle, vaddr, len, writable,
+				      TASK_VM_REGION_MMAP);
+}
+
+int server_task_alloc_kind(struct task *parent, u64 task_handle, u64 vaddr,
+			   u64 len, u32 writable, u32 kind)
+{
 	struct task *task = task_from_handle(parent, task_handle,
 					    TASK_RIGHT_SEND);
 	if (task == 0 || len == 0 || vaddr + len < vaddr) {
@@ -465,6 +484,12 @@ int server_task_alloc(struct task *parent, u64 task_handle, u64 vaddr,
 
 	console_printf("kernel: task alloc task=%u vaddr=%p len=%u writable=%u\n",
 		       task_id(task), (const void *)vaddr, (u32)len, writable);
+	if (task_add_vm_region(task, align_down(vaddr, VM_PAGE_SIZE),
+			       align_up(vaddr + len, VM_PAGE_SIZE) -
+			       align_down(vaddr, VM_PAGE_SIZE),
+			       writable, kind) != 0) {
+		return -1;
+	}
 	return 0;
 }
 
@@ -549,12 +574,6 @@ int server_task_start_at(struct task *parent, u64 task_handle, u64 entry,
 
 struct task *server_task_fork_current(const struct arch_syscall_frame *frame)
 {
-	enum {
-		LINUX_IMAGE_START = 0x400000,
-		LINUX_INITIAL_BRK = 0x900000,
-		LINUX_MMAP_BASE = 0x10000000,
-	};
-
 	struct task *parent = task_current();
 	if (parent == 0 || frame == 0 ||
 	    fork_start_count >= sizeof(fork_starts) / sizeof(fork_starts[0])) {
@@ -571,23 +590,24 @@ struct task *server_task_fork_current(const struct arch_syscall_frame *frame)
 		return 0;
 	}
 
+	const u64 region_count = task_vm_region_count(parent);
+	for (u64 i = 0; i < region_count; i++) {
+		const struct task_vm_region *region =
+			task_vm_region_at(parent, i);
+
+		if (region == 0 ||
+		    vm_clone_user_range(task_vm_space(child),
+					task_vm_space(parent),
+					region->base, region->len,
+					region->writable) != 0 ||
+		    task_add_vm_region(child, region->base, region->len,
+				       region->writable, region->kind) != 0) {
+			return 0;
+		}
+	}
+
 	const u64 brk = task_linux_brk(parent);
-	const u64 image_end = align_up(brk > LINUX_INITIAL_BRK ?
-				       brk : LINUX_INITIAL_BRK, VM_PAGE_SIZE);
-	if (vm_clone_user_range(task_vm_space(child), task_vm_space(parent),
-				LINUX_IMAGE_START, image_end - LINUX_IMAGE_START,
-				1) != 0) {
-		return 0;
-	}
-
 	const u64 mmap_next = task_linux_mmap_next(parent);
-	if (mmap_next > LINUX_MMAP_BASE &&
-	    vm_clone_user_range(task_vm_space(child), task_vm_space(parent),
-				LINUX_MMAP_BASE, mmap_next - LINUX_MMAP_BASE,
-				1) != 0) {
-		return 0;
-	}
-
 	task_set_linux_brk(child, brk);
 	task_set_linux_mmap_next(child, mmap_next);
 

@@ -423,6 +423,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "kernel: task fork parent=" $(BUILD_DIR)/serial.log
 	grep -F "linux: fork parent=" $(BUILD_DIR)/serial.log
 	grep -F "linux fork child ok" $(BUILD_DIR)/serial.log
+	grep -F "linux: munmap task=" $(BUILD_DIR)/serial.log
+	grep -F "linux munmap checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: wait4" $(BUILD_DIR)/serial.log
 	grep -F "linux wait checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: read" $(BUILD_DIR)/serial.log

@@ -49,6 +49,7 @@ enum {
 	LINUX_SYSCALL_CLOSE = 3,
 	LINUX_SYSCALL_FSTAT = 5,
 	LINUX_SYSCALL_MMAP = 9,
+	LINUX_SYSCALL_MUNMAP = 11,
 	LINUX_SYSCALL_BRK = 12,
 	LINUX_SYSCALL_FORK = 57,
 	LINUX_SYSCALL_GETPID = 39,
@@ -264,6 +265,10 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 					writable) != 0) {
 			return (u64)-LINUX_ENOMEM;
 		}
+		if (task_add_vm_region(task, base, len, writable,
+				       TASK_VM_REGION_MMAP) != 0) {
+			return (u64)-LINUX_ENOMEM;
+		}
 
 		if (base + len > task_linux_mmap_next(task)) {
 			task_set_linux_mmap_next(task, base + len);
@@ -272,6 +277,24 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			       task_id(task), (const void *)base, (u32)len,
 			       (u32)flags);
 		return base;
+	}
+	case LINUX_SYSCALL_MUNMAP: {
+		u64 base = arg0;
+		u64 len = arg1;
+
+		if (base == 0 || len == 0 ||
+		    (base & (VM_PAGE_SIZE - 1)) != 0 ||
+		    len + VM_PAGE_SIZE - 1 < len) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		len = align_up(len, VM_PAGE_SIZE);
+		if (task_remove_vm_region(task, base, len) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		console_printf("linux: munmap task=%u addr=%p len=%u\n",
+			       task_id(task), (const void *)base, (u32)len);
+		return 0;
 	}
 	case LINUX_SYSCALL_FORK: {
 		struct task *child = server_task_fork_current(frame);
@@ -294,6 +317,19 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			return task_linux_brk(task);
 		}
 		if (arg0 >= LINUX_INITIAL_BRK && arg0 < LINUX_MAX_BRK) {
+			const u64 old_brk = task_linux_brk(task);
+			const u64 old_page = align_up(old_brk, VM_PAGE_SIZE);
+			const u64 new_page = align_up(arg0, VM_PAGE_SIZE);
+
+			if (new_page > old_page &&
+			    (vm_alloc_user_range(task_vm_space(task), old_page,
+						 new_page - old_page, 1) != 0 ||
+			     task_add_or_extend_vm_region(task, old_page,
+							  new_page - old_page,
+							  1,
+							  TASK_VM_REGION_BRK) != 0)) {
+				return task_linux_brk(task);
+			}
 			task_set_linux_brk(task, arg0);
 		}
 		return task_linux_brk(task);

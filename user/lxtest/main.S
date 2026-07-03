@@ -117,6 +117,10 @@ _start:
 	jmp 2f
 
 fork_child:
+	movq $0x6b63656863207061, %rax
+	cmpq %rax, (%rbx)
+	jne fail
+
 	movq $1, %rax
 	movq $1, %rdi
 	leaq fork_child_message(%rip), %rsi
@@ -128,6 +132,20 @@ fork_child:
 	syscall
 
 2:
+	movq $11, %rax
+	movq %rbx, %rdi
+	movq $4096, %rsi
+	syscall
+	testq %rax, %rax
+	jne fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq munmap_message(%rip), %rsi
+	movq $munmap_message_end - munmap_message, %rdx
+	syscall
+	cmpq $munmap_message_end - munmap_message, %rax
+	jne fail
 
 	movq $5, %rax
 	movq %r12, %rdi
@@ -226,6 +244,9 @@ wait_message_end:
 fork_child_message:
 	.ascii "linux fork child ok\n"
 fork_child_message_end:
+munmap_message:
+	.ascii "linux munmap checks ok\n"
+munmap_message_end:
 fail_message:
 	.ascii "linux return checks failed\n"
 fail_message_end:

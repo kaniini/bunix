@@ -32,6 +32,8 @@ int server_task_write(struct task *parent, u64 task_handle, u64 vaddr,
 		      const void *src, u64 len);
 int server_task_alloc(struct task *parent, u64 task_handle, u64 vaddr,
 		      u64 len, u32 writable);
+int server_task_alloc_kind(struct task *parent, u64 task_handle, u64 vaddr,
+			   u64 len, u32 writable, u32 kind);
 int server_task_clone_range(struct task *parent, u64 dst_handle,
 			    u64 src_handle, u64 vaddr, u64 len, u32 writable);
 int server_task_grant(struct task *parent, u64 task_handle, u64 handle,
