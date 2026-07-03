@@ -9,12 +9,14 @@ int main(void)
 	const char still_open[] = "ping: vm still open\n";
 	struct bunix_msg message;
 	struct bunix_msg vm_message = {
+		.protocol = BUNIX_PROTO_VM,
 		.type = 1,
 		.sender = 0,
 		.reply = 0,
 		.words = { 0, 0, 0, 0 },
 	};
 	struct bunix_msg reply = {
+		.protocol = BUNIX_PROTO_PING,
 		.type = 2,
 		.sender = 0,
 		.reply = 0,

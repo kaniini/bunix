@@ -438,28 +438,43 @@ u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights)
 	return 0;
 }
 
-u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle)
+int task_can_inherit_handle(struct task *src, u64 handle, u32 rights)
 {
-	if (dst == 0 || src == 0 || handle == 0 || handle > MAX_TASK_HANDLES) {
-		return 0;
+	if (src == 0 || handle == 0 || handle > MAX_TASK_HANDLES ||
+	    rights == 0) {
+		return -1;
 	}
 
 	const u64 flags = spin_lock_irqsave(&src->lock);
 	const struct task_handle src_handle = src->handles[handle - 1];
 
 	if (src_handle.type == TASK_HANDLE_EMPTY ||
-	    (src_handle.rights & TASK_RIGHT_DUP) == 0) {
+	    (src_handle.rights & TASK_RIGHT_DUP) == 0 ||
+	    (rights & ~src_handle.rights) != 0) {
 		spin_unlock_irqrestore(&src->lock, flags);
-		console_printf("sched: inherit denied task=%u handle=%u rights=0x%x\n",
-			       src->pid, (u32)handle, src_handle.rights);
+		console_printf("sched: inherit denied task=%u handle=%u requested=0x%x rights=0x%x\n",
+			       src->pid, (u32)handle, rights, src_handle.rights);
+		return -1;
+	}
+
+	spin_unlock_irqrestore(&src->lock, flags);
+	return 0;
+}
+
+u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
+				u32 rights)
+{
+	if (dst == 0 || task_can_inherit_handle(src, handle, rights) != 0) {
 		return 0;
 	}
 
+	const u64 flags = spin_lock_irqsave(&src->lock);
+	const struct task_handle src_handle = src->handles[handle - 1];
 	spin_unlock_irqrestore(&src->lock, flags);
 
 	if (src_handle.type == TASK_HANDLE_PORT) {
 		return task_grant_port(dst, (struct ipc_port *)src_handle.object,
-				       src_handle.rights);
+				       rights);
 	}
 
 	return 0;

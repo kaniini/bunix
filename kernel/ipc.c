@@ -196,9 +196,9 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 
 	port->tail = node;
 	port->queued++;
-	console_printf("ipc: send port=%s type=%u sender=%u queued=%u\n",
-		       port->name, node->message.type, node->message.sender,
-		       port->queued);
+	console_printf("ipc: send port=%s proto=0x%x type=%u sender=%u queued=%u\n",
+		       port->name, node->message.protocol, node->message.type,
+		       node->message.sender, port->queued);
 
 	struct thread *receiver = port->receiver;
 	if (port->receiver != 0) {
@@ -235,8 +235,9 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 	*message = node->message;
 	message_free(node);
 
-	console_printf("ipc: recv port=%s type=%u sender=%u queued=%u\n",
-		       port->name, message->type, message->sender, port->queued);
+	console_printf("ipc: recv port=%s proto=0x%x type=%u sender=%u queued=%u\n",
+		       port->name, message->protocol, message->type,
+		       message->sender, port->queued);
 	spin_unlock_irqrestore(&ipc_lock, flags);
 	return 0;
 }

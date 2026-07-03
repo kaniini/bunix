@@ -10,6 +10,7 @@ enum {
 struct ipc_port;
 
 struct ipc_message {
+	u32 protocol;
 	u32 type;
 	u32 sender;
 	struct ipc_port *reply_port;

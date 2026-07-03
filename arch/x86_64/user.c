@@ -28,11 +28,13 @@ enum {
 	SYSCALL_IPC_CALL = -14,
 	SYSCALL_HANDLE_CLOSE = -16,
 	USER_IPC_WORDS = 4,
+	USER_FOURCC_CONS = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	USER_CONSOLE_WRITE = 1,
 	ARCH_USER_MAX_CPUS = 8,
 };
 
 struct user_ipc_message {
+	u32 protocol;
 	u32 type;
 	u32 sender;
 	u64 reply;
@@ -42,6 +44,7 @@ struct user_ipc_message {
 static void user_message_to_ipc(const struct user_ipc_message *user_message,
 				struct ipc_message *message)
 {
+	message->protocol = user_message->protocol;
 	message->type = user_message->type;
 	message->sender = 0;
 	message->reply_port = task_port_from_handle(task_current(),
@@ -55,6 +58,7 @@ static void user_message_to_ipc(const struct user_ipc_message *user_message,
 static void ipc_message_to_user(const struct ipc_message *message,
 				struct user_ipc_message *user_message)
 {
+	user_message->protocol = message->protocol;
 	user_message->type = message->type;
 	user_message->sender = message->sender;
 	user_message->reply = task_grant_port(task_current(), message->reply_port,
@@ -216,7 +220,7 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 	case SYSCALL_LAUNCH_MODULE:
 		return server_launch_module_with_caps((const char *)arg0,
 						      task_current(),
-						      (const u64 *)arg1,
+						      (const struct task_launch_cap *)arg1,
 						      arg2);
 	case SYSCALL_PORT_CREATE:
 		return task_grant_port(task_current(),
@@ -236,7 +240,9 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 			return (u64)-1;
 		}
 
-		if (port != 0 && user_message->type == USER_CONSOLE_WRITE &&
+		if (port != 0 &&
+		    user_message->protocol == USER_FOURCC_CONS &&
+		    user_message->type == USER_CONSOLE_WRITE &&
 		    str_eq(ipc_port_name(port), "console")) {
 			const char *text = (const char *)user_message->words[0];
 			const u64 len = user_message->words[1];
@@ -246,6 +252,7 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		}
 
 		struct ipc_message message = {
+			.protocol = 0,
 			.type = 0,
 		};
 
@@ -277,7 +284,7 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 			task_port_from_handle(task_current(), arg0,
 					      TASK_RIGHT_SEND);
 		struct ipc_port *reply_port = task_reply_port(task_current());
-		struct ipc_message message = { .type = 0 };
+		struct ipc_message message = { .protocol = 0, .type = 0 };
 		struct ipc_message reply;
 
 		if (request == 0 || user_reply == 0 || port == 0 ||

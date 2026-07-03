@@ -6,6 +6,7 @@ int main(void)
 	const char denied[] = "hello: vm denied\n";
 	const char allowed[] = "hello: vm allowed\n";
 	const struct bunix_msg vm_message = {
+		.protocol = BUNIX_PROTO_VM,
 		.type = 1,
 		.sender = 0,
 		.reply = 0,

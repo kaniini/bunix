@@ -42,23 +42,24 @@ to grow toward lightweight kernel-thread/event-port style server communication
 rather than forcing every interaction into a synchronous syscall shape.
 
 User mode can create private ports and send/receive fixed-size
-`struct bunix_msg` messages through task-local handles. Handles are typed
-capabilities rather than global object IDs or kernel pointers. The current
-handle type is `port`, with `SEND`, `RECV`, and `DUP` rights checked by the IPC
-syscall path. Module launch accepts an explicit list of parent handles to
-inherit; the parent must hold `DUP`, and the child receives the same type and
-rights. The child receives its own service port as handle 1, then inherited
-handles in caller-specified order.
+`struct bunix_msg` messages through task-local handles. Each message carries a
+FourCC protocol ID plus a protocol-local type. Handles are typed capabilities
+rather than global object IDs or kernel pointers. The current handle type is
+`port`, with `SEND`, `RECV`, and `DUP` rights checked by the IPC syscall path.
+Module launch accepts an explicit list of parent handles plus requested child
+rights. The parent must hold `DUP`, and the requested rights must be a subset
+of the parent's rights. The child receives its own service port as handle 1,
+then attenuated inherited handles in caller-specified order.
 
 The boot policy grants init `self`, `console`, and `vm`; init launches hello
-with only `console` and ping with `console` plus `vm`. The returned launch value
-is a send-capability to the child's service port in the parent task. `recv`
-blocks the current thread and wakes when a sender queues an event. `ipc_call`
-uses a per-task private reply port, and received messages can carry a
-send-capability reply handle that the server can use without learning anything
-else about the caller. A task can also close one of its own handles, which
-clears only that task-local capability slot; the underlying object and any other
-task's capabilities remain untouched.
+with only send rights to `console` and ping with send rights to `console` plus
+`vm`. The returned launch value is a send-capability to the child's service port
+in the parent task. `recv` blocks the current thread and wakes when a sender
+queues an event. `ipc_call` uses a per-task private reply port, and received
+messages can carry a send-capability reply handle that the server can use
+without learning anything else about the caller. A task can also close one of
+its own handles, which clears only that task-local capability slot; the
+underlying object and any other task's capabilities remain untouched.
 
 The VM server owns the memory authority policy, but module task spaces are now
 granted through direct kernel VM calls during launch. That avoids a synchronous
@@ -149,14 +150,17 @@ make test
 `make test` boots through OVMF/GRUB with KVM, captures serial output in
 `build/serial.log`, and checks that GRUB passed Multiboot2 modules, the kernel
 started VM plus init, init received its boot capabilities, and init launched the
-hello and ping C servers with explicit inherited handles. Init sends ping a
+hello and ping C servers with attenuated inherited handles. Init first proves
+the OCAP launch rule by asking for a receive right it does not hold, which the
+kernel rejects before the module is marked launched. Init sends ping a
 synchronous user IPC call through the returned service-port handle, ping
-receives it through blocking `recv`, sends a VM event through its inherited VM
-capability, exercises automatic CPU placement across both CPUs, and replies to
-init through the granted reply capability. Hello receives only console rights;
-the test also checks that its attempt to use the conventional VM handle is
-denied. Ping closes its VM handle after one successful send and proves the local
-capability has been revoked by attempting a second VM send.
+receives it through blocking `recv`, sends a VMEM FourCC event through its
+inherited VM capability, exercises automatic CPU placement across both CPUs, and
+replies to init through the granted reply capability. Hello receives only
+console send rights; the test also checks that its attempt to use the
+conventional VM handle is denied. Ping closes its VM handle after one successful
+send and proves the local capability has been revoked by attempting a second VM
+send.
 
 For an interactive serial console:
 

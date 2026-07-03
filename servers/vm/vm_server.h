@@ -4,6 +4,7 @@
 #include "../../kernel/vm.h"
 
 enum {
+	VM_IPC_PROTOCOL = ('V') | ('M' << 8) | ('E' << 16) | ('M' << 24),
 	VM_IPC_EVENT_PING = 1,
 	VM_RPC_CREATE_SPACE = 2,
 	VM_RPC_ALLOC_FRAME = 3,

@@ -221,25 +221,28 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: grant task=2 handle=2 type=port rights=0x5" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=2 handle=3 type=port rights=0x5" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=3 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=3 handle=2 type=port rights=0x5" $(BUILD_DIR)/serial.log
+	grep -F "sched: inherit denied task=2 handle=2 requested=0x3 rights=0x5" $(BUILD_DIR)/serial.log
+	grep -F "kernel: invalid inherited cap handle=2 rights=0x3 for hello" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=3 handle=2 type=port rights=0x1" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=2 handle=4 type=port rights=0x5" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=4 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=4 handle=2 type=port rights=0x5" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=4 handle=3 type=port rights=0x5" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=4 handle=2 type=port rights=0x1" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=4 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=4 handle=4 type=port rights=0x1" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=2 handle=5 type=port rights=0x5" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=vm" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=reply" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=ping type=1 sender=2 queued=1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv port=ping type=1 sender=2 queued=0" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=vm type=1 sender=4" $(BUILD_DIR)/serial.log
-	grep -F "sched: close task=4 handle=3 type=port rights=0x5" $(BUILD_DIR)/serial.log
+	grep -F "ipc: send port=ping proto=0x474e4950 type=1 sender=2 queued=1" $(BUILD_DIR)/serial.log
+	grep -F "ipc: recv port=ping proto=0x474e4950 type=1 sender=2 queued=0" $(BUILD_DIR)/serial.log
+	grep -F "ipc: send port=vm proto=0x4d454d56 type=1 sender=4" $(BUILD_DIR)/serial.log
+	grep -F "sched: close task=4 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
 	grep -F "sched: handle denied task=4 handle=3 need=0x1 rights=0x0" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=reply type=2 sender=4 queued=1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv port=reply type=2 sender=4 queued=0" $(BUILD_DIR)/serial.log
+	grep -F "ipc: send port=reply proto=0x474e4950 type=2 sender=4 queued=1" $(BUILD_DIR)/serial.log
+	grep -F "ipc: recv port=reply proto=0x474e4950 type=2 sender=4 queued=0" $(BUILD_DIR)/serial.log
 	grep -F "sched: preemption enabled" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: ipc event type=1 sender=4 word0=0x2a" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: ipc event proto=0x4d454d56 type=1 sender=4 word0=0x2a" $(BUILD_DIR)/serial.log
 	grep -F "init: launching servers" $(BUILD_DIR)/serial.log
+	grep -F "init: bad cap denied" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server hello" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server ping" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server hello" $(BUILD_DIR)/serial.log

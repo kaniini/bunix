@@ -108,16 +108,17 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 }
 
 u64 server_launch_module_with_caps(const char *name, struct task *parent,
-				   const u64 *handles, u64 handle_count)
+				   const struct task_launch_cap *caps,
+				   u64 cap_count)
 {
 	enum {
 		USER_STACK_TOP = 0x800000,
 		USER_STACK_PAGES = 4,
 		MAX_INHERITED_HANDLES = 8,
 	};
-	if (handle_count > MAX_INHERITED_HANDLES) {
+	if (cap_count > MAX_INHERITED_HANDLES) {
 		console_printf("kernel: too many inherited caps for %s count=%u\n",
-			       name, (u32)handle_count);
+			       name, (u32)cap_count);
 		return (u64)-1;
 	}
 
@@ -135,7 +136,19 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 			return -1;
 		}
 
-		start->launched = 1;
+		for (u64 cap = 0; cap < cap_count; cap++) {
+			if (caps == 0 ||
+			    caps[cap].reserved != 0 ||
+			    task_can_inherit_handle(parent, caps[cap].handle,
+						    caps[cap].rights) != 0) {
+				console_printf("kernel: invalid inherited cap handle=%u rights=0x%x for %s\n",
+					       caps != 0 ? (u32)caps[cap].handle : 0,
+					       caps != 0 ? caps[cap].rights : 0,
+					       name);
+				return (u64)-1;
+			}
+		}
+
 		console_printf("kernel: launching module server %s\n",
 			       server_name);
 
@@ -149,6 +162,8 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 			return (u64)-1;
 		}
 
+		start->launched = 1;
+
 		struct ipc_port *service_port = ipc_port_create(server_name);
 		const u64 child_self =
 			task_grant_port(task, service_port,
@@ -158,11 +173,13 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 			return (u64)-1;
 		}
 
-		for (u64 handle = 0; handle < handle_count; handle++) {
+		for (u64 cap = 0; cap < cap_count; cap++) {
 			if (task_grant_inherited_handle(task, parent,
-							handles[handle]) == 0) {
-				console_printf("kernel: invalid inherited cap %u for %s\n",
-					       (u32)handles[handle], name);
+							caps[cap].handle,
+							caps[cap].rights) == 0) {
+				console_printf("kernel: invalid inherited cap handle=%u rights=0x%x for %s\n",
+					       (u32)caps[cap].handle,
+					       caps[cap].rights, name);
 				return (u64)-1;
 			}
 		}

@@ -36,7 +36,9 @@ struct thread *thread_create_on_cpu(struct task *task, const char *name,
 struct task *task_current(void);
 struct thread *thread_current(void);
 u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights);
-u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle);
+int task_can_inherit_handle(struct task *src, u64 handle, u32 rights);
+u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
+				u32 rights);
 struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
 				       u32 rights);
 int task_close_handle(struct task *task, u64 handle);

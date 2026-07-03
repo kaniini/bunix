@@ -36,6 +36,7 @@ struct vm_space *vm_server_bootstrap_space(const char *owner)
 struct vm_space *vm_server_rpc_create_space(const char *owner)
 {
 	struct ipc_message request = {
+		.protocol = VM_IPC_PROTOCOL,
 		.type = VM_RPC_CREATE_SPACE,
 		.sender = 0,
 		.reply_port = 0,
@@ -54,16 +55,24 @@ struct vm_space *vm_server_rpc_create_space(const char *owner)
 static void vm_server_handle_message(const struct ipc_message *message)
 {
 	struct ipc_message reply = {
+		.protocol = message->protocol,
 		.type = message->type,
 		.sender = 0,
 		.reply_port = 0,
 		.words = { 0, 0, 0, 0 },
 	};
 
+	if (message->protocol != VM_IPC_PROTOCOL) {
+		console_printf("vm-server: unknown ipc proto=0x%x type=%u sender=%u\n",
+			       message->protocol, message->type, message->sender);
+		return;
+	}
+
 	switch (message->type) {
 	case VM_IPC_EVENT_PING:
-		console_printf("vm-server: ipc event type=%u sender=%u word0=0x%x\n",
-			       message->type, message->sender, (u32)message->words[0]);
+		console_printf("vm-server: ipc event proto=0x%x type=%u sender=%u word0=0x%x\n",
+			       message->protocol, message->type, message->sender,
+			       (u32)message->words[0]);
 		break;
 	case VM_RPC_CREATE_SPACE: {
 		const char *owner = (const char *)message->words[0];
@@ -90,8 +99,8 @@ static void vm_server_handle_message(const struct ipc_message *message)
 		}
 		break;
 	default:
-		console_printf("vm-server: unknown ipc type=%u sender=%u\n",
-			       message->type, message->sender);
+		console_printf("vm-server: unknown ipc proto=0x%x type=%u sender=%u\n",
+			       message->protocol, message->type, message->sender);
 		break;
 	}
 }

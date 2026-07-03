@@ -15,6 +15,12 @@ enum {
 	BUNIX_SYSCALL_IPC_CALL = -14,
 	BUNIX_SYSCALL_HANDLE_CLOSE = -16,
 	BUNIX_IPC_WORDS = 4,
+	BUNIX_RIGHT_SEND = 1 << 0,
+	BUNIX_RIGHT_RECV = 1 << 1,
+	BUNIX_RIGHT_DUP = 1 << 2,
+	BUNIX_PROTO_CONSOLE = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
+	BUNIX_PROTO_VM = ('V') | ('M' << 8) | ('E' << 16) | ('M' << 24),
+	BUNIX_PROTO_PING = ('P') | ('I' << 8) | ('N' << 16) | ('G' << 24),
 	BUNIX_CONSOLE_WRITE = 1,
 	BUNIX_HANDLE_SELF = 1,
 	BUNIX_HANDLE_CONSOLE = 2,
@@ -22,10 +28,17 @@ enum {
 };
 
 struct bunix_msg {
+	unsigned int protocol;
 	unsigned int type;
 	unsigned int sender;
 	u64 reply;
 	u64 words[BUNIX_IPC_WORDS];
+};
+
+struct bunix_launch_cap {
+	u64 handle;
+	unsigned int rights;
+	unsigned int reserved;
 };
 
 static inline long bunix_syscall0(long number)
@@ -86,11 +99,11 @@ static inline long bunix_launch_module(const char *name)
 }
 
 static inline long bunix_launch_module_with_caps(const char *name,
-						 const u64 *handles,
-						 u64 handle_count)
+						 const struct bunix_launch_cap *caps,
+						 u64 cap_count)
 {
 	return bunix_syscall3(BUNIX_SYSCALL_LAUNCH_MODULE, (u64)name,
-			      (u64)handles, handle_count);
+			      (u64)caps, cap_count);
 }
 
 static inline u64 bunix_timer_ticks(void)
@@ -128,6 +141,7 @@ static inline long bunix_handle_close(u64 handle)
 static inline long bunix_console_write(const char *text, usize len)
 {
 	const struct bunix_msg message = {
+		.protocol = BUNIX_PROTO_CONSOLE,
 		.type = BUNIX_CONSOLE_WRITE,
 		.sender = 0,
 		.reply = 0,
