@@ -304,6 +304,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: preemption enabled" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: ipc event proto=0x4d454d56 type=1 sender=7 word0=0x2a" $(BUILD_DIR)/serial.log
 	grep -F "names: online" $(BUILD_DIR)/serial.log
+	grep -F "names: namespace" $(BUILD_DIR)/serial.log
 	grep -F "names: registered" $(BUILD_DIR)/serial.log
 	grep -F "names: resolved" $(BUILD_DIR)/serial.log
 	grep -F "block: online" $(BUILD_DIR)/serial.log
@@ -311,6 +312,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "vfs: mounted block" $(BUILD_DIR)/serial.log
 	grep -F "init: launching servers" $(BUILD_DIR)/serial.log
 	grep -F "init: names ready" $(BUILD_DIR)/serial.log
+	grep -F "init: fs namespace" $(BUILD_DIR)/serial.log
 	grep -F "init: fs ready" $(BUILD_DIR)/serial.log
 	grep -F "rootfs: module" $(BUILD_DIR)/serial.log
 	grep -F "init: bad cap denied" $(BUILD_DIR)/serial.log

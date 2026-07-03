@@ -66,6 +66,14 @@ can use without learning anything else about the caller. A task can also close
 one of its own handles, which clears only that task-local capability slot; the
 underlying object and any other task's capabilities remain untouched.
 
+Names are scoped by namespace objects. The names server starts with a root
+namespace for boot services, and clients can request new namespace IDs. Register
+and resolve operations include both a namespace and a service ID, so the same
+object can be re-exported with different visibility and rights in another
+namespace without changing the underlying port object. Init currently creates a
+filesystem namespace, re-exports VFS into it, then resolves VFS from that
+namespace for the root read.
+
 The VM server owns the memory authority policy, but module task spaces are now
 granted through direct kernel VM calls during launch. That avoids a synchronous
 scheduler re-entry path while VM remains kernel-hosted. VM still receives
@@ -77,9 +85,10 @@ The first filesystem slice is a server-to-server read flow. GRUB loads a
 `disk0` Multiboot2 data module from `modules/disk0.img`, and the kernel assigns
 that boot module only to the block server. Init launches a block server and a
 VFS server with only console and names capabilities. The block server registers
-`BLK0` and serves read-only bytes from its assigned disk image. VFS resolves
-`BLK0`, registers `VFS0`, and proxies a read request to block. Init resolves
-`VFS0`, reads the synthetic root file, and prints `rootfs: module`.
+`BLK0` in the root namespace and serves read-only bytes from its assigned disk
+image. VFS resolves `BLK0`, registers `VFS0`, and proxies a read request to
+block. Init creates a filesystem namespace, re-exports `VFS0` there, resolves it
+from that namespace, reads the synthetic root file, and prints `rootfs: module`.
 
 This is intentionally not a real disk filesystem yet. The useful primitive is
 the capability-shaped chain `init -> names -> vfs -> block -> disk0`, which is
@@ -175,8 +184,9 @@ make test
 started VM, names, and init, init received its boot capabilities, and init
 registered and resolved services through the user-space names server before
 launching block, VFS, hello, and ping with attenuated inherited handles. The
-test checks the `VFS0 -> BLK0 -> disk0` read and the resulting `rootfs: module`
-console output. Init also proves the OCAP launch rule by asking for a receive right it
+test checks namespace creation, VFS re-export into the filesystem namespace, the
+`VFS0 -> BLK0 -> disk0` read, and the resulting `rootfs: module` console
+output. Init also proves the OCAP launch rule by asking for a receive right it
 does not hold, which the kernel rejects before the module is marked launched.
 Init sends ping a synchronous user IPC call through the returned service-port
 handle, ping receives it through blocking `recv`, sends a VMEM FourCC event

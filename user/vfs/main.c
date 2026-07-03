@@ -13,7 +13,7 @@ static long register_service(u64 service, u64 handle)
 		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 		.reply = 0,
 		.cap = handle,
-		.words = { service, 0, 0, 0 },
+		.words = { BUNIX_NAMES_ROOT, service, 0, 0 },
 	};
 	struct bunix_msg reply;
 
@@ -33,7 +33,7 @@ static u64 resolve_service(u64 service, unsigned int rights)
 		.cap_rights = 0,
 		.reply = 0,
 		.cap = 0,
-		.words = { service, rights, 0, 0 },
+		.words = { BUNIX_NAMES_ROOT, service, rights, 0 },
 	};
 	struct bunix_msg reply;
 
