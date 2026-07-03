@@ -29,6 +29,7 @@ enum {
 	BUNIX_SYSCALL_TASK_ID = -42,
 	BUNIX_SYSCALL_TASK_ALLOC = -44,
 	BUNIX_SYSCALL_TASK_CLONE_RANGE = -46,
+	BUNIX_SYSCALL_CONSOLE_READ = -48,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
 	BUNIX_RIGHT_SEND = 1 << 0,
@@ -61,6 +62,7 @@ enum {
 	BUNIX_VFS_TYPE_REGULAR = 1,
 	BUNIX_LINUX_READ = 0,
 	BUNIX_LINUX_WRITE = 1,
+	BUNIX_LINUX_OPEN = 2,
 	BUNIX_LINUX_CLOSE = 3,
 	BUNIX_LINUX_FSTAT = 5,
 	BUNIX_LINUX_GETPID = 39,
@@ -319,6 +321,11 @@ static inline long bunix_console_write(const char *text, usize len)
 	};
 
 	return bunix_ipc_send(BUNIX_HANDLE_CONSOLE, &message);
+}
+
+static inline long bunix_console_read(char *buffer, usize len)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_CONSOLE_READ, (u64)buffer, len);
 }
 
 #endif

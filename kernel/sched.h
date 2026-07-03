@@ -128,6 +128,7 @@ int task_add_or_extend_vm_mapping(struct task *task, u64 base, u64 len,
 				  u32 prot, u32 map_flags, u32 kind,
 				  u32 object_type, u32 object_id, u64 offset);
 int task_vm_range_is_free(struct task *task, u64 base, u64 len);
+int task_protect_vm_region(struct task *task, u64 base, u64 len, u32 prot);
 int task_remove_vm_region(struct task *task, u64 base, u64 len);
 void task_clear_vm_regions(struct task *task);
 u64 task_vm_region_count(const struct task *task);

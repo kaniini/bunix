@@ -140,6 +140,7 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "kernel: recorded") ||
 	    str_starts_with(fmt, "linux: arch_prctl") ||
 	    str_starts_with(fmt, "linux: mmap") ||
+	    str_starts_with(fmt, "linux: mprotect") ||
 	    str_starts_with(fmt, "linux: munmap") ||
 	    str_starts_with(fmt, "linux: execve") ||
 	    str_starts_with(fmt, "linux: fork") ||
@@ -152,6 +153,7 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "sched: place") ||
 	    str_starts_with(fmt, "sched: task pid") ||
 	    str_starts_with(fmt, "sched: thread tid") ||
+	    str_starts_with(fmt, "vfs: read file") ||
 	    str_starts_with(fmt, "vm: create space") ||
 	    str_starts_with(fmt, "vm: destroy space") ||
 	    str_starts_with(fmt, "vm: selftest")) {
@@ -182,6 +184,13 @@ static void serial_putc(char c)
 	while ((arch_inb(COM1 + 5) & 0x20) == 0) {
 	}
 	arch_outb(COM1, (u8)c);
+}
+
+static char serial_getc(void)
+{
+	while ((arch_inb(COM1 + 5) & 0x01) == 0) {
+	}
+	return (char)arch_inb(COM1);
 }
 
 static void vga_newline(void)
@@ -222,6 +231,18 @@ static void console_putc_raw(char c)
 		serial_putc('\r');
 		serial_putc('\n');
 		vga_newline();
+		return;
+	}
+
+	if (c == '\b') {
+		serial_putc('\b');
+		serial_putc(' ');
+		serial_putc('\b');
+		if (cursor_col != 0) {
+			cursor_col--;
+			vga[cursor_row * VGA_WIDTH + cursor_col] =
+				((u16)VGA_ATTR << 8) | ' ';
+		}
 		return;
 	}
 
@@ -283,6 +304,57 @@ void console_write_len(const char *text, u64 len)
 	}
 
 	spin_unlock_irqrestore(&console_lock, flags);
+}
+
+u64 console_read_line(char *buffer, u64 len)
+{
+	u64 used = 0;
+
+	if (buffer == 0 || len == 0) {
+		return 0;
+	}
+
+	for (;;) {
+		char c = serial_getc();
+
+		if (c == '\r') {
+			c = '\n';
+		}
+
+		if (c == '\b' || c == 0x7f) {
+			if (used != 0) {
+				const u64 flags = spin_lock_irqsave(&console_lock);
+
+				used--;
+				console_putc_raw('\b');
+				spin_unlock_irqrestore(&console_lock, flags);
+			}
+			continue;
+		}
+
+		if (c == '\n') {
+			const u64 flags = spin_lock_irqsave(&console_lock);
+
+			buffer[used++] = '\n';
+			console_putc_raw('\n');
+			spin_unlock_irqrestore(&console_lock, flags);
+			return used;
+		}
+
+		if (used + 1 >= len) {
+			return used;
+		}
+
+		if ((u8)c < 0x20) {
+			continue;
+		}
+
+		buffer[used++] = c;
+		const u64 flags = spin_lock_irqsave(&console_lock);
+
+		console_putc_raw(c);
+		spin_unlock_irqrestore(&console_lock, flags);
+	}
 }
 
 static void console_write_hex32_raw(u32 value)

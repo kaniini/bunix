@@ -39,6 +39,8 @@ enum {
 
 struct cpu_local {
 	u32 cpu_id;
+	u32 reserved;
+	u64 syscall_stack;
 };
 
 struct rsdp {
@@ -217,8 +219,15 @@ static u32 cpu_index_from_lapic_id(u32 apic_id)
 static void set_current_cpu_id(u32 cpu_id)
 {
 	cpu_locals[cpu_id].cpu_id = cpu_id;
+	cpu_locals[cpu_id].reserved = 0;
+	cpu_locals[cpu_id].syscall_stack = 0;
 	arch_wrmsr(MSR_GS_BASE, (u64)&cpu_locals[cpu_id]);
 	cpu_local_ready = 1;
+}
+
+void arch_smp_set_syscall_stack(u64 stack)
+{
+	cpu_locals[arch_smp_current_cpu_id()].syscall_stack = stack;
 }
 
 static void lapic_write(u32 reg, u32 value)

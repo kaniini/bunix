@@ -12,6 +12,7 @@ int arch_vm_space_init(struct arch_vm_space *space);
 void arch_vm_space_destroy(struct arch_vm_space *space);
 int arch_vm_map_page(struct arch_vm_space *space, u64 vaddr, u64 phys,
 		     u32 writable, u32 user);
+int arch_vm_protect_page(struct arch_vm_space *space, u64 vaddr, u32 writable);
 u64 arch_vm_unmap_page(struct arch_vm_space *space, u64 vaddr);
 u64 arch_vm_translate(const struct arch_vm_space *space, u64 vaddr,
 		      u32 write);

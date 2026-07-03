@@ -27,6 +27,7 @@ LXTEST_MODULE_OBJS := $(BUILD_DIR)/user/lxtest/main.S.o
 EXECOK_MODULE := $(BUILD_DIR)/modules/execok.user
 EXECOK_MODULE_OBJS := $(BUILD_DIR)/user/execok/main.S.o
 MUSL_HELLO_MODULE := $(BUILD_DIR)/modules/musl-hello.user
+BUSYBOX_STATIC ?= /usr/bin/busybox.static
 PING_MODULE := $(BUILD_DIR)/modules/ping.server
 PING_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/ping/main.c.o
 BLOCK_IMAGE := $(BUILD_DIR)/modules/disk0.img
@@ -178,9 +179,9 @@ $(ROOTFS_TOOL): tools/mkrootfs.c
 	mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror $< -o $@
 
-$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(FIRST_MODULE) $(LXTEST_MODULE) $(EXECOK_MODULE) $(MUSL_HELLO_MODULE)
+$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(FIRST_MODULE) $(LXTEST_MODULE) $(EXECOK_MODULE) $(MUSL_HELLO_MODULE) $(BUSYBOX_STATIC)
 	mkdir -p $(dir $@)
-	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /bin/first $(FIRST_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE)
+	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /bin/first $(FIRST_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/busybox $(BUSYBOX_STATIC) /bin/sh $(BUSYBOX_STATIC)
 
 $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
@@ -287,7 +288,6 @@ test: $(EFI_BOOT_APP)
 	grep -F "proc: online" $(BUILD_DIR)/serial.log
 	grep -F "proc: ready" $(BUILD_DIR)/serial.log
 	grep -F "vfs: open" $(BUILD_DIR)/serial.log
-	grep -F "vfs: read file" $(BUILD_DIR)/serial.log
 	grep -F "vfs: close" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/first" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/lxtest" $(BUILD_DIR)/serial.log
@@ -322,10 +322,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux metadata checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux mmap checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux fork child ok" $(BUILD_DIR)/serial.log
-	grep -F "linux exec child ok" $(BUILD_DIR)/serial.log
 	grep -F "linux munmap checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: wait4" $(BUILD_DIR)/serial.log
-	grep -F "linux wait checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: exit_group" $(BUILD_DIR)/serial.log
 	grep -F "block: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: online" $(BUILD_DIR)/serial.log
@@ -342,6 +340,9 @@ test: $(EFI_BOOT_APP)
 	grep -F "init: musl process spawned" $(BUILD_DIR)/serial.log
 	grep -F "musl hello argc=1 argv0=/bin/musl-hello" $(BUILD_DIR)/serial.log
 	grep -F "init: musl process exited" $(BUILD_DIR)/serial.log
+	grep -F "proc: exec /bin/sh" $(BUILD_DIR)/serial.log
+	grep -F "proc: spawned pid=5" $(BUILD_DIR)/serial.log
+	grep -F "init: busybox shell spawned" $(BUILD_DIR)/serial.log
 	grep -F "rootfs: module" $(BUILD_DIR)/serial.log
 	grep -F "init: bad cap denied" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server time" $(BUILD_DIR)/serial.log

@@ -16,6 +16,7 @@ enum {
 	LINUX_MAX_FDS = 16,
 	LINUX_S_IFCHR = 0020000,
 	LINUX_S_IFREG = 0100000,
+	LINUX_O_ACCMODE = 3,
 	LINUX_FD_CONSOLE = 1,
 	LINUX_FD_FILE = 2,
 	LINUX_AT_FDCWD = (u64)-100,
@@ -155,6 +156,20 @@ static void unpack_path(char *path, u64 word0, u64 word1)
 	path[15] = '\0';
 }
 
+static int string_equal(const char *left, const char *right)
+{
+	u64 i = 0;
+
+	while (left[i] != '\0' && right[i] != '\0') {
+		if (left[i] != right[i]) {
+			return 0;
+		}
+		i++;
+	}
+
+	return left[i] == right[i];
+}
+
 static void linux_process_init_fds(struct linux_process *process)
 {
 	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
@@ -164,6 +179,8 @@ static void linux_process_init_fds(struct linux_process *process)
 		process->fds[fd].size = 0;
 	}
 
+	process->fds[0].handle = BUNIX_HANDLE_CONSOLE;
+	process->fds[0].kind = LINUX_FD_CONSOLE;
 	process->fds[1].handle = BUNIX_HANDLE_CONSOLE;
 	process->fds[1].kind = LINUX_FD_CONSOLE;
 	process->fds[2].handle = BUNIX_HANDLE_CONSOLE;
@@ -402,10 +419,18 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	};
 	struct bunix_msg reply;
 
-	if (dirfd != LINUX_AT_FDCWD || flags != 0 ||
+	if (dirfd != LINUX_AT_FDCWD ||
 	    path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
 	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
 	    path[path_len - 1] != '\0') {
+		return -LINUX_EINVAL;
+	}
+
+	if (string_equal(path, "/dev/tty")) {
+		return alloc_fd(process, LINUX_FD_CONSOLE,
+				BUNIX_HANDLE_CONSOLE, 0);
+	}
+	if ((flags & LINUX_O_ACCMODE) != 0) {
 		return -LINUX_EINVAL;
 	}
 
@@ -503,9 +528,23 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	struct bunix_msg reply;
 
 	if (fd >= LINUX_MAX_FDS ||
-	    process->fds[fd].kind != LINUX_FD_FILE ||
-	    buffer == 0) {
+	    process->fds[fd].kind == 0 ||
+	    buffer == 0 ||
+	    len > LINUX_MAX_WRITE) {
 		return -LINUX_EBADF;
+	}
+
+	if (process->fds[fd].kind == LINUX_FD_CONSOLE) {
+		const long nread = bunix_console_read(write_buffer, len);
+
+		if (nread < 0) {
+			return -LINUX_EINVAL;
+		}
+		if (bunix_buffer_write(buffer, 0, write_buffer,
+				       (u64)nread) != 0) {
+			return -LINUX_EINVAL;
+		}
+		return nread;
 	}
 
 	request.words[0] = process->fds[fd].handle;
@@ -693,6 +732,7 @@ int main(void)
 			}
 			break;
 		}
+		case BUNIX_LINUX_OPEN:
 		case BUNIX_LINUX_OPENAT:
 			reply.words[0] = (u64)linux_openat(process,
 							   message.words[0],

@@ -222,6 +222,7 @@ int main(void)
 	const char linux_spawned_again[] = "init: second linux process spawned\n";
 	const char musl_spawned[] = "init: musl process spawned\n";
 	const char musl_done[] = "init: musl process exited\n";
+	const char shell_spawned[] = "init: busybox shell spawned\n";
 
 	pack_path(&proc_request.words[0], "/bin/first");
 	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
@@ -288,6 +289,14 @@ int main(void)
 		return 1;
 	}
 	bunix_console_write(musl_done, sizeof(musl_done) - 1);
+
+	proc_request.type = BUNIX_PROC_SPAWN;
+	pack_path(&proc_request.words[0], "/bin/sh");
+	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
+	    proc_reply.words[0] != 0) {
+		return 1;
+	}
+	bunix_console_write(shell_spawned, sizeof(shell_spawned) - 1);
 
 	return 0;
 }

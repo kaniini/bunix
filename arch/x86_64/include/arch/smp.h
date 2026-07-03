@@ -9,6 +9,7 @@ u32 arch_smp_cpu_count(void);
 u32 arch_smp_current_cpu_id(void);
 u32 arch_smp_lapic_id(u32 cpu_index);
 u64 arch_smp_lapic_address(void);
+void arch_smp_set_syscall_stack(u64 stack);
 void arch_smp_send_scheduler_ipi(u32 cpu_index);
 void arch_smp_handle_scheduler_ipi(void);
 void arch_smp_handle_timer_interrupt(void);

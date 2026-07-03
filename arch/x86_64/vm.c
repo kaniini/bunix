@@ -217,6 +217,52 @@ int arch_vm_map_page(struct arch_vm_space *space, u64 vaddr, u64 phys,
 	return 0;
 }
 
+int arch_vm_protect_page(struct arch_vm_space *space, u64 vaddr, u32 writable)
+{
+	u64 *pml4 = (u64 *)space->cr3;
+	const u64 pml4_index = (vaddr >> 39) & 0x1ff;
+	const u64 pdpt_index = (vaddr >> 30) & 0x1ff;
+	const u64 pd_index = (vaddr >> 21) & 0x1ff;
+	const u64 pt_index = (vaddr >> 12) & 0x1ff;
+	u64 entry;
+
+	if ((vaddr & (PAGE_SIZE - 1)) != 0) {
+		return -1;
+	}
+
+	entry = pml4[pml4_index];
+	if ((entry & PTE_PRESENT) == 0 || (entry & PTE_LARGE) != 0) {
+		return -1;
+	}
+
+	u64 *pdpt = (u64 *)(entry & ~0xfffull);
+	entry = pdpt[pdpt_index];
+	if ((entry & PTE_PRESENT) == 0 || (entry & PTE_LARGE) != 0) {
+		return -1;
+	}
+
+	u64 *pd = (u64 *)(entry & ~0xfffull);
+	entry = pd[pd_index];
+	if ((entry & PTE_PRESENT) == 0 || (entry & PTE_LARGE) != 0) {
+		return -1;
+	}
+
+	u64 *pt = (u64 *)(entry & ~0xfffull);
+	entry = pt[pt_index];
+	if ((entry & PTE_PRESENT) == 0) {
+		return -1;
+	}
+
+	if (writable) {
+		entry |= PTE_WRITABLE;
+	} else {
+		entry &= ~((u64)PTE_WRITABLE);
+	}
+	pt[pt_index] = entry;
+	__asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
+	return 0;
+}
+
 u64 arch_vm_unmap_page(struct arch_vm_space *space, u64 vaddr)
 {
 	u64 *pml4 = (u64 *)space->cr3;

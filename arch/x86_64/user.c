@@ -47,8 +47,10 @@ enum {
 	SYSCALL_TASK_ID = -42,
 	SYSCALL_TASK_ALLOC = -44,
 	SYSCALL_TASK_CLONE_RANGE = -46,
+	SYSCALL_CONSOLE_READ = -48,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
+	LINUX_SYSCALL_OPEN = 2,
 	LINUX_SYSCALL_CLOSE = 3,
 	LINUX_SYSCALL_FSTAT = 5,
 	LINUX_SYSCALL_MMAP = 9,
@@ -59,7 +61,17 @@ enum {
 	LINUX_SYSCALL_RT_SIGPROCMASK = 14,
 	LINUX_SYSCALL_IOCTL = 16,
 	LINUX_SYSCALL_WRITEV = 20,
+	LINUX_SYSCALL_FCNTL = 72,
+	LINUX_SYSCALL_GETCWD = 79,
+	LINUX_SYSCALL_CHDIR = 80,
+	LINUX_SYSCALL_GETUID = 102,
+	LINUX_SYSCALL_GETGID = 104,
+	LINUX_SYSCALL_GETEUID = 107,
+	LINUX_SYSCALL_GETEGID = 108,
+	LINUX_SYSCALL_GETPPID = 110,
+	LINUX_SYSCALL_GETPGRP = 111,
 	LINUX_SYSCALL_FORK = 57,
+	LINUX_SYSCALL_VFORK = 58,
 	LINUX_SYSCALL_EXIT = 60,
 	LINUX_SYSCALL_UNAME = 63,
 	LINUX_SYSCALL_ARCH_PRCTL = 158,
@@ -85,9 +97,12 @@ enum {
 	LINUX_ARCH_SET_FS = 0x1002,
 	LINUX_FUTEX_WAIT = 0,
 	LINUX_FUTEX_WAKE = 1,
+	LINUX_TCGETS = 0x5401,
+	LINUX_TCSETS = 0x5402,
+	LINUX_TIOCGWINSZ = 0x5413,
 	ARCH_USER_MAX_CPUS = 8,
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
-	LINUX_EXEC_MAX_IMAGE = 65536,
+	LINUX_EXEC_MAX_IMAGE = 2 * 1024 * 1024,
 	LINUX_EXEC_MAX_PATH = 32,
 	LINUX_EXEC_STACK_TOP = 0x800000,
 	LINUX_EXEC_STACK_PAGES = 16,
@@ -116,6 +131,7 @@ enum {
 	USER_VFS_TYPE_REGULAR = 1,
 	USER_LINUX_READ = 0,
 	USER_LINUX_WRITE = 1,
+	USER_LINUX_OPEN = 2,
 	USER_LINUX_CLOSE = 3,
 	USER_LINUX_FSTAT = 5,
 	USER_LINUX_GETPID = 39,
@@ -136,6 +152,7 @@ enum {
 	ELF_CLASS_64 = 2,
 	ELF_DATA_LSB = 1,
 	ELF_TYPE_EXEC = 2,
+	ELF_TYPE_DYN = 3,
 	ELF_MACHINE_X86_64 = 62,
 	ELF_PH_LOAD = 1,
 	ELF_PF_X = 1,
@@ -174,6 +191,7 @@ struct elf64_phdr {
 } __attribute__((packed));
 
 static u8 syscall_copy_buffer[LINUX_MAX_SYSCALL_BUFFER];
+static u8 console_input_buffer[LINUX_MAX_SYSCALL_BUFFER];
 static struct spinlock syscall_copy_lock = SPINLOCK_INIT("syscall-copy");
 struct user_ipc_message {
 	u32 protocol;
@@ -530,7 +548,7 @@ static int linux_exec_validate(const u8 *image, u64 image_size,
 	    ehdr->ident[3] != ELF_MAGIC3 ||
 	    ehdr->ident[4] != ELF_CLASS_64 ||
 	    ehdr->ident[5] != ELF_DATA_LSB ||
-	    ehdr->type != ELF_TYPE_EXEC ||
+	    (ehdr->type != ELF_TYPE_EXEC && ehdr->type != ELF_TYPE_DYN) ||
 	    ehdr->machine != ELF_MACHINE_X86_64 ||
 	    ehdr->ehsize != ELF_EHDR_SIZE ||
 	    ehdr->phentsize != ELF_PHDR_SIZE ||
@@ -956,7 +974,8 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			       task_id(task), (const void *)base, (u32)len);
 		return 0;
 	}
-	case LINUX_SYSCALL_FORK: {
+	case LINUX_SYSCALL_FORK:
+	case LINUX_SYSCALL_VFORK: {
 		struct task *child = server_task_fork_current(frame);
 		u64 pid;
 
@@ -1014,6 +1033,26 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		return 0;
 	case LINUX_SYSCALL_SET_TID_ADDRESS:
 		return thread_id(thread_current());
+	case LINUX_SYSCALL_GETUID:
+	case LINUX_SYSCALL_GETGID:
+	case LINUX_SYSCALL_GETEUID:
+	case LINUX_SYSCALL_GETEGID:
+		return 0;
+	case LINUX_SYSCALL_GETPPID:
+		return 1;
+	case LINUX_SYSCALL_GETPGRP:
+		return 1;
+	case LINUX_SYSCALL_GETCWD: {
+		const char cwd[] = "/";
+
+		if (arg0 == 0 || arg1 < sizeof(cwd)) {
+			return (u64)-LINUX_EINVAL;
+		}
+		return write_current_user(arg0, cwd, sizeof(cwd)) == 0 ?
+		       sizeof(cwd) : (u64)-LINUX_EINVAL;
+	}
+	case LINUX_SYSCALL_CHDIR:
+		return 0;
 	case LINUX_SYSCALL_SET_ROBUST_LIST:
 	case LINUX_SYSCALL_RT_SIGPROCMASK:
 		return 0;
@@ -1028,9 +1067,61 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		}
 		return 0;
 	case LINUX_SYSCALL_MPROTECT:
+		if (arg0 == 0 || (arg0 & (VM_PAGE_SIZE - 1)) != 0 ||
+		    arg1 == 0 || arg1 + VM_PAGE_SIZE - 1 < arg1) {
+			return (u64)-LINUX_EINVAL;
+		}
+		{
+			const u64 len = align_up(arg1, VM_PAGE_SIZE);
+			const u32 prot = linux_prot_to_task(arg2);
+			const u32 writable =
+				(prot & TASK_VM_PROT_WRITE) != 0;
+
+			if (arg0 + len < arg0 ||
+			    vm_protect_user_range(task_vm_space(task), arg0,
+						  len, writable) != 0 ||
+			    task_protect_vm_region(task, arg0, len,
+						   prot) != 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+			console_printf("linux: mprotect task=%u addr=%p len=%u prot=0x%x\n",
+				       task_id(task), (const void *)arg0,
+				       (u32)len, (u32)arg2);
+		}
 		return 0;
 	case LINUX_SYSCALL_IOCTL:
+		if (arg1 == LINUX_TCGETS) {
+			u8 termios[64];
+
+			if (arg2 == 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+			mem_zero(termios, sizeof(termios));
+			return write_current_user(arg2, termios,
+						  sizeof(termios)) == 0 ?
+			       0 : (u64)-LINUX_EINVAL;
+		}
+		if (arg1 == LINUX_TCSETS) {
+			return 0;
+		}
+		if (arg1 == LINUX_TIOCGWINSZ) {
+			u16 winsz[4] = { 25, 80, 0, 0 };
+
+			if (arg2 == 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+			return write_current_user(arg2, winsz, sizeof(winsz)) == 0 ?
+			       0 : (u64)-LINUX_EINVAL;
+		}
 		return (u64)-LINUX_ENOTTY;
+	case LINUX_SYSCALL_FCNTL:
+		if (arg0 >= 16) {
+			return (u64)-LINUX_EBADF;
+		}
+		if (arg1 == 1 || arg1 == 2 || arg1 == 3 || arg1 == 4) {
+			return 0;
+		}
+		return (u64)-LINUX_EINVAL;
 	case LINUX_SYSCALL_CLOCK_GETTIME: {
 		u64 timespec[2];
 		const u64 ns = timer_monotonic_ns();
@@ -1326,9 +1417,14 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_ENOSYS;
 		}
 		return reply.words[0];
+	case LINUX_SYSCALL_OPEN:
 	case LINUX_SYSCALL_OPENAT: {
 		struct shared_buffer *buffer;
-		const char *path = (const char *)arg1;
+		const char *path = number == LINUX_SYSCALL_OPEN ?
+				    (const char *)arg0 : (const char *)arg1;
+		const u64 dirfd = number == LINUX_SYSCALL_OPEN ?
+				  (u64)-100 : arg0;
+		const u64 flags = number == LINUX_SYSCALL_OPEN ? arg1 : arg2;
 		u64 len = 0;
 
 		if (path == 0) {
@@ -1349,10 +1445,10 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 
-		request.type = USER_LINUX_OPENAT;
-		request.words[0] = arg0;
+		request.type = USER_LINUX_OPEN;
+		request.words[0] = dirfd;
 		request.words[1] = len;
-		request.words[2] = arg2;
+		request.words[2] = flags;
 		request.words[3] = 0;
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_RECV;
@@ -1414,7 +1510,10 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_EXIT_GROUP:
 		return linux_exit_current(arg0);
 	default:
-		console_printf("linux: unknown syscall=%u\n", (u32)number);
+		console_printf("linux: unknown syscall=%u rip=%p arg0=%p arg1=%p arg2=%p arg3=%p\n",
+			       (u32)number, (const void *)frame->user_rip,
+			       (const void *)arg0, (const void *)arg1,
+			       (const void *)arg2, (const void *)arg3);
 		return (u64)-1;
 	}
 }
@@ -1469,6 +1568,22 @@ static void gdt_set_tss(struct arch_user_cpu *cpu, u32 index, u64 base,
 	cpu->gdt[index + 1] = base >> 32;
 }
 
+static void arch_enable_sse(void)
+{
+	u64 cr0;
+	u64 cr4;
+
+	__asm__ volatile ("movq %%cr0, %0" : "=r"(cr0));
+	cr0 |= 1u << 1;
+	cr0 &= ~(1u << 2);
+	cr0 &= ~(1u << 3);
+	__asm__ volatile ("movq %0, %%cr0" : : "r"(cr0) : "memory");
+
+	__asm__ volatile ("movq %%cr4, %0" : "=r"(cr4));
+	cr4 |= (1u << 9) | (1u << 10);
+	__asm__ volatile ("movq %0, %%cr4" : : "r"(cr4) : "memory");
+}
+
 void arch_user_init_cpu(u32 cpu_id)
 {
 	struct arch_user_cpu *cpu = &user_cpus[cpu_id];
@@ -1506,6 +1621,7 @@ void arch_user_init_cpu(u32 cpu_id)
 		: "r"((u16)GDT_KERNEL_DATA)
 		: "memory");
 	__asm__ volatile ("ltr %0" : : "r"((u16)GDT_TSS));
+	arch_enable_sse();
 
 	arch_wrmsr(MSR_STAR, ((u64)0x13 << 48) | ((u64)GDT_KERNEL_CODE << 32));
 	arch_wrmsr(MSR_LSTAR, (u64)arch_syscall_entry);
@@ -1528,6 +1644,7 @@ void arch_user_set_kernel_stack(u64 stack)
 
 	user_cpus[cpu_id].tss.rsp0 = stack;
 	arch_current_syscall_stack[cpu_id] = stack;
+	arch_smp_set_syscall_stack(stack);
 }
 
 void arch_user_set_fs_base(u64 fs_base)
@@ -1792,6 +1909,23 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 		}
 		spin_unlock_irqrestore(&syscall_copy_lock, flags);
 		return 0;
+	}
+	case SYSCALL_CONSOLE_READ: {
+		u64 nread;
+		u64 flags;
+
+		if (arg0 == 0 || arg1 > LINUX_MAX_SYSCALL_BUFFER) {
+			return (u64)-1;
+		}
+
+		nread = console_read_line((char *)console_input_buffer, arg1);
+		flags = spin_lock_irqsave(&syscall_copy_lock);
+		if (write_current_user(arg0, console_input_buffer, nread) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			return (u64)-1;
+		}
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
+		return nread;
 	}
 	case SYSCALL_IPC_SEND: {
 		struct user_ipc_message user_message;

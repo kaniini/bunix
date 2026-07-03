@@ -13,7 +13,7 @@
 enum {
 	MAX_CPUS = 8,
 	MAX_TASK_HANDLES = 32,
-	MAX_TASK_VM_REGIONS = 32,
+	MAX_TASK_VM_REGIONS = 256,
 	KERNEL_STACK_SIZE = 32768,
 	SCHED_QUANTUM_TICKS = 5,
 };
@@ -1208,13 +1208,17 @@ int task_add_vm_mapping(struct task *task, u64 base, u64 len, u32 prot,
 
 	for (u32 i = 0; i < task->vm_region_count; i++) {
 		struct task_vm_region *region = &task->vm_regions[i];
+		const int offset_extends =
+			object_id == 0 ||
+			object_type == TASK_VM_OBJECT_ANON ||
+			region->offset + region->len == offset;
 
 		if (region->kind == kind &&
 		    region->prot == prot &&
 		    region->flags == map_flags &&
 		    region->object_type == object_type &&
 		    region->object_id == object_id &&
-		    region->offset + region->len == offset &&
+		    offset_extends &&
 		    region_end(region) == base) {
 			region->len += len;
 			spin_unlock_irqrestore(&task->lock, irq_flags);
@@ -1317,6 +1321,124 @@ int task_vm_range_is_free(struct task *task, u64 base, u64 len)
 
 	spin_unlock_irqrestore(&task->lock, flags);
 	return 1;
+}
+
+static void region_set_prot(struct task_vm_region *region, u32 prot)
+{
+	region->prot = prot;
+	region->writable = (prot & TASK_VM_PROT_WRITE) != 0;
+}
+
+static int task_vm_range_is_covered_locked(struct task *task, u64 base, u64 len)
+{
+	const u64 end = base + len;
+	u64 cursor = base;
+
+	while (cursor < end) {
+		int found = 0;
+
+		for (u32 i = 0; i < task->vm_region_count; i++) {
+			const struct task_vm_region *region = &task->vm_regions[i];
+			const u64 region_end = region->base + region->len;
+
+			if (region->base <= cursor && cursor < region_end) {
+				cursor = region_end < end ? region_end : end;
+				found = 1;
+				break;
+			}
+		}
+		if (!found) {
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+static int task_append_vm_region_locked(struct task *task,
+					struct task_vm_region region)
+{
+	if (task->vm_region_count >= MAX_TASK_VM_REGIONS) {
+		console_printf("sched: vma protect split denied task=%u\n",
+			       task->pid);
+		return -1;
+	}
+
+	task->vm_regions[task->vm_region_count++] = region;
+	return 0;
+}
+
+int task_protect_vm_region(struct task *task, u64 base, u64 len, u32 prot)
+{
+	if (task == 0 || len == 0 || base + len < base) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	const u64 end = base + len;
+
+	if (!task_vm_range_is_covered_locked(task, base, len)) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		return -1;
+	}
+
+	for (u32 i = 0; i < task->vm_region_count; i++) {
+		struct task_vm_region *region = &task->vm_regions[i];
+		const u64 region_base = region->base;
+		const u64 region_end = region->base + region->len;
+
+		if (!regions_overlap(base, len, region_base, region->len)) {
+			continue;
+		}
+
+		const u64 protect_base =
+			base > region_base ? base : region_base;
+		const u64 protect_end = end < region_end ? end : region_end;
+
+		if (protect_base == region_base && protect_end == region_end) {
+			region_set_prot(region, prot);
+			continue;
+		}
+
+		struct task_vm_region middle = *region;
+
+		middle.base = protect_base;
+		middle.len = protect_end - protect_base;
+		region_set_prot(&middle, prot);
+
+		if (protect_base == region_base) {
+			region->base = protect_end;
+			region->len = region_end - protect_end;
+			if (task_append_vm_region_locked(task, middle) != 0) {
+				spin_unlock_irqrestore(&task->lock, flags);
+				return -1;
+			}
+			continue;
+		}
+
+		if (protect_end == region_end) {
+			region->len = protect_base - region_base;
+			if (task_append_vm_region_locked(task, middle) != 0) {
+				spin_unlock_irqrestore(&task->lock, flags);
+				return -1;
+			}
+			continue;
+		}
+
+		struct task_vm_region right = *region;
+
+		right.base = protect_end;
+		right.len = region_end - protect_end;
+		region->len = protect_base - region_base;
+		if (task_append_vm_region_locked(task, middle) != 0 ||
+		    task_append_vm_region_locked(task, right) != 0) {
+			spin_unlock_irqrestore(&task->lock, flags);
+			return -1;
+		}
+	}
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	return 0;
 }
 
 int task_remove_vm_region(struct task *task, u64 base, u64 len)

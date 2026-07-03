@@ -12,9 +12,15 @@ enum {
 	ELFCLASS64 = 2,
 	ELFDATA2LSB = 1,
 	ET_EXEC = 2,
+	ET_DYN = 3,
 	EM_X86_64 = 62,
 	PT_LOAD = 1,
+	PT_DYNAMIC = 2,
 	PF_W = 1 << 1,
+	DT_NULL = 0,
+	DT_RELR = 0x24,
+	DT_RELRSZ = 0x23,
+	DT_RELRENT = 0x25,
 	AT_NULL = 0,
 	AT_PHDR = 3,
 	AT_PHENT = 4,
@@ -35,6 +41,7 @@ enum {
 	EXEC_HANDLE_TIME = 3,
 	EXEC_HANDLE_PROC = 4,
 	PROC_MAX_PROCESSES = 16,
+	PROC_DYN_LOAD_BIAS = 0x400000,
 };
 
 struct process {
@@ -73,6 +80,11 @@ struct elf64_phdr {
 	u64 align;
 } __attribute__((packed));
 
+struct elf64_dyn {
+	long long tag;
+	u64 value;
+} __attribute__((packed));
+
 struct vfs_file {
 	u64 handle;
 	u64 size;
@@ -96,10 +108,12 @@ static const char proc_ready[] = "proc: ready\n";
 static const char proc_exec[] = "proc: exec /bin/first\n";
 static const char proc_exec_linux[] = "proc: exec /bin/lxtest\n";
 static const char proc_exec_musl[] = "proc: exec /bin/musl-hello\n";
+static const char proc_exec_shell[] = "proc: exec /bin/sh\n";
 static const char proc_spawned[] = "proc: spawned pid=1\n";
 static const char proc_spawned_linux[] = "proc: spawned pid=2\n";
 static const char proc_spawned_linux_again[] = "proc: spawned pid=3\n";
 static const char proc_spawned_musl[] = "proc: spawned pid=4\n";
+static const char proc_spawned_shell[] = "proc: spawned pid=5\n";
 static const char proc_exited[] = "proc: exited pid=1 status=0\n";
 static const char proc_waited[] = "proc: wait pid=1 status=0\n";
 static const char proc_register_failed[] = "proc: register failed\n";
@@ -189,7 +203,10 @@ static int str_eq(const char *left, const char *right)
 
 static int is_linux_path(const char *path)
 {
-	return str_eq(path, "/bin/lxtest") || str_eq(path, "/bin/musl-hello");
+	return str_eq(path, "/bin/lxtest") ||
+	       str_eq(path, "/bin/musl-hello") ||
+	       str_eq(path, "/bin/sh") ||
+	       str_eq(path, "/bin/busybox");
 }
 
 static const char *task_name_for_path(const char *path)
@@ -199,6 +216,9 @@ static const char *task_name_for_path(const char *path)
 	}
 	if (str_eq(path, "/bin/musl-hello")) {
 		return "musl-hello";
+	}
+	if (str_eq(path, "/bin/sh") || str_eq(path, "/bin/busybox")) {
+		return "busybox";
 	}
 	return "first";
 }
@@ -227,6 +247,17 @@ static u64 min_u64(u64 left, u64 right)
 static u64 max_u64(u64 left, u64 right)
 {
 	return left > right ? left : right;
+}
+
+static u64 read_u64_le(const unsigned char *src)
+{
+	u64 value = 0;
+
+	for (u64 i = 0; i < 8; i++) {
+		value |= ((u64)src[i]) << (i * 8);
+	}
+
+	return value;
 }
 
 static void mem_zero(unsigned char *dst, u64 len)
@@ -356,6 +387,147 @@ static long vfs_read_file(u64 vfs, u64 file, u64 file_size, u64 offset,
 			return -1;
 		}
 		done += reply.words[1];
+	}
+
+	return 0;
+}
+
+static long elf_vaddr_to_offset(const struct elf64_phdr *phdrs, u64 phnum,
+				u64 vaddr, u64 len, u64 *offset)
+{
+	if (phdrs == 0 || offset == 0 || vaddr + len < vaddr) {
+		return -1;
+	}
+
+	for (u64 i = 0; i < phnum; i++) {
+		const struct elf64_phdr *phdr = &phdrs[i];
+
+		if (phdr->type != PT_LOAD ||
+		    vaddr < phdr->vaddr ||
+		    vaddr + len > phdr->vaddr + phdr->filesz) {
+			continue;
+		}
+
+		*offset = phdr->offset + (vaddr - phdr->vaddr);
+		return 0;
+	}
+
+	return -1;
+}
+
+static long read_vaddr_bytes(u64 vfs, const struct vfs_file *file,
+			     const struct elf64_phdr *phdrs, u64 phnum,
+			     u64 vaddr, unsigned char *buffer, u64 len,
+			     u64 io_buffer)
+{
+	u64 offset = 0;
+
+	if (file == 0 ||
+	    elf_vaddr_to_offset(phdrs, phnum, vaddr, len, &offset) != 0) {
+		return -1;
+	}
+
+	return vfs_read_file(vfs, file->handle, file->size, offset,
+			     buffer, len, io_buffer);
+}
+
+static long apply_relr_one(u64 task, u64 load_bias, u64 reloc_vaddr,
+			   u64 vfs, const struct vfs_file *file,
+			   const struct elf64_phdr *phdrs, u64 phnum,
+			   u64 io_buffer)
+{
+	unsigned char word[8];
+
+	if (read_vaddr_bytes(vfs, file, phdrs, phnum, reloc_vaddr,
+			     word, sizeof(word), io_buffer) != 0) {
+		return -1;
+	}
+
+	const u64 relocated = read_u64_le(word) + load_bias;
+	return bunix_task_write(task, load_bias + reloc_vaddr,
+				&relocated, sizeof(relocated));
+}
+
+static long apply_relative_relocations(u64 vfs, const struct vfs_file *file,
+				       const struct elf64_phdr *phdrs,
+				       u64 phnum, u64 task, u64 load_bias,
+				       u64 io_buffer)
+{
+	u64 relr = 0;
+	u64 relrsz = 0;
+	u64 relrent = 8;
+
+	if (load_bias == 0) {
+		return 0;
+	}
+
+	for (u64 i = 0; i < phnum; i++) {
+		const struct elf64_phdr *phdr = &phdrs[i];
+
+		if (phdr->type != PT_DYNAMIC) {
+			continue;
+		}
+		if (phdr->filesz > PROC_SEGMENT_MAX ||
+		    vfs_read_file(vfs, file->handle, file->size, phdr->offset,
+				  segment_buffer, phdr->filesz,
+				  io_buffer) != 0) {
+			return -1;
+		}
+
+		const u64 entries = phdr->filesz / sizeof(struct elf64_dyn);
+		const struct elf64_dyn *dyn =
+			(const struct elf64_dyn *)segment_buffer;
+
+		for (u64 entry = 0; entry < entries; entry++) {
+			if (dyn[entry].tag == DT_NULL) {
+				break;
+			}
+			if (dyn[entry].tag == DT_RELR) {
+				relr = dyn[entry].value;
+			} else if (dyn[entry].tag == DT_RELRSZ) {
+				relrsz = dyn[entry].value;
+			} else if (dyn[entry].tag == DT_RELRENT) {
+				relrent = dyn[entry].value;
+			}
+		}
+		break;
+	}
+
+	if (relr == 0 || relrsz == 0) {
+		return 0;
+	}
+	if (relrent != 8 || relrsz > PROC_SEGMENT_MAX ||
+	    read_vaddr_bytes(vfs, file, phdrs, phnum, relr,
+			     segment_buffer, relrsz, io_buffer) != 0) {
+		return -1;
+	}
+
+	u64 reloc_vaddr = 0;
+	const u64 entries = relrsz / relrent;
+
+	for (u64 i = 0; i < entries; i++) {
+		const u64 entry = read_u64_le(segment_buffer + i * relrent);
+
+		if ((entry & 1) == 0) {
+			reloc_vaddr = entry;
+			if (apply_relr_one(task, load_bias, reloc_vaddr,
+					   vfs, file, phdrs, phnum,
+					   io_buffer) != 0) {
+				return -1;
+			}
+			reloc_vaddr += 8;
+			continue;
+		}
+
+		for (u64 bit = 1; bit < 64; bit++) {
+			if ((entry & (1ull << bit)) != 0 &&
+			    apply_relr_one(task, load_bias, reloc_vaddr,
+					   vfs, file, phdrs, phnum,
+					   io_buffer) != 0) {
+				return -1;
+			}
+			reloc_vaddr += 8;
+		}
 	}
 
 	return 0;
@@ -492,11 +664,13 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 	};
 	struct elf64_ehdr ehdr;
 	struct elf64_phdr phdrs[PROC_MAX_PHDRS];
+	struct elf64_phdr aux_phdrs[PROC_MAX_PHDRS];
 	struct exec_info exec;
 	struct vfs_file file = { 0, 0, 0 };
 	long io_buffer;
 	long task;
 	u64 stack = 0;
+	u64 load_bias = 0;
 
 	io_buffer = bunix_buffer_create(PROC_SEGMENT_MAX);
 	if (io_buffer <= 0 ||
@@ -508,7 +682,7 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 	    read_magic(ehdr.ident) != ELF_MAGIC ||
 	    ehdr.ident[4] != ELFCLASS64 ||
 	    ehdr.ident[5] != ELFDATA2LSB ||
-	    ehdr.type != ET_EXEC ||
+	    (ehdr.type != ET_EXEC && ehdr.type != ET_DYN) ||
 	    ehdr.machine != EM_X86_64 ||
 	    ehdr.phnum > PROC_MAX_PHDRS ||
 	    ehdr.phentsize != sizeof(phdrs[0]) ||
@@ -524,10 +698,16 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 		}
 		return -1;
 	}
-	exec.entry = ehdr.entry;
+	load_bias = ehdr.type == ET_DYN ? PROC_DYN_LOAD_BIAS : 0;
+	for (u64 i = 0; i < ehdr.phnum; i++) {
+		aux_phdrs[i] = phdrs[i];
+		aux_phdrs[i].vaddr += load_bias;
+		aux_phdrs[i].paddr += load_bias;
+	}
+	exec.entry = ehdr.entry + load_bias;
 	exec.phent = ehdr.phentsize;
 	exec.phnum = ehdr.phnum;
-	exec.phdrs = phdrs;
+	exec.phdrs = aux_phdrs;
 
 	task = bunix_task_create(task_name);
 	if (task < 0) {
@@ -560,17 +740,22 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 			return -1;
 		}
 
-		const u64 page_start = align_down(phdr->vaddr, 4096);
-		const u64 page_end = ((phdr->vaddr + phdr->memsz + 4095) &
+		const u64 page_start = align_down(phdr->vaddr + load_bias,
+						  4096);
+		const u64 page_end = ((phdr->vaddr + load_bias +
+				       phdr->memsz + 4095) &
 				      ~4095ull);
 
 		for (u64 page = page_start; page < page_end; page += 4096) {
 			const u64 page_end_addr = page + 4096;
-			const u64 copy_start = max_u64(page, phdr->vaddr);
+			const u64 copy_start = max_u64(page,
+						       phdr->vaddr + load_bias);
 			const u64 copy_end = min_u64(page_end_addr,
-						     phdr->vaddr + phdr->filesz);
+						     phdr->vaddr + load_bias +
+						     phdr->filesz);
 			const u64 dst_offset = copy_start - page;
-			const u64 src_offset = copy_start - phdr->vaddr;
+			const u64 src_offset = copy_start - load_bias -
+					       phdr->vaddr;
 			const u64 filesz = copy_start < copy_end ?
 					   copy_end - copy_start : 0;
 
@@ -596,6 +781,15 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 		}
 	}
 
+	if (apply_relative_relocations(vfs, &file, phdrs, ehdr.phnum,
+				       (u64)task, load_bias,
+				       (u64)io_buffer) != 0) {
+		vfs_close(vfs, file.handle);
+		bunix_handle_close((u64)io_buffer);
+		bunix_handle_close((u64)task);
+		return -1;
+	}
+
 	if (build_initial_stack((u64)task, path, &exec, &stack) != 0) {
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
@@ -614,7 +808,7 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 			return -1;
 		}
 	}
-	const long started = bunix_task_start_at((u64)task, ehdr.entry, stack);
+	const long started = bunix_task_start_at((u64)task, exec.entry, stack);
 
 	bunix_handle_close((u64)task);
 	return started;
@@ -784,6 +978,11 @@ int main(void)
 							    sizeof(proc_exec_musl) - 1);
 					bunix_console_write(proc_spawned_musl,
 							    sizeof(proc_spawned_musl) - 1);
+				} else if (str_eq(path, "/bin/sh")) {
+					bunix_console_write(proc_exec_shell,
+							    sizeof(proc_exec_shell) - 1);
+					bunix_console_write(proc_spawned_shell,
+							    sizeof(proc_spawned_shell) - 1);
 				} else {
 					bunix_console_write(proc_exec,
 							    sizeof(proc_exec) - 1);

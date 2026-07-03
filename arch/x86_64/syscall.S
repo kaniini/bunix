@@ -1,40 +1,49 @@
 .section .text, "ax"
-.extern arch_current_syscall_stack
 .global arch_syscall_entry
 .type arch_syscall_entry, @function
 arch_syscall_entry:
-	movq %r10, %r9
-	movq %rsp, %r10
-	movq %rax, %r8
-	movl %gs:0, %eax
-	leaq arch_current_syscall_stack(%rip), %rsp
-	movq (%rsp,%rax,8), %rsp
+	movq %rsp, %r11
+	movq %gs:8, %rsp
 
-	subq $112, %rsp
+	subq $128, %rsp
 
 	movq %r8, 0(%rsp)
 	movq %rdi, 8(%rsp)
 	movq %rsi, 16(%rsp)
 	movq %rdx, 24(%rsp)
-	movq %r9, 32(%rsp)
+	movq %r10, 32(%rsp)
 	movq %rcx, 40(%rsp)
-	movq %r11, 48(%rsp)
-	movq %r10, 56(%rsp)
+	movq $0x202, 48(%rsp)
+	movq %r11, 56(%rsp)
 	movq %rbx, 64(%rsp)
 	movq %rbp, 72(%rsp)
 	movq %r12, 80(%rsp)
 	movq %r13, 88(%rsp)
 	movq %r14, 96(%rsp)
 	movq %r15, 104(%rsp)
+	movq %r8, 112(%rsp)
+	movq %r9, 120(%rsp)
+
+	movq %rax, 0(%rsp)
 
 	movq %rsp, %rdi
 	call arch_syscall_dispatch
 
+	movq 8(%rsp), %rdi
+	movq 16(%rsp), %rsi
+	movq 24(%rsp), %rdx
+	movq 32(%rsp), %r10
+	movq 64(%rsp), %rbx
+	movq 72(%rsp), %rbp
+	movq 80(%rsp), %r12
+	movq 88(%rsp), %r13
+	movq 96(%rsp), %r14
+	movq 104(%rsp), %r15
+	movq 112(%rsp), %r8
+	movq 120(%rsp), %r9
 	movq 40(%rsp), %rcx
 	movq 48(%rsp), %r11
-	movq 56(%rsp), %r10
-	addq $112, %rsp
-	movq %r10, %rsp
+	movq 56(%rsp), %rsp
 	sysretq
 
 .global arch_user_resume

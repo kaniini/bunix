@@ -36,6 +36,8 @@ struct vm_frame vm_alloc_user_page(struct vm_space *space, u64 vaddr,
 				   u32 writable);
 int vm_alloc_user_range(struct vm_space *space, u64 vaddr, u64 len,
 			u32 writable);
+int vm_protect_user_range(struct vm_space *space, u64 vaddr, u64 len,
+			  u32 writable);
 int vm_unmap_user_range(struct vm_space *space, u64 vaddr, u64 len);
 int vm_clone_user_range(struct vm_space *dst, struct vm_space *src,
 			u64 vaddr, u64 len, u32 writable);
