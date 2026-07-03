@@ -24,6 +24,8 @@ FIRST_MODULE := $(BUILD_DIR)/modules/first.user
 FIRST_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/first/main.c.o
 LXTEST_MODULE := $(BUILD_DIR)/modules/lxtest.user
 LXTEST_MODULE_OBJS := $(BUILD_DIR)/user/lxtest/main.S.o
+EXECOK_MODULE := $(BUILD_DIR)/modules/execok.user
+EXECOK_MODULE_OBJS := $(BUILD_DIR)/user/execok/main.S.o
 PING_MODULE := $(BUILD_DIR)/modules/ping.server
 PING_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/ping/main.c.o
 BLOCK_IMAGE := $(BUILD_DIR)/modules/disk0.img
@@ -89,6 +91,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/init/main.c.o \
 	$(BUILD_DIR)/user/vfs/main.c.o \
 	$(BUILD_DIR)/user/first/main.c.o \
 	$(BUILD_DIR)/user/lxtest/main.S.o \
+	$(BUILD_DIR)/user/execok/main.S.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
@@ -156,6 +159,10 @@ $(LXTEST_MODULE): $(LXTEST_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(LXTEST_MODULE_OBJS)
 
+$(EXECOK_MODULE): $(EXECOK_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(EXECOK_MODULE_OBJS)
+
 $(PING_MODULE): $(PING_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PING_MODULE_OBJS)
@@ -164,9 +171,9 @@ $(ROOTFS_TOOL): tools/mkrootfs.c
 	mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror $< -o $@
 
-$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(FIRST_MODULE) $(LXTEST_MODULE)
+$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(FIRST_MODULE) $(LXTEST_MODULE) $(EXECOK_MODULE)
 	mkdir -p $(dir $@)
-	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /bin/first $(FIRST_MODULE) /bin/lxtest $(LXTEST_MODULE)
+	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /bin/first $(FIRST_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE)
 
 $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
@@ -234,7 +241,7 @@ run-iso: $(EFI_BOOT_IMG)
 test: $(EFI_BOOT_APP)
 	mkdir -p $(BUILD_DIR)
 	truncate -s 0 $(BUILD_DIR)/serial.log
-	timeout 30s $(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
+	timeout 60s $(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
 		-smp $(SMP) \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive format=raw,file=fat:rw:$(ESP_DIR) \
@@ -423,6 +430,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "kernel: task fork parent=" $(BUILD_DIR)/serial.log
 	grep -F "linux: fork parent=" $(BUILD_DIR)/serial.log
 	grep -F "linux fork child ok" $(BUILD_DIR)/serial.log
+	grep -F "linux: execve task=" $(BUILD_DIR)/serial.log
+	grep -F "linux exec child ok" $(BUILD_DIR)/serial.log
 	grep -F "linux: munmap task=" $(BUILD_DIR)/serial.log
 	grep -F "linux munmap checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: wait4" $(BUILD_DIR)/serial.log

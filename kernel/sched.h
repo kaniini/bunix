@@ -97,6 +97,7 @@ int task_add_vm_region(struct task *task, u64 base, u64 len, u32 writable,
 int task_add_or_extend_vm_region(struct task *task, u64 base, u64 len,
 				 u32 writable, u32 kind);
 int task_remove_vm_region(struct task *task, u64 base, u64 len);
+void task_clear_vm_regions(struct task *task);
 u64 task_vm_region_count(const struct task *task);
 const struct task_vm_region *task_vm_region_at(const struct task *task,
 					       u64 index);

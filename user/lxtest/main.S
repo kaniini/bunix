@@ -134,8 +134,14 @@ fork_child:
 	movq $fork_child_message_end - fork_child_message, %rdx
 	syscall
 
+	movq $59, %rax
+	leaq exec_path(%rip), %rdi
+	xorq %rsi, %rsi
+	xorq %rdx, %rdx
+	syscall
+
 	movq $231, %rax
-	xorq %rdi, %rdi
+	movq $1, %rdi
 	syscall
 
 2:
@@ -259,6 +265,8 @@ fail_message:
 fail_message_end:
 hello_path:
 	.asciz "/hello.txt"
+exec_path:
+	.asciz "/bin/execok"
 
 .section .bss, "aw"
 read_buffer:

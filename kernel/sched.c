@@ -15,7 +15,7 @@ enum {
 	MAX_THREADS = 32,
 	MAX_TASK_HANDLES = 32,
 	MAX_TASK_VM_REGIONS = 32,
-	KERNEL_STACK_SIZE = 16384,
+	KERNEL_STACK_SIZE = 32768,
 	SCHED_QUANTUM_TICKS = 5,
 };
 
@@ -1143,6 +1143,18 @@ int task_remove_vm_region(struct task *task, u64 base, u64 len)
 
 	spin_unlock_irqrestore(&task->lock, flags);
 	return -1;
+}
+
+void task_clear_vm_regions(struct task *task)
+{
+	if (task == 0) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
+	task->vm_region_count = 0;
+	spin_unlock_irqrestore(&task->lock, flags);
 }
 
 u64 task_vm_region_count(const struct task *task)

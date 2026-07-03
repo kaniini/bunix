@@ -153,9 +153,11 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 		return;
 	}
 
-	console_printf("interrupts: vector=%u error=0x%x rip=%p\n",
+	console_printf("interrupts: vector=%u error=0x%x rip=%p task=%u thread=%u task_name=%s thread_name=%s\n",
 		       (u32)frame->vector, (u32)frame->error_code,
-		       (const void *)frame->rip);
+		       (const void *)frame->rip, task_id(task_current()),
+		       thread_id(thread_current()), task_name(task_current()),
+		       thread_name(thread_current()));
 
 	for (;;) {
 		__asm__ volatile ("cli; hlt");
