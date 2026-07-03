@@ -72,8 +72,12 @@ enum {
 	LINUX_SYSCALL_GETPGRP = 111,
 	LINUX_SYSCALL_FORK = 57,
 	LINUX_SYSCALL_VFORK = 58,
+	LINUX_SYSCALL_KILL = 62,
 	LINUX_SYSCALL_EXIT = 60,
 	LINUX_SYSCALL_UNAME = 63,
+	LINUX_SYSCALL_SETPGID = 109,
+	LINUX_SYSCALL_SETSID = 112,
+	LINUX_SYSCALL_GETPGID = 121,
 	LINUX_SYSCALL_ARCH_PRCTL = 158,
 	LINUX_SYSCALL_FUTEX = 202,
 	LINUX_SYSCALL_SET_TID_ADDRESS = 218,
@@ -99,6 +103,8 @@ enum {
 	LINUX_FUTEX_WAKE = 1,
 	LINUX_TCGETS = 0x5401,
 	LINUX_TCSETS = 0x5402,
+	LINUX_TIOCGPGRP = 0x540f,
+	LINUX_TIOCSPGRP = 0x5410,
 	LINUX_TIOCGWINSZ = 0x5413,
 	ARCH_USER_MAX_CPUS = 8,
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
@@ -135,6 +141,7 @@ enum {
 	USER_LINUX_CLOSE = 3,
 	USER_LINUX_FSTAT = 5,
 	USER_LINUX_GETPID = 39,
+	USER_LINUX_FCNTL = 72,
 	USER_LINUX_WAIT4 = 61,
 	USER_LINUX_GETTID = 186,
 	USER_LINUX_OPENAT = 257,
@@ -869,10 +876,120 @@ static u64 linux_fork_process(struct task *parent, struct task *child)
 	return reply.words[0];
 }
 
-static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
+static const char *linux_syscall_name(u64 number)
+{
+	switch (number) {
+	case LINUX_SYSCALL_READ:
+		return "read";
+	case LINUX_SYSCALL_WRITE:
+		return "write";
+	case LINUX_SYSCALL_OPEN:
+		return "open";
+	case LINUX_SYSCALL_CLOSE:
+		return "close";
+	case LINUX_SYSCALL_FSTAT:
+		return "fstat";
+	case LINUX_SYSCALL_MMAP:
+		return "mmap";
+	case LINUX_SYSCALL_MPROTECT:
+		return "mprotect";
+	case LINUX_SYSCALL_MUNMAP:
+		return "munmap";
+	case LINUX_SYSCALL_BRK:
+		return "brk";
+	case LINUX_SYSCALL_RT_SIGACTION:
+		return "rt_sigaction";
+	case LINUX_SYSCALL_RT_SIGPROCMASK:
+		return "rt_sigprocmask";
+	case LINUX_SYSCALL_IOCTL:
+		return "ioctl";
+	case LINUX_SYSCALL_WRITEV:
+		return "writev";
+	case LINUX_SYSCALL_GETCWD:
+		return "getcwd";
+	case LINUX_SYSCALL_CHDIR:
+		return "chdir";
+	case LINUX_SYSCALL_GETUID:
+		return "getuid";
+	case LINUX_SYSCALL_GETGID:
+		return "getgid";
+	case LINUX_SYSCALL_GETEUID:
+		return "geteuid";
+	case LINUX_SYSCALL_GETEGID:
+		return "getegid";
+	case LINUX_SYSCALL_GETPPID:
+		return "getppid";
+	case LINUX_SYSCALL_GETPGRP:
+		return "getpgrp";
+	case LINUX_SYSCALL_GETPGID:
+		return "getpgid";
+	case LINUX_SYSCALL_SETPGID:
+		return "setpgid";
+	case LINUX_SYSCALL_SETSID:
+		return "setsid";
+	case LINUX_SYSCALL_FORK:
+		return "fork";
+	case LINUX_SYSCALL_VFORK:
+		return "vfork";
+	case LINUX_SYSCALL_KILL:
+		return "kill";
+	case LINUX_SYSCALL_EXIT:
+		return "exit";
+	case LINUX_SYSCALL_UNAME:
+		return "uname";
+	case LINUX_SYSCALL_FCNTL:
+		return "fcntl";
+	case LINUX_SYSCALL_ARCH_PRCTL:
+		return "arch_prctl";
+	case LINUX_SYSCALL_FUTEX:
+		return "futex";
+	case LINUX_SYSCALL_SET_TID_ADDRESS:
+		return "set_tid_address";
+	case LINUX_SYSCALL_CLOCK_GETTIME:
+		return "clock_gettime";
+	case LINUX_SYSCALL_EXECVE:
+		return "execve";
+	case LINUX_SYSCALL_GETPID:
+		return "getpid";
+	case LINUX_SYSCALL_WAIT4:
+		return "wait4";
+	case LINUX_SYSCALL_GETTID:
+		return "gettid";
+	case LINUX_SYSCALL_NEWFSTATAT:
+		return "newfstatat";
+	case LINUX_SYSCALL_SET_ROBUST_LIST:
+		return "set_robust_list";
+	case LINUX_SYSCALL_OPENAT:
+		return "openat";
+	case LINUX_SYSCALL_PRLIMIT64:
+		return "prlimit64";
+	case LINUX_SYSCALL_GETRANDOM:
+		return "getrandom";
+	case LINUX_SYSCALL_EXIT_GROUP:
+		return "exit_group";
+	default:
+		return "unknown";
+	}
+}
+
+static void linux_strace_log(const struct arch_syscall_frame *frame, u64 result)
+{
+	const struct task *task = task_current();
+	const u64 number = frame->number;
+
+	console_printf("linux-strace: task=%u name=%s rip=%p %s(%p,%p,%p,%p) = %p\n",
+		       task_id(task), task_name(task),
+		       (const void *)frame->user_rip,
+		       linux_syscall_name(number),
+		       (const void *)frame->arg0, (const void *)frame->arg1,
+		       (const void *)frame->arg2, (const void *)frame->arg3,
+		       (const void *)result);
+}
+
+static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	__attribute__((noinline));
 
-static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
+static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 {
 	struct task *task = task_current();
 	const u64 number = frame->number;
@@ -1041,6 +1158,12 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_GETPPID:
 		return 1;
 	case LINUX_SYSCALL_GETPGRP:
+	case LINUX_SYSCALL_GETPGID:
+		return 1;
+	case LINUX_SYSCALL_SETPGID:
+	case LINUX_SYSCALL_KILL:
+		return 0;
+	case LINUX_SYSCALL_SETSID:
 		return 1;
 	case LINUX_SYSCALL_GETCWD: {
 		const char cwd[] = "/";
@@ -1104,6 +1227,19 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		if (arg1 == LINUX_TCSETS) {
 			return 0;
 		}
+		if (arg1 == LINUX_TIOCGPGRP) {
+			const int foreground_pgrp = 1;
+
+			if (arg2 == 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+			return write_current_user(arg2, &foreground_pgrp,
+						  sizeof(foreground_pgrp)) == 0 ?
+			       0 : (u64)-LINUX_EINVAL;
+		}
+		if (arg1 == LINUX_TIOCSPGRP) {
+			return 0;
+		}
 		if (arg1 == LINUX_TIOCGWINSZ) {
 			u16 winsz[4] = { 25, 80, 0, 0 };
 
@@ -1115,13 +1251,7 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 		}
 		return (u64)-LINUX_ENOTTY;
 	case LINUX_SYSCALL_FCNTL:
-		if (arg0 >= 16) {
-			return (u64)-LINUX_EBADF;
-		}
-		if (arg1 == 1 || arg1 == 2 || arg1 == 3 || arg1 == 4) {
-			return 0;
-		}
-		return (u64)-LINUX_EINVAL;
+		break;
 	case LINUX_SYSCALL_CLOCK_GETTIME: {
 		u64 timespec[2];
 		const u64 ns = timer_monotonic_ns();
@@ -1417,6 +1547,16 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_ENOSYS;
 		}
 		return reply.words[0];
+	case LINUX_SYSCALL_FCNTL:
+		request.type = USER_LINUX_FCNTL;
+		request.words[0] = arg0;
+		request.words[1] = arg1;
+		request.words[2] = arg2;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
 	case LINUX_SYSCALL_OPEN:
 	case LINUX_SYSCALL_OPENAT: {
 		struct shared_buffer *buffer;
@@ -1516,6 +1656,14 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			       (const void *)arg2, (const void *)arg3);
 		return (u64)-1;
 	}
+}
+
+static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
+{
+	const u64 result = linux_syscall_handle(frame);
+
+	linux_strace_log(frame, result);
+	return result;
 }
 
 struct gdt_ptr {

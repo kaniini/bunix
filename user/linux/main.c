@@ -20,6 +20,12 @@ enum {
 	LINUX_FD_CONSOLE = 1,
 	LINUX_FD_FILE = 2,
 	LINUX_AT_FDCWD = (u64)-100,
+	LINUX_F_DUPFD = 0,
+	LINUX_F_GETFD = 1,
+	LINUX_F_SETFD = 2,
+	LINUX_F_GETFL = 3,
+	LINUX_F_SETFL = 4,
+	LINUX_F_DUPFD_CLOEXEC = 1030,
 };
 
 struct linux_fd {
@@ -592,6 +598,34 @@ static long linux_close(struct linux_process *process, u64 fd)
 	return 0;
 }
 
+static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
+{
+	if (fd >= LINUX_MAX_FDS || process->fds[fd].kind == 0) {
+		return -LINUX_EBADF;
+	}
+
+	if (cmd == LINUX_F_GETFD || cmd == LINUX_F_GETFL) {
+		return 0;
+	}
+	if (cmd == LINUX_F_SETFD || cmd == LINUX_F_SETFL) {
+		return 0;
+	}
+	if (cmd == LINUX_F_DUPFD || cmd == LINUX_F_DUPFD_CLOEXEC) {
+		if (arg >= LINUX_MAX_FDS) {
+			return -LINUX_EINVAL;
+		}
+		for (u64 new_fd = arg; new_fd < LINUX_MAX_FDS; new_fd++) {
+			if (process->fds[new_fd].kind == 0) {
+				process->fds[new_fd] = process->fds[fd];
+				return (long)new_fd;
+			}
+		}
+		return -LINUX_EMFILE;
+	}
+
+	return -LINUX_EINVAL;
+}
+
 static void linux_close_process_fds(struct linux_process *process)
 {
 	if (process == 0) {
@@ -757,6 +791,12 @@ int main(void)
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
+			break;
+		case BUNIX_LINUX_FCNTL:
+			reply.words[0] = (u64)linux_fcntl(process,
+							  message.words[0],
+							  message.words[1],
+							  message.words[2]);
 			break;
 		case BUNIX_LINUX_NEWFSTATAT:
 			reply.words[0] = (u64)linux_newfstatat(message.words[0],

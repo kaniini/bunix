@@ -465,7 +465,6 @@ int main(void)
 			} else {
 				reply.words[0] = 0;
 				reply.words[1] = (u64)read_len;
-				bunix_console_write("vfs: read file\n", 15);
 			}
 			break;
 		}
