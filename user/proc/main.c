@@ -32,6 +32,7 @@ enum {
 
 struct process {
 	u64 pid;
+	u64 linux_pid;
 	u64 status;
 	u64 exited;
 	u64 waiter;
@@ -80,6 +81,7 @@ struct exec_info {
 
 static struct process processes[PROC_MAX_PROCESSES];
 static u64 next_pid = 1;
+static u64 first_linux_pid;
 static unsigned char segment_buffer[PROC_SEGMENT_MAX];
 static unsigned char init_stack[PROC_INIT_STACK_MAX];
 
@@ -386,7 +388,34 @@ static long build_initial_stack(u64 task, const char *path,
 	return 0;
 }
 
-static long exec_path(u64 vfs, const char *path, const char *task_name)
+static long register_linux_process(u64 task, u64 ppid, u64 *linux_pid)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_LINUX,
+		.type = BUNIX_LINUX_REGISTER_PROCESS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { task, ppid, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 linux = resolve_service(BUNIX_SERVICE_LINUX, BUNIX_RIGHT_SEND);
+
+	if (linux == 0 ||
+	    bunix_ipc_call(linux, &request, &reply) != 0 ||
+	    (long)reply.words[0] <= 0) {
+		return -1;
+	}
+
+	if (linux_pid != 0) {
+		*linux_pid = reply.words[0];
+	}
+	return 0;
+}
+
+static long exec_path(u64 vfs, const char *path, const char *task_name,
+		      u64 linux_parent_pid, u64 *linux_pid)
 {
 	const struct bunix_launch_cap caps[] = {
 		{ PROC_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
@@ -468,6 +497,15 @@ static long exec_path(u64 vfs, const char *path, const char *task_name)
 		return -1;
 	}
 	vfs_close(vfs, file.handle);
+	if (str_eq(path, "/bin/lxtest")) {
+		const long bunix_id = bunix_task_id((u64)task);
+
+		if (bunix_id <= 0 ||
+		    register_linux_process((u64)bunix_id, linux_parent_pid,
+					   linux_pid) != 0) {
+			return -1;
+		}
+	}
 	return bunix_task_start_at((u64)task, ehdr.entry, stack);
 }
 
@@ -511,6 +549,8 @@ static struct process *process_alloc(void)
 static long spawn_process(const char *path, u64 *pid)
 {
 	u64 vfs;
+	u64 linux_pid = 0;
+	u64 linux_parent_pid = 0;
 	struct process *process = process_alloc();
 
 	if (process == 0 || pid == 0) {
@@ -523,17 +563,27 @@ static long spawn_process(const char *path, u64 *pid)
 	}
 
 	process->pid = next_pid++;
+	process->linux_pid = 0;
 	process->status = 0;
 	process->exited = 0;
 	process->waiter = 0;
 	*pid = process->pid;
 
-	if (exec_path(vfs, path, str_eq(path, "/bin/lxtest") ? "lxtest" : "first") != 0) {
+	if (str_eq(path, "/bin/lxtest") && first_linux_pid != 0) {
+		linux_parent_pid = first_linux_pid;
+	}
+
+	if (exec_path(vfs, path, str_eq(path, "/bin/lxtest") ? "lxtest" : "first",
+		      linux_parent_pid, &linux_pid) != 0) {
 		process->pid = 0;
 		*pid = 0;
 		return -1;
 	}
 
+	process->linux_pid = linux_pid;
+	if (linux_pid != 0 && first_linux_pid == 0) {
+		first_linux_pid = linux_pid;
+	}
 	return 0;
 }
 

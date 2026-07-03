@@ -40,12 +40,14 @@ enum {
 	SYSCALL_BUFFER_WRITE = -36,
 	SYSCALL_TASK_WRITE = -38,
 	SYSCALL_TASK_START_AT = -40,
+	SYSCALL_TASK_ID = -42,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_CLOSE = 3,
 	LINUX_SYSCALL_FSTAT = 5,
 	LINUX_SYSCALL_BRK = 12,
 	LINUX_SYSCALL_GETPID = 39,
+	LINUX_SYSCALL_WAIT4 = 61,
 	LINUX_SYSCALL_GETTID = 186,
 	LINUX_SYSCALL_NEWFSTATAT = 262,
 	LINUX_SYSCALL_OPENAT = 257,
@@ -55,6 +57,7 @@ enum {
 	LINUX_ENOSYS = 38,
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
 	LINUX_STAT_SIZE = 144,
+	LINUX_WAIT_STATUS_SIZE = 4,
 	LINUX_INITIAL_BRK = 0x900000,
 	LINUX_MAX_BRK = 0x10000000,
 	USER_IPC_WORDS = 4,
@@ -66,10 +69,12 @@ enum {
 	USER_LINUX_CLOSE = 3,
 	USER_LINUX_FSTAT = 5,
 	USER_LINUX_GETPID = 39,
+	USER_LINUX_WAIT4 = 61,
 	USER_LINUX_GETTID = 186,
 	USER_LINUX_OPENAT = 257,
 	USER_LINUX_NEWFSTATAT = 262,
 	USER_LINUX_EXIT_GROUP = 231,
+	USER_LINUX_REGISTER_PROCESS = 1000,
 	ARCH_USER_MAX_CPUS = 8,
 };
 
@@ -276,6 +281,38 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 			return (u64)-LINUX_ENOSYS;
 		}
 		return reply.words[0];
+	case LINUX_SYSCALL_WAIT4: {
+		struct shared_buffer *buffer = 0;
+
+		if (arg1 != 0) {
+			buffer = buffer_create(LINUX_WAIT_STATUS_SIZE);
+			if (buffer == 0) {
+				return (u64)-LINUX_EINVAL;
+			}
+			request.cap_type = IPC_CAP_BUFFER;
+			request.cap_rights = TASK_RIGHT_SEND;
+			request.cap_object = buffer;
+		}
+
+		request.type = USER_LINUX_WAIT4;
+		request.words[0] = arg0;
+		request.words[1] = arg2;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			buffer_destroy(buffer);
+			return (u64)-LINUX_ENOSYS;
+		}
+		if ((i64)reply.words[0] > 0 && arg1 != 0 &&
+		    buffer_read(buffer, 0, (void *)arg1,
+				LINUX_WAIT_STATUS_SIZE) != 0) {
+			buffer_destroy(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+		buffer_destroy(buffer);
+		return reply.words[0];
+	}
 	case LINUX_SYSCALL_FSTAT: {
 		struct shared_buffer *buffer;
 
@@ -581,6 +618,12 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 						      arg2);
 	case SYSCALL_TASK_CREATE:
 		return server_task_create(task_current(), (const char *)arg0);
+	case SYSCALL_TASK_ID: {
+		struct task *task =
+			task_from_handle(task_current(), arg0, TASK_RIGHT_SEND);
+
+		return task != 0 ? task_id(task) : (u64)-1;
+	}
 	case SYSCALL_TASK_MAP: {
 		const u64 *args = (const u64 *)arg0;
 

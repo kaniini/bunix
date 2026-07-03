@@ -145,28 +145,32 @@ Linux syscall numbers are kept separate from the native negative Bunix syscall
 space. For the current MVP, nonnegative syscall numbers trap into the kernel.
 The minimal tracked `brk` is still answered directly by the kernel, while
 Linux identity and file-oriented calls are marshalled as synchronous `LINX`
-protocol requests to the user-space linux personality server. The server owns a
-small Linux PID namespace table keyed by the backing Bunix task id, so the first
-Linux process sees PID/TID 1 even though its Bunix task id is different. Each
-Linux process object also owns its fd table, initialized with stdout/stderr and
-allocating VFS-backed file fds from 3 independently. `exit_group` marks the
-Linux process exited and records its status before the kernel tears down the
-backing task thread. This keeps Bunix task identity available for observability
-without conflating it with Linux process identity. The kernel attaches user
-buffers as shared-buffer capabilities and blocks the caller on a reply port,
-then returns the server's Linux-style result value. `/bin/lxtest` contains no
-Bunix headers or crt0; it issues raw x86_64 Linux syscall numbers for `write`,
-`getpid`, `gettid`, `openat`, `fstat`, `newfstatat`, `read`, `close`, and
-`exit_group`, verifies returned byte counts, metadata, Linux PID/TID values,
-`brk`, fd allocation, and `-EBADF` for invalid fds, then exits successfully.
-Init launches two `/bin/lxtest` instances to prove their Linux PID and fd
-namespaces are separate. Console writes use the server's delegated console
-capability, while `openat(AT_FDCWD, path, O_RDONLY)`, `fstat`, `newfstatat`,
-`read`, and `close` proxy to VFS using shared-buffer capabilities. `mmap` is
-intentionally not part of this slice; it should be built later from more
-granular memory object and mapping capabilities rather than a monolithic
-compatibility hook. The next Linux slices need parent/child relationships,
-wait/zombie state, and real mapped-growth behavior behind `brk`.
+protocol requests to the user-space linux personality server. Proc explicitly
+registers Linux tasks with that server before starting them, carrying the
+backing Bunix task id and Linux parent PID. The server owns a small Linux PID
+namespace table keyed by the backing Bunix task id, so the first Linux process
+sees PID/TID 1 even though its Bunix task id is different. Each Linux process
+object also owns its fd table, initialized with stdout/stderr and allocating
+VFS-backed file fds from 3 independently. `exit_group` marks the Linux process
+exited and records its status before the kernel tears down the backing task
+thread; `wait4(-1, &status, 0, NULL)` can block on a child and returns the
+child PID with a Linux wait status. This keeps Bunix task identity available for
+observability without conflating it with Linux process identity. The kernel
+attaches user buffers as shared-buffer capabilities and blocks the caller on a
+reply port, then returns the server's Linux-style result value. `/bin/lxtest`
+contains no Bunix headers or crt0; it issues raw x86_64 Linux syscall numbers
+for `write`, `getpid`, `gettid`, `openat`, `fstat`, `newfstatat`, `read`,
+`close`, `wait4`, and `exit_group`, verifies returned byte counts, metadata,
+Linux PID/TID values, `brk`, fd allocation, child waiting, and `-EBADF` for
+invalid fds, then exits successfully. Init launches two `/bin/lxtest` instances
+to prove their Linux PID and fd namespaces are separate and that PID 1 can wait
+for PID 2. Console writes use the server's delegated console capability, while
+`openat(AT_FDCWD, path, O_RDONLY)`, `fstat`, `newfstatat`, `read`, and `close`
+proxy to VFS using shared-buffer capabilities. `mmap` is intentionally not part
+of this slice; it should be built later from more granular memory object and
+mapping capabilities rather than a monolithic compatibility hook. The next
+Linux slices need real clone/fork parentage and mapped-growth behavior behind
+`brk`.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with

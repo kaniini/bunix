@@ -409,6 +409,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "first: aux proc=4" $(BUILD_DIR)/serial.log
 	grep -F "first: exit 0" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: online" $(BUILD_DIR)/serial.log
+	grep -F "linux-server: registered" $(BUILD_DIR)/serial.log
 	grep -F "linux syscall shared buffer" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: ebadf" $(BUILD_DIR)/serial.log
 	grep -F "linux return checks ok" $(BUILD_DIR)/serial.log
@@ -417,6 +418,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux-server: fstat" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: newfstatat" $(BUILD_DIR)/serial.log
 	grep -F "linux metadata checks ok" $(BUILD_DIR)/serial.log
+	grep -F "linux-server: wait4" $(BUILD_DIR)/serial.log
+	grep -F "linux wait checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: read" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: close" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: write" $(BUILD_DIR)/serial.log

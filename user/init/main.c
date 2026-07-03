@@ -250,6 +250,7 @@ int main(void)
 	const struct bunix_launch_cap linux_caps[] = {
 		{ console, BUNIX_RIGHT_SEND, 0 },
 		{ vfs_launch, BUNIX_RIGHT_SEND, 0 },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
 	};
 	bunix_launch_module_with_caps("linux", linux_caps,
 				      sizeof(linux_caps) / sizeof(linux_caps[0]));

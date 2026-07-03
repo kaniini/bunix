@@ -120,6 +120,29 @@ _start:
 	cmpq $-9, %rax
 	jne fail
 
+	cmpq $1, %r15
+	jne 2f
+
+	movq $61, %rax
+	movq $-1, %rdi
+	leaq wait_status(%rip), %rsi
+	xorq %rdx, %rdx
+	syscall
+	cmpq $2, %rax
+	jne fail
+	cmpl $0, wait_status(%rip)
+	jne fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq wait_message(%rip), %rsi
+	movq $wait_message_end - wait_message, %rdx
+	syscall
+	cmpq $wait_message_end - wait_message, %rax
+	jne fail
+
+2:
+
 	movq $231, %rax
 	xorq %rdi, %rdi
 	syscall
@@ -151,6 +174,9 @@ ok_message_end:
 stat_message:
 	.ascii "linux metadata checks ok\n"
 stat_message_end:
+wait_message:
+	.ascii "linux wait checks ok\n"
+wait_message_end:
 fail_message:
 	.ascii "linux return checks failed\n"
 fail_message_end:
@@ -164,3 +190,5 @@ stat_buffer:
 	.skip 144
 statat_buffer:
 	.skip 144
+wait_status:
+	.skip 4

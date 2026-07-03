@@ -2,11 +2,13 @@
 
 enum {
 	LINUX_HANDLE_VFS = 3,
+	LINUX_HANDLE_NAMES = 4,
 	LINUX_EBADF = 9,
 	LINUX_ENOENT = 2,
 	LINUX_EINVAL = 22,
 	LINUX_EMFILE = 24,
 	LINUX_ESRCH = 3,
+	LINUX_ECHILD = 10,
 	LINUX_MAX_WRITE = 4096,
 	LINUX_MAX_PATH = 32,
 	LINUX_STAT_SIZE = 144,
@@ -29,16 +31,41 @@ struct linux_fd {
 struct linux_process {
 	u64 pid;
 	u64 tid;
+	u64 ppid;
 	u64 bunix_task;
 	u64 bunix_thread;
 	u64 exited;
 	u64 exit_status;
+	u64 waited;
+	u64 waiter;
+	u64 wait_buffer;
+	u64 wait_pid;
 	struct linux_fd fds[LINUX_MAX_FDS];
 };
 
 static struct linux_process processes[LINUX_MAX_PROCESSES];
 static char write_buffer[LINUX_MAX_WRITE];
 static u64 next_pid = 1;
+
+static long register_service(u64 service)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_REGISTER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = BUNIX_HANDLE_SELF,
+		.words = { BUNIX_NAMES_ROOT, service, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(LINUX_HANDLE_NAMES, &request, &reply) != 0) {
+		return -1;
+	}
+
+	return reply.words[0] == 0 ? 0 : -1;
+}
 
 static void zero_bytes(char *buffer, u64 len)
 {
@@ -140,22 +167,146 @@ static struct linux_process *linux_process_for(const struct bunix_msg *message)
 		return process;
 	}
 
+	return 0;
+}
+
+static long linux_register_process(u64 bunix_task, u64 ppid)
+{
+	if (bunix_task == 0 || linux_process_find(bunix_task) != 0) {
+		return -LINUX_EINVAL;
+	}
+
 	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
 		if (processes[i].pid == 0) {
 			const u64 pid = next_pid++;
 
 			processes[i].pid = pid;
 			processes[i].tid = pid;
-			processes[i].bunix_task = message->sender;
-			processes[i].bunix_thread = message->words[1];
+			processes[i].ppid = ppid;
+			processes[i].bunix_task = bunix_task;
+			processes[i].bunix_thread = 0;
 			processes[i].exited = 0;
 			processes[i].exit_status = 0;
+			processes[i].waited = 0;
+			processes[i].waiter = 0;
+			processes[i].wait_buffer = 0;
+			processes[i].wait_pid = 0;
 			linux_process_init_fds(&processes[i]);
+			return (long)pid;
+		}
+	}
+
+	return -LINUX_ESRCH;
+}
+
+static struct linux_process *linux_process_find_pid(u64 pid)
+{
+	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
+		if (processes[i].pid == pid) {
 			return &processes[i];
 		}
 	}
 
 	return 0;
+}
+
+static int linux_child_matches(const struct linux_process *parent,
+			       const struct linux_process *child, long pid)
+{
+	if (parent == 0 || child == 0 ||
+	    child->ppid != parent->pid ||
+	    child->waited) {
+		return 0;
+	}
+
+	return pid == -1 || child->pid == (u64)pid;
+}
+
+static int linux_store_wait_status(u64 buffer, u64 exit_status)
+{
+	char status[4];
+	const unsigned int value = (unsigned int)(exit_status << 8);
+
+	for (u64 i = 0; i < sizeof(status); i++) {
+		status[i] = (char)((value >> (i * 8)) & 0xff);
+	}
+
+	return buffer == 0 ||
+		bunix_buffer_write(buffer, 0, status, sizeof(status)) == 0 ?
+		0 : -1;
+}
+
+static long linux_wait4(struct linux_process *parent, long pid, u64 options,
+			u64 status_buffer, u64 reply)
+{
+	struct linux_process *candidate = 0;
+
+	if (pid != -1 || options != 0) {
+		return -LINUX_EINVAL;
+	}
+
+	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
+		if (!linux_child_matches(parent, &processes[i], pid)) {
+			continue;
+		}
+
+		candidate = &processes[i];
+		if (candidate->exited) {
+			if (linux_store_wait_status(status_buffer,
+						    candidate->exit_status) != 0) {
+				return -LINUX_EINVAL;
+			}
+			candidate->waited = 1;
+			return (long)candidate->pid;
+		}
+	}
+
+	if (candidate == 0) {
+		return -LINUX_ECHILD;
+	}
+
+	if (reply == 0) {
+		return -LINUX_EINVAL;
+	}
+
+	parent->waiter = reply;
+	parent->wait_buffer = status_buffer;
+	parent->wait_pid = (u64)pid;
+	return 0;
+}
+
+static void linux_wake_parent(struct linux_process *child)
+{
+	struct linux_process *parent = linux_process_find_pid(child->ppid);
+	const char wait4_ok[] = "linux-server: wait4\n";
+
+	if (parent == 0 || parent->waiter == 0 ||
+	    !linux_child_matches(parent, child, (long)parent->wait_pid)) {
+		return;
+	}
+
+	struct bunix_msg reply = {
+		.protocol = BUNIX_PROTO_LINUX,
+		.type = BUNIX_LINUX_WAIT4,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { child->pid, 0, 0, 0 },
+	};
+
+	if (linux_store_wait_status(parent->wait_buffer,
+				    child->exit_status) == 0) {
+		child->waited = 1;
+		bunix_console_write(wait4_ok, sizeof(wait4_ok) - 1);
+		bunix_ipc_send(parent->waiter, &reply);
+	}
+	if (parent->wait_buffer != 0) {
+		bunix_handle_close(parent->wait_buffer);
+	}
+	parent->waiter = 0;
+	parent->wait_buffer = 0;
+	parent->wait_pid = 0;
 }
 
 static long linux_openat(struct linux_process *process, u64 dirfd,
@@ -334,11 +485,16 @@ int main(void)
 	const char fstat_ok[] = "linux-server: fstat\n";
 	const char newfstatat_ok[] = "linux-server: newfstatat\n";
 	const char process_ok[] = "linux-server: process\n";
+	const char registered_ok[] = "linux-server: registered\n";
+	const char wait4_ok[] = "linux-server: wait4\n";
 	const char exited_ok[] = "linux-server: exited\n";
 	const char close_ok[] = "linux-server: close\n";
 	const char exit_group[] = "linux-server: exit_group\n";
 	struct bunix_msg message;
 
+	if (register_service(BUNIX_SERVICE_LINUX) != 0) {
+		return 1;
+	}
 	bunix_console_write(online, sizeof(online) - 1);
 	for (;;) {
 		struct bunix_msg reply = {
@@ -350,6 +506,7 @@ int main(void)
 			.cap = 0,
 			.words = { 0, 0, 0, 0 },
 		};
+		int should_reply = 1;
 
 		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
 		    message.protocol != BUNIX_PROTO_LINUX) {
@@ -357,6 +514,19 @@ int main(void)
 		}
 
 		reply.type = message.type;
+		if (message.type == BUNIX_LINUX_REGISTER_PROCESS) {
+			reply.words[0] = (u64)linux_register_process(message.words[0],
+								     message.words[1]);
+			if ((long)reply.words[0] > 0) {
+				bunix_console_write(registered_ok,
+						    sizeof(registered_ok) - 1);
+			}
+			if (message.reply != 0) {
+				bunix_ipc_send(message.reply, &reply);
+			}
+			continue;
+		}
+
 		struct linux_process *process = linux_process_for(&message);
 		if (process == 0) {
 			reply.words[0] = (u64)-LINUX_ESRCH;
@@ -374,6 +544,27 @@ int main(void)
 		case BUNIX_LINUX_GETTID:
 			reply.words[0] = process->tid;
 			break;
+		case BUNIX_LINUX_WAIT4: {
+			const long waited = linux_wait4(process,
+						       (long)message.words[0],
+						       message.words[1],
+						       message.cap,
+						       message.reply);
+
+			if (waited == 0) {
+				should_reply = 0;
+			} else {
+				reply.words[0] = (u64)waited;
+				if (waited > 0) {
+					bunix_console_write(wait4_ok,
+							    sizeof(wait4_ok) - 1);
+				}
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+			}
+			break;
+		}
 		case BUNIX_LINUX_OPENAT:
 			reply.words[0] = (u64)linux_openat(process,
 							   message.words[0],
@@ -469,6 +660,7 @@ int main(void)
 			process->exit_status = message.words[0];
 			bunix_console_write(exit_group, sizeof(exit_group) - 1);
 			bunix_console_write(exited_ok, sizeof(exited_ok) - 1);
+			linux_wake_parent(process);
 			reply.words[0] = 0;
 			break;
 		default:
@@ -476,7 +668,7 @@ int main(void)
 			break;
 		}
 
-		if (message.reply != 0) {
+		if (should_reply && message.reply != 0) {
 			bunix_ipc_send(message.reply, &reply);
 		}
 	}
