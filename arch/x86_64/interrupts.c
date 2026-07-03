@@ -46,17 +46,22 @@ extern void isr_stub_13(void);
 extern void isr_stub_14(void);
 extern void isr_stub_32(void);
 
-static void idt_set_gate(u8 vector, void (*handler)(void))
+static void idt_set_gate_flags(u8 vector, void (*handler)(void), u8 flags)
 {
 	const u64 addr = (u64)handler;
 
 	idt[vector].offset_low = addr & 0xffff;
 	idt[vector].selector = KERNEL_CODE_SELECTOR;
 	idt[vector].ist = 0;
-	idt[vector].flags = 0x8e;
+	idt[vector].flags = flags;
 	idt[vector].offset_mid = (addr >> 16) & 0xffff;
 	idt[vector].offset_high = (addr >> 32) & 0xffffffff;
 	idt[vector].zero = 0;
+}
+
+static void idt_set_gate(u8 vector, void (*handler)(void))
+{
+	idt_set_gate_flags(vector, handler, 0x8e);
 }
 
 static void idt_load(void)

@@ -5,6 +5,8 @@ ESP_DIR := $(BUILD_DIR)/esp
 EFI_BOOT_IMG := $(BUILD_DIR)/bunixos-efi.iso
 EFI_BOOT_APP := $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 KERNEL := $(BUILD_DIR)/bunixos.kernel
+HELLO_MODULE := $(BUILD_DIR)/modules/hello.server
+HELLO_MODULE_OBJ := $(BUILD_DIR)/user/hello/start.S.o
 
 CC ?= gcc
 LD ?= ld
@@ -27,9 +29,12 @@ KERNEL_SRCS := \
 	arch/$(ARCH)/interrupts.S \
 	arch/$(ARCH)/thread.c \
 	arch/$(ARCH)/thread.S \
+	arch/$(ARCH)/syscall.S \
+	arch/$(ARCH)/user.c \
 	arch/$(ARCH)/vm.c \
 	kernel/main.c \
 	kernel/console.c \
+	kernel/elf.c \
 	kernel/ipc.c \
 	kernel/multiboot2.c \
 	kernel/pmm.c \
@@ -37,7 +42,6 @@ KERNEL_SRCS := \
 	kernel/server.c \
 	kernel/timer.c \
 	kernel/vm.c \
-	servers/hello/hello.c \
 	servers/ping/ping.c \
 	servers/vm/vm.c
 
@@ -64,7 +68,15 @@ iso: $(EFI_BOOT_IMG)
 
 esp: $(EFI_BOOT_APP)
 
-$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg modules/hello.server modules/ping.server modules/vm.server
+$(HELLO_MODULE_OBJ): user/hello/start.S
+	mkdir -p $(dir $@)
+	$(CC) -m64 -ffreestanding -fno-pic -fno-pie -c $< -o $@
+
+$(HELLO_MODULE): $(HELLO_MODULE_OBJ) user/user.ld
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(HELLO_MODULE_OBJ)
+
+$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(HELLO_MODULE) modules/ping.server modules/vm.server
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -73,11 +85,11 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg modules/hello.server modules
 	$(GRUB_MKSTANDALONE) -O x86_64-efi -o $@ \
 		"boot/grub/grub.cfg=boot/grub-standalone.cfg" \
 		"boot/bunixos.kernel=$(KERNEL)" \
-		"modules/hello.server=modules/hello.server" \
+		"modules/hello.server=$(HELLO_MODULE)" \
 		"modules/ping.server=modules/ping.server" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg modules/hello.server modules/ping.server modules/vm.server
+$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(HELLO_MODULE) modules/ping.server modules/vm.server
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -88,7 +100,7 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg modules/hello.server modules/ping.serve
 	mkdir -p $(ISO_ROOT)/modules
 	cp $(KERNEL) $(ISO_ROOT)/boot/bunixos.kernel
 	cp boot/grub.cfg $(ISO_ROOT)/boot/grub/grub.cfg
-	cp modules/hello.server $(ISO_ROOT)/modules/hello.server
+	cp $(HELLO_MODULE) $(ISO_ROOT)/modules/hello.server
 	cp modules/ping.server $(ISO_ROOT)/modules/ping.server
 	cp modules/vm.server $(ISO_ROOT)/modules/vm.server
 	$(GRUB_MKRESCUE) -o $@ $(ISO_ROOT)
@@ -123,6 +135,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "timer: pit 100hz" $(BUILD_DIR)/serial.log
 	grep -F "interrupts: enabled" $(BUILD_DIR)/serial.log
 	grep -F "timer: tick 1" $(BUILD_DIR)/serial.log
+	grep -F "user: gdt/tss/syscall ready" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=vm id=1" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=hello id=2" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=ping id=3" $(BUILD_DIR)/serial.log
@@ -146,7 +159,10 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: preempt tid=3 cpu=0" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: ipc event type=1 sender=3 word0=0x2a" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server hello" $(BUILD_DIR)/serial.log
+	grep -F "elf: entry=0x0000000000400000" $(BUILD_DIR)/serial.log
+	grep -F "user: enter rip=0x0000000000400000" $(BUILD_DIR)/serial.log
 	grep -F "hello: world <3" $(BUILD_DIR)/serial.log
+	grep -F "syscall: exit status=0" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping" $(BUILD_DIR)/serial.log
 	grep -F "ping: one" $(BUILD_DIR)/serial.log
 	grep -F "ping: two" $(BUILD_DIR)/serial.log

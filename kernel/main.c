@@ -6,6 +6,7 @@
 #include "types.h"
 #include "vm.h"
 #include <arch/interrupts.h>
+#include <arch/user.h>
 #include "../servers/vm/vm_server.h"
 
 void kernel_main(u32 magic, u64 multiboot_info)
@@ -27,6 +28,7 @@ void kernel_main(u32 magic, u64 multiboot_info)
 	vm_init(multiboot_info);
 	vm_self_test();
 	arch_interrupts_init();
+	arch_user_init();
 	ipc_init();
 	vm_server_init();
 	sched_init();

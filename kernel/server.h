@@ -12,7 +12,6 @@ struct server {
 
 void server_start_all(void);
 void server_start_boot_modules(u64 multiboot_info);
-void hello_server_start(void);
 void ping_server_start(void);
 void vm_server_start(void);
 

@@ -1,12 +1,14 @@
 #include "console.h"
+#include "elf.h"
 #include "multiboot2.h"
 #include "sched.h"
 #include "server.h"
 #include "types.h"
+#include <arch/user.h>
 #include "../servers/vm/vm_server.h"
 
 static const struct server boot_servers[] = {
-	{ "hello", hello_server_start },
+	{ "hello", 0 },
 	{ "ping", ping_server_start },
 	{ "vm", vm_server_start },
 };
@@ -19,6 +21,8 @@ struct module_server_start {
 
 static struct module_server_start module_starts[16];
 static u32 module_start_count;
+
+static int str_eq(const char *left, const char *right);
 
 void server_start_all(void)
 {
@@ -39,7 +43,18 @@ static void module_server_thread(void *arg)
 		       start->server->name,
 		       (const void *)start->image_start,
 		       (const void *)start->image_end);
-	start->server->start();
+
+	if (str_eq(start->server->name, "hello")) {
+		u64 entry = 0;
+		if (elf_load_user_image(start->image_start, start->image_end, &entry) == 0) {
+			arch_user_enter(entry, 0x600000);
+		}
+		return;
+	}
+
+	if (start->server->start != 0) {
+		start->server->start();
+	}
 }
 
 static int str_eq(const char *left, const char *right)

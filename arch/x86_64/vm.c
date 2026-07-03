@@ -5,6 +5,7 @@
 enum {
 	PTE_PRESENT = 1 << 0,
 	PTE_WRITABLE = 1 << 1,
+	PTE_USER = 1 << 2,
 	PTE_LARGE = 1 << 7,
 	PAGE_ENTRIES = 512,
 	LARGE_PAGE_SIZE = 0x200000,
@@ -55,11 +56,12 @@ int arch_vm_space_init(struct arch_vm_space *space)
 	u64 *pdpt = (u64 *)pdpt_phys;
 	u64 *pd = (u64 *)pd_phys;
 
-	pml4[0] = pdpt_phys | PTE_PRESENT | PTE_WRITABLE;
-	pdpt[0] = pd_phys | PTE_PRESENT | PTE_WRITABLE;
+	pml4[0] = pdpt_phys | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+	pdpt[0] = pd_phys | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
 
 	for (u64 i = 0; i < PAGE_ENTRIES; i++) {
-		pd[i] = (i * LARGE_PAGE_SIZE) | PTE_PRESENT | PTE_WRITABLE | PTE_LARGE;
+		pd[i] = (i * LARGE_PAGE_SIZE) | PTE_PRESENT | PTE_WRITABLE |
+			PTE_USER | PTE_LARGE;
 	}
 
 	space->cr3 = pml4_phys;

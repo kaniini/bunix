@@ -20,12 +20,11 @@ hello: world <3
 - `servers/`: initial server stubs, including the skeletal VM server.
 - `Makefile`: build, EFI ISO, and QEMU/KVM targets.
 
-The hello implementation is still linked into the kernel for this milestone,
-but it is now selected by a Multiboot2 module and run in its own kernel task and
-thread. The VM server is also module-backed and owns memory policy shape through
-temporary direct-call `vm_rpc_*` hooks. The next microkernel steps are to make
-those module payloads ELF server images, replace direct VM calls with IPC, add
-address-space primitives, and wire IPC between scheduled tasks.
+The hello module is now a standalone ELF image loaded into its task and entered
+in ring 3. The VM server is also module-backed and owns memory policy shape
+through RPC hooks. The next microkernel steps are to move the remaining
+kernel-hosted servers to ELF images and replace bootstrap shortcuts with
+capability-checked IPC.
 
 The tree is split so future ports can add a sibling such as `arch/arm64/` with
 its own boot path, interrupt setup, MMU setup, and device I/O while reusing the
@@ -44,6 +43,13 @@ rather than forcing every interaction into a synchronous syscall shape.
 VM space grants now travel through VM server RPC messages. The VM server still
 uses a bootstrap space for itself, then receives `VM_RPC_CREATE_SPACE` messages
 for other module-backed servers and replies over the caller's reply port.
+
+## User Mode
+
+The `hello` module is built as a freestanding x86_64 ELF at `0x400000`. The
+kernel loads its `PT_LOAD` segments, enters ring 3 with `iretq`, and exposes a
+small negative-number syscall namespace over `syscall/sysret`: `-1` writes to
+the console and `-2` exits the thread.
 
 ## Scheduler shape
 

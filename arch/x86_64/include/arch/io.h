@@ -15,4 +15,21 @@ static inline u8 arch_inb(u16 port)
 	return value;
 }
 
+static inline void arch_wrmsr(u32 msr, u64 value)
+{
+	const u32 low = value & 0xffffffff;
+	const u32 high = value >> 32;
+
+	__asm__ volatile ("wrmsr" : : "c"(msr), "a"(low), "d"(high));
+}
+
+static inline u64 arch_rdmsr(u32 msr)
+{
+	u32 low;
+	u32 high;
+
+	__asm__ volatile ("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
+	return ((u64)high << 32) | low;
+}
+
 #endif
