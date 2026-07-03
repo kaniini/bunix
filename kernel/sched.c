@@ -701,8 +701,12 @@ void thread_sleep_ticks(u64 ticks)
 
 	const u64 flags = spin_lock_irqsave(&sleep_lock);
 	prev->wake_tick = timer_ticks() + ticks;
-	prev->sleep_next = sleep_list;
-	sleep_list = prev;
+	struct thread **link = &sleep_list;
+	while (*link != 0 && (*link)->wake_tick <= prev->wake_tick) {
+		link = &(*link)->sleep_next;
+	}
+	prev->sleep_next = *link;
+	*link = prev;
 	prev->state = THREAD_BLOCKED;
 	spin_unlock_irqrestore(&sleep_lock, flags);
 
@@ -711,6 +715,11 @@ void thread_sleep_ticks(u64 ticks)
 	cpu->current = &cpu->scheduler_thread;
 	sched_activate_thread_space(cpu->current);
 	arch_thread_switch(&prev->context, &cpu->scheduler_thread.context);
+}
+
+void thread_sleep_ns(u64 ns)
+{
+	thread_sleep_ticks(timer_ns_to_ticks_ceil(ns));
 }
 
 void sched_wake_sleepers(u64 now)

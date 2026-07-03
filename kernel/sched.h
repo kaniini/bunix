@@ -48,6 +48,7 @@ void sched_idle_loop(void) __attribute__((noreturn));
 void thread_yield(void);
 void thread_block(void);
 void thread_sleep_ticks(u64 ticks);
+void thread_sleep_ns(u64 ns);
 void thread_unblock(struct thread *thread);
 void sched_wake_sleepers(u64 now);
 void sched_enable_preemption(void);

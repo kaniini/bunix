@@ -28,7 +28,8 @@ enum {
 	SYSCALL_IPC_CALL = -14,
 	SYSCALL_HANDLE_CLOSE = -16,
 	SYSCALL_BOOT_MODULE_READ = -18,
-	SYSCALL_SLEEP_TICKS = -20,
+	SYSCALL_CLOCK_MONOTONIC_NS = -20,
+	SYSCALL_SLEEP_NS = -22,
 	USER_IPC_WORDS = 4,
 	USER_FOURCC_CONS = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	USER_CONSOLE_WRITE = 1,
@@ -249,8 +250,10 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		thread_exit();
 	case SYSCALL_TIMER_TICKS:
 		return timer_ticks();
-	case SYSCALL_SLEEP_TICKS:
-		thread_sleep_ticks(arg0);
+	case SYSCALL_CLOCK_MONOTONIC_NS:
+		return timer_monotonic_ns();
+	case SYSCALL_SLEEP_NS:
+		thread_sleep_ns(arg0);
 		return 0;
 	case SYSCALL_LAUNCH_MODULE:
 		return server_launch_module_with_caps((const char *)arg0,

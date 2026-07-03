@@ -16,6 +16,7 @@ struct arch_interrupt_frame {
 void arch_interrupts_init(void);
 void arch_interrupts_load(void);
 u64 arch_timer_ticks(void);
+u64 arch_timer_hz(void);
 void arch_interrupt_dispatch(struct arch_interrupt_frame *frame);
 
 #endif

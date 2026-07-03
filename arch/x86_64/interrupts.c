@@ -120,6 +120,11 @@ u64 arch_timer_ticks(void)
 	return timer_ticks;
 }
 
+u64 arch_timer_hz(void)
+{
+	return PIT_HZ;
+}
+
 void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 {
 	if (frame->vector == IRQ_TIMER_VECTOR) {

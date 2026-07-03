@@ -104,10 +104,10 @@ User modules are built as freestanding C x86_64 ELFs with a tiny `crt0.S` and
 inline syscall wrappers. Init, names, block, VFS, and ping all link at the normal
 `0x400000` user base and enter with the same `0x800000` user stack top. The
 small user ABI exposes negative-number syscalls for thread exit, timer ticks,
-blocking tick sleep, module launch with inherited handles, private port
-creation, IPC send/receive, and IPC call. The kernel still has an internal
-bootstrap name registry, but it is no longer exposed as a normal user authority
-path.
+monotonic nanosecond time, blocking nanosecond sleep, module launch with
+inherited handles, private port creation, IPC send/receive, and IPC call. The
+kernel still has an internal bootstrap name registry, but it is no longer
+exposed as a normal user authority path.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with
@@ -125,9 +125,9 @@ syscalls.
 Tasks are low-level resource containers: they own handles and VM spaces, but
 they are not process lifetime objects. Threads are schedulable contexts that
 will map naturally to Linux LWPs. The current scheduler is FIFO, with
-`thread_yield()`, `thread_block()`, `thread_sleep_ticks()`,
-`thread_unblock()`, timer-driven preemption, and thread-slot reaping after
-exit.
+`thread_yield()`, `thread_block()`, deadline-ordered sleep queues behind
+`thread_sleep_ns()`, `thread_unblock()`, timer-driven preemption, and
+thread-slot reaping after exit.
 
 The scheduler state is split into per-CPU structures with per-CPU run queues,
 and the shared kernel structures used by the current server path now have
@@ -194,8 +194,8 @@ test checks namespace creation, VFS re-export into the filesystem namespace, the
 output. Init also proves the OCAP launch rule by asking for a receive right it
 does not hold, which the kernel rejects before the module is marked launched.
 Init then launches ping with console and VM send capabilities. Ping blocks on
-the scheduler sleep queue for two-second intervals, logs `ping: heartbeat`, and
-forwards an incrementing heartbeat value as a VMEM FourCC event through its
+the nanosecond sleep syscall for two-second intervals, logs `ping: heartbeat`,
+and forwards an incrementing heartbeat value as a VMEM FourCC event through its
 inherited VM capability.
 
 For an interactive serial console:

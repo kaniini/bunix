@@ -70,9 +70,10 @@ static void vm_server_handle_message(const struct ipc_message *message)
 
 	switch (message->type) {
 	case VM_IPC_EVENT_PING:
-		console_printf("vm-server: ipc event proto=0x%x type=%u sender=%u word0=0x%x\n",
+		console_printf("vm-server: ipc event proto=0x%x type=%u sender=%u word0=0x%x word1=0x%x\n",
 			       message->protocol, message->type, message->sender,
-			       (u32)message->words[0]);
+			       (u32)message->words[0],
+			       (u32)message->words[1]);
 		break;
 	case VM_RPC_CREATE_SPACE: {
 		const char *owner = (const char *)message->words[0];

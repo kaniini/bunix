@@ -285,6 +285,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: sleep tid=6" $(BUILD_DIR)/serial.log
 	grep -F "sched: wake tid=6" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: ipc event proto=0x4d454d56 type=1 sender=6 word0=0x1" $(BUILD_DIR)/serial.log
+	grep -F "word1=0x" $(BUILD_DIR)/serial.log
 	grep -F "names: online" $(BUILD_DIR)/serial.log
 	grep -F "names: namespace" $(BUILD_DIR)/serial.log
 	grep -F "names: wait" $(BUILD_DIR)/serial.log
