@@ -274,6 +274,12 @@ fork_child:
 	syscall
 	testq %rax, %rax
 	jne fail
+	cmpl $0100444, stat_buffer + 24(%rip)
+	jne fail
+	cmpl $0, stat_buffer + 28(%rip)
+	jne fail
+	cmpl $0, stat_buffer + 32(%rip)
+	jne fail
 	cmpq $15, stat_buffer + 48(%rip)
 	jne fail
 
@@ -283,6 +289,12 @@ fork_child:
 	leaq statat_buffer(%rip), %rdx
 	syscall
 	testq %rax, %rax
+	jne fail
+	cmpl $0100444, statat_buffer + 24(%rip)
+	jne fail
+	cmpl $0, statat_buffer + 28(%rip)
+	jne fail
+	cmpl $0, statat_buffer + 32(%rip)
 	jne fail
 	cmpq $15, statat_buffer + 48(%rip)
 	jne fail
@@ -387,6 +399,14 @@ fork_child:
 	cmpq $-1, %rax
 	jne fail
 
+	movq $257, %rax
+	movq $-100, %rdi
+	leaq secret_path(%rip), %rsi
+	xorq %rdx, %rdx
+	syscall
+	cmpq $-13, %rax
+	jne fail
+
 	movq $1, %rax
 	movq $1, %rdi
 	leaq credential_mutation_message(%rip), %rsi
@@ -455,6 +475,8 @@ fail_message:
 fail_message_end:
 hello_path:
 	.asciz "/hello.txt"
+secret_path:
+	.asciz "/secret.txt"
 exec_path:
 	.asciz "/bin/execok"
 

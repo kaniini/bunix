@@ -4,8 +4,9 @@ enum {
 	LINUX_HANDLE_VFS = 3,
 	LINUX_HANDLE_NAMES = 4,
 	LINUX_EPERM = 1,
-	LINUX_EBADF = 9,
 	LINUX_ENOENT = 2,
+	LINUX_EBADF = 9,
+	LINUX_EACCES = 13,
 	LINUX_EINVAL = 22,
 	LINUX_EMFILE = 24,
 	LINUX_ESRCH = 3,
@@ -967,8 +968,14 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	}
 
 	pack_path(&request.words[0], path);
-	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
-	    reply.words[0] != 0 ||
+	request.words[3] = process->bunix_task;
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0) {
+		return -LINUX_ENOENT;
+	}
+	if (reply.words[0] == BUNIX_VFS_ERR_ACCESS) {
+		return -LINUX_EACCES;
+	}
+	if (reply.words[0] != 0 ||
 	    reply.words[3] != BUNIX_VFS_TYPE_REGULAR) {
 		return -LINUX_ENOENT;
 	}
@@ -977,7 +984,8 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	return alloc_fd(process, LINUX_FD_FILE, reply.words[1], reply.words[2]);
 }
 
-static long linux_stat_write(u64 stat_buffer, u64 mode, u64 size)
+static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
+			     u64 size)
 {
 	char stat[LINUX_STAT_SIZE];
 
@@ -990,6 +998,8 @@ static long linux_stat_write(u64 stat_buffer, u64 mode, u64 size)
 	store_u64(stat, 8, 1);
 	store_u64(stat, 16, 1);
 	store_u32(stat, 24, (unsigned int)mode);
+	store_u32(stat, 28, (unsigned int)uid);
+	store_u32(stat, 32, (unsigned int)gid);
 	store_u64(stat, 48, size);
 	store_u64(stat, 56, 4096);
 	store_u64(stat, 64, (size + 511) / 512);
@@ -1005,11 +1015,30 @@ static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 	}
 
 	if (process->fds[fd].kind == LINUX_FD_CONSOLE) {
-		return linux_stat_write(stat_buffer, LINUX_S_IFCHR | 0600, 0);
+		return linux_stat_write(stat_buffer, LINUX_S_IFCHR | 0600,
+					0, 0, 0);
 	}
 
-	return linux_stat_write(stat_buffer, LINUX_S_IFREG | 0444,
-				process->fds[fd].size);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_STAT_META,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { process->fds[fd].handle, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_EINVAL;
+	}
+
+	return linux_stat_write(stat_buffer, LINUX_S_IFREG | reply.words[2],
+				reply.words[3] & 0xffffffff,
+				reply.words[3] >> 32,
+				reply.words[1]);
 }
 
 static long linux_newfstatat(u64 dirfd, u64 word0, u64 word1, u64 stat_buffer)
@@ -1017,7 +1046,7 @@ static long linux_newfstatat(u64 dirfd, u64 word0, u64 word1, u64 stat_buffer)
 	char path[16];
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_OPEN,
+		.type = BUNIX_VFS_STAT_PATH_META,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply = 0,
@@ -1033,17 +1062,14 @@ static long linux_newfstatat(u64 dirfd, u64 word0, u64 word1, u64 stat_buffer)
 	unpack_path(path, word0, word1);
 	pack_path(&request.words[0], path);
 	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
-	    reply.words[0] != 0 ||
-	    reply.words[3] != BUNIX_VFS_TYPE_REGULAR) {
+	    reply.words[0] != 0) {
 		return -LINUX_ENOENT;
 	}
 
-	const long result = linux_stat_write(stat_buffer, LINUX_S_IFREG | 0444,
-					     reply.words[2]);
-	request.type = BUNIX_VFS_CLOSE;
-	request.words[0] = reply.words[1];
-	(void)bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply);
-	return result;
+	return linux_stat_write(stat_buffer, LINUX_S_IFREG | reply.words[2],
+				reply.words[3] & 0xffffffff,
+				reply.words[3] >> 32,
+				reply.words[1]);
 }
 
 static long linux_read(struct linux_process *process, u64 fd, u64 len,

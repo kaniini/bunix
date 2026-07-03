@@ -4,7 +4,7 @@ enum {
 	VFS_HANDLE_NAMES = 3,
 	ROOTFS_MAGIC = 0x30534652,
 	ROOTFS_MAX_PATH = 32,
-	ROOTFS_MAX_ENTRIES = 8,
+	ROOTFS_MAX_ENTRIES = 16,
 	VFS_MAX_OPEN_FILES = 16,
 };
 
@@ -17,11 +17,16 @@ struct rootfs_entry {
 	char path[ROOTFS_MAX_PATH];
 	u64 offset;
 	u64 size;
+	unsigned int uid;
+	unsigned int gid;
+	unsigned int mode;
+	unsigned int reserved;
 };
 
 static struct rootfs_entry root_entries[ROOTFS_MAX_ENTRIES];
 static unsigned int root_entry_count;
 static const struct rootfs_entry *open_files[VFS_MAX_OPEN_FILES];
+static u64 user_service;
 
 static long register_service(u64 service, u64 handle)
 {
@@ -62,6 +67,16 @@ static u64 resolve_service(u64 service, unsigned int rights)
 	}
 
 	return reply.cap;
+}
+
+static u64 service_user(void)
+{
+	if (user_service == 0) {
+		user_service = resolve_service(BUNIX_SERVICE_USER,
+					       BUNIX_RIGHT_SEND);
+	}
+
+	return user_service;
 }
 
 static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
@@ -231,6 +246,91 @@ static const struct rootfs_entry *rootfs_find_ref(const char *path)
 	}
 
 	return 0;
+}
+
+static long user_credential_value(u64 task, u64 type, u64 *value)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = type,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { task, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = service_user();
+
+	if (value == 0 || user == 0) {
+		return -1;
+	}
+	if (bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+
+	*value = reply.words[1];
+	return 0;
+}
+
+static int user_has_group(u64 task, u64 gid)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_HAS_GROUP,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { task, gid, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = service_user();
+
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return 0;
+	}
+
+	return reply.words[1] != 0;
+}
+
+static int can_read_entry(const struct rootfs_entry *entry, u64 task)
+{
+	u64 euid;
+	u64 egid;
+
+	if (entry == 0) {
+		return 0;
+	}
+	if (task == 0) {
+		return 1;
+	}
+	if (user_credential_value(task, BUNIX_USER_GETEUID, &euid) != 0 ||
+	    user_credential_value(task, BUNIX_USER_GETEGID, &egid) != 0) {
+		return 0;
+	}
+	if (euid == 0) {
+		return 1;
+	}
+	if (euid == entry->uid) {
+		return (entry->mode & 0400) != 0;
+	}
+	if (egid == entry->gid || user_has_group(task, entry->gid)) {
+		return (entry->mode & 0040) != 0;
+	}
+	return (entry->mode & 0004) != 0;
+}
+
+static void stat_meta_reply(struct bunix_msg *reply,
+			    const struct rootfs_entry *entry)
+{
+	reply->words[0] = 0;
+	reply->words[1] = entry->size;
+	reply->words[2] = entry->mode;
+	reply->words[3] = ((u64)entry->uid) | ((u64)entry->gid << 32);
 }
 
 static u64 open_file(const struct rootfs_entry *entry)
@@ -410,8 +510,16 @@ int main(void)
 			}
 			unpack_bytes((unsigned char *)path, &message.words[0], 16);
 			entry = rootfs_find_ref(path);
+			if (entry == 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			if (!can_read_entry(entry, message.words[3])) {
+				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
+				break;
+			}
 			file = open_file(entry);
-			if (entry == 0 || file == 0) {
+			if (file == 0) {
 				reply.words[0] = (u64)-1;
 			} else {
 				reply.words[0] = 0;
@@ -419,6 +527,22 @@ int main(void)
 				reply.words[2] = entry->size;
 				reply.words[3] = BUNIX_VFS_TYPE_REGULAR;
 				bunix_console_write("vfs: open\n", 10);
+			}
+			break;
+		}
+		case BUNIX_VFS_STAT_PATH_META: {
+			char path[ROOTFS_MAX_PATH];
+			const struct rootfs_entry *entry;
+
+			for (u64 i = 0; i < sizeof(path); i++) {
+				path[i] = '\0';
+			}
+			unpack_bytes((unsigned char *)path, &message.words[0], 16);
+			entry = rootfs_find_ref(path);
+			if (entry == 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+			} else {
+				stat_meta_reply(&reply, entry);
 			}
 			break;
 		}
@@ -432,6 +556,17 @@ int main(void)
 				reply.words[0] = 0;
 				reply.words[1] = entry->size;
 				reply.words[2] = BUNIX_VFS_TYPE_REGULAR;
+			}
+			break;
+		}
+		case BUNIX_VFS_STAT_META: {
+			const struct rootfs_entry *entry =
+				file_from_handle(message.words[0]);
+
+			if (entry == 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				stat_meta_reply(&reply, entry);
 			}
 			break;
 		}

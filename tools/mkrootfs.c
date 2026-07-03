@@ -19,6 +19,10 @@ struct rootfs_entry {
 	char path[ROOTFS_MAX_PATH];
 	uint64_t offset;
 	uint64_t size;
+	uint32_t uid;
+	uint32_t gid;
+	uint32_t mode;
+	uint32_t reserved;
 };
 
 static long file_size(FILE *file)
@@ -122,6 +126,13 @@ int main(int argc, char **argv)
 		strcpy(entries[i].path, path);
 		entries[i].offset = offset;
 		entries[i].size = (uint64_t)size;
+		entries[i].uid = 0;
+		entries[i].gid = 0;
+		entries[i].mode = strncmp(path, "/bin/", 5) == 0 ?
+				  0555 : 0444;
+		if (strcmp(path, "/secret.txt") == 0) {
+			entries[i].mode = 0400;
+		}
 		offset += (uint64_t)size;
 	}
 

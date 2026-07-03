@@ -264,6 +264,23 @@ static long credential_setgroups(u64 task, u64 group_count, u64 group0,
 	return 0;
 }
 
+static long credential_has_group(u64 task, u64 gid, u64 *has_group)
+{
+	struct user_credential *credential = credential_find(task);
+
+	if (credential == 0 || has_group == 0) {
+		return -1;
+	}
+
+	*has_group = credential->gid == gid;
+	for (u64 i = 0; i < credential->group_count && i < USER_MAX_GROUPS; i++) {
+		if (credential->groups[i] == gid) {
+			*has_group = 1;
+		}
+	}
+	return 0;
+}
+
 int main(void)
 {
 	const char online[] = "user: online\n";
@@ -343,6 +360,11 @@ int main(void)
 								   message.words[1],
 								   message.words[2],
 								   message.words[3]);
+			break;
+		case BUNIX_USER_HAS_GROUP:
+			reply.words[0] = (u64)credential_has_group(message.words[0],
+								   message.words[1],
+								   &reply.words[1]);
 			break;
 		default:
 			reply.words[0] = (u64)-1;
