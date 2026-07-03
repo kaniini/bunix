@@ -40,7 +40,10 @@ enum {
 	SYSCALL_BUFFER_WRITE = -36,
 	SYSCALL_TASK_WRITE = -38,
 	SYSCALL_TASK_START_AT = -40,
+	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
+	LINUX_SYSCALL_CLOSE = 3,
+	LINUX_SYSCALL_OPENAT = 257,
 	LINUX_SYSCALL_EXIT_GROUP = 231,
 	LINUX_EBADF = 9,
 	LINUX_EINVAL = 22,
@@ -50,7 +53,10 @@ enum {
 	USER_FOURCC_CONS = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	USER_FOURCC_LINX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
 	USER_CONSOLE_WRITE = 1,
+	USER_LINUX_READ = 0,
 	USER_LINUX_WRITE = 1,
+	USER_LINUX_CLOSE = 3,
+	USER_LINUX_OPENAT = 257,
 	USER_LINUX_EXIT_GROUP = 231,
 	ARCH_USER_MAX_CPUS = 8,
 };
@@ -159,6 +165,36 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 	request.reply_port = reply_port;
 
 	switch (number) {
+	case LINUX_SYSCALL_READ: {
+		struct shared_buffer *buffer;
+
+		if (arg1 == 0 || arg2 > LINUX_MAX_SYSCALL_BUFFER) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		buffer = buffer_create(arg2 == 0 ? 1 : arg2);
+		if (buffer == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = USER_LINUX_READ;
+		request.words[0] = arg0;
+		request.words[1] = arg2;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP;
+		request.cap_object = buffer;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		if ((i64)reply.words[0] > 0 &&
+		    buffer_read(buffer, 0, (void *)arg1, reply.words[0]) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		return reply.words[0];
+	}
 	case LINUX_SYSCALL_WRITE: {
 		struct shared_buffer *buffer;
 
@@ -176,6 +212,50 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		request.words[0] = arg0;
 		request.words[1] = arg2;
 		request.words[2] = 0;
+		request.words[3] = 0;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_RECV;
+		request.cap_object = buffer;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
+	}
+	case LINUX_SYSCALL_CLOSE:
+		request.type = USER_LINUX_CLOSE;
+		request.words[0] = arg0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
+	case LINUX_SYSCALL_OPENAT: {
+		struct shared_buffer *buffer;
+		const char *path = (const char *)arg1;
+		u64 len = 0;
+
+		if (path == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		while (len < LINUX_MAX_SYSCALL_BUFFER && path[len] != '\0') {
+			len++;
+		}
+		if (len == LINUX_MAX_SYSCALL_BUFFER) {
+			return (u64)-LINUX_EINVAL;
+		}
+		len++;
+
+		buffer = buffer_create(len);
+		if (buffer == 0 ||
+		    buffer_write(buffer, 0, path, len) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = USER_LINUX_OPENAT;
+		request.words[0] = arg0;
+		request.words[1] = len;
+		request.words[2] = arg2;
 		request.words[3] = 0;
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_RECV;

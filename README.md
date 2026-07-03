@@ -147,12 +147,15 @@ and are marshalled as synchronous `LINX` protocol requests to the user-space
 linux personality server. The kernel attaches user buffers as shared-buffer
 capabilities and blocks the caller on a reply port, then returns the server's
 Linux-style result value. `/bin/lxtest` contains no Bunix headers or crt0; it
-issues raw x86_64 Linux syscall numbers for `write` and `exit_group`, verifies
-the returned byte counts and `-EBADF` for an invalid fd, and only then exits
-successfully. The personality server owns the initial fd table for stdout and
-stderr, handles console-backed writes using its delegated console capability,
-and acknowledges exit events. The next Linux slices need persistent per-process
-state, `openat`/`read`/`close` over VFS, and a real memory API for `brk`/`mmap`.
+issues raw x86_64 Linux syscall numbers for `write`, `openat`, `read`, `close`,
+and `exit_group`, verifies returned byte counts and `-EBADF` for invalid fds,
+then exits successfully. The personality server owns the initial fd table for
+stdout/stderr and allocates VFS-backed file fds starting at 3. Console writes
+use the server's delegated console capability, while `openat(AT_FDCWD, path,
+O_RDONLY)`, `read`, and `close` proxy to VFS using shared-buffer capabilities.
+The next Linux slices need per-process fd namespaces instead of one global
+server table, metadata syscalls such as `fstat`/`newfstatat`, and a real memory
+API for `brk`/`mmap`.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with

@@ -139,6 +139,7 @@ int main(void)
 	u64 time = 0;
 	u64 proc = 0;
 	u64 vfs = 0;
+	u64 vfs_launch = 0;
 	u64 fs_namespace = 0;
 	const struct bunix_launch_cap bad_caps[] = {
 		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND | BUNIX_RIGHT_RECV, 0 },
@@ -188,6 +189,7 @@ int main(void)
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	vfs = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS,
 					BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
+	vfs_launch = vfs;
 	fs_namespace = create_namespace();
 	if (fs_namespace == 0 ||
 	    register_service_in_namespace(fs_namespace, BUNIX_SERVICE_VFS,
@@ -246,6 +248,7 @@ int main(void)
 
 	const struct bunix_launch_cap linux_caps[] = {
 		{ console, BUNIX_RIGHT_SEND, 0 },
+		{ vfs_launch, BUNIX_RIGHT_SEND, 0 },
 	};
 	bunix_launch_module_with_caps("linux", linux_caps,
 				      sizeof(linux_caps) / sizeof(linux_caps[0]));

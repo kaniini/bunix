@@ -411,6 +411,9 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux syscall shared buffer" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: ebadf" $(BUILD_DIR)/serial.log
 	grep -F "linux return checks ok" $(BUILD_DIR)/serial.log
+	grep -F "linux-server: openat" $(BUILD_DIR)/serial.log
+	grep -F "linux-server: read" $(BUILD_DIR)/serial.log
+	grep -F "linux-server: close" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: write" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: exit_group" $(BUILD_DIR)/serial.log
 	grep -F "linux: exit_group status=0" $(BUILD_DIR)/serial.log
