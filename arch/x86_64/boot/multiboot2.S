@@ -18,7 +18,8 @@ multiboot2_header_end:
 
 .section .bss, "aw", @nobits
 .align 4096
-pml4_table:
+.global arch_boot_pml4
+arch_boot_pml4:
 	.skip 4096
 pdpt_table:
 	.skip 4096
@@ -65,7 +66,7 @@ _start:
 	orl $(1 << 5), %eax
 	movl %eax, %cr4
 
-	movl $pml4_table, %eax
+	movl $arch_boot_pml4, %eax
 	movl %eax, %cr3
 
 	movl $0xc0000080, %ecx
@@ -81,8 +82,8 @@ _start:
 
 setup_page_tables:
 	movl $(pdpt_table + 0x003), %eax
-	movl %eax, pml4_table
-	movl $0, pml4_table + 4
+	movl %eax, arch_boot_pml4
+	movl $0, arch_boot_pml4 + 4
 
 	movl $(pd_table + 0x003), %eax
 	movl %eax, pdpt_table

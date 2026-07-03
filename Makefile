@@ -25,6 +25,7 @@ KERNEL_SRCS := \
 	arch/$(ARCH)/boot/multiboot2.S \
 	arch/$(ARCH)/thread.c \
 	arch/$(ARCH)/thread.S \
+	arch/$(ARCH)/vm.c \
 	kernel/main.c \
 	kernel/console.c \
 	kernel/multiboot2.c \
@@ -120,6 +121,9 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: thread tid=2 task=2 name=ping" $(BUILD_DIR)/serial.log
 	grep -F "sched: task pid=3 name=vm" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=3 task=3 name=vm" $(BUILD_DIR)/serial.log
+	grep -F "vm: create space id=1 owner=hello" $(BUILD_DIR)/serial.log
+	grep -F "vm: create space id=2 owner=ping" $(BUILD_DIR)/serial.log
+	grep -F "vm: create space id=3 owner=vm" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server vm" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: memory authority online" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: rpc free_frame" $(BUILD_DIR)/serial.log

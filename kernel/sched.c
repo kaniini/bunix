@@ -1,5 +1,6 @@
 #include "console.h"
 #include "sched.h"
+#include "vm.h"
 #include <arch/thread.h>
 
 enum {
@@ -13,6 +14,7 @@ struct task {
 	u32 pid;
 	const char *name;
 	u32 thread_count;
+	struct vm_space *vm_space;
 };
 
 struct thread {
@@ -94,6 +96,15 @@ static void sched_enqueue_on(struct cpu_sched *cpu, struct thread *thread)
 		       thread->tid, cpu->id, cpu->runq.count);
 }
 
+static void sched_activate_thread_space(struct thread *thread)
+{
+	if (thread == 0 || thread->task == 0 || thread->task->vm_space == 0) {
+		return;
+	}
+
+	vm_rpc_activate_space(thread->task->vm_space);
+}
+
 static void sched_thread_bootstrap(void)
 {
 	struct thread *thread = sched_current_cpu()->current;
@@ -107,6 +118,7 @@ void sched_init(void)
 	kernel_task.pid = 0;
 	kernel_task.name = "kernel";
 	kernel_task.thread_count = 1;
+	kernel_task.vm_space = vm_kernel_space();
 
 	for (u32 i = 0; i < MAX_CPUS; i++) {
 		cpus[i].id = i;
@@ -136,7 +148,13 @@ struct task *task_create(const char *name)
 		tasks[i].pid = next_pid++;
 		tasks[i].name = name;
 		tasks[i].thread_count = 0;
-		console_printf("sched: task pid=%u name=%s\n", tasks[i].pid, name);
+		tasks[i].vm_space = vm_rpc_create_space(name);
+		if (tasks[i].vm_space == 0) {
+			tasks[i].pid = 0;
+			return 0;
+		}
+		console_printf("sched: task pid=%u name=%s vm=%u\n",
+			       tasks[i].pid, name, tasks[i].vm_space->id);
 		return &tasks[i];
 	}
 
@@ -192,7 +210,9 @@ void sched_run(void)
 		cpu->current = next;
 		console_printf("sched: switch cpu=%u prev=%u next=%u\n",
 			       cpu->id, prev->tid, next->tid);
+		sched_activate_thread_space(next);
 		arch_thread_switch(&prev->context, &next->context);
+		sched_activate_thread_space(cpu->current);
 	}
 }
 
@@ -209,6 +229,7 @@ void thread_yield(void)
 	console_printf("sched: yield tid=%u cpu=%u\n", prev->tid, cpu->id);
 	sched_enqueue_on(cpu, prev);
 	cpu->current = &cpu->scheduler_thread;
+	sched_activate_thread_space(cpu->current);
 	arch_thread_switch(&prev->context, &cpu->scheduler_thread.context);
 }
 
@@ -224,6 +245,7 @@ void thread_block(void)
 	console_printf("sched: block tid=%u cpu=%u\n", prev->tid, cpu->id);
 	prev->state = THREAD_BLOCKED;
 	cpu->current = &cpu->scheduler_thread;
+	sched_activate_thread_space(cpu->current);
 	arch_thread_switch(&prev->context, &cpu->scheduler_thread.context);
 }
 
@@ -244,6 +266,7 @@ void thread_exit(void)
 	console_printf("sched: thread tid=%u exited\n", prev->tid);
 	prev->state = THREAD_DEAD;
 	cpu->current = &cpu->scheduler_thread;
+	sched_activate_thread_space(cpu->current);
 	arch_thread_switch(&prev->context, &cpu->scheduler_thread.context);
 
 	for (;;) {
