@@ -10,6 +10,8 @@ USER_CRT0_OBJ := $(BUILD_DIR)/user/crt0.S.o
 INIT_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/init/main.c.o
 NAMES_MODULE := $(BUILD_DIR)/modules/names.server
 NAMES_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/names/main.c.o
+TIME_MODULE := $(BUILD_DIR)/modules/time.server
+TIME_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/time/main.c.o
 BLOCK_MODULE := $(BUILD_DIR)/modules/block.server
 BLOCK_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/block/main.c.o
 VFS_MODULE := $(BUILD_DIR)/modules/vfs.server
@@ -69,6 +71,7 @@ KERNEL_SRCS := \
 KERNEL_OBJS := $(KERNEL_SRCS:%=$(BUILD_DIR)/%.o)
 USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/init/main.c.o \
 	$(BUILD_DIR)/user/names/main.c.o \
+	$(BUILD_DIR)/user/time/main.c.o \
 	$(BUILD_DIR)/user/block/main.c.o \
 	$(BUILD_DIR)/user/vfs/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
@@ -110,6 +113,10 @@ $(NAMES_MODULE): $(NAMES_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(NAMES_MODULE_OBJS)
 
+$(TIME_MODULE): $(TIME_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(TIME_MODULE_OBJS)
+
 $(BLOCK_MODULE): $(BLOCK_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(BLOCK_MODULE_OBJS)
@@ -122,7 +129,7 @@ $(PING_MODULE): $(PING_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PING_MODULE_OBJS)
 
-$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -133,13 +140,14 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODUL
 		"boot/bunixos.kernel=$(KERNEL)" \
 		"modules/names.server=$(NAMES_MODULE)" \
 		"modules/init.server=$(INIT_MODULE)" \
+		"modules/time.server=$(TIME_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/vfs.server=$(VFS_MODULE)" \
 		"modules/ping.server=$(PING_MODULE)" \
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -152,6 +160,7 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(BLOCK_
 	cp boot/grub.cfg $(ISO_ROOT)/boot/grub/grub.cfg
 	cp $(NAMES_MODULE) $(ISO_ROOT)/modules/names.server
 	cp $(INIT_MODULE) $(ISO_ROOT)/modules/init.server
+	cp $(TIME_MODULE) $(ISO_ROOT)/modules/time.server
 	cp $(BLOCK_MODULE) $(ISO_ROOT)/modules/block.server
 	cp $(VFS_MODULE) $(ISO_ROOT)/modules/vfs.server
 	cp $(PING_MODULE) $(ISO_ROOT)/modules/ping.server
@@ -211,9 +220,10 @@ test: $(EFI_BOOT_APP)
 	grep -F "vm-server: grant_space owner=vm id=1" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=names id=2" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=init id=3" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=block id=4" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=vfs id=5" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=ping id=6" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: grant_space owner=time id=4" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: grant_space owner=block id=5" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: grant_space owner=vfs id=6" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: grant_space owner=ping id=7" $(BUILD_DIR)/serial.log
 	grep -F "sched: task pid=1 name=vm vm=1" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=1 task=1 name=vm" $(BUILD_DIR)/serial.log
 	grep -F "sched: place tid=1 cpu=0 policy=auto" $(BUILD_DIR)/serial.log
@@ -225,17 +235,21 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: task pid=3 name=init vm=3" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=3 task=3 name=init" $(BUILD_DIR)/serial.log
 	grep -F "sched: place tid=3 cpu=0 policy=auto" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=4 name=block vm=4" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=4 task=4 name=block" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=4 name=time vm=4" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=4 task=4 name=time" $(BUILD_DIR)/serial.log
 	grep -F "sched: place tid=4 cpu=1 policy=auto" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=5 name=vfs vm=5" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=5 task=5 name=vfs" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=5 name=block vm=5" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=5 task=5 name=block" $(BUILD_DIR)/serial.log
 	grep -F "sched: place tid=5 cpu=0 policy=auto" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=6 name=ping vm=6" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=6 task=6 name=ping" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=6 name=vfs vm=6" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=6 task=6 name=vfs" $(BUILD_DIR)/serial.log
+	grep -F "sched: place tid=6 cpu=1 policy=auto" $(BUILD_DIR)/serial.log
+	grep -F "sched: task pid=7 name=ping vm=7" $(BUILD_DIR)/serial.log
+	grep -F "sched: thread tid=7 task=7 name=ping" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server vm" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server names" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server init" $(BUILD_DIR)/serial.log
+	grep -F "kernel: starting module server time" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server block" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server vfs" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: memory authority online" $(BUILD_DIR)/serial.log
@@ -244,6 +258,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "ipc: port create console" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create names" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create init" $(BUILD_DIR)/serial.log
+	grep -F "ipc: port create time" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create block" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create vfs" $(BUILD_DIR)/serial.log
 	grep -F "ipc: port create ping" $(BUILD_DIR)/serial.log
@@ -261,16 +276,22 @@ test: $(EFI_BOOT_APP)
 	grep -F "kernel: invalid inherited cap handle=2 rights=0x3 for ping" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=4 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=4 handle=2 type=port rights=0x1" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=4 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=5 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=5 handle=2 type=port rights=0x1" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=5 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=6 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=6 handle=2 type=port rights=0x1" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=6 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=7 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=7 handle=2 type=port rights=0x1" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=7 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=7 handle=4 type=port rights=0x1" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=vm" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=names" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=block" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=vfs" $(BUILD_DIR)/serial.log
+	grep -F "ipc: recv block port=time" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=reply" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=names proto=0x454d414e type=1 sender=3 queued=1" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv port=names proto=0x454d414e type=1 sender=3 queued=0" $(BUILD_DIR)/serial.log
@@ -278,19 +299,23 @@ test: $(EFI_BOOT_APP)
 	grep -F "ipc: recv port=names proto=0x454d414e type=2 sender=3 queued=0" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=vfs proto=0x30534656 type=1 sender=3 queued=1" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv port=vfs proto=0x30534656 type=1 sender=3 queued=0" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=block proto=0x304b4c42 type=2 sender=5 queued=1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv port=block proto=0x304b4c42 type=2 sender=5 queued=0" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=vm proto=0x4d454d56 type=1 sender=6" $(BUILD_DIR)/serial.log
+	grep -F "ipc: send port=block proto=0x304b4c42 type=2 sender=6 queued=1" $(BUILD_DIR)/serial.log
+	grep -F "ipc: recv port=block proto=0x304b4c42 type=2 sender=6 queued=0" $(BUILD_DIR)/serial.log
+	grep -F "ipc: send port=time proto=0x454d4954 type=2 sender=7" $(BUILD_DIR)/serial.log
+	grep -F "ipc: recv port=time proto=0x454d4954 type=2 sender=7" $(BUILD_DIR)/serial.log
+	grep -F "ipc: send port=vm proto=0x4d454d56 type=1 sender=7" $(BUILD_DIR)/serial.log
 	grep -F "sched: preemption enabled" $(BUILD_DIR)/serial.log
-	grep -F "sched: sleep tid=6" $(BUILD_DIR)/serial.log
-	grep -F "sched: wake tid=6" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: ipc event proto=0x4d454d56 type=1 sender=6 word0=0x1" $(BUILD_DIR)/serial.log
+	grep -F "sched: sleep tid=4" $(BUILD_DIR)/serial.log
+	grep -F "sched: wake tid=4" $(BUILD_DIR)/serial.log
+	grep -F "vm-server: ipc event proto=0x4d454d56 type=1 sender=7 word0=0x1" $(BUILD_DIR)/serial.log
 	grep -F "word1=0x" $(BUILD_DIR)/serial.log
 	grep -F "names: online" $(BUILD_DIR)/serial.log
 	grep -F "names: namespace" $(BUILD_DIR)/serial.log
 	grep -F "names: wait" $(BUILD_DIR)/serial.log
 	grep -F "names: registered" $(BUILD_DIR)/serial.log
 	grep -F "names: resolved" $(BUILD_DIR)/serial.log
+	grep -F "time: online" $(BUILD_DIR)/serial.log
+	grep -F "time: ready" $(BUILD_DIR)/serial.log
 	grep -F "block: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: mounted block" $(BUILD_DIR)/serial.log
@@ -300,6 +325,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "init: fs ready" $(BUILD_DIR)/serial.log
 	grep -F "rootfs: module" $(BUILD_DIR)/serial.log
 	grep -F "init: bad cap denied" $(BUILD_DIR)/serial.log
+	grep -F "kernel: launching module server time" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server block" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server vfs" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server ping" $(BUILD_DIR)/serial.log

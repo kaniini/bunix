@@ -123,6 +123,7 @@ int main(void)
 	char file[17];
 	u64 console;
 	u64 vm;
+	u64 time = 0;
 	u64 vfs = 0;
 	u64 fs_namespace = 0;
 	const struct bunix_launch_cap bad_caps[] = {
@@ -141,14 +142,18 @@ int main(void)
 	}
 	bunix_console_write(names_ready, sizeof(names_ready) - 1);
 
-	const struct bunix_launch_cap ping_caps[] = {
-		{ console, BUNIX_RIGHT_SEND, 0 },
-		{ vm, BUNIX_RIGHT_SEND, 0 },
-	};
 	const struct bunix_launch_cap fs_caps[] = {
 		{ console, BUNIX_RIGHT_SEND, 0 },
 		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
 	};
+
+	bunix_launch_module_with_caps("time", fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	time = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_TIME,
+					 BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
+	if (time == 0) {
+		return 1;
+	}
 
 	bunix_launch_module_with_caps("block", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
@@ -179,6 +184,11 @@ int main(void)
 					  sizeof(bad_caps[0])) < 0) {
 		bunix_console_write(attenuated, sizeof(attenuated) - 1);
 	}
+	const struct bunix_launch_cap ping_caps[] = {
+		{ console, BUNIX_RIGHT_SEND, 0 },
+		{ vm, BUNIX_RIGHT_SEND, 0 },
+		{ time, BUNIX_RIGHT_SEND, 0 },
+	};
 	bunix_launch_module_with_caps("ping", ping_caps,
 				      sizeof(ping_caps) / sizeof(ping_caps[0]));
 
