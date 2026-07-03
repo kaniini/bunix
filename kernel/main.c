@@ -13,6 +13,39 @@
 #include <arch/user.h>
 #include "../servers/vm/vm_server.h"
 
+static int starts_with(const char *text, const char *prefix)
+{
+	while (*prefix != '\0') {
+		if (*text++ != *prefix++) {
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+static void configure_console(u64 multiboot_info)
+{
+	const char *cmdline = multiboot2_cmdline(multiboot_info);
+
+	while (*cmdline != '\0') {
+		while (*cmdline == ' ') {
+			cmdline++;
+		}
+
+		if (starts_with(cmdline, "log=")) {
+			console_set_verbosity(cmdline + 4);
+			return;
+		}
+
+		while (*cmdline != '\0' && *cmdline != ' ') {
+			cmdline++;
+		}
+	}
+
+	console_set_verbosity("info");
+}
+
 void kernel_main(u32 magic, u64 multiboot_info)
 {
 	console_init();
@@ -28,6 +61,7 @@ void kernel_main(u32 magic, u64 multiboot_info)
 		}
 	}
 
+	configure_console(multiboot_info);
 	multiboot2_dump(multiboot_info);
 	vm_init(multiboot_info);
 	slab_init();

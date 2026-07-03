@@ -254,11 +254,10 @@ test: $(EFI_BOOT_APP)
 		-drive format=raw,file=fat:rw:$(ESP_DIR) \
 		-serial file:$(BUILD_DIR)/serial.log -display none -no-reboot; \
 		status=$$?; test $$status -eq 0 -o $$status -eq 124
-	grep -F "multiboot2: module" $(BUILD_DIR)/serial.log
+	grep -F "kernel: log level info" $(BUILD_DIR)/serial.log
 	grep -F "interrupts: idt loaded" $(BUILD_DIR)/serial.log
 	grep -F "timer: pit 100hz" $(BUILD_DIR)/serial.log
 	grep -F "interrupts: enabled" $(BUILD_DIR)/serial.log
-	grep -F "timer: tick 1" $(BUILD_DIR)/serial.log
 	grep -F "user: gdt/tss/syscall ready" $(BUILD_DIR)/serial.log
 	grep -F "multiboot2: acpi rsdp=" $(BUILD_DIR)/serial.log
 	grep -F "smp: discovered cpus=2" $(BUILD_DIR)/serial.log
@@ -269,123 +268,15 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: init cpus=2 boot_cpu=0" $(BUILD_DIR)/serial.log
 	grep -F "sched: cpu=1 online" $(BUILD_DIR)/serial.log
 	grep -F "smp: scheduler aps=1" $(BUILD_DIR)/serial.log
-	grep -F "sched: ipi cpu=1" $(BUILD_DIR)/serial.log
 	grep -F "names: init entries=32" $(BUILD_DIR)/serial.log
-	grep -F "names: register name=vm id=1 kind=2" $(BUILD_DIR)/serial.log
-	grep -F "names: register name=console id=2 kind=2" $(BUILD_DIR)/serial.log
 	grep -F "slab: init caches=" $(BUILD_DIR)/serial.log
 	grep -F "buffer: init slab" $(BUILD_DIR)/serial.log
 	grep -F "ipc: init slab ports messages" $(BUILD_DIR)/serial.log
-	grep -F "kernel: recorded data module disk0" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=vm id=1" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=names id=2" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=init id=3" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=time id=4" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=proc id=5" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=block id=6" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=vfs id=7" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=first id=8" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: grant_space owner=ping id=9" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=1 name=vm vm=1" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=1 task=1 name=vm" $(BUILD_DIR)/serial.log
-	grep -F "sched: place tid=1 cpu=0 policy=auto" $(BUILD_DIR)/serial.log
-	grep -F "sched: enqueue tid=1 cpu=0" $(BUILD_DIR)/serial.log
-	grep -F "sched: switch cpu=0 prev=0 next=1" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=2 name=names vm=2" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=2 task=2 name=names" $(BUILD_DIR)/serial.log
-	grep -F "sched: place tid=2 cpu=1 policy=auto" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=3 name=init vm=3" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=3 task=3 name=init" $(BUILD_DIR)/serial.log
-	grep -F "sched: place tid=3 cpu=0 policy=auto" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=4 name=time vm=4" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=4 task=4 name=time" $(BUILD_DIR)/serial.log
-	grep -F "sched: place tid=4 cpu=1 policy=auto" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=5 name=proc vm=5" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=5 task=5 name=proc" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=6 name=block vm=6" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=6 task=6 name=block" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=7 name=vfs vm=7" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=7 task=7 name=vfs" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=8 name=first vm=8" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=8 task=8 name=first" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=9 name=ping vm=9" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=9 task=9 name=ping" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=10 name=linux vm=10" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=10 task=10 name=linux" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=11 name=lxtest vm=11" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=11 task=11 name=lxtest" $(BUILD_DIR)/serial.log
-	grep -F "kernel: starting module server vm" $(BUILD_DIR)/serial.log
-	grep -F "kernel: starting module server names" $(BUILD_DIR)/serial.log
-	grep -F "kernel: starting module server init" $(BUILD_DIR)/serial.log
-	grep -F "kernel: starting module server time" $(BUILD_DIR)/serial.log
-	grep -F "kernel: starting module server proc" $(BUILD_DIR)/serial.log
-	grep -F "kernel: starting module server block" $(BUILD_DIR)/serial.log
-	grep -F "kernel: starting module server vfs" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: memory authority online" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: rpc free_frame" $(BUILD_DIR)/serial.log
-	grep -F "ipc: port create vm" $(BUILD_DIR)/serial.log
-	grep -F "ipc: port create console" $(BUILD_DIR)/serial.log
-	grep -F "ipc: port create names" $(BUILD_DIR)/serial.log
-	grep -F "ipc: port create init" $(BUILD_DIR)/serial.log
-	grep -F "ipc: port create time" $(BUILD_DIR)/serial.log
-	grep -F "ipc: port create proc" $(BUILD_DIR)/serial.log
-	grep -F "ipc: port create block" $(BUILD_DIR)/serial.log
-	grep -F "ipc: port create vfs" $(BUILD_DIR)/serial.log
-	grep -F "ipc: port create first" $(BUILD_DIR)/serial.log
-	grep -F "ipc: port create ping" $(BUILD_DIR)/serial.log
-	grep -F "ipc: port create reply" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=1 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=2 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=2 handle=2 type=port rights=0x5" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=3 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=3 handle=2 type=port rights=0x5" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=3 handle=3 type=port rights=0x5" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=3 handle=4 type=port rights=0x5" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=2 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=2 handle=4 type=port rights=0x5" $(BUILD_DIR)/serial.log
 	grep -F "sched: inherit denied task=3 handle=2 requested=0x3 rights=0x5" $(BUILD_DIR)/serial.log
 	grep -F "kernel: invalid inherited cap handle=2 rights=0x3 for ping" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=4 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=4 handle=2 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=4 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=5 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=5 handle=2 type=port rights=0x5" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=5 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=5 handle=4 type=port rights=0x5" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=6 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=6 handle=2 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=6 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=7 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=7 handle=2 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=7 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=8 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=8 handle=2 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=8 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=8 handle=4 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=9 handle=1 type=port rights=0x7" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=9 handle=2 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=9 handle=3 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=9 handle=4 type=port rights=0x1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv block port=vm" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv block port=names" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv block port=time" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv block port=proc" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=names proto=0x454d414e type=1 sender=3 queued=1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv port=names proto=0x454d414e type=1 sender=3 queued=0" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=names proto=0x454d414e type=2 sender=3 queued=1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv port=names proto=0x454d414e type=2 sender=3 queued=0" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=proc proto=0x434f5250 type=1 sender=3 queued=1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=proc proto=0x434f5250 type=2 sender=3 queued=1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=proc proto=0x434f5250 type=3 sender=8 queued=1" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=time proto=0x454d4954 type=2 sender=8" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=time proto=0x454d4954 type=2 sender=9" $(BUILD_DIR)/serial.log
-	grep -F "ipc: recv port=time proto=0x454d4954 type=2 sender=9" $(BUILD_DIR)/serial.log
-	grep -F "ipc: send port=vm proto=0x4d454d56 type=1 sender=9" $(BUILD_DIR)/serial.log
-	grep -F "sched: preemption enabled" $(BUILD_DIR)/serial.log
-	grep -F "sched: sleep tid=4" $(BUILD_DIR)/serial.log
-	grep -F "sched: wake tid=4" $(BUILD_DIR)/serial.log
-	grep -F "vm-server: ipc event proto=0x4d454d56 type=1 sender=9 word0=0x1" $(BUILD_DIR)/serial.log
-	grep -F "word1=0x" $(BUILD_DIR)/serial.log
 	grep -F "names: online" $(BUILD_DIR)/serial.log
 	grep -F "names: namespace" $(BUILD_DIR)/serial.log
 	grep -F "names: wait" $(BUILD_DIR)/serial.log
@@ -395,16 +286,9 @@ test: $(EFI_BOOT_APP)
 	grep -F "time: ready" $(BUILD_DIR)/serial.log
 	grep -F "proc: online" $(BUILD_DIR)/serial.log
 	grep -F "proc: ready" $(BUILD_DIR)/serial.log
-	grep -F "buffer: create id=1 size=4096" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=5 handle=7 type=buffer rights=0x7 target=1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=7 handle=7 type=buffer rights=0x5 target=1" $(BUILD_DIR)/serial.log
-	grep -F "sched: grant task=6 handle=5 type=buffer rights=0x1 target=1" $(BUILD_DIR)/serial.log
 	grep -F "vfs: open" $(BUILD_DIR)/serial.log
 	grep -F "vfs: read file" $(BUILD_DIR)/serial.log
 	grep -F "vfs: close" $(BUILD_DIR)/serial.log
-	grep -F "buffer: write id=1 offset=0 len=" $(BUILD_DIR)/serial.log
-	grep -F "buffer: read id=1 offset=0 len=" $(BUILD_DIR)/serial.log
-	grep -F "kernel: task write task=8 vaddr=0x" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/first" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/lxtest" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=1" $(BUILD_DIR)/serial.log
@@ -436,23 +320,14 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux-server: fstat" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: newfstatat" $(BUILD_DIR)/serial.log
 	grep -F "linux metadata checks ok" $(BUILD_DIR)/serial.log
-	grep -F "linux: mmap task=" $(BUILD_DIR)/serial.log
-	grep -F "len=4096 flags=0x32" $(BUILD_DIR)/serial.log
 	grep -F "linux mmap checks ok" $(BUILD_DIR)/serial.log
-	grep -F "kernel: task fork parent=" $(BUILD_DIR)/serial.log
-	grep -F "linux: fork parent=" $(BUILD_DIR)/serial.log
 	grep -F "linux fork child ok" $(BUILD_DIR)/serial.log
-	grep -F "linux: execve task=" $(BUILD_DIR)/serial.log
 	grep -F "linux exec child ok" $(BUILD_DIR)/serial.log
-	grep -F "linux: munmap task=" $(BUILD_DIR)/serial.log
 	grep -F "linux munmap checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: wait4" $(BUILD_DIR)/serial.log
 	grep -F "linux wait checks ok" $(BUILD_DIR)/serial.log
-	grep -F "linux-server: read" $(BUILD_DIR)/serial.log
-	grep -F "linux-server: close" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: write" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: exit_group" $(BUILD_DIR)/serial.log
-	grep -F "linux: exit_group status=0" $(BUILD_DIR)/serial.log
 	grep -F "block: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: mounted block" $(BUILD_DIR)/serial.log
@@ -476,35 +351,11 @@ test: $(EFI_BOOT_APP)
 	grep -F "kernel: launching module server block" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server vfs" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server ping" $(BUILD_DIR)/serial.log
-	grep -F "kernel: task map task=8 vaddr=0x0000000000400000" $(BUILD_DIR)/serial.log
-	grep -F "kernel: task map task=8 vaddr=0x0000000000401000" $(BUILD_DIR)/serial.log
-	grep -F "kernel: task start task=8 entry=0x0000000000400000" $(BUILD_DIR)/serial.log
-	grep -F "elf: entry=0x0000000000400000" $(BUILD_DIR)/serial.log
-	grep -F "user: enter rip=0x0000000000400000" $(BUILD_DIR)/serial.log
 	grep -F "syscall: exit status=0" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping image=0x" $(BUILD_DIR)/serial.log
-	grep -F "elf: load vaddr=0x0000000000400000" $(BUILD_DIR)/serial.log
 	grep -F "ping: online" $(BUILD_DIR)/serial.log
 	grep -F "ping: heartbeat" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=3 exited" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=8 exited" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=11 exited" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=12 exited" $(BUILD_DIR)/serial.log
-	grep -F "sched: thread tid=13 exited" $(BUILD_DIR)/serial.log
-	grep -F "sched: reap tid=3 task=3 name=init remaining=0" $(BUILD_DIR)/serial.log
-	grep -F "sched: reap tid=8 task=8 name=first remaining=0" $(BUILD_DIR)/serial.log
-	grep -F "sched: reap tid=11 task=11 name=lxtest remaining=0" $(BUILD_DIR)/serial.log
-	grep -E "sched: reap tid=12 task=[0-9]+ name=lxtest remaining=0" $(BUILD_DIR)/serial.log
-	grep -E "sched: reap tid=13 task=[0-9]+ name=lxtest remaining=0" $(BUILD_DIR)/serial.log
-	grep -F "vm: destroy space id=8 owner=first" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=8 name=first destroyed" $(BUILD_DIR)/serial.log
-	grep -F "vm: destroy space id=3 owner=init" $(BUILD_DIR)/serial.log
-	grep -F "sched: task pid=3 name=init destroyed" $(BUILD_DIR)/serial.log
-	grep -E "vm: destroy space id=[0-9]+ owner=lxtest" $(BUILD_DIR)/serial.log
-	grep -F "name=lxtest destroyed" $(BUILD_DIR)/serial.log
-	grep -F "ipc: port destroy lxtest" $(BUILD_DIR)/serial.log
-	grep -F "buffer: destroy" $(BUILD_DIR)/serial.log
 
 check-tools:
 	@command -v $(CC)

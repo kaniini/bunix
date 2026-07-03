@@ -16,6 +16,156 @@ static u32 cursor_row;
 static u32 cursor_col;
 static struct spinlock console_lock = SPINLOCK_INIT("console");
 
+enum console_log_level {
+	CONSOLE_LOG_ERROR,
+	CONSOLE_LOG_WARN,
+	CONSOLE_LOG_INFO,
+	CONSOLE_LOG_DEBUG,
+	CONSOLE_LOG_TRACE,
+};
+
+static u32 console_verbosity = CONSOLE_LOG_INFO;
+
+static int str_token_eq(const char *left, const char *right)
+{
+	while (*left != '\0' && *left != ' ' && *right != '\0') {
+		if (*left++ != *right++) {
+			return 0;
+		}
+	}
+
+	return (*left == '\0' || *left == ' ') && *right == '\0';
+}
+
+static int str_starts_with(const char *text, const char *prefix)
+{
+	while (*prefix != '\0') {
+		if (*text++ != *prefix++) {
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+static u32 log_level_from_name(const char *level)
+{
+	if (level == 0) {
+		return CONSOLE_LOG_INFO;
+	}
+	if (str_token_eq(level, "quiet") || str_token_eq(level, "error")) {
+		return CONSOLE_LOG_ERROR;
+	}
+	if (str_token_eq(level, "warn")) {
+		return CONSOLE_LOG_WARN;
+	}
+	if (str_token_eq(level, "debug")) {
+		return CONSOLE_LOG_DEBUG;
+	}
+	if (str_token_eq(level, "trace")) {
+		return CONSOLE_LOG_TRACE;
+	}
+	return CONSOLE_LOG_INFO;
+}
+
+static u32 log_level_for_format(const char *fmt)
+{
+	if (str_starts_with(fmt, "interrupts: vector=") ||
+	    str_starts_with(fmt, "bunixos: invalid") ||
+	    str_starts_with(fmt, "arch-vm: failed") ||
+	    str_starts_with(fmt, "elf: invalid") ||
+	    str_starts_with(fmt, "elf: failed") ||
+	    str_starts_with(fmt, "kernel: failed") ||
+	    str_starts_with(fmt, "kernel: invalid") ||
+	    str_starts_with(fmt, "kernel: too many") ||
+	    str_starts_with(fmt, "kernel: no module") ||
+	    str_starts_with(fmt, "sched: refusing") ||
+	    str_starts_with(fmt, "sched: thread alloc failed") ||
+	    str_starts_with(fmt, "sched: task alloc failed") ||
+	    str_starts_with(fmt, "sched: handle table full") ||
+	    str_starts_with(fmt, "sched: vma table full") ||
+	    str_starts_with(fmt, "smp: ap start timeout") ||
+	    str_starts_with(fmt, "smp: lapic delivery timeout") ||
+	    str_starts_with(fmt, "syscall: unknown") ||
+	    str_starts_with(fmt, "linux: unknown")) {
+		return CONSOLE_LOG_ERROR;
+	}
+
+	if (str_starts_with(fmt, "sched: cap denied") ||
+	    str_starts_with(fmt, "sched: close denied") ||
+	    str_starts_with(fmt, "sched: handle denied") ||
+	    str_starts_with(fmt, "sched: inherit denied") ||
+	    str_starts_with(fmt, "sched: task handle denied") ||
+	    str_starts_with(fmt, "sched: buffer handle denied") ||
+	    str_starts_with(fmt, "sched: vma overlap") ||
+	    str_starts_with(fmt, "names: table full") ||
+	    str_starts_with(fmt, "ipc: message alloc failed") ||
+	    str_starts_with(fmt, "buffer: alloc failed")) {
+		return CONSOLE_LOG_WARN;
+	}
+
+	if (str_starts_with(fmt, "multiboot2: mmap") ||
+	    str_starts_with(fmt, "pmm: reserve") ||
+	    str_starts_with(fmt, "timer: tick") ||
+	    str_starts_with(fmt, "vm-server: ipc event") ||
+	    str_starts_with(fmt, "sched: ipi") ||
+	    str_starts_with(fmt, "sched: enqueue") ||
+	    str_starts_with(fmt, "sched: switch") ||
+	    str_starts_with(fmt, "sched: yield") ||
+	    str_starts_with(fmt, "sched: preempt") ||
+	    str_starts_with(fmt, "sched: block") ||
+	    str_starts_with(fmt, "sched: sleep") ||
+	    str_starts_with(fmt, "sched: wake") ||
+	    str_starts_with(fmt, "sched: reap") ||
+	    str_starts_with(fmt, "ipc: send") ||
+	    str_starts_with(fmt, "ipc: recv") ||
+	    str_starts_with(fmt, "buffer: read") ||
+	    str_starts_with(fmt, "buffer: write") ||
+	    str_starts_with(fmt, "kernel: task map") ||
+	    str_starts_with(fmt, "kernel: task write") ||
+	    str_starts_with(fmt, "kernel: task alloc") ||
+	    str_starts_with(fmt, "kernel: task clone") ||
+	    str_starts_with(fmt, "kernel: task start") ||
+	    str_starts_with(fmt, "kernel: task fork") ||
+	    str_starts_with(fmt, "elf: load") ||
+	    str_starts_with(fmt, "user: enter")) {
+		return CONSOLE_LOG_TRACE;
+	}
+
+	if (str_starts_with(fmt, "arch-vm: create space") ||
+	    str_starts_with(fmt, "buffer: create") ||
+	    str_starts_with(fmt, "buffer: destroy") ||
+	    str_starts_with(fmt, "elf: entry") ||
+	    str_starts_with(fmt, "ipc: port") ||
+	    str_starts_with(fmt, "kernel: recorded") ||
+	    str_starts_with(fmt, "linux: arch_prctl") ||
+	    str_starts_with(fmt, "linux: mmap") ||
+	    str_starts_with(fmt, "linux: munmap") ||
+	    str_starts_with(fmt, "linux: execve") ||
+	    str_starts_with(fmt, "linux: fork") ||
+	    str_starts_with(fmt, "multiboot2: module") ||
+	    str_starts_with(fmt, "names: lookup") ||
+	    str_starts_with(fmt, "names: register") ||
+	    str_starts_with(fmt, "names: update") ||
+	    str_starts_with(fmt, "sched: close") ||
+	    str_starts_with(fmt, "sched: grant") ||
+	    str_starts_with(fmt, "sched: place") ||
+	    str_starts_with(fmt, "sched: task pid") ||
+	    str_starts_with(fmt, "sched: thread tid") ||
+	    str_starts_with(fmt, "vm: create space") ||
+	    str_starts_with(fmt, "vm: destroy space") ||
+	    str_starts_with(fmt, "vm: selftest")) {
+		return CONSOLE_LOG_DEBUG;
+	}
+
+	return CONSOLE_LOG_INFO;
+}
+
+static int console_should_print(const char *fmt)
+{
+	return log_level_for_format(fmt) <= console_verbosity;
+}
+
 static void serial_init(void)
 {
 	arch_outb(COM1 + 1, 0x00);
@@ -87,6 +237,25 @@ static void console_write_raw(const char *text)
 	while (*text != '\0') {
 		console_putc_raw(*text++);
 	}
+}
+
+static void console_write_token_raw(const char *text)
+{
+	while (*text != '\0' && *text != ' ') {
+		console_putc_raw(*text++);
+	}
+}
+
+void console_set_verbosity(const char *level)
+{
+	const u64 flags = spin_lock_irqsave(&console_lock);
+
+	console_verbosity = log_level_from_name(level);
+	console_write_raw("kernel: log level ");
+	console_write_token_raw(level != 0 ? level : "info");
+	console_putc_raw('\n');
+
+	spin_unlock_irqrestore(&console_lock, flags);
 }
 
 void console_putc(char c)
@@ -249,6 +418,10 @@ void console_vprintf(const char *fmt, va_list args)
 void console_printf(const char *fmt, ...)
 {
 	va_list args;
+
+	if (!console_should_print(fmt)) {
+		return;
+	}
 
 	va_start(args, fmt);
 	console_vprintf(fmt, args);

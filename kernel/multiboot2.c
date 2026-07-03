@@ -3,6 +3,7 @@
 
 enum {
 	MULTIBOOT2_TAG_END = 0,
+	MULTIBOOT2_TAG_CMDLINE = 1,
 	MULTIBOOT2_TAG_MODULE = 3,
 	MULTIBOOT2_TAG_MMAP = 6,
 	MULTIBOOT2_TAG_ACPI_OLD = 14,
@@ -25,6 +26,12 @@ struct multiboot2_tag_module {
 	u32 mod_start;
 	u32 mod_end;
 	char cmdline[];
+};
+
+struct multiboot2_tag_string {
+	u32 type;
+	u32 size;
+	char string[];
 };
 
 struct multiboot2_tag_mmap {
@@ -69,6 +76,31 @@ u64 multiboot2_total_size(u64 info_addr)
 	const struct multiboot2_info *info = (const struct multiboot2_info *)info_addr;
 
 	return info->total_size;
+}
+
+const char *multiboot2_cmdline(u64 info_addr)
+{
+	const struct multiboot2_info *info = (const struct multiboot2_info *)info_addr;
+	u64 cursor = info_addr + sizeof(*info);
+	const u64 end = info_addr + info->total_size;
+
+	while (cursor + sizeof(struct multiboot2_tag) <= end) {
+		const struct multiboot2_tag *tag = (const struct multiboot2_tag *)cursor;
+
+		if (tag->type == MULTIBOOT2_TAG_END) {
+			return "";
+		}
+
+		if (tag->type == MULTIBOOT2_TAG_CMDLINE) {
+			const struct multiboot2_tag_string *raw =
+				(const struct multiboot2_tag_string *)tag;
+			return raw->string;
+		}
+
+		cursor = align_up_u64(cursor + tag->size, 8);
+	}
+
+	return "";
 }
 
 void multiboot2_for_each_module(u64 info_addr, multiboot2_module_fn fn,
