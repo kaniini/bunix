@@ -6,11 +6,11 @@ This first slice boots a freestanding x86_64 kernel through Multiboot2,
 initializes serial and VGA text consoles, parses Multiboot2 modules, starts the
 kernel-hosted VM server, and enters a user-space init server which launches
 other user servers. The current boot proves both a synthetic filesystem read and
-the original hello path:
+a user-space heartbeat server:
 
 ```text
 rootfs: module
-hello: world <3
+ping: heartbeat
 ```
 
 ## Current shape
@@ -22,7 +22,7 @@ hello: world <3
 - `servers/`: initial server stubs, including the skeletal VM server.
 - `Makefile`: build, EFI ISO, and QEMU/KVM targets.
 
-The init, names, block, VFS, hello, and ping modules are freestanding C ELF
+The init, names, block, VFS, and ping modules are freestanding C ELF
 images loaded into their tasks and entered in ring 3. The VM server remains
 kernel-hosted for the current performance-oriented design, but still exposes a
 VM IPC port for events. The next microkernel steps are to move more server
@@ -57,7 +57,7 @@ attenuated inherited handles in caller-specified order.
 
 The boot policy grants init `self`, `console`, `vm`, and `names`; init registers
 console and VM with the user-space names server, resolves them back as
-delegable capabilities, then launches block, VFS, hello, and ping with
+delegable capabilities, then launches block, VFS, and ping with
 attenuated caps. The returned launch value is a send-capability to the child's
 service port in the parent task. `recv` blocks the current thread and wakes
 when a sender queues an event. `ipc_call` uses a per-task private reply port,
@@ -80,7 +80,7 @@ ticks or retry loops.
 The VM server owns the memory authority policy, but module task spaces are now
 granted through direct kernel VM calls during launch. That avoids a synchronous
 scheduler re-entry path while VM remains kernel-hosted. VM still receives
-event-port style IPC, currently exercised by ping.
+event-port style IPC, currently exercised by the ping heartbeat server.
 
 ## Filesystem Path
 
@@ -101,12 +101,13 @@ filesystem format.
 ## User Mode
 
 User modules are built as freestanding C x86_64 ELFs with a tiny `crt0.S` and
-inline syscall wrappers. Init, names, block, VFS, hello, and ping all link at the normal
+inline syscall wrappers. Init, names, block, VFS, and ping all link at the normal
 `0x400000` user base and enter with the same `0x800000` user stack top. The
 small user ABI exposes negative-number syscalls for thread exit, timer ticks,
-module launch with inherited handles, private port creation, IPC send/receive,
-and IPC call. The kernel still has an internal bootstrap name registry, but it
-is no longer exposed as a normal user authority path.
+blocking tick sleep, module launch with inherited handles, private port
+creation, IPC send/receive, and IPC call. The kernel still has an internal
+bootstrap name registry, but it is no longer exposed as a normal user authority
+path.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with
@@ -124,8 +125,9 @@ syscalls.
 Tasks are low-level resource containers: they own handles and VM spaces, but
 they are not process lifetime objects. Threads are schedulable contexts that
 will map naturally to Linux LWPs. The current scheduler is FIFO, with
-`thread_yield()`, `thread_block()`, `thread_unblock()`, timer-driven
-preemption, and thread-slot reaping after exit.
+`thread_yield()`, `thread_block()`, `thread_sleep_ticks()`,
+`thread_unblock()`, timer-driven preemption, and thread-slot reaping after
+exit.
 
 The scheduler state is split into per-CPU structures with per-CPU run queues,
 and the shared kernel structures used by the current server path now have
@@ -142,7 +144,7 @@ Idle CPUs mark themselves idle under the run-queue lock and then enter
 clears that idle state under the same lock and sends a scheduler IPI when the
 target CPU was sleeping. Normal thread creation uses scheduler-owned automatic
 placement over the least-loaded CPU with round-robin tie breaking. The current
-boot flow lets VM, init, hello, and ping all use automatic placement, which
+boot flow lets VM, init, block, VFS, and ping all use automatic placement, which
 exercises user entry, syscalls, IPC wakeups, server work, and scheduling across
 both CPUs.
 
@@ -186,19 +188,15 @@ make test
 `build/serial.log`, and checks that GRUB passed Multiboot2 modules, the kernel
 started VM, names, and init, init received its boot capabilities, and init
 registered and resolved services through the user-space names server before
-launching block, VFS, hello, and ping with attenuated inherited handles. The
+launching block, VFS, and ping with attenuated inherited handles. The
 test checks namespace creation, VFS re-export into the filesystem namespace, the
 `VFS0 -> BLK0 -> disk0` read, and the resulting `rootfs: module` console
 output. Init also proves the OCAP launch rule by asking for a receive right it
 does not hold, which the kernel rejects before the module is marked launched.
-Init sends ping a synchronous user IPC call through the returned service-port
-handle, ping receives it through blocking `recv`, sends a VMEM FourCC event
-through its inherited VM capability, exercises automatic CPU placement across
-both CPUs, and replies to init through the granted reply capability. Hello
-receives only console send rights; the test also checks that its attempt to use
-the conventional VM handle is denied. Ping closes its VM handle after one
-successful send and proves the local capability has been revoked by attempting a
-second VM send.
+Init then launches ping with console and VM send capabilities. Ping blocks on
+the scheduler sleep queue for two-second intervals, logs `ping: heartbeat`, and
+forwards an incrementing heartbeat value as a VMEM FourCC event through its
+inherited VM capability.
 
 For an interactive serial console:
 

@@ -127,6 +127,7 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 		if (timer_ticks <= 3) {
 			console_printf("timer: tick %u\n", (u32)timer_ticks);
 		}
+		sched_wake_sleepers(timer_ticks);
 		pic_eoi(frame->vector);
 		if ((frame->cs & 3) == 3) {
 			sched_tick();

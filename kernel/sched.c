@@ -2,6 +2,7 @@
 #include "ipc.h"
 #include "sched.h"
 #include "spinlock.h"
+#include "timer.h"
 #include "vm.h"
 #include <arch/smp.h>
 #include <arch/thread.h>
@@ -46,6 +47,8 @@ struct thread {
 	void *arg;
 	u32 cpu_id;
 	struct thread *run_next;
+	struct thread *sleep_next;
+	u64 wake_tick;
 	struct arch_thread_context context;
 	u8 kernel_stack[KERNEL_STACK_SIZE] __attribute__((aligned(16)));
 	u8 trap_stack[KERNEL_STACK_SIZE] __attribute__((aligned(16)));
@@ -78,9 +81,11 @@ static u32 next_tid = 1;
 static u32 preemption_enabled;
 static u32 sched_cpu_count = 1;
 static u32 next_auto_cpu;
+static struct thread *sleep_list;
 static struct spinlock task_table_lock = SPINLOCK_INIT("task-table");
 static struct spinlock thread_table_lock = SPINLOCK_INIT("thread-table");
 static struct spinlock placement_lock = SPINLOCK_INIT("sched-placement");
+static struct spinlock sleep_lock = SPINLOCK_INIT("sched-sleep");
 
 static struct cpu_sched *sched_current_cpu(void)
 {
@@ -182,6 +187,8 @@ static void sched_reap_thread(struct thread *thread)
 	thread->arg = 0;
 	thread->cpu_id = 0;
 	thread->run_next = 0;
+	thread->sleep_next = 0;
+	thread->wake_tick = 0;
 	thread->state = THREAD_EMPTY;
 	spin_unlock_irqrestore(&thread_table_lock, thread_flags);
 
@@ -676,6 +683,66 @@ void thread_block(void)
 	cpu->current = &cpu->scheduler_thread;
 	sched_activate_thread_space(cpu->current);
 	arch_thread_switch(&prev->context, &cpu->scheduler_thread.context);
+}
+
+void thread_sleep_ticks(u64 ticks)
+{
+	struct cpu_sched *cpu = sched_current_cpu();
+	struct thread *prev = cpu->current;
+
+	if (ticks == 0) {
+		thread_yield();
+		return;
+	}
+
+	if (prev == &cpu->scheduler_thread) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&sleep_lock);
+	prev->wake_tick = timer_ticks() + ticks;
+	prev->sleep_next = sleep_list;
+	sleep_list = prev;
+	prev->state = THREAD_BLOCKED;
+	spin_unlock_irqrestore(&sleep_lock, flags);
+
+	console_printf("sched: sleep tid=%u cpu=%u ticks=%u\n",
+		       prev->tid, cpu->id, (u32)ticks);
+	cpu->current = &cpu->scheduler_thread;
+	sched_activate_thread_space(cpu->current);
+	arch_thread_switch(&prev->context, &cpu->scheduler_thread.context);
+}
+
+void sched_wake_sleepers(u64 now)
+{
+	struct thread *ready = 0;
+	const u64 flags = spin_lock_irqsave(&sleep_lock);
+	struct thread **link = &sleep_list;
+
+	while (*link != 0) {
+		struct thread *thread = *link;
+
+		if (thread->wake_tick > now) {
+			link = &thread->sleep_next;
+			continue;
+		}
+
+		*link = thread->sleep_next;
+		thread->sleep_next = ready;
+		ready = thread;
+	}
+
+	spin_unlock_irqrestore(&sleep_lock, flags);
+
+	while (ready != 0) {
+		struct thread *thread = ready;
+
+		ready = thread->sleep_next;
+		thread->sleep_next = 0;
+		thread->wake_tick = 0;
+		console_printf("sched: wake tid=%u\n", thread->tid);
+		thread_unblock(thread);
+	}
 }
 
 void thread_unblock(struct thread *thread)

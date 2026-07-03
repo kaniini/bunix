@@ -112,14 +112,6 @@ int main(void)
 	const char names_ready[] = "init: names ready\n";
 	const char fs_namespace_ready[] = "init: fs namespace\n";
 	const char fs_ready[] = "init: fs ready\n";
-	struct bunix_msg ping_message = {
-		.protocol = BUNIX_PROTO_PING,
-		.type = 1,
-		.sender = 0,
-		.reply = 0,
-		.words = { 0x2a, 0, 0, 0 },
-	};
-	struct bunix_msg ping_reply;
 	struct bunix_msg vfs_request = {
 		.protocol = BUNIX_PROTO_VFS,
 		.type = BUNIX_VFS_READ,
@@ -149,9 +141,6 @@ int main(void)
 	}
 	bunix_console_write(names_ready, sizeof(names_ready) - 1);
 
-	const struct bunix_launch_cap hello_caps[] = {
-		{ console, BUNIX_RIGHT_SEND, 0 },
-	};
 	const struct bunix_launch_cap ping_caps[] = {
 		{ console, BUNIX_RIGHT_SEND, 0 },
 		{ vm, BUNIX_RIGHT_SEND, 0 },
@@ -185,18 +174,13 @@ int main(void)
 		bunix_console_write(file, vfs_reply.words[1]);
 	}
 
-	if (bunix_launch_module_with_caps("hello", bad_caps,
+	if (bunix_launch_module_with_caps("ping", bad_caps,
 					  sizeof(bad_caps) /
 					  sizeof(bad_caps[0])) < 0) {
 		bunix_console_write(attenuated, sizeof(attenuated) - 1);
 	}
-	bunix_launch_module_with_caps("hello", hello_caps,
-				      sizeof(hello_caps) / sizeof(hello_caps[0]));
-	const u64 ping_port =
-		(u64)bunix_launch_module_with_caps("ping", ping_caps,
-						   sizeof(ping_caps) /
-						   sizeof(ping_caps[0]));
-	bunix_ipc_call(ping_port, &ping_message, &ping_reply);
+	bunix_launch_module_with_caps("ping", ping_caps,
+				      sizeof(ping_caps) / sizeof(ping_caps[0]));
 
 	return 0;
 }

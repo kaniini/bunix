@@ -15,6 +15,7 @@ enum {
 	BUNIX_SYSCALL_IPC_CALL = -14,
 	BUNIX_SYSCALL_HANDLE_CLOSE = -16,
 	BUNIX_SYSCALL_BOOT_MODULE_READ = -18,
+	BUNIX_SYSCALL_SLEEP_TICKS = -20,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_RIGHT_SEND = 1 << 0,
 	BUNIX_RIGHT_RECV = 1 << 1,
@@ -128,6 +129,11 @@ static inline long bunix_launch_module_with_caps(const char *name,
 static inline u64 bunix_timer_ticks(void)
 {
 	return (u64)bunix_syscall0(BUNIX_SYSCALL_TIMER_TICKS);
+}
+
+static inline long bunix_sleep_ticks(u64 ticks)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_SLEEP_TICKS, ticks);
 }
 
 static inline long bunix_port_create(const char *name)
