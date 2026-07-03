@@ -9,7 +9,7 @@
 
 static const struct server boot_servers[] = {
 	{ "hello", 0 },
-	{ "ping", ping_server_start },
+	{ "ping", 0 },
 	{ "vm", vm_server_start },
 };
 
@@ -44,7 +44,8 @@ static void module_server_thread(void *arg)
 		       (const void *)start->image_start,
 		       (const void *)start->image_end);
 
-	if (str_eq(start->server->name, "hello")) {
+	if (str_eq(start->server->name, "hello") ||
+	    str_eq(start->server->name, "ping")) {
 		u64 entry = 0;
 		if (elf_load_user_image(start->image_start, start->image_end, &entry) == 0) {
 			arch_user_enter(entry, 0x600000);

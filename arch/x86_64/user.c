@@ -1,7 +1,10 @@
 #include <arch/user.h>
 #include <arch/io.h>
 #include "console.h"
+#include "ipc.h"
 #include "sched.h"
+#include "timer.h"
+#include "../servers/vm/vm_server.h"
 
 enum {
 	GDT_KERNEL_CODE = 0x08,
@@ -16,6 +19,8 @@ enum {
 	EFER_SCE = 1,
 	SYSCALL_WRITE = -1,
 	SYSCALL_EXIT = -2,
+	SYSCALL_VM_PING = -3,
+	SYSCALL_TIMER_TICKS = -4,
 };
 
 struct gdt_ptr {
@@ -130,6 +135,23 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		console_printf("syscall: exit status=%u\n", (u32)arg0);
 		__asm__ volatile ("sti");
 		thread_exit();
+	case SYSCALL_VM_PING: {
+		struct ipc_port *vm_port = ipc_port_find("vm");
+		struct ipc_message message = {
+			.type = VM_IPC_EVENT_PING,
+			.sender = 0,
+			.reply_port = 0,
+			.words = { arg0, 0, 0, 0 },
+		};
+
+		if (vm_port == 0) {
+			return (u64)-1;
+		}
+
+		return (u64)ipc_send(vm_port, &message);
+	}
+	case SYSCALL_TIMER_TICKS:
+		return timer_ticks();
 	default:
 		console_printf("syscall: unknown number=%u\n", (u32)number);
 		return (u64)-1;

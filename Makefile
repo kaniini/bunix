@@ -7,6 +7,8 @@ EFI_BOOT_APP := $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 KERNEL := $(BUILD_DIR)/bunixos.kernel
 HELLO_MODULE := $(BUILD_DIR)/modules/hello.server
 HELLO_MODULE_OBJ := $(BUILD_DIR)/user/hello/start.S.o
+PING_MODULE := $(BUILD_DIR)/modules/ping.server
+PING_MODULE_OBJ := $(BUILD_DIR)/user/ping/start.S.o
 
 CC ?= gcc
 LD ?= ld
@@ -42,7 +44,6 @@ KERNEL_SRCS := \
 	kernel/server.c \
 	kernel/timer.c \
 	kernel/vm.c \
-	servers/ping/ping.c \
 	servers/vm/vm.c
 
 KERNEL_OBJS := $(KERNEL_SRCS:%=$(BUILD_DIR)/%.o)
@@ -76,7 +77,15 @@ $(HELLO_MODULE): $(HELLO_MODULE_OBJ) user/user.ld
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(HELLO_MODULE_OBJ)
 
-$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(HELLO_MODULE) modules/ping.server modules/vm.server
+$(PING_MODULE_OBJ): user/ping/start.S
+	mkdir -p $(dir $@)
+	$(CC) -m64 -ffreestanding -fno-pic -fno-pie -c $< -o $@
+
+$(PING_MODULE): $(PING_MODULE_OBJ) user/user.ld
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PING_MODULE_OBJ)
+
+$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(HELLO_MODULE) $(PING_MODULE) modules/vm.server
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -86,10 +95,10 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(HELLO_MODULE) modules/ping
 		"boot/grub/grub.cfg=boot/grub-standalone.cfg" \
 		"boot/bunixos.kernel=$(KERNEL)" \
 		"modules/hello.server=$(HELLO_MODULE)" \
-		"modules/ping.server=modules/ping.server" \
+		"modules/ping.server=$(PING_MODULE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(HELLO_MODULE) modules/ping.server modules/vm.server
+$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(HELLO_MODULE) $(PING_MODULE) modules/vm.server
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -101,7 +110,7 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(HELLO_MODULE) modules/ping.server mod
 	cp $(KERNEL) $(ISO_ROOT)/boot/bunixos.kernel
 	cp boot/grub.cfg $(ISO_ROOT)/boot/grub/grub.cfg
 	cp $(HELLO_MODULE) $(ISO_ROOT)/modules/hello.server
-	cp modules/ping.server $(ISO_ROOT)/modules/ping.server
+	cp $(PING_MODULE) $(ISO_ROOT)/modules/ping.server
 	cp modules/vm.server $(ISO_ROOT)/modules/vm.server
 	$(GRUB_MKRESCUE) -o $@ $(ISO_ROOT)
 
@@ -164,6 +173,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "hello: world <3" $(BUILD_DIR)/serial.log
 	grep -F "syscall: exit status=0" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping" $(BUILD_DIR)/serial.log
+	grep -F "kernel: starting module server ping image=0x" $(BUILD_DIR)/serial.log
+	grep -F "elf: load vaddr=0x0000000000400000 filesz=102" $(BUILD_DIR)/serial.log
 	grep -F "ping: one" $(BUILD_DIR)/serial.log
 	grep -F "ping: two" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=2 exited" $(BUILD_DIR)/serial.log

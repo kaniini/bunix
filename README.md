@@ -20,11 +20,11 @@ hello: world <3
 - `servers/`: initial server stubs, including the skeletal VM server.
 - `Makefile`: build, EFI ISO, and QEMU/KVM targets.
 
-The hello module is now a standalone ELF image loaded into its task and entered
-in ring 3. The VM server is also module-backed and owns memory policy shape
-through RPC hooks. The next microkernel steps are to move the remaining
-kernel-hosted servers to ELF images and replace bootstrap shortcuts with
-capability-checked IPC.
+The hello and ping modules are standalone ELF images loaded into their tasks and
+entered in ring 3. The VM server remains kernel-hosted and owns memory policy
+shape through RPC hooks. The next microkernel steps are to replace bootstrap
+shortcuts with capability-checked IPC and move more server functionality behind
+the same user-mode ABI.
 
 The tree is split so future ports can add a sibling such as `arch/arm64/` with
 its own boot path, interrupt setup, MMU setup, and device I/O while reusing the
@@ -46,10 +46,11 @@ for other module-backed servers and replies over the caller's reply port.
 
 ## User Mode
 
-The `hello` module is built as a freestanding x86_64 ELF at `0x400000`. The
-kernel loads its `PT_LOAD` segments, enters ring 3 with `iretq`, and exposes a
-small negative-number syscall namespace over `syscall/sysret`: `-1` writes to
-the console and `-2` exits the thread.
+User modules are built as freestanding x86_64 ELFs at `0x400000`. The kernel
+loads their `PT_LOAD` segments, enters ring 3 with `iretq`, and exposes a small
+negative-number syscall namespace over `syscall/sysret`: `-1` writes to the
+console, `-2` exits the thread, `-3` sends a VM ping event, and `-4` reads timer
+ticks.
 
 ## Scheduler shape
 
