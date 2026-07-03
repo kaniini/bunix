@@ -35,6 +35,57 @@ _start:
 	jl fail
 	movq %rax, %r12
 
+	movq $39, %rax
+	syscall
+	testq %rax, %rax
+	jle fail
+
+	movq $186, %rax
+	syscall
+	testq %rax, %rax
+	jle fail
+
+	movq $12, %rax
+	xorq %rdi, %rdi
+	syscall
+	testq %rax, %rax
+	jle fail
+	movq %rax, %r13
+	leaq 4096(%r13), %r14
+
+	movq $12, %rax
+	movq %r14, %rdi
+	syscall
+	cmpq %r14, %rax
+	jne fail
+
+	movq $5, %rax
+	movq %r12, %rdi
+	leaq stat_buffer(%rip), %rsi
+	syscall
+	testq %rax, %rax
+	jne fail
+	cmpq $15, stat_buffer + 48(%rip)
+	jne fail
+
+	movq $262, %rax
+	movq $-100, %rdi
+	leaq hello_path(%rip), %rsi
+	leaq statat_buffer(%rip), %rdx
+	syscall
+	testq %rax, %rax
+	jne fail
+	cmpq $15, statat_buffer + 48(%rip)
+	jne fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq stat_message(%rip), %rsi
+	movq $stat_message_end - stat_message, %rdx
+	syscall
+	cmpq $stat_message_end - stat_message, %rax
+	jne fail
+
 	xorq %rax, %rax
 	movq %r12, %rdi
 	leaq read_buffer(%rip), %rsi
@@ -93,6 +144,9 @@ badfd_message_end:
 ok_message:
 	.ascii "linux return checks ok\n"
 ok_message_end:
+stat_message:
+	.ascii "linux metadata checks ok\n"
+stat_message_end:
 fail_message:
 	.ascii "linux return checks failed\n"
 fail_message_end:
@@ -102,3 +156,7 @@ hello_path:
 .section .bss, "aw"
 read_buffer:
 	.skip 32
+stat_buffer:
+	.skip 144
+statat_buffer:
+	.skip 144

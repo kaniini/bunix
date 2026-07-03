@@ -43,12 +43,20 @@ enum {
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_CLOSE = 3,
+	LINUX_SYSCALL_FSTAT = 5,
+	LINUX_SYSCALL_BRK = 12,
+	LINUX_SYSCALL_GETPID = 39,
+	LINUX_SYSCALL_GETTID = 186,
+	LINUX_SYSCALL_NEWFSTATAT = 262,
 	LINUX_SYSCALL_OPENAT = 257,
 	LINUX_SYSCALL_EXIT_GROUP = 231,
 	LINUX_EBADF = 9,
 	LINUX_EINVAL = 22,
 	LINUX_ENOSYS = 38,
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
+	LINUX_STAT_SIZE = 144,
+	LINUX_INITIAL_BRK = 0x900000,
+	LINUX_MAX_BRK = 0x10000000,
 	USER_IPC_WORDS = 4,
 	USER_FOURCC_CONS = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	USER_FOURCC_LINX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
@@ -56,7 +64,9 @@ enum {
 	USER_LINUX_READ = 0,
 	USER_LINUX_WRITE = 1,
 	USER_LINUX_CLOSE = 3,
+	USER_LINUX_FSTAT = 5,
 	USER_LINUX_OPENAT = 257,
+	USER_LINUX_NEWFSTATAT = 262,
 	USER_LINUX_EXIT_GROUP = 231,
 	ARCH_USER_MAX_CPUS = 8,
 };
@@ -145,8 +155,9 @@ static void ipc_message_to_user(const struct ipc_message *message,
 
 static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 {
+	struct task *task = task_current();
 	struct ipc_port *linux = ipc_port_find("linux");
-	struct ipc_port *reply_port = task_reply_port(task_current());
+	struct ipc_port *reply_port = task_reply_port(task);
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_LINX,
 		.type = (u32)number,
@@ -158,6 +169,23 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		.words = { arg0, arg1, arg2, 0 },
 	};
 	struct ipc_message reply;
+
+	switch (number) {
+	case LINUX_SYSCALL_GETPID:
+		return task_id(task);
+	case LINUX_SYSCALL_GETTID:
+		return thread_id(thread_current());
+	case LINUX_SYSCALL_BRK:
+		if (arg0 == 0) {
+			return task_linux_brk(task);
+		}
+		if (arg0 >= LINUX_INITIAL_BRK && arg0 < LINUX_MAX_BRK) {
+			task_set_linux_brk(task, arg0);
+		}
+		return task_linux_brk(task);
+	default:
+		break;
+	}
 
 	if (linux == 0 || reply_port == 0) {
 		return (u64)-LINUX_ENOSYS;
@@ -222,6 +250,36 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		}
 		return reply.words[0];
 	}
+	case LINUX_SYSCALL_FSTAT: {
+		struct shared_buffer *buffer;
+
+		if (arg1 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		buffer = buffer_create(LINUX_STAT_SIZE);
+		if (buffer == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = USER_LINUX_FSTAT;
+		request.words[0] = arg0;
+		request.words[1] = LINUX_STAT_SIZE;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_SEND;
+		request.cap_object = buffer;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		if (reply.words[0] == 0 &&
+		    buffer_read(buffer, 0, (void *)arg1, LINUX_STAT_SIZE) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		return reply.words[0];
+	}
 	case LINUX_SYSCALL_CLOSE:
 		request.type = USER_LINUX_CLOSE;
 		request.words[0] = arg0;
@@ -263,6 +321,49 @@ static u64 linux_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
 			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
+	}
+	case LINUX_SYSCALL_NEWFSTATAT: {
+		struct shared_buffer *buffer;
+		const char *path = (const char *)arg1;
+		u64 packed[2] = { 0, 0 };
+		u64 len = 0;
+
+		if (path == 0 || arg2 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		while (len < sizeof(packed) && path[len] != '\0') {
+			const u64 slot = len / 8;
+			const u64 shift = (len % 8) * 8;
+
+			packed[slot] |= ((u64)(unsigned char)path[len]) << shift;
+			len++;
+		}
+		if (len == sizeof(packed)) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		buffer = buffer_create(LINUX_STAT_SIZE);
+		if (buffer == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = USER_LINUX_NEWFSTATAT;
+		request.words[0] = arg0;
+		request.words[1] = LINUX_STAT_SIZE;
+		request.words[2] = packed[0];
+		request.words[3] = packed[1];
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_SEND;
+		request.cap_object = buffer;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		if (reply.words[0] == 0 &&
+		    buffer_read(buffer, 0, (void *)arg2, LINUX_STAT_SIZE) != 0) {
+			return (u64)-LINUX_EINVAL;
 		}
 		return reply.words[0];
 	}

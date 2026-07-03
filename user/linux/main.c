@@ -8,6 +8,9 @@ enum {
 	LINUX_EMFILE = 24,
 	LINUX_MAX_WRITE = 4096,
 	LINUX_MAX_PATH = 32,
+	LINUX_STAT_SIZE = 144,
+	LINUX_S_IFCHR = 0020000,
+	LINUX_S_IFREG = 0100000,
 	LINUX_FD_CONSOLE = 1,
 	LINUX_FD_FILE = 2,
 	LINUX_AT_FDCWD = (u64)-100,
@@ -23,6 +26,27 @@ struct linux_fd {
 static struct linux_fd fds[16];
 static char write_buffer[LINUX_MAX_WRITE];
 
+static void zero_bytes(char *buffer, u64 len)
+{
+	for (u64 i = 0; i < len; i++) {
+		buffer[i] = 0;
+	}
+}
+
+static void store_u32(char *buffer, u64 offset, unsigned int value)
+{
+	for (u64 i = 0; i < 4; i++) {
+		buffer[offset + i] = (char)((value >> (i * 8)) & 0xff);
+	}
+}
+
+static void store_u64(char *buffer, u64 offset, u64 value)
+{
+	for (u64 i = 0; i < 8; i++) {
+		buffer[offset + i] = (char)((value >> (i * 8)) & 0xff);
+	}
+}
+
 static void pack_path(u64 *words, const char *path)
 {
 	words[0] = 0;
@@ -34,6 +58,19 @@ static void pack_path(u64 *words, const char *path)
 
 		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
 	}
+}
+
+static void unpack_path(char *path, u64 word0, u64 word1)
+{
+	const u64 words[] = { word0, word1 };
+
+	for (u64 i = 0; i < 16; i++) {
+		path[i] = (char)((words[i / 8] >> ((i % 8) * 8)) & 0xff);
+		if (path[i] == '\0') {
+			return;
+		}
+	}
+	path[15] = '\0';
 }
 
 static long alloc_fd(u64 kind, u64 handle, u64 size)
@@ -80,6 +117,75 @@ static long linux_openat(u64 dirfd, u64 path_len, u64 flags, u64 path_buffer)
 	}
 
 	return alloc_fd(LINUX_FD_FILE, reply.words[1], reply.words[2]);
+}
+
+static long linux_stat_write(u64 stat_buffer, u64 mode, u64 size)
+{
+	char stat[LINUX_STAT_SIZE];
+
+	if (stat_buffer == 0) {
+		return -LINUX_EINVAL;
+	}
+
+	zero_bytes(stat, sizeof(stat));
+	store_u64(stat, 0, 1);
+	store_u64(stat, 8, 1);
+	store_u64(stat, 16, 1);
+	store_u32(stat, 24, (unsigned int)mode);
+	store_u64(stat, 48, size);
+	store_u64(stat, 56, 4096);
+	store_u64(stat, 64, (size + 511) / 512);
+
+	return bunix_buffer_write(stat_buffer, 0, stat, sizeof(stat)) == 0 ?
+		0 : -LINUX_EINVAL;
+}
+
+static long linux_fstat(u64 fd, u64 stat_buffer)
+{
+	if (fd >= sizeof(fds) / sizeof(fds[0]) || fds[fd].kind == 0) {
+		return -LINUX_EBADF;
+	}
+
+	if (fds[fd].kind == LINUX_FD_CONSOLE) {
+		return linux_stat_write(stat_buffer, LINUX_S_IFCHR | 0600, 0);
+	}
+
+	return linux_stat_write(stat_buffer, LINUX_S_IFREG | 0444,
+				fds[fd].size);
+}
+
+static long linux_newfstatat(u64 dirfd, u64 word0, u64 word1, u64 stat_buffer)
+{
+	char path[16];
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_OPEN,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (dirfd != LINUX_AT_FDCWD || stat_buffer == 0) {
+		return -LINUX_EINVAL;
+	}
+
+	unpack_path(path, word0, word1);
+	pack_path(&request.words[0], path);
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[3] != BUNIX_VFS_TYPE_REGULAR) {
+		return -LINUX_ENOENT;
+	}
+
+	const long result = linux_stat_write(stat_buffer, LINUX_S_IFREG | 0444,
+					     reply.words[2]);
+	request.type = BUNIX_VFS_CLOSE;
+	request.words[0] = reply.words[1];
+	(void)bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply);
+	return result;
 }
 
 static long linux_read(u64 fd, u64 len, u64 buffer)
@@ -153,6 +259,8 @@ int main(void)
 	const char bad_fd[] = "linux-server: ebadf\n";
 	const char open_ok[] = "linux-server: openat\n";
 	const char read_ok[] = "linux-server: read\n";
+	const char fstat_ok[] = "linux-server: fstat\n";
+	const char newfstatat_ok[] = "linux-server: newfstatat\n";
 	const char close_ok[] = "linux-server: close\n";
 	const char exit_group[] = "linux-server: exit_group\n";
 	struct bunix_msg message;
@@ -188,6 +296,30 @@ int main(void)
 							   message.cap);
 			if ((long)reply.words[0] >= 0) {
 				bunix_console_write(open_ok, sizeof(open_ok) - 1);
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_FSTAT:
+			reply.words[0] = (u64)linux_fstat(message.words[0],
+							  message.cap);
+			if (reply.words[0] == 0) {
+				bunix_console_write(fstat_ok,
+						    sizeof(fstat_ok) - 1);
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_NEWFSTATAT:
+			reply.words[0] = (u64)linux_newfstatat(message.words[0],
+							       message.words[2],
+							       message.words[3],
+							       message.cap);
+			if (reply.words[0] == 0) {
+				bunix_console_write(newfstatat_ok,
+						    sizeof(newfstatat_ok) - 1);
 			}
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);

@@ -36,6 +36,7 @@ struct task {
 	const char *name;
 	u32 thread_count;
 	struct vm_space *vm_space;
+	u64 linux_brk;
 	struct ipc_port *reply_port;
 	struct task_handle handles[MAX_TASK_HANDLES];
 	struct spinlock lock;
@@ -321,6 +322,7 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 		tasks[i].name = name;
 		tasks[i].thread_count = 0;
 		tasks[i].vm_space = vm_space;
+		tasks[i].linux_brk = 0x900000;
 		tasks[i].reply_port = 0;
 		spinlock_init(&tasks[i].lock, "task");
 		for (u32 handle = 0; handle < MAX_TASK_HANDLES; handle++) {
@@ -970,6 +972,18 @@ void thread_exit(void)
 u32 task_id(const struct task *task)
 {
 	return task != 0 ? task->pid : 0;
+}
+
+u64 task_linux_brk(const struct task *task)
+{
+	return task != 0 ? task->linux_brk : 0;
+}
+
+void task_set_linux_brk(struct task *task, u64 brk)
+{
+	if (task != 0) {
+		task->linux_brk = brk;
+	}
 }
 
 u32 thread_id(const struct thread *thread)

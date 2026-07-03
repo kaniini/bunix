@@ -142,20 +142,24 @@ has an internal bootstrap name registry, but it is no longer exposed as a normal
 user authority path.
 
 Linux syscall numbers are kept separate from the native negative Bunix syscall
-space. For the current MVP, nonnegative syscall numbers trap into the kernel
-and are marshalled as synchronous `LINX` protocol requests to the user-space
-linux personality server. The kernel attaches user buffers as shared-buffer
-capabilities and blocks the caller on a reply port, then returns the server's
-Linux-style result value. `/bin/lxtest` contains no Bunix headers or crt0; it
-issues raw x86_64 Linux syscall numbers for `write`, `openat`, `read`, `close`,
-and `exit_group`, verifies returned byte counts and `-EBADF` for invalid fds,
-then exits successfully. The personality server owns the initial fd table for
-stdout/stderr and allocates VFS-backed file fds starting at 3. Console writes
-use the server's delegated console capability, while `openat(AT_FDCWD, path,
-O_RDONLY)`, `read`, and `close` proxy to VFS using shared-buffer capabilities.
+space. For the current MVP, nonnegative syscall numbers trap into the kernel.
+Task-local calls such as `getpid`, `gettid`, and a minimal tracked `brk` are
+answered directly, while file-oriented calls are marshalled as synchronous
+`LINX` protocol requests to the user-space linux personality server. The kernel
+attaches user buffers as shared-buffer capabilities and blocks the caller on a
+reply port, then returns the server's Linux-style result value. `/bin/lxtest`
+contains no Bunix headers or crt0; it issues raw x86_64 Linux syscall numbers
+for `write`, `openat`, `fstat`, `newfstatat`, `read`, `close`, and
+`exit_group`, verifies returned byte counts, metadata, task ids, `brk`, and
+`-EBADF` for invalid fds, then exits successfully. The personality server owns
+the initial fd table for stdout/stderr and allocates VFS-backed file fds
+starting at 3. Console writes use the server's delegated console capability,
+while `openat(AT_FDCWD, path, O_RDONLY)`, `fstat`, `newfstatat`, `read`, and
+`close` proxy to VFS using shared-buffer capabilities. `mmap` is intentionally
+not part of this slice; it should be built later from more granular memory
+object and mapping capabilities rather than a monolithic compatibility hook.
 The next Linux slices need per-process fd namespaces instead of one global
-server table, metadata syscalls such as `fstat`/`newfstatat`, and a real memory
-API for `brk`/`mmap`.
+server table and real mapped-growth behavior behind `brk`.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with
