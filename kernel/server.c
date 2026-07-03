@@ -92,10 +92,44 @@ static int str_eq(const char *left, const char *right)
 
 int server_launch_module(const char *name)
 {
+	return server_launch_module_with_caps(name, 0, 0, 0) == (u64)-1 ? -1 : 0;
+}
+
+static void grant_bootstrap_caps(struct task *task, const char *server_name)
+{
+	if (!str_eq(server_name, "init")) {
+		return;
+	}
+
+	task_grant_port(task, ipc_port_find("console"));
+	task_grant_port(task, ipc_port_find("vm"));
+}
+
+u64 server_launch_module_with_caps(const char *name, struct task *parent,
+				   const u64 *handles, u64 handle_count)
+{
 	enum {
 		USER_STACK_TOP = 0x800000,
 		USER_STACK_PAGES = 4,
+		MAX_INHERITED_HANDLES = 8,
 	};
+	struct ipc_port *inherited_ports[MAX_INHERITED_HANDLES];
+
+	if (handle_count > MAX_INHERITED_HANDLES) {
+		console_printf("kernel: too many inherited caps for %s count=%u\n",
+			       name, (u32)handle_count);
+		return (u64)-1;
+	}
+
+	for (u64 handle = 0; handle < handle_count; handle++) {
+		inherited_ports[handle] = task_port_from_handle(parent,
+								handles[handle]);
+		if (inherited_ports[handle] == 0) {
+			console_printf("kernel: invalid inherited cap %u for %s\n",
+				       (u32)handles[handle], name);
+			return (u64)-1;
+		}
+	}
 
 	for (u32 i = 0; i < module_start_count; i++) {
 		struct module_server_start *start = &module_starts[i];
@@ -122,7 +156,23 @@ int server_launch_module(const char *name)
 
 		struct task *task = task_create(server_name, space);
 		if (task == 0) {
-			return -1;
+			return (u64)-1;
+		}
+
+		struct ipc_port *service_port = ipc_port_create(server_name);
+		const u64 child_self = task_grant_port(task, service_port);
+		if (child_self == 0) {
+			return (u64)-1;
+		}
+
+		for (u64 handle = 0; handle < handle_count; handle++) {
+			if (task_grant_port(task, inherited_ports[handle]) == 0) {
+				return (u64)-1;
+			}
+		}
+
+		if (parent == 0) {
+			grant_bootstrap_caps(task, server_name);
 		}
 
 		for (u64 page = 0; page < USER_STACK_PAGES; page++) {
@@ -131,7 +181,7 @@ int server_launch_module(const char *name)
 			if (vm_alloc_user_page(space, vaddr, 1).addr == 0) {
 				console_printf("kernel: failed to map stack for %s\n",
 					       server_name);
-				return -1;
+				return (u64)-1;
 			}
 		}
 
@@ -141,20 +191,19 @@ int server_launch_module(const char *name)
 		if (thread_create(task, server_name, module_server_thread, start) == 0) {
 			console_printf("kernel: failed to create server thread %s\n",
 				       server_name);
-			return -1;
+			return (u64)-1;
 		}
 
 		if (!str_eq(server_name, "vm")) {
-			ipc_port_create(server_name);
 			name_service_register(server_name, NAME_SERVICE_TASK,
 					      task_id(task));
 		}
 
-		return 0;
+		return parent != 0 ? task_grant_port(parent, service_port) : 0;
 	}
 
 	console_printf("kernel: no module server named %s\n", name);
-	return -1;
+	return (u64)-1;
 }
 
 static void record_boot_module(const struct multiboot2_module *module, void *ctx)

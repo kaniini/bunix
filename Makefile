@@ -189,11 +189,14 @@ test: $(EFI_BOOT_APP)
 	grep -F "ipc: port create reply" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=2 handle=1" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=2 handle=2" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=2 handle=3" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=3 handle=1" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=3 handle=2" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=4 handle=1" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=4 handle=2" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=4 handle=3" $(BUILD_DIR)/serial.log
 	grep -F "sched: grant task=4 handle=4" $(BUILD_DIR)/serial.log
+	grep -F "sched: grant task=2 handle=5" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=vm" $(BUILD_DIR)/serial.log
 	grep -F "ipc: recv block port=reply" $(BUILD_DIR)/serial.log
 	grep -F "ipc: send port=ping type=1 sender=2 queued=1" $(BUILD_DIR)/serial.log

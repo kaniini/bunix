@@ -10,15 +10,16 @@ int main(void)
 		.words = { 0x2a, 0, 0, 0 },
 	};
 	struct bunix_msg ping_reply;
-	u64 ping_port = 0;
+	const u64 hello_caps[] = { BUNIX_HANDLE_CONSOLE };
+	const u64 ping_caps[] = { BUNIX_HANDLE_CONSOLE, BUNIX_HANDLE_VM };
 
-	bunix_name_register("init");
 	bunix_console_write(launching, sizeof(launching) - 1);
-	bunix_launch_module("hello");
-	bunix_launch_module("ping");
-	while (ping_port == 0) {
-		ping_port = (u64)bunix_port_lookup("ping");
-	}
+	bunix_launch_module_with_caps("hello", hello_caps,
+				      sizeof(hello_caps) / sizeof(hello_caps[0]));
+	const u64 ping_port =
+		(u64)bunix_launch_module_with_caps("ping", ping_caps,
+						   sizeof(ping_caps) /
+						   sizeof(ping_caps[0]));
 	bunix_ipc_call(ping_port, &ping_message, &ping_reply);
 
 	return 0;

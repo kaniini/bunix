@@ -17,15 +17,12 @@ int main(void)
 		.reply = 0,
 		.words = { 0, 0, 0, 0 },
 	};
-	const u64 port = (u64)bunix_port_create("ping");
-	const u64 vm = (u64)bunix_port_lookup("vm");
 	const u64 tick = bunix_timer_ticks();
 
-	bunix_name_register("ping");
-	bunix_ipc_recv(port, &message);
+	bunix_ipc_recv(BUNIX_HANDLE_SELF, &message);
 	bunix_console_write(one, sizeof(one) - 1);
 	vm_message.words[0] = message.words[0];
-	bunix_ipc_send(vm, &vm_message);
+	bunix_ipc_send(BUNIX_HANDLE_VM, &vm_message);
 
 	while (bunix_timer_ticks() < tick + 8) {
 	}

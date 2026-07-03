@@ -8,16 +8,16 @@ typedef unsigned long u64;
 enum {
 	BUNIX_SYSCALL_EXIT = -2,
 	BUNIX_SYSCALL_TIMER_TICKS = -4,
-	BUNIX_SYSCALL_NAME_LOOKUP = -5,
 	BUNIX_SYSCALL_LAUNCH_MODULE = -8,
-	BUNIX_SYSCALL_NAME_REGISTER = -9,
 	BUNIX_SYSCALL_PORT_CREATE = -10,
-	BUNIX_SYSCALL_PORT_LOOKUP = -11,
 	BUNIX_SYSCALL_IPC_SEND = -12,
 	BUNIX_SYSCALL_IPC_RECV = -13,
 	BUNIX_SYSCALL_IPC_CALL = -14,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_CONSOLE_WRITE = 1,
+	BUNIX_HANDLE_SELF = 1,
+	BUNIX_HANDLE_CONSOLE = 2,
+	BUNIX_HANDLE_VM = 3,
 };
 
 struct bunix_msg {
@@ -79,19 +79,17 @@ static inline long bunix_syscall3(long number, u64 arg0, u64 arg1, u64 arg2)
 	return rax;
 }
 
-static inline long bunix_name_register(const char *name)
-{
-	return bunix_syscall1(BUNIX_SYSCALL_NAME_REGISTER, (u64)name);
-}
-
-static inline long bunix_name_lookup(const char *name)
-{
-	return bunix_syscall1(BUNIX_SYSCALL_NAME_LOOKUP, (u64)name);
-}
-
 static inline long bunix_launch_module(const char *name)
 {
-	return bunix_syscall1(BUNIX_SYSCALL_LAUNCH_MODULE, (u64)name);
+	return bunix_syscall3(BUNIX_SYSCALL_LAUNCH_MODULE, (u64)name, 0, 0);
+}
+
+static inline long bunix_launch_module_with_caps(const char *name,
+						 const u64 *handles,
+						 u64 handle_count)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_LAUNCH_MODULE, (u64)name,
+			      (u64)handles, handle_count);
 }
 
 static inline u64 bunix_timer_ticks(void)
@@ -102,11 +100,6 @@ static inline u64 bunix_timer_ticks(void)
 static inline long bunix_port_create(const char *name)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_PORT_CREATE, (u64)name);
-}
-
-static inline long bunix_port_lookup(const char *name)
-{
-	return bunix_syscall1(BUNIX_SYSCALL_PORT_LOOKUP, (u64)name);
 }
 
 static inline long bunix_ipc_send(u64 port, const struct bunix_msg *message)
@@ -128,7 +121,6 @@ static inline long bunix_ipc_call(u64 port, const struct bunix_msg *request,
 
 static inline long bunix_console_write(const char *text, usize len)
 {
-	const u64 console = (u64)bunix_port_lookup("console");
 	const struct bunix_msg message = {
 		.type = BUNIX_CONSOLE_WRITE,
 		.sender = 0,
@@ -136,7 +128,7 @@ static inline long bunix_console_write(const char *text, usize len)
 		.words = { (u64)text, len, 0, 0 },
 	};
 
-	return bunix_ipc_send(console, &message);
+	return bunix_ipc_send(BUNIX_HANDLE_CONSOLE, &message);
 }
 
 #endif

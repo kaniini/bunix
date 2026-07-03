@@ -2,7 +2,6 @@
 #include <arch/io.h>
 #include "console.h"
 #include "ipc.h"
-#include "name.h"
 #include "sched.h"
 #include "timer.h"
 #include "server.h"
@@ -21,11 +20,8 @@ enum {
 	EFER_SCE = 1,
 	SYSCALL_EXIT = -2,
 	SYSCALL_TIMER_TICKS = -4,
-	SYSCALL_NAME_LOOKUP = -5,
 	SYSCALL_LAUNCH_MODULE = -8,
-	SYSCALL_NAME_REGISTER = -9,
 	SYSCALL_PORT_CREATE = -10,
-	SYSCALL_PORT_LOOKUP = -11,
 	SYSCALL_IPC_SEND = -12,
 	SYSCALL_IPC_RECV = -13,
 	SYSCALL_IPC_CALL = -14,
@@ -188,29 +184,14 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 		thread_exit();
 	case SYSCALL_TIMER_TICKS:
 		return timer_ticks();
-	case SYSCALL_NAME_LOOKUP:
-		return name_service_lookup((const char *)arg0);
 	case SYSCALL_LAUNCH_MODULE:
-		return (u64)server_launch_module((const char *)arg0);
-	case SYSCALL_NAME_REGISTER:
-		return name_service_register((const char *)arg0,
-					     NAME_SERVICE_TASK,
-					     task_id(task_current()));
-	case SYSCALL_PORT_CREATE: {
-		const char *current_name = task_name(task_current());
-		struct ipc_port *existing = ipc_port_find(current_name);
-
-		if (existing != 0) {
-			return task_grant_port(task_current(), existing);
-		}
-
+		return server_launch_module_with_caps((const char *)arg0,
+						      task_current(),
+						      (const u64 *)arg1,
+						      arg2);
+	case SYSCALL_PORT_CREATE:
 		return task_grant_port(task_current(),
-				       ipc_port_create((const char *)arg0));
-	}
-	case SYSCALL_PORT_LOOKUP: {
-		struct ipc_port *port = ipc_port_find((const char *)arg0);
-		return task_grant_port(task_current(), port);
-	}
+				       ipc_port_create_private((const char *)arg0));
 	case SYSCALL_IPC_SEND: {
 		const struct user_ipc_message *user_message =
 			(const struct user_ipc_message *)arg1;
