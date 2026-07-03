@@ -71,6 +71,33 @@ void vm_rpc_free_frame(struct vm_frame frame)
 	pmm_page_free_addr(frame.addr);
 }
 
+int vm_map_user_page(struct vm_space *space, u64 vaddr, struct vm_frame frame,
+		     u32 writable)
+{
+	if (space == 0 || frame.addr == 0) {
+		return -1;
+	}
+
+	return arch_vm_map_page(&space->arch, vaddr, frame.addr, writable, 1);
+}
+
+struct vm_frame vm_alloc_user_page(struct vm_space *space, u64 vaddr,
+				   u32 writable)
+{
+	struct vm_frame frame = vm_rpc_alloc_frame();
+
+	if (frame.addr == 0) {
+		return frame;
+	}
+
+	if (vm_map_user_page(space, vaddr, frame, writable) != 0) {
+		vm_rpc_free_frame(frame);
+		return (struct vm_frame){ .addr = 0 };
+	}
+
+	return frame;
+}
+
 u64 vm_rpc_total_frames(void)
 {
 	return pmm_total_page_count();

@@ -5,6 +5,7 @@
 #include "sched.h"
 #include "server.h"
 #include "types.h"
+#include "vm.h"
 #include <arch/user.h>
 #include "../servers/vm/vm_server.h"
 
@@ -19,6 +20,7 @@ struct module_server_start {
 	const struct server *server;
 	u64 image_start;
 	u64 image_end;
+	struct vm_space *space;
 	u64 stack;
 	u32 launched;
 };
@@ -51,7 +53,8 @@ static void module_server_thread(void *arg)
 
 	if (start->server->start == 0) {
 		u64 entry = 0;
-		if (elf_load_user_image(start->image_start, start->image_end, &entry) == 0) {
+		if (elf_load_user_image(start->space, start->image_start,
+					start->image_end, &entry) == 0) {
 			arch_user_enter(entry, start->stack);
 		}
 		return;
@@ -88,6 +91,11 @@ static int str_eq(const char *left, const char *right)
 
 int server_launch_module(const char *name)
 {
+	enum {
+		USER_STACK_TOP = 0x800000,
+		USER_STACK_PAGES = 4,
+	};
+
 	for (u32 i = 0; i < module_start_count; i++) {
 		struct module_server_start *start = &module_starts[i];
 
@@ -113,6 +121,19 @@ int server_launch_module(const char *name)
 		if (task == 0) {
 			return -1;
 		}
+
+		for (u64 page = 0; page < USER_STACK_PAGES; page++) {
+			const u64 vaddr = USER_STACK_TOP -
+					  (page + 1) * VM_PAGE_SIZE;
+			if (vm_alloc_user_page(space, vaddr, 1).addr == 0) {
+				console_printf("kernel: failed to map stack for %s\n",
+					       name);
+				return -1;
+			}
+		}
+
+		start->space = space;
+		start->stack = USER_STACK_TOP;
 
 		if (thread_create(task, name, module_server_thread, start) == 0) {
 			console_printf("kernel: failed to create server thread %s\n",
@@ -153,7 +174,8 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 	start->server = server;
 	start->image_start = module->start;
 	start->image_end = module->end;
-	start->stack = 0x2000000 + ((u64)module_start_count * 0x200000);
+	start->space = 0;
+	start->stack = 0;
 	start->launched = 0;
 
 	console_printf("kernel: recorded module server %s image=%p-%p\n",

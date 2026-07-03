@@ -1,5 +1,6 @@
 #include "console.h"
 #include "elf.h"
+#include "vm.h"
 
 enum {
 	ELF_MAGIC = 0x464c457f,
@@ -8,6 +9,7 @@ enum {
 	ET_EXEC = 2,
 	EM_X86_64 = 62,
 	PT_LOAD = 1,
+	PF_W = 1 << 1,
 };
 
 struct elf64_ehdr {
@@ -58,12 +60,62 @@ static u32 read_magic(const unsigned char *ident)
 	       ((u32)ident[2] << 16) | ((u32)ident[3] << 24);
 }
 
-int elf_load_user_image(u64 image_start, u64 image_end, u64 *entry)
+static u64 align_down(u64 value, u64 align)
+{
+	return value & ~(align - 1);
+}
+
+static u64 align_up(u64 value, u64 align)
+{
+	return (value + align - 1) & ~(align - 1);
+}
+
+static u64 min_u64(u64 left, u64 right)
+{
+	return left < right ? left : right;
+}
+
+static u64 max_u64(u64 left, u64 right)
+{
+	return left > right ? left : right;
+}
+
+static int load_segment_page(struct vm_space *space, u64 image_start,
+			     const struct elf64_phdr *phdr, u64 page_vaddr)
+{
+	const u64 segment_file_start = phdr->vaddr;
+	const u64 segment_file_end = phdr->vaddr + phdr->filesz;
+	const u64 page_end = page_vaddr + VM_PAGE_SIZE;
+	const u64 copy_start = max_u64(page_vaddr, segment_file_start);
+	const u64 copy_end = min_u64(page_end, segment_file_end);
+	struct vm_frame frame = vm_alloc_user_page(space, page_vaddr,
+						  (phdr->flags & PF_W) != 0);
+
+	if (frame.addr == 0) {
+		return -1;
+	}
+
+	mem_zero((u8 *)frame.addr, VM_PAGE_SIZE);
+
+	if (copy_start < copy_end) {
+		const u64 dst_offset = copy_start - page_vaddr;
+		const u64 src_offset = phdr->offset + (copy_start - phdr->vaddr);
+		mem_copy((u8 *)(frame.addr + dst_offset),
+			 (const u8 *)(image_start + src_offset),
+			 copy_end - copy_start);
+	}
+
+	return 0;
+}
+
+int elf_load_user_image(struct vm_space *space, u64 image_start, u64 image_end,
+			u64 *entry)
 {
 	const struct elf64_ehdr *ehdr = (const struct elf64_ehdr *)image_start;
 	const u64 image_size = image_end - image_start;
 
-	if (image_size < sizeof(*ehdr) || read_magic(ehdr->ident) != ELF_MAGIC ||
+	if (space == 0 || image_size < sizeof(*ehdr) ||
+	    read_magic(ehdr->ident) != ELF_MAGIC ||
 	    ehdr->ident[4] != ELFCLASS64 || ehdr->ident[5] != ELFDATA2LSB ||
 	    ehdr->type != ET_EXEC || ehdr->machine != EM_X86_64) {
 		console_printf("elf: invalid user image %p-%p\n",
@@ -81,15 +133,25 @@ int elf_load_user_image(u64 image_start, u64 image_end, u64 *entry)
 		}
 
 		if (phdr->offset + phdr->filesz > image_size ||
-		    phdr->filesz > phdr->memsz) {
+		    phdr->filesz > phdr->memsz ||
+		    phdr->vaddr + phdr->memsz < phdr->vaddr) {
 			console_printf("elf: invalid load segment\n");
 			return -1;
 		}
 
-		mem_copy((u8 *)phdr->vaddr, (const u8 *)(image_start + phdr->offset),
-			 phdr->filesz);
-		mem_zero((u8 *)(phdr->vaddr + phdr->filesz),
-			 phdr->memsz - phdr->filesz);
+		const u64 page_start = align_down(phdr->vaddr, VM_PAGE_SIZE);
+		const u64 page_end = align_up(phdr->vaddr + phdr->memsz,
+					      VM_PAGE_SIZE);
+
+		for (u64 page = page_start; page < page_end;
+		     page += VM_PAGE_SIZE) {
+			if (load_segment_page(space, image_start, phdr, page) != 0) {
+				console_printf("elf: failed map vaddr=%p\n",
+					       (const void *)page);
+				return -1;
+			}
+		}
+
 		console_printf("elf: load vaddr=%p filesz=%u memsz=%u\n",
 			       (const void *)phdr->vaddr,
 			       (u32)phdr->filesz, (u32)phdr->memsz);

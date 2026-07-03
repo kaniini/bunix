@@ -25,6 +25,10 @@ struct vm_space *vm_rpc_create_space(const char *owner);
 void vm_rpc_activate_space(struct vm_space *space);
 struct vm_frame vm_rpc_alloc_frame(void);
 void vm_rpc_free_frame(struct vm_frame frame);
+int vm_map_user_page(struct vm_space *space, u64 vaddr, struct vm_frame frame,
+		     u32 writable);
+struct vm_frame vm_alloc_user_page(struct vm_space *space, u64 vaddr,
+				   u32 writable);
 u64 vm_rpc_free_frames(void);
 u64 vm_rpc_total_frames(void);
 void vm_self_test(void);

@@ -49,15 +49,15 @@ event-port style IPC, currently exercised by ping.
 ## User Mode
 
 User modules are built as freestanding C x86_64 ELFs with a tiny `crt0.S` and
-inline syscall wrappers. Until the VM loader maps private pages, the modules use
-distinct fixed bases: init at `0x400000`, hello at `0x800000`, and ping at
-`0xc00000`.
+inline syscall wrappers. Init, hello, and ping all link at the normal
+`0x400000` user base and enter with the same `0x800000` user stack top.
 
-The kernel loads their `PT_LOAD` segments, enters ring 3 with `iretq`, and
-exposes a small negative-number syscall namespace over `syscall/sysret`.
-Current calls include console write, thread exit, timer ticks, name lookup/name
-registration, service writes, VM ping-by-service, module launch, and explicit
-preemption enable.
+The kernel loads each module's `PT_LOAD` segments into private frames mapped in
+the target task's VM space, allocates private stack pages, enters ring 3 with
+`iretq`, and exposes a small negative-number syscall namespace over
+`syscall/sysret`. Current calls include console write, thread exit, timer ticks,
+name lookup/name registration, service writes, VM ping-by-service, module
+launch, and explicit preemption enable.
 
 ## Scheduler shape
 
@@ -74,8 +74,10 @@ preemption.
 
 Each task owns a `vm_space` granted by the VM server facade. On x86_64, a VM
 space contains a real PML4, PDPT, and page directory, currently identity-mapping
-the low 1 GiB so the existing kernel-thread servers can run while CR3 switching
-is exercised.
+the low 1 GiB so the kernel can keep running after CR3 switches. User ELF and
+stack pages are mapped privately by splitting those 2 MiB identity mappings into
+4 KiB page tables where needed. A future higher-half kernel split should remove
+the broad user-visible identity map.
 
 ## Interrupts
 

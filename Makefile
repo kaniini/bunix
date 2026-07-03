@@ -88,20 +88,17 @@ $(BUILD_DIR)/user/%.S.o: user/%.S
 	mkdir -p $(dir $@)
 	$(CC) $(USER_ASFLAGS) -c $< -o $@
 
-$(INIT_MODULE): $(INIT_MODULE_OBJS) user/user.ld
+$(INIT_MODULE): $(INIT_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld \
-		--defsym USER_BASE=0x400000 -o $@ $(INIT_MODULE_OBJS)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(INIT_MODULE_OBJS)
 
-$(HELLO_MODULE): $(HELLO_MODULE_OBJS) user/user.ld
+$(HELLO_MODULE): $(HELLO_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld \
-		--defsym USER_BASE=0x800000 -o $@ $(HELLO_MODULE_OBJS)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(HELLO_MODULE_OBJS)
 
-$(PING_MODULE): $(PING_MODULE_OBJS) user/user.ld
+$(PING_MODULE): $(PING_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld \
-		--defsym USER_BASE=0xc00000 -o $@ $(PING_MODULE_OBJS)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PING_MODULE_OBJS)
 
 $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(HELLO_MODULE) $(PING_MODULE) modules/vm.server
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
@@ -198,18 +195,12 @@ test: $(EFI_BOOT_APP)
 	grep -F "names: lookup name=vm id=1" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server hello" $(BUILD_DIR)/serial.log
 	grep -F "elf: entry=0x0000000000400000" $(BUILD_DIR)/serial.log
-	grep -F "elf: entry=0x0000000000800000" $(BUILD_DIR)/serial.log
-	grep -F "elf: entry=0x0000000000c00000" $(BUILD_DIR)/serial.log
 	grep -F "user: enter rip=0x0000000000400000" $(BUILD_DIR)/serial.log
-	grep -F "user: enter rip=0x0000000000800000" $(BUILD_DIR)/serial.log
-	grep -F "user: enter rip=0x0000000000c00000" $(BUILD_DIR)/serial.log
 	grep -F "hello: world <3" $(BUILD_DIR)/serial.log
 	grep -F "syscall: exit status=0" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping" $(BUILD_DIR)/serial.log
 	grep -F "kernel: starting module server ping image=0x" $(BUILD_DIR)/serial.log
 	grep -F "elf: load vaddr=0x0000000000400000" $(BUILD_DIR)/serial.log
-	grep -F "elf: load vaddr=0x0000000000800000" $(BUILD_DIR)/serial.log
-	grep -F "elf: load vaddr=0x0000000000c00000" $(BUILD_DIR)/serial.log
 	grep -F "ping: one" $(BUILD_DIR)/serial.log
 	grep -F "ping: two" $(BUILD_DIR)/serial.log
 	grep -F "sched: thread tid=2 exited" $(BUILD_DIR)/serial.log
