@@ -24,6 +24,8 @@ enum {
 	BUNIX_SYSCALL_BUFFER_CREATE = -32,
 	BUNIX_SYSCALL_BUFFER_READ = -34,
 	BUNIX_SYSCALL_BUFFER_WRITE = -36,
+	BUNIX_SYSCALL_TASK_WRITE = -38,
+	BUNIX_SYSCALL_TASK_START_AT = -40,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
 	BUNIX_RIGHT_SEND = 1 << 0,
@@ -216,6 +218,19 @@ static inline long bunix_task_grant(u64 task, u64 handle, unsigned int rights)
 static inline long bunix_task_start(u64 task, u64 entry)
 {
 	return bunix_syscall2(BUNIX_SYSCALL_TASK_START, task, entry);
+}
+
+static inline long bunix_task_write(u64 task, u64 vaddr, const void *src,
+				    u64 len)
+{
+	const u64 args[] = { task, vaddr, (u64)src, len };
+
+	return bunix_syscall3(BUNIX_SYSCALL_TASK_WRITE, (u64)args, 0, 0);
+}
+
+static inline long bunix_task_start_at(u64 task, u64 entry, u64 stack)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_TASK_START_AT, task, entry, stack);
 }
 
 static inline long bunix_buffer_create(u64 size)

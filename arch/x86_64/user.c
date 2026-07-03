@@ -38,6 +38,8 @@ enum {
 	SYSCALL_BUFFER_CREATE = -32,
 	SYSCALL_BUFFER_READ = -34,
 	SYSCALL_BUFFER_WRITE = -36,
+	SYSCALL_TASK_WRITE = -38,
+	SYSCALL_TASK_START_AT = -40,
 	USER_IPC_WORDS = 4,
 	USER_FOURCC_CONS = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	USER_CONSOLE_WRITE = 1,
@@ -303,6 +305,19 @@ u64 arch_syscall_dispatch(u64 number, u64 arg0, u64 arg1, u64 arg2)
 					      (u32)arg2);
 	case SYSCALL_TASK_START:
 		return (u64)server_task_start(task_current(), arg0, arg1);
+	case SYSCALL_TASK_WRITE: {
+		const u64 *args = (const u64 *)arg0;
+
+		if (args == 0) {
+			return (u64)-1;
+		}
+
+		return (u64)server_task_write(task_current(), args[0], args[1],
+					      (const void *)args[2], args[3]);
+	}
+	case SYSCALL_TASK_START_AT:
+		return (u64)server_task_start_at(task_current(), arg0, arg1,
+						 arg2);
 	case SYSCALL_BUFFER_CREATE: {
 		struct shared_buffer *buffer = buffer_create(arg0);
 		const u64 handle =

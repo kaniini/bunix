@@ -54,12 +54,33 @@ static void proc_exit(u64 status)
 	bunix_ipc_call(FIRST_HANDLE_PROC, &request, &reply);
 }
 
-int main(void)
+static void stdout_write_argv0(const char *value)
+{
+	const char prefix[] = "first: argv0=";
+	char line[64];
+	u64 cursor = 0;
+
+	for (u64 i = 0; i < sizeof(prefix) - 1 && cursor < sizeof(line); i++) {
+		line[cursor++] = prefix[i];
+	}
+	for (u64 i = 0; value[i] != '\0' && cursor + 1 < sizeof(line); i++) {
+		line[cursor++] = value[i];
+	}
+	line[cursor++] = '\n';
+	stdout_write(line, cursor);
+}
+
+int main(int argc, char **argv)
 {
 	const char started[] = "first: stdout ready\n";
+	const char argc_ok[] = "first: argc=1\n";
 	const char exiting[] = "first: exit 0\n";
 
 	stdout_write(started, sizeof(started) - 1);
+	if (argc == 1 && argv != 0 && argv[0] != 0) {
+		stdout_write(argc_ok, sizeof(argc_ok) - 1);
+		stdout_write_argv0(argv[0]);
+	}
 	time_sleep(100000000ULL);
 	stdout_write(exiting, sizeof(exiting) - 1);
 	proc_exit(0);

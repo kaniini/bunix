@@ -5,7 +5,9 @@ enum {
 	PROC_HANDLE_NAMES = 3,
 	PROC_HANDLE_TIME = 4,
 	PROC_SEGMENT_MAX = 4096,
+	PROC_INIT_STACK_MAX = 4096,
 	PROC_MAX_PHDRS = 8,
+	USER_STACK_TOP = 0x800000,
 	ELF_MAGIC = 0x464c457f,
 	ELFCLASS64 = 2,
 	ELFDATA2LSB = 1,
@@ -59,6 +61,7 @@ struct vfs_file {
 static struct process first_process;
 static u64 next_pid = 1;
 static unsigned char segment_buffer[PROC_SEGMENT_MAX];
+static unsigned char init_stack[PROC_INIT_STACK_MAX];
 
 static long register_service(u64 service, u64 handle)
 {
@@ -130,6 +133,36 @@ static unsigned int read_magic(const unsigned char *ident)
 	       ((unsigned int)ident[1] << 8) |
 	       ((unsigned int)ident[2] << 16) |
 	       ((unsigned int)ident[3] << 24);
+}
+
+static u64 str_len(const char *text)
+{
+	u64 len = 0;
+
+	while (text[len] != '\0') {
+		len++;
+	}
+
+	return len;
+}
+
+static u64 align_down(u64 value, u64 align)
+{
+	return value & ~(align - 1);
+}
+
+static void mem_zero(unsigned char *dst, u64 len)
+{
+	for (u64 i = 0; i < len; i++) {
+		dst[i] = 0;
+	}
+}
+
+static void mem_copy(unsigned char *dst, const unsigned char *src, u64 len)
+{
+	for (u64 i = 0; i < len; i++) {
+		dst[i] = src[i];
+	}
 }
 
 static long vfs_open(u64 vfs, const char *path, struct vfs_file *file)
@@ -250,7 +283,46 @@ static long vfs_read_file(u64 vfs, u64 file, u64 file_size, u64 offset,
 	return 0;
 }
 
-static long exec_first_path(u64 vfs, const char *path)
+static long build_initial_stack(u64 task, const char *path, u64 *stack)
+{
+	enum {
+		STACK_WORDS = 6,
+	};
+
+	const u64 stack_base = USER_STACK_TOP - PROC_INIT_STACK_MAX;
+	const u64 path_len = str_len(path);
+	u64 sp = PROC_INIT_STACK_MAX;
+
+	if (path_len + 1 + STACK_WORDS * sizeof(u64) > PROC_INIT_STACK_MAX) {
+		return -1;
+	}
+
+	mem_zero(init_stack, sizeof(init_stack));
+	sp -= path_len + 1;
+	const u64 argv0 = stack_base + sp;
+	mem_copy(init_stack + sp, (const unsigned char *)path, path_len + 1);
+
+	sp = align_down(sp, 16);
+	sp -= STACK_WORDS * sizeof(u64);
+	u64 *words = (u64 *)(init_stack + sp);
+
+	words[0] = 1;
+	words[1] = argv0;
+	words[2] = 0;
+	words[3] = 0;
+	words[4] = 0;
+	words[5] = 0;
+
+	if (bunix_task_write(task, stack_base + sp, init_stack + sp,
+			     PROC_INIT_STACK_MAX - sp) != 0) {
+		return -1;
+	}
+
+	*stack = stack_base + sp;
+	return 0;
+}
+
+static long exec_path(u64 vfs, const char *path, const char *task_name)
 {
 	const struct bunix_launch_cap caps[] = {
 		{ PROC_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
@@ -262,6 +334,7 @@ static long exec_first_path(u64 vfs, const char *path)
 	struct vfs_file file = { 0, 0, 0 };
 	long io_buffer;
 	long task;
+	u64 stack = 0;
 
 	io_buffer = bunix_buffer_create(PROC_SEGMENT_MAX);
 	if (io_buffer <= 0 ||
@@ -287,7 +360,7 @@ static long exec_first_path(u64 vfs, const char *path)
 		return -1;
 	}
 
-	task = bunix_task_create("first");
+	task = bunix_task_create(task_name);
 	if (task < 0) {
 		vfs_close(vfs, file.handle);
 		return -1;
@@ -322,8 +395,12 @@ static long exec_first_path(u64 vfs, const char *path)
 		}
 	}
 
+	if (build_initial_stack((u64)task, path, &stack) != 0) {
+		vfs_close(vfs, file.handle);
+		return -1;
+	}
 	vfs_close(vfs, file.handle);
-	return bunix_task_start((u64)task, ehdr.entry);
+	return bunix_task_start_at((u64)task, ehdr.entry, stack);
 }
 
 static void reply_status(u64 reply_handle, u64 pid, u64 status)
@@ -341,7 +418,7 @@ static void reply_status(u64 reply_handle, u64 pid, u64 status)
 	bunix_ipc_send(reply_handle, &reply);
 }
 
-static long spawn_first(const char *path)
+static long spawn_process(const char *path)
 {
 	u64 vfs;
 
@@ -359,7 +436,7 @@ static long spawn_first(const char *path)
 	first_process.exited = 0;
 	first_process.waiter = 0;
 
-	if (exec_first_path(vfs, path) != 0) {
+	if (exec_path(vfs, path, "first") != 0) {
 		first_process.pid = 0;
 		return -1;
 	}
@@ -410,7 +487,7 @@ int main(void)
 			}
 			unpack_bytes((unsigned char *)path, &message.words[0],
 				     sizeof(path));
-			if (spawn_first(path) == 0) {
+			if (spawn_process(path) == 0) {
 				reply.words[0] = 0;
 				reply.words[1] = first_process.pid;
 				bunix_console_write(exec, sizeof(exec) - 1);

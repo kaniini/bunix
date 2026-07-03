@@ -27,9 +27,13 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 u64 server_task_create(struct task *parent, const char *name);
 int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
 		    const void *src, u64 filesz, u64 memsz, u32 writable);
+int server_task_write(struct task *parent, u64 task_handle, u64 vaddr,
+		      const void *src, u64 len);
 int server_task_grant(struct task *parent, u64 task_handle, u64 handle,
 		      u32 rights);
 int server_task_start(struct task *parent, u64 task_handle, u64 entry);
+int server_task_start_at(struct task *parent, u64 task_handle, u64 entry,
+			 u64 stack);
 u64 server_boot_module_size(void);
 int server_boot_module_read(u64 offset, void *buffer, u64 len);
 void vm_server_start(void);

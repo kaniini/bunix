@@ -365,13 +365,16 @@ test: $(EFI_BOOT_APP)
 	grep -F "vfs: open" $(BUILD_DIR)/serial.log
 	grep -F "vfs: read file" $(BUILD_DIR)/serial.log
 	grep -F "vfs: close" $(BUILD_DIR)/serial.log
-	grep -F "buffer: write id=1 offset=0 len=450" $(BUILD_DIR)/serial.log
-	grep -F "buffer: read id=1 offset=0 len=450" $(BUILD_DIR)/serial.log
+	grep -F "buffer: write id=1 offset=0 len=" $(BUILD_DIR)/serial.log
+	grep -F "buffer: read id=1 offset=0 len=" $(BUILD_DIR)/serial.log
+	grep -F "kernel: task write task=8 vaddr=0x" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/first" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=1" $(BUILD_DIR)/serial.log
 	grep -F "proc: exited pid=1 status=0" $(BUILD_DIR)/serial.log
 	grep -F "proc: wait pid=1 status=0" $(BUILD_DIR)/serial.log
 	grep -F "first: stdout ready" $(BUILD_DIR)/serial.log
+	grep -F "first: argc=1" $(BUILD_DIR)/serial.log
+	grep -F "first: argv0=/bin/first" $(BUILD_DIR)/serial.log
 	grep -F "first: exit 0" $(BUILD_DIR)/serial.log
 	grep -F "block: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: online" $(BUILD_DIR)/serial.log

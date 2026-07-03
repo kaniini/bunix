@@ -418,6 +418,24 @@ int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
 	return 0;
 }
 
+int server_task_write(struct task *parent, u64 task_handle, u64 vaddr,
+		      const void *src, u64 len)
+{
+	struct task *task = task_from_handle(parent, task_handle,
+					    TASK_RIGHT_SEND);
+	if (task == 0 || src == 0 || vaddr + len < vaddr) {
+		return -1;
+	}
+
+	if (vm_write_user(task_vm_space(task), vaddr, src, len) != 0) {
+		return -1;
+	}
+
+	console_printf("kernel: task write task=%u vaddr=%p len=%u\n",
+		       task_id(task), (const void *)vaddr, (u32)len);
+	return 0;
+}
+
 int server_task_grant(struct task *parent, u64 task_handle, u64 handle,
 		      u32 rights)
 {
@@ -451,6 +469,27 @@ int server_task_start(struct task *parent, u64 task_handle, u64 entry)
 
 	console_printf("kernel: task start task=%u entry=%p\n", task_id(task),
 		       (const void *)entry);
+	return thread_create(task, task_name(task), task_entry_thread, start) != 0 ?
+	       0 : -1;
+}
+
+int server_task_start_at(struct task *parent, u64 task_handle, u64 entry,
+			 u64 stack)
+{
+	struct task *task = task_from_handle(parent, task_handle,
+					    TASK_RIGHT_SEND);
+	if (task == 0 || stack == 0 ||
+	    task_start_count >= sizeof(task_starts) / sizeof(task_starts[0])) {
+		return -1;
+	}
+
+	struct task_start *start = &task_starts[task_start_count++];
+	start->entry = entry;
+	start->stack = stack;
+
+	console_printf("kernel: task start task=%u entry=%p stack=%p\n",
+		       task_id(task), (const void *)entry,
+		       (const void *)stack);
 	return thread_create(task, task_name(task), task_entry_thread, start) != 0 ?
 	       0 : -1;
 }

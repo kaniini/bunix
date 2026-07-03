@@ -130,9 +130,11 @@ the exec-facing file operations proc needs now: open a named regular file,
 query its size/type, read positioned byte ranges through a shared buffer, and
 close the open object. Proc allocates a buffer, sends duplicate/write authority
 to VFS, VFS forwards write-only authority to block, block fills it from the
-rootfs module, and proc copies the bytes back through its read authority. The
-kernel still has an internal bootstrap name registry, but it is no longer
-exposed as a normal user authority path.
+rootfs module, and proc copies the bytes back through its read authority. Proc
+also builds a minimal exec stack for the new task: `argc`, `argv[]`, null
+`envp`, and an `AT_NULL` auxv terminator. The kernel still has an internal
+bootstrap name registry, but it is no longer exposed as a normal user authority
+path.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with

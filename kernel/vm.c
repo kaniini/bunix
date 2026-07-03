@@ -95,6 +95,43 @@ int vm_map_user_page(struct vm_space *space, u64 vaddr, struct vm_frame frame,
 	return arch_vm_map_page(&space->arch, vaddr, frame.addr, writable, 1);
 }
 
+static void mem_copy(u8 *dst, const u8 *src, u64 len)
+{
+	for (u64 i = 0; i < len; i++) {
+		dst[i] = src[i];
+	}
+}
+
+static u64 min_u64(u64 left, u64 right)
+{
+	return left < right ? left : right;
+}
+
+int vm_write_user(struct vm_space *space, u64 vaddr, const void *src, u64 len)
+{
+	u64 done = 0;
+
+	if (space == 0 || src == 0 || vaddr + len < vaddr) {
+		return -1;
+	}
+
+	while (done < len) {
+		const u64 current = vaddr + done;
+		const u64 phys = arch_vm_translate(&space->arch, current, 1);
+		const u64 page_remaining = VM_PAGE_SIZE - (current & (VM_PAGE_SIZE - 1));
+		const u64 chunk = min_u64(len - done, page_remaining);
+
+		if (phys == 0) {
+			return -1;
+		}
+
+		mem_copy((u8 *)phys, (const u8 *)src + done, chunk);
+		done += chunk;
+	}
+
+	return 0;
+}
+
 int vm_map_kernel_page(u64 vaddr, u64 phys, u32 writable)
 {
 	return arch_vm_map_page(&kernel_space.arch, vaddr, phys, writable, 0);
