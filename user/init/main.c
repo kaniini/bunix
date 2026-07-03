@@ -68,6 +68,28 @@ static u64 resolve_service_in_namespace(u64 namespace, u64 service,
 	return reply.cap;
 }
 
+static u64 wait_service_in_namespace(u64 namespace, u64 service,
+				     unsigned int rights)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_WAIT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { namespace, service, rights, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(BUNIX_HANDLE_NAMES, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return 0;
+	}
+
+	return reply.cap;
+}
+
 static u64 resolve_service(u64 service, unsigned int rights)
 {
 	return resolve_service_in_namespace(BUNIX_NAMES_ROOT, service, rights);
@@ -143,13 +165,8 @@ int main(void)
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	bunix_launch_module_with_caps("vfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
-	const u64 fs_tick = bunix_timer_ticks();
-	while (bunix_timer_ticks() < fs_tick + 4) {
-	}
-	while (vfs == 0) {
-		vfs = resolve_service(BUNIX_SERVICE_VFS,
-				      BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
-	}
+	vfs = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS,
+					BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	fs_namespace = create_namespace();
 	if (fs_namespace == 0 ||
 	    register_service_in_namespace(fs_namespace, BUNIX_SERVICE_VFS,

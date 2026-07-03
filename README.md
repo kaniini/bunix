@@ -72,7 +72,10 @@ and resolve operations include both a namespace and a service ID, so the same
 object can be re-exported with different visibility and rights in another
 namespace without changing the underlying port object. Init currently creates a
 filesystem namespace, re-exports VFS into it, then resolves VFS from that
-namespace for the root read.
+namespace for the root read. Callers that need a service dependency can issue a
+blocking names wait, letting the names server retain the caller's reply
+capability until a matching object is registered instead of polling on timer
+ticks or retry loops.
 
 The VM server owns the memory authority policy, but module task spaces are now
 granted through direct kernel VM calls during launch. That avoids a synchronous

@@ -305,6 +305,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "vm-server: ipc event proto=0x4d454d56 type=1 sender=7 word0=0x2a" $(BUILD_DIR)/serial.log
 	grep -F "names: online" $(BUILD_DIR)/serial.log
 	grep -F "names: namespace" $(BUILD_DIR)/serial.log
+	grep -F "names: wait" $(BUILD_DIR)/serial.log
 	grep -F "names: registered" $(BUILD_DIR)/serial.log
 	grep -F "names: resolved" $(BUILD_DIR)/serial.log
 	grep -F "block: online" $(BUILD_DIR)/serial.log

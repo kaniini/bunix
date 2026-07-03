@@ -28,7 +28,7 @@ static u64 resolve_service(u64 service, unsigned int rights)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_NAMES,
-		.type = BUNIX_NAMES_RESOLVE,
+		.type = BUNIX_NAMES_WAIT,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply = 0,
@@ -54,8 +54,9 @@ int main(void)
 
 	bunix_console_write(online, sizeof(online) - 1);
 	register_service(BUNIX_SERVICE_VFS, BUNIX_HANDLE_SELF);
-	while (block == 0) {
-		block = resolve_service(BUNIX_SERVICE_BLOCK, BUNIX_RIGHT_SEND);
+	block = resolve_service(BUNIX_SERVICE_BLOCK, BUNIX_RIGHT_SEND);
+	if (block == 0) {
+		return 1;
 	}
 	bunix_console_write(ready, sizeof(ready) - 1);
 
