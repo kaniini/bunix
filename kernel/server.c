@@ -3,6 +3,7 @@
 #include "ipc.h"
 #include "multiboot2.h"
 #include "name.h"
+#include "pmm.h"
 #include "sched.h"
 #include "server.h"
 #include "types.h"
@@ -14,6 +15,7 @@ static const struct server boot_servers[] = {
 	{ "names", 0 },
 	{ "init", 0 },
 	{ "time", 0 },
+	{ "user", 0 },
 	{ "linux", 0 },
 	{ "proc", 0 },
 	{ "block", 0 },
@@ -62,6 +64,7 @@ static u32 task_name_count;
 static int str_eq(const char *left, const char *right);
 static const struct server *find_boot_server(const char *name);
 static void grant_bootstrap_caps(struct task *task, const char *server_name);
+static u64 align_up(u64 value, u64 align);
 
 void server_start_all(void)
 {
@@ -244,6 +247,25 @@ static void mem_zero(u8 *dst, u64 len)
 	for (u64 i = 0; i < len; i++) {
 		dst[i] = 0;
 	}
+}
+
+static u64 copy_boot_data_module(const struct multiboot2_module *module)
+{
+	const u64 size = module->end - module->start;
+	const u64 pages = align_up(size, PMM_PAGE_SIZE) / PMM_PAGE_SIZE;
+	const u64 copy = pmm_pages_alloc_contiguous(pages);
+
+	if (copy == 0) {
+		console_printf("kernel: failed to copy data module %s size=%u\n",
+			       module->cmdline, (u32)size);
+		return 0;
+	}
+
+	mem_copy((u8 *)copy, (const u8 *)module->start, size);
+	console_printf("kernel: copied data module %s image=%p-%p size=%u\n",
+		       module->cmdline, (const void *)copy,
+		       (const void *)(copy + size), (u32)size);
+	return copy;
 }
 
 static u64 align_down(u64 value, u64 align)
@@ -688,17 +710,20 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 	const struct server *server = find_boot_server(module->cmdline);
 	if (server == 0) {
 		if (str_eq(module->cmdline, "disk0")) {
+			const u64 copy = copy_boot_data_module(module);
+			const u64 size = module->end - module->start;
+
 			disk0_module.name = module->cmdline;
-			disk0_module.start = module->start;
-			disk0_module.end = module->end;
+			disk0_module.start = copy != 0 ? copy : module->start;
+			disk0_module.end = disk0_module.start + size;
 			console_printf("kernel: recorded data module disk0 image=%p-%p size=%u\n",
-				       (const void *)module->start,
-				       (const void *)module->end,
-				       (u32)(module->end - module->start));
+				       (const void *)disk0_module.start,
+				       (const void *)disk0_module.end,
+				       (u32)size);
 			for (u32 i = 0; i < module_start_count; i++) {
 				if (str_eq(module_starts[i].server->name, "block")) {
-					module_starts[i].data_start = module->start;
-					module_starts[i].data_end = module->end;
+					module_starts[i].data_start = disk0_module.start;
+					module_starts[i].data_end = disk0_module.end;
 				}
 			}
 			return;

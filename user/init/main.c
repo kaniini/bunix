@@ -169,6 +169,12 @@ int main(void)
 	if (time == 0) {
 		return 1;
 	}
+	bunix_launch_module_with_caps("user", fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_USER,
+				      BUNIX_RIGHT_SEND) == 0) {
+		return 1;
+	}
 
 	const struct bunix_launch_cap proc_caps[] = {
 		{ console, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
@@ -219,7 +225,7 @@ int main(void)
 	struct bunix_msg proc_reply;
 	const char first_done[] = "init: first process exited\n";
 	const char linux_spawned[] = "init: linux process spawned\n";
-	const char linux_spawned_again[] = "init: second linux process spawned\n";
+	const char linux_done[] = "init: linux process exited\n";
 	const char musl_spawned[] = "init: musl process spawned\n";
 	const char musl_done[] = "init: musl process exited\n";
 	const char shell_spawned[] = "init: busybox shell spawned\n";
@@ -265,15 +271,13 @@ int main(void)
 		return 1;
 	}
 	bunix_console_write(linux_spawned, sizeof(linux_spawned) - 1);
-
-	proc_request.type = BUNIX_PROC_SPAWN;
-	pack_path(&proc_request.words[0], "/bin/lxtest");
+	proc_request.type = BUNIX_PROC_WAIT;
+	proc_request.words[0] = proc_reply.words[1];
 	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
 	    proc_reply.words[0] != 0) {
 		return 1;
 	}
-	bunix_console_write(linux_spawned_again,
-			    sizeof(linux_spawned_again) - 1);
+	bunix_console_write(linux_done, sizeof(linux_done) - 1);
 
 	proc_request.type = BUNIX_PROC_SPAWN;
 	pack_path(&proc_request.words[0], "/bin/musl-hello");

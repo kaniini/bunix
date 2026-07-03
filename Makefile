@@ -12,6 +12,8 @@ NAMES_MODULE := $(BUILD_DIR)/modules/names.server
 NAMES_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/names/main.c.o
 TIME_MODULE := $(BUILD_DIR)/modules/time.server
 TIME_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/time/main.c.o
+USER_MODULE := $(BUILD_DIR)/modules/user.server
+USER_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/user/main.c.o
 LINUX_SERVER_MODULE := $(BUILD_DIR)/modules/linux.server
 LINUX_SERVER_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/linux/main.c.o
 PROC_MODULE := $(BUILD_DIR)/modules/proc.server
@@ -89,6 +91,7 @@ KERNEL_OBJS := $(KERNEL_SRCS:%=$(BUILD_DIR)/%.o)
 USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/init/main.c.o \
 	$(BUILD_DIR)/user/names/main.c.o \
 	$(BUILD_DIR)/user/time/main.c.o \
+	$(BUILD_DIR)/user/user/main.c.o \
 	$(BUILD_DIR)/user/linux/main.c.o \
 	$(BUILD_DIR)/user/proc/main.c.o \
 	$(BUILD_DIR)/user/block/main.c.o \
@@ -139,6 +142,10 @@ $(TIME_MODULE): $(TIME_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(TIME_MODULE_OBJS)
 
+$(USER_MODULE): $(USER_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(USER_MODULE_OBJS)
+
 $(LINUX_SERVER_MODULE): $(LINUX_SERVER_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(LINUX_SERVER_MODULE_OBJS)
@@ -183,7 +190,7 @@ $(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(FIRST_MODULE) $(LXTEST_MODULE) 
 	mkdir -p $(dir $@)
 	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /bin/first $(FIRST_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/busybox $(BUSYBOX_STATIC) /bin/sh $(BUSYBOX_STATIC) /bin/dmesg $(BUSYBOX_STATIC)
 
-$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -195,6 +202,7 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODUL
 		"modules/names.server=$(NAMES_MODULE)" \
 		"modules/init.server=$(INIT_MODULE)" \
 		"modules/time.server=$(TIME_MODULE)" \
+		"modules/user.server=$(USER_MODULE)" \
 		"modules/linux.server=$(LINUX_SERVER_MODULE)" \
 		"modules/proc.server=$(PROC_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
@@ -203,7 +211,7 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODUL
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -217,6 +225,7 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_M
 	cp $(NAMES_MODULE) $(ISO_ROOT)/modules/names.server
 	cp $(INIT_MODULE) $(ISO_ROOT)/modules/init.server
 	cp $(TIME_MODULE) $(ISO_ROOT)/modules/time.server
+	cp $(USER_MODULE) $(ISO_ROOT)/modules/user.server
 	cp $(LINUX_SERVER_MODULE) $(ISO_ROOT)/modules/linux.server
 	cp $(PROC_MODULE) $(ISO_ROOT)/modules/proc.server
 	cp $(BLOCK_MODULE) $(ISO_ROOT)/modules/block.server
@@ -285,6 +294,10 @@ test: $(EFI_BOOT_APP)
 	grep -F "names: resolved" $(BUILD_DIR)/serial.log
 	grep -F "time: online" $(BUILD_DIR)/serial.log
 	grep -F "time: ready" $(BUILD_DIR)/serial.log
+	grep -F "user: online" $(BUILD_DIR)/serial.log
+	grep -F "user: ready" $(BUILD_DIR)/serial.log
+	grep -F "user: registered" $(BUILD_DIR)/serial.log
+	grep -F "user: forked" $(BUILD_DIR)/serial.log
 	grep -F "proc: online" $(BUILD_DIR)/serial.log
 	grep -F "proc: ready" $(BUILD_DIR)/serial.log
 	grep -F "vfs: open" $(BUILD_DIR)/serial.log
@@ -314,6 +327,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux syscall shared buffer" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: ebadf" $(BUILD_DIR)/serial.log
 	grep -F "linux return checks ok" $(BUILD_DIR)/serial.log
+	grep -F "linux credential checks ok" $(BUILD_DIR)/serial.log
+	grep -F "linux fork credential checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: process" $(BUILD_DIR)/serial.log
 	grep -F "linux brk checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: openat" $(BUILD_DIR)/serial.log
@@ -334,18 +349,19 @@ test: $(EFI_BOOT_APP)
 	grep -F "init: fs ready" $(BUILD_DIR)/serial.log
 	grep -F "init: first process exited" $(BUILD_DIR)/serial.log
 	grep -F "init: linux process spawned" $(BUILD_DIR)/serial.log
-	grep -F "init: second linux process spawned" $(BUILD_DIR)/serial.log
+	grep -F "init: linux process exited" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/musl-hello" $(BUILD_DIR)/serial.log
-	grep -F "proc: spawned pid=4" $(BUILD_DIR)/serial.log
+	grep -F "proc: spawned pid=3" $(BUILD_DIR)/serial.log
 	grep -F "init: musl process spawned" $(BUILD_DIR)/serial.log
 	grep -F "musl hello argc=1 argv0=/bin/musl-hello" $(BUILD_DIR)/serial.log
 	grep -F "init: musl process exited" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/sh" $(BUILD_DIR)/serial.log
-	grep -F "proc: spawned pid=5" $(BUILD_DIR)/serial.log
+	grep -F "proc: spawned pid=4" $(BUILD_DIR)/serial.log
 	grep -F "init: busybox shell spawned" $(BUILD_DIR)/serial.log
 	grep -F "rootfs: module" $(BUILD_DIR)/serial.log
 	grep -F "init: bad cap denied" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server time" $(BUILD_DIR)/serial.log
+	grep -F "kernel: launching module server user" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server linux" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server proc" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server block" $(BUILD_DIR)/serial.log

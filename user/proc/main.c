@@ -111,9 +111,8 @@ static const char proc_exec_musl[] = "proc: exec /bin/musl-hello\n";
 static const char proc_exec_shell[] = "proc: exec /bin/sh\n";
 static const char proc_spawned[] = "proc: spawned pid=1\n";
 static const char proc_spawned_linux[] = "proc: spawned pid=2\n";
-static const char proc_spawned_linux_again[] = "proc: spawned pid=3\n";
-static const char proc_spawned_musl[] = "proc: spawned pid=4\n";
-static const char proc_spawned_shell[] = "proc: spawned pid=5\n";
+static const char proc_spawned_musl[] = "proc: spawned pid=3\n";
+static const char proc_spawned_shell[] = "proc: spawned pid=4\n";
 static const char proc_exited[] = "proc: exited pid=1 status=0\n";
 static const char proc_waited[] = "proc: wait pid=1 status=0\n";
 static const char proc_register_failed[] = "proc: register failed\n";
@@ -969,9 +968,6 @@ int main(void)
 					if (pid == 2) {
 						bunix_console_write(proc_spawned_linux,
 								    sizeof(proc_spawned_linux) - 1);
-					} else if (pid == 3) {
-						bunix_console_write(proc_spawned_linux_again,
-								    sizeof(proc_spawned_linux_again) - 1);
 					}
 				} else if (str_eq(path, "/bin/musl-hello")) {
 					bunix_console_write(proc_exec_musl,
@@ -1015,11 +1011,10 @@ int main(void)
 			break;
 		}
 		case BUNIX_PROC_EXIT: {
-			struct process *process = process_find(message.words[0]);
+			struct process *process = message.words[2] != 0 ?
+						  process_find_linux_pid(message.words[0]) :
+						  process_find(message.words[0]);
 
-			if (process == 0) {
-				process = process_find_linux_pid(message.words[0]);
-			}
 			if (process != 0) {
 				process->status = message.words[1];
 				process->exited = 1;

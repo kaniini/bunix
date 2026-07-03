@@ -82,6 +82,7 @@ enum {
 	LINUX_SYSCALL_UNAME = 63,
 	LINUX_SYSCALL_SETPGID = 109,
 	LINUX_SYSCALL_SETSID = 112,
+	LINUX_SYSCALL_GETGROUPS = 115,
 	LINUX_SYSCALL_GETPGID = 121,
 	LINUX_SYSCALL_ARCH_PRCTL = 158,
 	LINUX_SYSCALL_FUTEX = 202,
@@ -100,6 +101,7 @@ enum {
 	LINUX_EBADF = 9,
 	LINUX_EAGAIN = 11,
 	LINUX_ENOMEM = 12,
+	LINUX_EFAULT = 14,
 	LINUX_EINVAL = 22,
 	LINUX_ENOSYS = 38,
 	LINUX_ENOTTY = 25,
@@ -153,10 +155,15 @@ enum {
 	USER_LINUX_FSTAT = 5,
 	USER_LINUX_IOCTL = 16,
 	USER_LINUX_GETPID = 39,
+	USER_LINUX_GETUID = 102,
+	USER_LINUX_GETGID = 104,
+	USER_LINUX_GETEUID = 107,
+	USER_LINUX_GETEGID = 108,
 	USER_LINUX_SETPGID = 109,
 	USER_LINUX_GETPPID = 110,
 	USER_LINUX_GETPGRP = 111,
 	USER_LINUX_SETSID = 112,
+	USER_LINUX_GETGROUPS = 115,
 	USER_LINUX_GETPGID = 121,
 	USER_LINUX_FCNTL = 72,
 	USER_LINUX_WAIT4 = 61,
@@ -222,6 +229,7 @@ struct linux_exec_args {
 static u8 syscall_copy_buffer[LINUX_MAX_SYSCALL_BUFFER];
 static u8 console_input_buffer[LINUX_MAX_SYSCALL_BUFFER];
 static struct spinlock syscall_copy_lock = SPINLOCK_INIT("syscall-copy");
+static int str_eq(const char *left, const char *right);
 struct user_ipc_message {
 	u32 protocol;
 	u32 type;
@@ -1058,6 +1066,8 @@ static const char *linux_syscall_name(u64 number)
 		return "getppid";
 	case LINUX_SYSCALL_GETPGRP:
 		return "getpgrp";
+	case LINUX_SYSCALL_GETGROUPS:
+		return "getgroups";
 	case LINUX_SYSCALL_GETPGID:
 		return "getpgid";
 	case LINUX_SYSCALL_SETPGID:
@@ -1136,6 +1146,99 @@ static void linux_strace_enter(const struct arch_syscall_frame *frame)
 		       linux_syscall_name(number),
 		       (const void *)frame->arg0, (const void *)frame->arg1,
 		       (const void *)frame->arg2, (const void *)frame->arg3);
+}
+
+static int task_uses_linux_personality(const struct task *task)
+{
+	const char *name = task_name(task);
+
+	return str_eq(name, "busybox") ||
+	       str_eq(name, "musl-hello") ||
+	       str_eq(name, "lxtest") ||
+	       str_eq(name, "execok");
+}
+
+static void linux_negative_syscall_dump_bytes(struct task *task, u64 vaddr)
+{
+	u8 bytes[16];
+
+	if (vaddr == 0 ||
+	    vm_read_user(task_vm_space(task), vaddr, bytes, sizeof(bytes)) != 0) {
+		console_printf("user-syscall: bytes addr=%p unreadable\n",
+			       (const void *)vaddr);
+		return;
+	}
+
+	console_printf("user-syscall: bytes addr=%p %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x\n",
+		       (const void *)vaddr, bytes[0], bytes[1], bytes[2],
+		       bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+		       bytes[8], bytes[9], bytes[10], bytes[11], bytes[12],
+		       bytes[13], bytes[14], bytes[15]);
+}
+
+static void linux_negative_syscall_dump_stack(struct task *task, u64 rsp)
+{
+	u64 words[8];
+
+	if (rsp == 0 ||
+	    vm_read_user(task_vm_space(task), rsp, words, sizeof(words)) != 0) {
+		console_printf("user-syscall: stack rsp=%p unreadable\n",
+			       (const void *)rsp);
+		return;
+	}
+
+	for (u64 i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
+		console_printf("user-syscall: stack[%u] %p\n", (u32)i,
+			       (const void *)words[i]);
+	}
+}
+
+static void linux_negative_syscall_dump_rbp(struct task *task, u64 rbp)
+{
+	for (u64 depth = 0; depth < 8 && rbp != 0; depth++) {
+		u64 frame[2];
+
+		if ((rbp & 7) != 0 ||
+		    vm_read_user(task_vm_space(task), rbp, frame,
+				 sizeof(frame)) != 0) {
+			console_printf("user-syscall: rbp[%u] frame=%p unreadable\n",
+				       (u32)depth, (const void *)rbp);
+			return;
+		}
+
+		console_printf("user-syscall: rbp[%u] frame=%p return=%p\n",
+			       (u32)depth, (const void *)rbp,
+			       (const void *)frame[1]);
+		if (frame[0] <= rbp) {
+			return;
+		}
+		rbp = frame[0];
+	}
+}
+
+static void linux_negative_syscall_dump(struct arch_syscall_frame *frame)
+{
+	static u32 dumps;
+	struct task *task = task_current();
+
+	if (dumps >= 4) {
+		return;
+	}
+	dumps++;
+
+	console_printf("user-syscall: negative linux task=%u name=%s number=%d rip=%p rsp=%p rbp=%p rflags=%p\n",
+		       task_id(task), task_name(task), (i32)frame->number,
+		       (const void *)frame->user_rip,
+		       (const void *)frame->user_rsp,
+		       (const void *)frame->rbp,
+		       (const void *)frame->user_rflags);
+	console_printf("user-syscall: args arg0=%p arg1=%p arg2=%p arg3=%p\n",
+		       (const void *)frame->arg0, (const void *)frame->arg1,
+		       (const void *)frame->arg2, (const void *)frame->arg3);
+	linux_negative_syscall_dump_bytes(task, frame->user_rip - 8);
+	linux_negative_syscall_dump_bytes(task, frame->arg0);
+	linux_negative_syscall_dump_stack(task, frame->user_rsp);
+	linux_negative_syscall_dump_rbp(task, frame->rbp);
 }
 
 static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
@@ -1303,11 +1406,6 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return 0;
 	case LINUX_SYSCALL_SET_TID_ADDRESS:
 		return thread_id(thread_current());
-	case LINUX_SYSCALL_GETUID:
-	case LINUX_SYSCALL_GETGID:
-	case LINUX_SYSCALL_GETEUID:
-	case LINUX_SYSCALL_GETEGID:
-		return 0;
 	case LINUX_SYSCALL_SYSLOG: {
 		enum {
 			LINUX_SYSLOG_ACTION_READ = 2,
@@ -1676,6 +1774,25 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_ENOSYS;
 		}
 		return reply.words[0];
+	case LINUX_SYSCALL_GETUID:
+	case LINUX_SYSCALL_GETGID:
+	case LINUX_SYSCALL_GETEUID:
+	case LINUX_SYSCALL_GETEGID:
+		request.type = number == LINUX_SYSCALL_GETUID ?
+			       USER_LINUX_GETUID :
+			       number == LINUX_SYSCALL_GETGID ?
+			       USER_LINUX_GETGID :
+			       number == LINUX_SYSCALL_GETEUID ?
+			       USER_LINUX_GETEUID : USER_LINUX_GETEGID;
+		request.words[0] = 0;
+		request.words[1] = 0;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
 	case LINUX_SYSCALL_GETPPID:
 	case LINUX_SYSCALL_GETPGRP:
 	case LINUX_SYSCALL_SETSID:
@@ -1690,6 +1807,30 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
 			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
+	case LINUX_SYSCALL_GETGROUPS:
+		request.type = USER_LINUX_GETGROUPS;
+		request.words[0] = arg0;
+		request.words[1] = 0;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		if ((i64)reply.words[0] > 0 && arg0 != 0) {
+			u32 groups[2];
+
+			if (reply.words[0] > 2) {
+				return (u64)-LINUX_EINVAL;
+			}
+			groups[0] = (u32)reply.words[1];
+			groups[1] = (u32)reply.words[2];
+			if (vm_write_user(task_vm_space(task), arg1, groups,
+					  reply.words[0] * sizeof(groups[0])) != 0) {
+				return (u64)-LINUX_EFAULT;
+			}
 		}
 		return reply.words[0];
 	case LINUX_SYSCALL_GETPGID:
@@ -2135,6 +2276,9 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 	if ((i64)number >= 0) {
 		return linux_syscall_dispatch(frame);
 	}
+	if (task_uses_linux_personality(task_current())) {
+		linux_negative_syscall_dump(frame);
+	}
 
 	switch ((i64)number) {
 	case SYSCALL_EXIT:
@@ -2286,6 +2430,9 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 		struct shared_buffer *buffer =
 			task_buffer_from_handle(task_current(), args[0],
 						TASK_RIGHT_RECV);
+		if (buffer == 0) {
+			return (u64)-1;
+		}
 		flags = spin_lock_irqsave(&syscall_copy_lock);
 		if (buffer_read(buffer, args[1], syscall_copy_buffer,
 				args[3]) != 0 ||
@@ -2317,6 +2464,10 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 		struct shared_buffer *buffer =
 			task_buffer_from_handle(task_current(), args[0],
 						TASK_RIGHT_SEND);
+		if (buffer == 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			return (u64)-1;
+		}
 		result = (u64)buffer_write(buffer, args[1],
 					   syscall_copy_buffer, args[3]);
 		spin_unlock_irqrestore(&syscall_copy_lock, flags);

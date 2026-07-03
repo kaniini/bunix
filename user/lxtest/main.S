@@ -39,14 +39,53 @@ _start:
 	syscall
 	testq %rax, %rax
 	jle fail
-	cmpq $3, %rax
-	jg fail
 1:
 	movq %rax, %r15
 
 	movq $186, %rax
 	syscall
 	cmpq %r15, %rax
+	jne fail
+
+	movq $102, %rax
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $104, %rax
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $107, %rax
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $108, %rax
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $115, %rax
+	xorq %rdi, %rdi
+	xorq %rsi, %rsi
+	syscall
+	cmpq $2, %rax
+	jne fail
+	movq $115, %rax
+	movq $2, %rdi
+	leaq group_buffer(%rip), %rsi
+	syscall
+	cmpq $2, %rax
+	jne fail
+	cmpl $0, group_buffer(%rip)
+	jne fail
+	cmpl $1, group_buffer + 4(%rip)
+	jne fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq credential_message(%rip), %rsi
+	movq $credential_message_end - credential_message, %rdx
+	syscall
+	cmpq $credential_message_end - credential_message, %rax
 	jne fail
 
 	movq $12, %rax
@@ -157,6 +196,45 @@ fork_child:
 	movq $0x65676170206f7774, %rax
 	cmpq %rax, 4096(%rbx)
 	jne fail
+
+	movq $102, %rax
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $104, %rax
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $107, %rax
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $108, %rax
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $115, %rax
+	xorq %rdi, %rdi
+	xorq %rsi, %rsi
+	syscall
+	cmpq $2, %rax
+	jne fail
+	movq $115, %rax
+	movq $2, %rdi
+	leaq group_buffer(%rip), %rsi
+	syscall
+	cmpq $2, %rax
+	jne fail
+	cmpl $0, group_buffer(%rip)
+	jne fail
+	cmpl $1, group_buffer + 4(%rip)
+	jne fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq fork_credential_message(%rip), %rsi
+	movq $fork_credential_message_end - fork_credential_message, %rdx
+	syscall
 
 	movq $1, %rax
 	movq $1, %rdi
@@ -275,6 +353,9 @@ badfd_message_end:
 ok_message:
 	.ascii "linux return checks ok\n"
 ok_message_end:
+credential_message:
+	.ascii "linux credential checks ok\n"
+credential_message_end:
 brk_message:
 	.ascii "linux brk checks ok\n"
 brk_message_end:
@@ -290,6 +371,9 @@ wait_message_end:
 fork_child_message:
 	.ascii "linux fork child ok\n"
 fork_child_message_end:
+fork_credential_message:
+	.ascii "linux fork credential checks ok\n"
+fork_credential_message_end:
 munmap_message:
 	.ascii "linux munmap checks ok\n"
 munmap_message_end:
@@ -310,3 +394,5 @@ statat_buffer:
 	.skip 144
 wait_status:
 	.skip 4
+group_buffer:
+	.skip 8

@@ -11,6 +11,11 @@ enum {
 	LINUX_ECHILD = 10,
 	LINUX_WAIT_BLOCK = 0x7fffffff,
 	LINUX_NO_PROCESS = 0xffffffff,
+	LINUX_GETUID = 102,
+	LINUX_GETGID = 104,
+	LINUX_GETEUID = 107,
+	LINUX_GETEGID = 108,
+	LINUX_GETGROUPS = 115,
 	LINUX_WNOHANG = 1,
 	LINUX_WUNTRACED = 2,
 	LINUX_WCONTINUED = 8,
@@ -24,6 +29,7 @@ enum {
 	LINUX_STAT_SIZE = 144,
 	LINUX_MAX_PROCESSES = 16,
 	LINUX_MAX_FDS = 16,
+	LINUX_MAX_FILE_REFS = 32,
 	LINUX_S_IFCHR = 0020000,
 	LINUX_S_IFREG = 0100000,
 	LINUX_O_ACCMODE = 3,
@@ -67,10 +73,97 @@ struct linux_process {
 
 static struct linux_process processes[LINUX_MAX_PROCESSES];
 static char write_buffer[LINUX_MAX_WRITE];
+static u64 file_ref_handles[LINUX_MAX_FILE_REFS];
+static u64 file_ref_counts[LINUX_MAX_FILE_REFS];
 static u64 next_pid = 1;
 static u64 foreground_pgid = 1;
+static u64 user_service;
 
+static u64 resolve_service(u64 service, unsigned int rights);
 static void linux_process_reset(struct linux_process *process);
+static long linux_user_process_exit(u64 pid);
+
+static u64 linux_user_service(void)
+{
+	if (user_service == 0) {
+		user_service = resolve_service(BUNIX_SERVICE_USER,
+					       BUNIX_RIGHT_SEND);
+	}
+
+	return user_service;
+}
+
+static long linux_user_process_register(u64 bunix_task)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_REGISTER_PROCESS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { bunix_task, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = linux_user_service();
+
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_ESRCH;
+	}
+
+	return 0;
+}
+
+static long linux_user_process_fork(u64 parent_task, u64 child_task)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_FORK_PROCESS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { parent_task, child_task, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = linux_user_service();
+
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_ESRCH;
+	}
+
+	return 0;
+}
+
+static long linux_user_process_exit(u64 bunix_task)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_EXIT_PROCESS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { bunix_task, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = linux_user_service();
+
+	if (bunix_task == 0 || user == 0) {
+		return 0;
+	}
+
+	if (bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_ESRCH;
+	}
+
+	return 0;
+}
 
 static u64 linux_process_index(const struct linux_process *process)
 {
@@ -196,7 +289,7 @@ static void notify_proc_exit(u64 linux_pid, u64 status)
 		.cap_rights = 0,
 		.reply = 0,
 		.cap = 0,
-		.words = { linux_pid, status, 0, 0 },
+		.words = { linux_pid, status, 1, 0 },
 	};
 
 	if (proc != 0) {
@@ -305,6 +398,50 @@ static long alloc_fd(struct linux_process *process, u64 kind, u64 handle,
 	return -LINUX_EMFILE;
 }
 
+static void linux_file_ref_add(u64 handle)
+{
+	if (handle == 0) {
+		return;
+	}
+
+	for (u64 i = 0; i < LINUX_MAX_FILE_REFS; i++) {
+		if (file_ref_handles[i] == handle) {
+			file_ref_counts[i]++;
+			return;
+		}
+	}
+
+	for (u64 i = 0; i < LINUX_MAX_FILE_REFS; i++) {
+		if (file_ref_handles[i] == 0) {
+			file_ref_handles[i] = handle;
+			file_ref_counts[i] = 1;
+			return;
+		}
+	}
+}
+
+static long linux_file_ref_drop(u64 handle)
+{
+	if (handle == 0) {
+		return 0;
+	}
+
+	for (u64 i = 0; i < LINUX_MAX_FILE_REFS; i++) {
+		if (file_ref_handles[i] != handle) {
+			continue;
+		}
+		if (file_ref_counts[i] > 1) {
+			file_ref_counts[i]--;
+			return 1;
+		}
+		file_ref_handles[i] = 0;
+		file_ref_counts[i] = 0;
+		return 0;
+	}
+
+	return 0;
+}
+
 static struct linux_process *linux_process_find(u64 bunix_task)
 {
 	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
@@ -358,6 +495,10 @@ static long linux_register_process(u64 bunix_task, u64 ppid)
 			if (foreground_pgid == 0 || pid == 1) {
 				foreground_pgid = pid;
 			}
+			if (linux_user_process_register(bunix_task) != 0) {
+				linux_process_reset(&processes[i]);
+				return -LINUX_ESRCH;
+			}
 			return (long)pid;
 		}
 	}
@@ -395,6 +536,13 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 			processes[i].wait_pid = 0;
 			for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
 				processes[i].fds[fd] = parent->fds[fd];
+				if (processes[i].fds[fd].kind == LINUX_FD_FILE) {
+					linux_file_ref_add(processes[i].fds[fd].handle);
+				}
+			}
+			if (linux_user_process_fork(parent_task, child_task) != 0) {
+				linux_process_reset(&processes[i]);
+				return -LINUX_ESRCH;
 			}
 			return (long)pid;
 		}
@@ -561,6 +709,79 @@ static void linux_wake_parent(struct linux_process *child)
 	parent->wait_pid = 0;
 }
 
+static long linux_user_credential(struct linux_process *process, u64 type)
+{
+	u64 request_type;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = 0,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (type == BUNIX_LINUX_GETUID) {
+		request_type = BUNIX_USER_GETUID;
+	} else if (type == BUNIX_LINUX_GETGID) {
+		request_type = BUNIX_USER_GETGID;
+	} else if (type == BUNIX_LINUX_GETEUID) {
+		request_type = BUNIX_USER_GETEUID;
+	} else if (type == BUNIX_LINUX_GETEGID) {
+		request_type = BUNIX_USER_GETEGID;
+	} else {
+		return -LINUX_EINVAL;
+	}
+
+	if (process == 0 || linux_user_service() == 0) {
+		return -LINUX_ESRCH;
+	}
+
+	request.type = request_type;
+	request.words[0] = process->bunix_task;
+	if (bunix_ipc_call(user_service, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_EINVAL;
+	}
+
+	return (long)reply.words[1];
+}
+
+static long linux_user_groups(struct linux_process *process, u64 max_groups,
+			      u64 *group0, u64 *group1)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_GETGROUPS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, max_groups, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (process == 0 || linux_user_service() == 0) {
+		return -LINUX_ESRCH;
+	}
+
+	request.words[0] = process->bunix_task;
+	if (bunix_ipc_call(user_service, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_EINVAL;
+	}
+
+	if (group0 != 0) {
+		*group0 = reply.words[2];
+	}
+	if (group1 != 0) {
+		*group1 = reply.words[3];
+	}
+	return (long)reply.words[1];
+}
+
 static long linux_getpgid(struct linux_process *process, u64 pid)
 {
 	struct linux_process *target = pid == 0 ? process :
@@ -693,6 +914,7 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		return -LINUX_ENOENT;
 	}
 
+	linux_file_ref_add(reply.words[1]);
 	return alloc_fd(process, LINUX_FD_FILE, reply.words[1], reply.words[2]);
 }
 
@@ -830,10 +1052,12 @@ static long linux_close(struct linux_process *process, u64 fd)
 	}
 
 	if (process->fds[fd].kind == LINUX_FD_FILE) {
-		request.words[0] = process->fds[fd].handle;
-		if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
-		    reply.words[0] != 0) {
-			return -LINUX_EINVAL;
+		if (linux_file_ref_drop(process->fds[fd].handle) == 0) {
+			request.words[0] = process->fds[fd].handle;
+			if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
+			    reply.words[0] != 0) {
+				return -LINUX_EINVAL;
+			}
 		}
 	}
 
@@ -863,6 +1087,9 @@ static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 		for (u64 new_fd = arg; new_fd < LINUX_MAX_FDS; new_fd++) {
 			if (process->fds[new_fd].kind == 0) {
 				process->fds[new_fd] = process->fds[fd];
+				if (process->fds[new_fd].kind == LINUX_FD_FILE) {
+					linux_file_ref_add(process->fds[new_fd].handle);
+				}
 				return (long)new_fd;
 			}
 		}
@@ -891,6 +1118,7 @@ static void linux_process_reset(struct linux_process *process)
 		return;
 	}
 
+	(void)linux_user_process_exit(process->bunix_task);
 	linux_child_unlink(process);
 	linux_close_process_fds(process);
 	process->pid = 0;
@@ -993,6 +1221,19 @@ int main(void)
 			break;
 		case BUNIX_LINUX_GETTID:
 			reply.words[0] = process->tid;
+			break;
+		case BUNIX_LINUX_GETUID:
+		case BUNIX_LINUX_GETGID:
+		case BUNIX_LINUX_GETEUID:
+		case BUNIX_LINUX_GETEGID:
+			reply.words[0] = (u64)linux_user_credential(process,
+								    message.type);
+			break;
+		case BUNIX_LINUX_GETGROUPS:
+			reply.words[0] = (u64)linux_user_groups(process,
+								message.words[0],
+								&reply.words[1],
+								&reply.words[2]);
 			break;
 		case BUNIX_LINUX_GETPPID:
 			reply.words[0] = process->ppid;
