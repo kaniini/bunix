@@ -5,11 +5,14 @@ An experimental microkernel-oriented operating system in C.
 This first slice boots a freestanding x86_64 kernel through Multiboot2,
 initializes serial and VGA text consoles, parses Multiboot2 modules, starts the
 kernel-hosted VM server, and enters a user-space init server which launches
-other user servers. The current boot proves both a synthetic filesystem read and
-a user-space heartbeat server:
+other user servers. The current boot proves a synthetic filesystem read, a
+module-backed first process with stdout/exit status, and a user-space heartbeat
+server:
 
 ```text
 rootfs: module
+first: stdout ready
+first: exit 0
 ping: heartbeat
 ```
 
@@ -22,12 +25,13 @@ ping: heartbeat
 - `servers/`: initial server stubs, including the skeletal VM server.
 - `Makefile`: build, EFI ISO, and QEMU/KVM targets.
 
-The init, names, time, block, VFS, and ping modules are freestanding C ELF
-images loaded into their tasks and entered in ring 3. The VM server remains
-kernel-hosted for the current performance-oriented design, but still exposes a
-VM IPC port for events. The next microkernel steps are to move more server
-functionality behind the same user-mode ABI while continuing to shrink the
-kernel bootstrap policy into explicit capability handoff.
+The init, names, time, proc, block, VFS, first, and ping modules are
+freestanding C ELF images loaded into their tasks and entered in ring 3. The VM
+server remains kernel-hosted for the current performance-oriented design, but
+still exposes a VM IPC port for events. The next microkernel steps are to make
+process image loading come from VFS instead of Multiboot2 modules while
+continuing to shrink the kernel bootstrap policy into explicit capability
+handoff.
 
 The tree is split so future ports can add a sibling such as `arch/arm64/` with
 its own boot path, interrupt setup, MMU setup, and device I/O while reusing the
@@ -57,16 +61,24 @@ attenuated inherited handles in caller-specified order.
 
 The boot policy grants init `self`, `console`, `vm`, and `names`; init registers
 console and VM with the user-space names server, resolves them back as
-delegable capabilities, then launches time, block, VFS, and ping with
+delegable capabilities, then launches time, proc, block, VFS, and ping with
 attenuated caps. Init waits for the time server to register `TIME`, then passes
-that capability to ping for heartbeat sleeps. The returned launch value is a
-send-capability to the child's service port in the parent task. `recv` blocks
-the current thread and wakes when a sender queues an event. `ipc_call` uses a
-per-task private reply port, and received messages can carry a send-capability
-reply handle that the server can use without learning anything else about the
-caller. A task can also close one of its own handles, which clears only that
-task-local capability slot; the underlying object and any other task's
-capabilities remain untouched.
+that capability to proc so proc can delegate sleep authority to the first
+process. The returned launch value is a send-capability to the child's service
+port in the parent task. `recv` blocks the current thread and wakes when a
+sender queues an event. `ipc_call` uses a per-task private reply port, and
+received messages can carry a send-capability reply handle that the server can
+use without learning anything else about the caller. A task can also close one
+of its own handles, which clears only that task-local capability slot; the
+underlying object and any other task's capabilities remain untouched.
+
+The proc server is the first higher-level lifetime authority above low-level
+tasks. It currently owns PID assignment for one module-backed first process,
+spawns that process with fd-like stdout mapped to a console send capability, and
+implements wait/exit over the `PROC` FourCC protocol. This is intentionally
+still not VFS exec: the first process image is a Multiboot2 module named
+`first`, and the next loader slice should replace that special module spawn
+with a VFS-backed executable image.
 
 Names are scoped by namespace objects. The names server starts with a root
 namespace for boot services, and clients can request new namespace IDs. Register
@@ -103,8 +115,9 @@ filesystem format.
 ## User Mode
 
 User modules are built as freestanding C x86_64 ELFs with a tiny `crt0.S` and
-inline syscall wrappers. Init, names, time, block, VFS, and ping all link at the normal
-`0x400000` user base and enter with the same `0x800000` user stack top. The
+inline syscall wrappers. Init, names, time, proc, block, VFS, first, and ping
+all link at the normal `0x400000` user base and enter with the same `0x800000`
+user stack top. The
 small user ABI exposes negative-number syscalls for thread exit, timer ticks,
 monotonic nanosecond time, blocking nanosecond sleep, module launch with
 inherited handles, private port creation, IPC send/receive, and IPC call. The
@@ -146,9 +159,9 @@ Idle CPUs mark themselves idle under the run-queue lock and then enter
 clears that idle state under the same lock and sends a scheduler IPI when the
 target CPU was sleeping. Normal thread creation uses scheduler-owned automatic
 placement over the least-loaded CPU with round-robin tie breaking. The current
-boot flow lets VM, init, time, block, VFS, and ping all use automatic placement,
-which exercises user entry, syscalls, IPC wakeups, server work, and scheduling
-across both CPUs.
+boot flow lets VM, init, time, proc, block, VFS, first, and ping all use
+automatic placement, which exercises user entry, syscalls, IPC wakeups, server
+work, and scheduling across both CPUs.
 
 Exited threads switch back to the per-CPU scheduler thread, which reaps them
 from the scheduler stack, decrements the owning task's thread count, and returns
@@ -190,15 +203,16 @@ make test
 `build/serial.log`, and checks that GRUB passed Multiboot2 modules, the kernel
 started VM, names, time, and init, init received its boot capabilities, and init
 registered and resolved services through the user-space names server before
-launching time, block, VFS, and ping with attenuated inherited handles. The
-test checks namespace creation, VFS re-export into the filesystem namespace, the
-`VFS0 -> BLK0 -> disk0` read, and the resulting `rootfs: module` console
+launching time, proc, block, VFS, and ping with attenuated inherited handles.
+The test checks namespace creation, VFS re-export into the filesystem namespace,
+the `VFS0 -> BLK0 -> disk0` read, and the resulting `rootfs: module` console
 output. Init also proves the OCAP launch rule by asking for a receive right it
 does not hold, which the kernel rejects before the module is marked launched.
-Init then launches ping with console, VM, and time capabilities. Ping asks the
-time server to sleep for two-second intervals, logs `ping: heartbeat`, and
-forwards an incrementing heartbeat value plus the time server's monotonic
-timestamp as a VMEM FourCC event through its inherited VM capability.
+Init asks proc to spawn the first process, waits for its exit status, and then
+launches ping with console, VM, and time capabilities. Ping asks the time server
+to sleep for two-second intervals, logs `ping: heartbeat`, and forwards an
+incrementing heartbeat value plus the time server's monotonic timestamp as a
+VMEM FourCC event through its inherited VM capability.
 
 For an interactive serial console:
 

@@ -4,7 +4,7 @@
 #include "spinlock.h"
 
 enum {
-	MAX_PORTS = 16,
+	MAX_PORTS = 32,
 	MAX_MESSAGES = 32,
 };
 

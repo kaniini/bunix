@@ -124,6 +124,7 @@ int main(void)
 	u64 console;
 	u64 vm;
 	u64 time = 0;
+	u64 proc = 0;
 	u64 vfs = 0;
 	u64 fs_namespace = 0;
 	const struct bunix_launch_cap bad_caps[] = {
@@ -155,6 +156,19 @@ int main(void)
 		return 1;
 	}
 
+	const struct bunix_launch_cap proc_caps[] = {
+		{ console, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+		{ time, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
+	};
+	bunix_launch_module_with_caps("proc", proc_caps,
+				      sizeof(proc_caps) / sizeof(proc_caps[0]));
+	proc = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROC,
+					 BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
+	if (proc == 0) {
+		return 1;
+	}
+
 	bunix_launch_module_with_caps("block", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	bunix_launch_module_with_caps("vfs", fs_caps,
@@ -178,6 +192,28 @@ int main(void)
 		file[vfs_reply.words[1]] = '\0';
 		bunix_console_write(file, vfs_reply.words[1]);
 	}
+
+	struct bunix_msg proc_request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = BUNIX_PROC_SPAWN_FIRST,
+		.sender = 0,
+		.reply = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg proc_reply;
+	const char first_done[] = "init: first process exited\n";
+
+	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
+	    proc_reply.words[0] != 0) {
+		return 1;
+	}
+	proc_request.type = BUNIX_PROC_WAIT;
+	proc_request.words[0] = proc_reply.words[1];
+	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
+	    proc_reply.words[0] != 0) {
+		return 1;
+	}
+	bunix_console_write(first_done, sizeof(first_done) - 1);
 
 	if (bunix_launch_module_with_caps("ping", bad_caps,
 					  sizeof(bad_caps) /
