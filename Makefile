@@ -23,6 +23,8 @@ LDFLAGS := -m elf_x86_64 -nostdlib -T linker.ld
 
 KERNEL_SRCS := \
 	arch/$(ARCH)/boot/multiboot2.S \
+	arch/$(ARCH)/interrupts.c \
+	arch/$(ARCH)/interrupts.S \
 	arch/$(ARCH)/thread.c \
 	arch/$(ARCH)/thread.S \
 	arch/$(ARCH)/vm.c \
@@ -116,6 +118,10 @@ test: $(EFI_BOOT_APP)
 		-serial file:$(BUILD_DIR)/serial.log -display none -no-reboot; \
 		status=$$?; test $$status -eq 0 -o $$status -eq 124
 	grep -F "multiboot2: module" $(BUILD_DIR)/serial.log
+	grep -F "interrupts: idt loaded" $(BUILD_DIR)/serial.log
+	grep -F "timer: pit 100hz" $(BUILD_DIR)/serial.log
+	grep -F "interrupts: enabled" $(BUILD_DIR)/serial.log
+	grep -F "timer: tick 1" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=vm id=1" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=hello id=2" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=ping id=3" $(BUILD_DIR)/serial.log

@@ -63,6 +63,12 @@ space contains a real PML4, PDPT, and page directory, currently identity-mapping
 the low 1 GiB so the existing kernel-thread servers can run while CR3 switching
 is exercised.
 
+## Interrupts
+
+x86_64 installs an IDT, remaps the legacy PIC, and starts the PIT at 100 Hz.
+Timer interrupts are currently counted and acknowledged only; scheduler
+preemption is intentionally left for the next slice.
+
 ## Build
 
 ```sh
