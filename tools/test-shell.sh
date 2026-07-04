@@ -54,7 +54,7 @@ done
 
 sleep 3
 exec 3>"$pipe.in"
-printf 'busybox uptime\nbusybox id\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\nbusybox cat /secret.txt\necho POSTCAT\nbusybox stat /bin\nbusybox ecxx\177\177ho BACKSPACE_OK\ncd /bin\npwd\nexit\n' >&3
+printf 'uptime\nbusybox uptime\nbusybox id\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\nbusybox cat /secret.txt\necho POSTCAT\nbusybox stat /bin\nbusybox ecxx\177\177ho BACKSPACE_OK\ncd /bin\npwd\nexit\n' >&3
 
 i=0
 while ! grep -F "load average" "$log" >/dev/null 2>&1; do
