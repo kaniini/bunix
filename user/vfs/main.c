@@ -45,6 +45,8 @@ struct vfs_open {
 	const struct rootfs_entry *entry;
 	u64 service;
 	u64 remote_handle;
+	char *path;
+	u64 type;
 };
 
 static struct rootfs_entry *root_entries;
@@ -206,6 +208,7 @@ static int path_component_eq(const char *component, const char *literal)
 	return component[i] == literal[i];
 }
 
+static struct vfs_open *open_from_handle(u64 handle);
 static const struct rootfs_entry *root_file_from_handle(u64 handle);
 
 static int vfs_resolve_path(const char *cwd, const char *input, char *out)
@@ -301,6 +304,20 @@ static int vfs_resolve_with_base(u64 base_handle, const char *cwd,
 	}
 
 	base = root_file_from_handle(base_handle);
+	if (base == 0) {
+		struct vfs_open *open = open_from_handle(base_handle);
+
+		if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
+			if (open->type != BUNIX_VFS_TYPE_DIRECTORY ||
+			    open->path == 0) {
+				if (error != 0) {
+					*error = BUNIX_VFS_ERR_NOTDIR;
+				}
+				return -1;
+			}
+			return vfs_resolve_path(open->path, input, out);
+		}
+	}
 	if (base == 0 || base->type != BUNIX_VFS_TYPE_DIRECTORY) {
 		if (error != 0) {
 			*error = BUNIX_VFS_ERR_NOTDIR;
@@ -634,12 +651,13 @@ static u64 open_root_file(const struct rootfs_entry *entry)
 	return handle;
 }
 
-static u64 open_remote_file(u64 service, u64 remote_handle)
+static u64 open_remote_file(u64 service, u64 remote_handle, const char *path,
+			    u64 type)
 {
 	struct vfs_open *open;
 	u64 handle;
 
-	if (service == 0 || remote_handle == 0) {
+	if (service == 0 || remote_handle == 0 || path == 0) {
 		return 0;
 	}
 	open = (struct vfs_open *)bunix_calloc(1, sizeof(*open));
@@ -649,8 +667,15 @@ static u64 open_remote_file(u64 service, u64 remote_handle)
 	open->kind = VFS_OPEN_REMOTE;
 	open->service = service;
 	open->remote_handle = remote_handle;
+	open->path = str_dup(path);
+	open->type = type;
+	if (open->path == 0) {
+		bunix_free(open);
+		return 0;
+	}
 	handle = bunix_id_alloc(&open_files, (u64)open);
 	if (handle == 0) {
+		bunix_free(open->path);
 		bunix_free(open);
 	}
 	return handle;
@@ -673,13 +698,16 @@ static void forget_open_file(u64 handle)
 	struct vfs_open *open = open_from_handle(handle);
 
 	if (open != 0) {
+		if (open->path != 0) {
+			bunix_free(open->path);
+		}
 		bunix_free(open);
 	}
 	(void)bunix_id_remove(&open_files, handle);
 }
 
 static int forward_mount_path(struct vfs_mount *mount, struct bunix_msg *message,
-			      struct bunix_msg *reply)
+			      struct bunix_msg *reply, const char *path)
 {
 	if (mount == 0 || mount->service == 0) {
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
@@ -694,7 +722,8 @@ static int forward_mount_path(struct vfs_mount *mount, struct bunix_msg *message
 	    reply->words[0] == 0) {
 		const u64 remote_handle = reply->words[1];
 		const u64 local_handle =
-			open_remote_file(mount->service, remote_handle);
+			open_remote_file(mount->service, remote_handle, path,
+					 reply->words[3]);
 
 		if (local_handle == 0) {
 			struct bunix_msg close = {
@@ -744,7 +773,7 @@ static int forward_mount_buffer_path(struct vfs_mount *mount,
 	forwarded.words[0] = cwd_len;
 	forwarded.words[1] = path_len;
 	forwarded.words[2] = 0;
-	result = forward_mount_path(mount, &forwarded, reply);
+	result = forward_mount_path(mount, &forwarded, reply, path);
 	bunix_handle_close((u64)buffer);
 	return result;
 }
@@ -818,7 +847,7 @@ static void vfs_open_path(struct bunix_msg *message, struct bunix_msg *reply,
 							path);
 			return;
 		}
-		(void)forward_mount_path(mount, &forwarded, reply);
+		(void)forward_mount_path(mount, &forwarded, reply, path);
 		return;
 	}
 
@@ -864,7 +893,7 @@ static void vfs_stat_path(struct bunix_msg *message, struct bunix_msg *reply,
 							path);
 			return;
 		}
-		(void)forward_mount_path(mount, &forwarded, reply);
+		(void)forward_mount_path(mount, &forwarded, reply, path);
 		return;
 	}
 

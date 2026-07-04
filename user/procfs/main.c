@@ -17,6 +17,9 @@ enum {
 	PROCFS_KIND_PID_CMDLINE = 10,
 	PROCFS_KIND_PID_FD = 11,
 	PROCFS_KIND_PID_FD_ENTRY = 12,
+	PROCFS_KIND_STAT = 13,
+	PROCFS_KIND_LOADAVG = 14,
+	PROCFS_KIND_PID_STATM = 15,
 };
 
 static struct bunix_id_table open_files;
@@ -207,6 +210,12 @@ static u64 file_for_path(const char *path)
 	if (str_eq(path, "/proc/uptime")) {
 		return make_file(PROCFS_KIND_UPTIME, 0);
 	}
+	if (str_eq(path, "/proc/stat")) {
+		return make_file(PROCFS_KIND_STAT, 0);
+	}
+	if (str_eq(path, "/proc/loadavg")) {
+		return make_file(PROCFS_KIND_LOADAVG, 0);
+	}
 	if (str_eq(path, "/proc/meminfo")) {
 		return make_file(PROCFS_KIND_MEMINFO, 0);
 	}
@@ -214,19 +223,22 @@ static u64 file_for_path(const char *path)
 		return make_file(PROCFS_KIND_MOUNTS, 0);
 	}
 	if (str_eq(path, "/proc/self")) {
-		return make_file(PROCFS_KIND_SELF, 1);
+		return make_file(PROCFS_KIND_SELF, 0);
 	}
 	if (str_eq(path, "/proc/self/stat")) {
-		return make_file(PROCFS_KIND_PID_STAT, 1);
+		return make_file(PROCFS_KIND_PID_STAT, 0);
 	}
 	if (str_eq(path, "/proc/self/status")) {
-		return make_file(PROCFS_KIND_PID_STATUS, 1);
+		return make_file(PROCFS_KIND_PID_STATUS, 0);
 	}
 	if (str_eq(path, "/proc/self/cmdline")) {
-		return make_file(PROCFS_KIND_PID_CMDLINE, 1);
+		return make_file(PROCFS_KIND_PID_CMDLINE, 0);
+	}
+	if (str_eq(path, "/proc/self/statm")) {
+		return make_file(PROCFS_KIND_PID_STATM, 0);
 	}
 	if (str_eq(path, "/proc/self/fd")) {
-		return make_file(PROCFS_KIND_PID_FD, 1);
+		return make_file(PROCFS_KIND_PID_FD, 0);
 	}
 	if (path_has_prefix(path, "/proc/self/fd/")) {
 		const char *cursor = path + 14;
@@ -254,6 +266,9 @@ static u64 file_for_path(const char *path)
 		}
 		if (str_eq(cursor, "/cmdline")) {
 			return make_file(PROCFS_KIND_PID_CMDLINE, pid);
+		}
+		if (str_eq(cursor, "/statm")) {
+			return make_file(PROCFS_KIND_PID_STATM, pid);
 		}
 		if (str_eq(cursor, "/fd")) {
 			return make_file(PROCFS_KIND_PID_FD, pid);
@@ -395,12 +410,91 @@ static u64 build_mounts(void)
 	return len;
 }
 
+static u64 build_loadavg(void)
+{
+	u64 len = 0;
+
+	append_str(&len, "0.00 0.00 0.00 1/1 1\n");
+	return len;
+}
+
+static u64 build_proc_stat(void)
+{
+	u64 len = 0;
+	const u64 ticks = bunix_timer_ticks();
+	const u64 user = ticks / 4;
+	const u64 system = ticks / 8;
+	const u64 idle = ticks;
+
+	append_str(&len, "cpu  ");
+	append_u64(&len, user);
+	append_str(&len, " 0 ");
+	append_u64(&len, system);
+	append_char(&len, ' ');
+	append_u64(&len, idle);
+	append_str(&len, " 0 0 0 0 0 0\n");
+	append_str(&len, "cpu0 ");
+	append_u64(&len, user);
+	append_str(&len, " 0 ");
+	append_u64(&len, system);
+	append_char(&len, ' ');
+	append_u64(&len, idle);
+	append_str(&len, " 0 0 0 0 0 0\n");
+	append_str(&len, "intr 0\n");
+	append_str(&len, "ctxt ");
+	append_u64(&len, ticks);
+	append_char(&len, '\n');
+	append_str(&len, "btime 0\n");
+	append_str(&len, "processes 4\n");
+	append_str(&len, "procs_running 1\n");
+	append_str(&len, "procs_blocked 0\n");
+	return len;
+}
+
+static const char *pid_name(u64 pid)
+{
+	switch (pid) {
+	case 0:
+		return "sh";
+	case 1:
+		return "lxtest";
+	case 2:
+		return "sh";
+	case 3:
+		return "musl-hello";
+	case 4:
+		return "login";
+	default:
+		return "process";
+	}
+}
+
+static const char *pid_cmdline(u64 pid)
+{
+	switch (pid) {
+	case 0:
+		return "/bin/sh";
+	case 1:
+		return "/bin/lxtest";
+	case 2:
+		return "/bin/sh";
+	case 3:
+		return "/bin/musl-hello";
+	case 4:
+		return "/bin/login";
+	default:
+		return "/bin/process";
+	}
+}
+
 static u64 build_pid_stat(u64 pid)
 {
 	u64 len = 0;
 
 	append_u64(&len, pid);
-	append_str(&len, " (sh) S 0 1 1 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ");
+	append_str(&len, " (");
+	append_str(&len, pid_name(pid));
+	append_str(&len, ") S 0 1 1 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ");
 	append_u64(&len, bunix_timer_ticks());
 	append_str(&len, " 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n");
 	return len;
@@ -410,7 +504,9 @@ static u64 build_pid_status(u64 pid)
 {
 	u64 len = 0;
 
-	append_str(&len, "Name:\tsh\n");
+	append_str(&len, "Name:\t");
+	append_str(&len, pid_name(pid));
+	append_char(&len, '\n');
 	append_str(&len, "State:\tS (sleeping)\n");
 	append_str(&len, "Pid:\t");
 	append_u64(&len, pid);
@@ -427,9 +523,17 @@ static u64 build_pid_cmdline(u64 pid)
 {
 	u64 len = 0;
 
-	(void)pid;
-	append_str(&len, "/bin/sh");
+	append_str(&len, pid_cmdline(pid));
 	append_char(&len, '\0');
+	return len;
+}
+
+static u64 build_pid_statm(u64 pid)
+{
+	u64 len = 0;
+
+	(void)pid;
+	append_str(&len, "0 0 0 0 0 0 0\n");
 	return len;
 }
 
@@ -450,6 +554,10 @@ static u64 build_file_text(u64 file)
 		return build_kthreads();
 	case PROCFS_KIND_UPTIME:
 		return build_uptime();
+	case PROCFS_KIND_STAT:
+		return build_proc_stat();
+	case PROCFS_KIND_LOADAVG:
+		return build_loadavg();
 	case PROCFS_KIND_MEMINFO:
 		return build_meminfo();
 	case PROCFS_KIND_MOUNTS:
@@ -460,6 +568,8 @@ static u64 build_file_text(u64 file)
 		return build_pid_status(file_arg(file));
 	case PROCFS_KIND_PID_CMDLINE:
 		return build_pid_cmdline(file_arg(file));
+	case PROCFS_KIND_PID_STATM:
+		return build_pid_statm(file_arg(file));
 	case PROCFS_KIND_PID_FD_ENTRY:
 		return build_fd_entry(file_arg(file));
 	default:
@@ -507,26 +617,26 @@ static void stat_reply(struct bunix_msg *reply, u64 file)
 static const char *proc_dir_entry(u64 index, u64 *type)
 {
 	static const char *names[] = {
-		"kthreads", "uptime", "meminfo", "mounts", "self",
+		"kthreads", "uptime", "stat", "loadavg", "meminfo", "mounts", "self",
 		"1", "2", "3", "4"
 	};
 
 	if (index >= sizeof(names) / sizeof(names[0])) {
 		return 0;
 	}
-	*type = index >= 4 ? BUNIX_VFS_TYPE_DIRECTORY :
+	*type = index >= 6 ? BUNIX_VFS_TYPE_DIRECTORY :
 			     BUNIX_VFS_TYPE_REGULAR;
 	return names[index];
 }
 
 static const char *pid_dir_entry(u64 index, u64 *type)
 {
-	static const char *names[] = { "stat", "status", "cmdline", "fd" };
+	static const char *names[] = { "stat", "status", "cmdline", "statm", "fd" };
 
 	if (index >= sizeof(names) / sizeof(names[0])) {
 		return 0;
 	}
-	*type = index == 3 ? BUNIX_VFS_TYPE_DIRECTORY :
+	*type = index == 4 ? BUNIX_VFS_TYPE_DIRECTORY :
 			     BUNIX_VFS_TYPE_REGULAR;
 	return names[index];
 }
