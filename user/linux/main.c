@@ -1078,7 +1078,7 @@ static void linux_reparent_children(struct linux_process *process)
 static int linux_store_wait_status(u64 buffer, u64 exit_status)
 {
 	char status[4];
-	const unsigned int value = (unsigned int)(exit_status << 8);
+	const unsigned int value = (unsigned int)exit_status;
 
 	for (u64 i = 0; i < sizeof(status); i++) {
 		status[i] = (char)((value >> (i * 8)) & 0xff);
@@ -1194,6 +1194,12 @@ static void linux_process_exit_status(struct linux_process *process, u64 status,
 	linux_wake_parent(process);
 }
 
+static void linux_process_exit_code(struct linux_process *process, u64 status,
+				    u64 kill_task)
+{
+	linux_process_exit_status(process, (status & 0xff) << 8, kill_task);
+}
+
 static int linux_signal_process(struct linux_process *process, u64 signal)
 {
 	if (process == 0 || process->exited || signal >= 64) {
@@ -1205,7 +1211,7 @@ static int linux_signal_process(struct linux_process *process, u64 signal)
 
 	process->pending_signals |= 1ull << signal;
 	if (signal == LINUX_SIGINT || signal == LINUX_SIGTERM) {
-		linux_process_exit_status(process, 128 + signal, 1);
+		linux_process_exit_status(process, signal, 1);
 		return 1;
 	}
 
@@ -2850,7 +2856,7 @@ int main(void)
 			break;
 		case BUNIX_LINUX_EXIT_GROUP:
 			bunix_console_write(exit_group, sizeof(exit_group) - 1);
-			linux_process_exit_status(process, message.words[0], 0);
+			linux_process_exit_code(process, message.words[0], 0);
 			bunix_console_write(exited_ok, sizeof(exited_ok) - 1);
 			reply.words[0] = 0;
 			break;
