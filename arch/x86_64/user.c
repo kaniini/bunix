@@ -2939,7 +2939,7 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 			return (u64)-1;
 		}
 
-		nread = console_read_line((char *)console_input_buffer, arg1);
+		nread = console_read((char *)console_input_buffer, arg1);
 		flags = spin_lock_irqsave(&syscall_copy_lock);
 		if (write_current_user(arg0, console_input_buffer, nread) != 0) {
 			spin_unlock_irqrestore(&syscall_copy_lock, flags);

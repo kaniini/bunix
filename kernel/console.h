@@ -14,6 +14,7 @@ void console_log_write_len(const char *text, u64 len);
 void console_logs_to_ring(void);
 u64 console_log_size(void);
 u64 console_log_read(char *buffer, u64 len);
+u64 console_read(char *buffer, u64 len);
 u64 console_read_line(char *buffer, u64 len);
 void console_write_hex32(u32 value);
 void console_write_hex64(u64 value);

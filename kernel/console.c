@@ -409,6 +409,18 @@ u64 console_log_read(char *buffer, u64 len)
 	return nread;
 }
 
+u64 console_read(char *buffer, u64 len)
+{
+	if (buffer == 0 || len == 0) {
+		return 0;
+	}
+	if (len == 1) {
+		buffer[0] = serial_getc();
+		return 1;
+	}
+	return console_read_line(buffer, len);
+}
+
 u64 console_read_line(char *buffer, u64 len)
 {
 	u64 used = 0;
