@@ -292,6 +292,4 @@ target does not require `xorriso`.
 
 ## Licensing note
 
-No third-party source has been imported yet. Keep imported components
-permissively licensed only, for example MIT, BSD, ISC, Apache-2.0, or similarly
-permissive terms.
+This is 100% slop.  Is it legal to distribute?  Who knows, I certainly don't.
