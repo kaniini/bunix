@@ -61,7 +61,7 @@ exec 3>"$pipe.in"
 printf 'kaniini\nbunix\n' >&3
 
 i=0
-while ! grep -F "/ $ " "$log" >/dev/null 2>&1; do
+while ! grep -F "~ $ " "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
 		echo "shell prompt did not appear after login" >&2
@@ -517,11 +517,11 @@ while [ "$(grep -F -c "login: " "$log" 2>/dev/null || true)" -le "$login_prompts
 	sleep 1
 done
 
-root_prompts_before_root=$(grep -F -c "/ # " "$log" 2>/dev/null || true)
+root_prompts_before_root=$(grep -F -c "~ # " "$log" 2>/dev/null || true)
 printf 'root\nroot\n' >&3
 
 i=0
-while [ "$(grep -F -c "/ # " "$log" 2>/dev/null || true)" -le "$root_prompts_before_root" ]; do
+while [ "$(grep -F -c "~ # " "$log" 2>/dev/null || true)" -le "$root_prompts_before_root" ]; do
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
 		echo "root shell prompt did not appear after second login" >&2

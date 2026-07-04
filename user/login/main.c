@@ -4,6 +4,7 @@ enum {
 	AT_NULL = 0,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
+	LINUX_SYSCALL_CHDIR = 80,
 	LINUX_SYSCALL_IOCTL = 16,
 	LINUX_SYSCALL_EXECVE = 59,
 	LINUX_SYSCALL_SETUID = 105,
@@ -328,17 +329,33 @@ static void make_login_env(const char *name, u64 uid,
 	envp[6] = 0;
 }
 
+static void make_home_path(const char *name, u64 uid, char *home,
+			   u64 home_size)
+{
+	if (uid == 0) {
+		copy_text(home, home_size, "/root");
+	} else {
+		copy_text(home, home_size, "/home/");
+		append_text(home, home_size, name);
+	}
+}
+
 static long exec_shell(const char *name, u64 uid)
 {
 	char path[] = "/bin/sh";
 	char *argv[] = { path, 0 };
 	char home[48];
+	char home_path[40];
 	char user[32];
 	char logname[40];
 	char *shell_env[7];
 
 	make_login_env(name, uid, home, sizeof(home), user, sizeof(user),
 		       logname, sizeof(logname), shell_env);
+	make_home_path(name, uid, home_path, sizeof(home_path));
+	if (linux_syscall4(LINUX_SYSCALL_CHDIR, (u64)home_path, 0, 0, 0) != 0) {
+		return -1;
+	}
 	return linux_syscall4(LINUX_SYSCALL_EXECVE, (u64)path,
 			      (u64)argv, (u64)shell_env, 0);
 }
