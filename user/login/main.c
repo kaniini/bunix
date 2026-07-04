@@ -299,7 +299,8 @@ static long apply_login(u64 uid, u64 gid, u64 group_count,
 	       0 : -1;
 }
 
-static void make_login_env(const char *name, char *home, u64 home_size,
+static void make_login_env(const char *name, u64 uid,
+			   char *home, u64 home_size,
 			   char *user, u64 user_size,
 			   char *logname, u64 logname_size,
 			   char **envp)
@@ -308,8 +309,12 @@ static void make_login_env(const char *name, char *home, u64 home_size,
 	static char path[] = "PATH=/bin:/sbin:/usr/bin:/usr/sbin";
 	static char term[] = "TERM=bunix";
 
-	copy_text(home, home_size, "HOME=/home/");
-	append_text(home, home_size, name);
+	if (uid == 0) {
+		copy_text(home, home_size, "HOME=/root");
+	} else {
+		copy_text(home, home_size, "HOME=/home/");
+		append_text(home, home_size, name);
+	}
 	copy_text(user, user_size, "USER=");
 	append_text(user, user_size, name);
 	copy_text(logname, logname_size, "LOGNAME=");
@@ -323,7 +328,7 @@ static void make_login_env(const char *name, char *home, u64 home_size,
 	envp[6] = 0;
 }
 
-static long exec_shell(const char *name)
+static long exec_shell(const char *name, u64 uid)
 {
 	char path[] = "/bin/sh";
 	char *argv[] = { path, 0 };
@@ -332,7 +337,7 @@ static long exec_shell(const char *name)
 	char logname[40];
 	char *shell_env[7];
 
-	make_login_env(name, home, sizeof(home), user, sizeof(user),
+	make_login_env(name, uid, home, sizeof(home), user, sizeof(user),
 		       logname, sizeof(logname), shell_env);
 	return linux_syscall4(LINUX_SYSCALL_EXECVE, (u64)path,
 			      (u64)argv, (u64)shell_env, 0);
@@ -440,7 +445,7 @@ int main(int argc, char **argv, char **envp)
 			(void)session_end(user, session_id);
 		} else {
 			write_text("login: shell exec\n");
-			if (exec_shell(name) != 0) {
+			if (exec_shell(name, uid) != 0) {
 				(void)session_end(user, session_id);
 			}
 		}

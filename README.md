@@ -192,11 +192,12 @@ The current rootfs can run a statically linked musl hello program, a dynamic
 musl hello program, and a dynamically linked BusyBox shell through `/bin/login`.
 BusyBox applets currently exercised by the test loop include `cat`, `echo`,
 `env`, `stat`, `ls`, `uptime`, `id`, `stty`, `kill`, `sleep`, `dmesg`, `pwd`,
-and `cd` through the shell. The generated rootfs includes an explicit
-`/home/kaniini` directory so the login shell can enter `$HOME`. Backspace,
-canonical tty input, Ctrl-C delivery to foreground jobs, login prompt respawn
-after shell exit, `/secret.txt` permission denial for the login user, and
-applet argv handling are covered by `make test-shell`.
+and `cd` through the shell. The generated rootfs includes explicit
+`/home/kaniini` and `/root` directories. Backspace, canonical tty input,
+Ctrl-C delivery to foreground jobs, login prompt respawn after shell exit,
+`/secret.txt` permission denial for the login user, second login as root, root
+access to `/secret.txt`, and applet argv handling are covered by
+`make test-shell`.
 
 `/bin/lxtest` contains no Bunix headers or crt0; it issues raw x86_64 Linux
 syscall numbers for the compatibility path and verifies returned byte counts,

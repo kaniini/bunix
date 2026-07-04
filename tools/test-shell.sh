@@ -516,4 +516,55 @@ while [ "$(grep -F -c "login: " "$log" 2>/dev/null || true)" -le "$login_prompts
 	fi
 	sleep 1
 done
+
+root_prompts_before_root=$(grep -F -c "/ # " "$log" 2>/dev/null || true)
+printf 'root\nroot\n' >&3
+
+i=0
+while [ "$(grep -F -c "/ # " "$log" 2>/dev/null || true)" -le "$root_prompts_before_root" ]; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "root shell prompt did not appear after second login" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+printf 'busybox id\nenv\nbusybox cat /secret.txt && echo ROOT_SECRET_OK\nexit\n' >&3
+
+i=0
+while ! grep -F "uid=0(root)" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "root login did not report uid 0" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+for expected in "HOME=/root" "USER=root" "LOGNAME=root"; do
+	i=0
+	while ! grep -F "$expected" "$log" >/dev/null 2>&1; do
+		i=$((i + 1))
+		if [ "$i" -gt 45 ]; then
+			echo "root login environment missing: $expected" >&2
+			tail -n 180 "$log" >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+done
+
+i=0
+while ! awk '{ sub(/\r$/, "") } /^ROOT_SECRET_OK$/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "root login could not read /secret.txt" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
 echo "shell regression ok"
