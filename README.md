@@ -133,7 +133,9 @@ Alpine root filesystem format.
 `procfs.server` is a separate user-space server that dynamically attaches
 itself to VFS as the `/proc` translator. It currently exposes `/proc/kthreads`,
 showing internal Bunix tasks as kernel threads for observability from Linux
-userspace.
+userspace, plus process metadata such as `/proc/self/status`,
+`/proc/self/cmdline`, `/proc/self/fd`, `/proc/self/exe`, `/proc/stat`,
+`/proc/ipc`, `/proc/meminfo`, `/proc/mounts`, and `/proc/uptime`.
 
 ## User Mode
 
@@ -294,13 +296,12 @@ make test
 ```
 
 `make test` boots through OVMF/GRUB with KVM, captures serial output in
-`build/serial.log`, and checks that GRUB passed Multiboot2 modules, the kernel
-started VM, names, time, user, linux, proc, procfs, block, VFS, and ping, init
-received its boot capabilities, and services registered/resolved through the
-user-space names server. It checks namespace creation, VFS re-export into the
-filesystem namespace, proc-spawned native and Linux test programs, Linux
-credentials, fork/wait, `brk`, `mmap`/`munmap`, VFS metadata, procfs startup,
-OCAP launch denial, and heartbeat startup.
+`build/serial.log`, and checks the boot-to-login path: GRUB passed Multiboot2
+modules, the kernel started VM, names, time, user, linux, proc, procfs, block,
+VFS, and ping, bootstrap received its boot capabilities, services
+registered/resolved through the user-space names server, VFS re-exported the
+filesystem namespace, `/sbin/init` launched, procfs attached, OCAP launch
+denial worked, and the login prompt appeared.
 
 For the interactive BusyBox shell regression:
 

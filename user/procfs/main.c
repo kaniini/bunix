@@ -21,6 +21,7 @@ enum {
 	PROCFS_KIND_LOADAVG = 14,
 	PROCFS_KIND_PID_STATM = 15,
 	PROCFS_KIND_IPC = 16,
+	PROCFS_KIND_PID_EXE = 17,
 };
 
 static struct bunix_id_table open_files;
@@ -40,6 +41,7 @@ struct proc_details {
 };
 
 static u64 build_kthreads(void);
+static const char *pid_cmdline(u64 pid);
 
 static u64 resolve_service(u64 service, unsigned int rights)
 {
@@ -88,6 +90,16 @@ static int str_eq(const char *left, const char *right)
 		}
 	}
 	return *left == '\0' && *right == '\0';
+}
+
+static u64 str_len(const char *text)
+{
+	u64 len = 0;
+
+	while (text[len] != '\0') {
+		len++;
+	}
+	return len;
 }
 
 static int path_has_prefix(const char *path, const char *prefix)
@@ -388,6 +400,11 @@ static u64 file_for_path(const char *path)
 
 		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_STATM, pid);
 	}
+	if (str_eq(path, "/proc/self/exe")) {
+		const u64 pid = proc_path_pid(0);
+
+		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_EXE, pid);
+	}
 	if (str_eq(path, "/proc/self/fd")) {
 		const u64 pid = proc_path_pid(0);
 
@@ -428,6 +445,9 @@ static u64 file_for_path(const char *path)
 		if (str_eq(cursor, "/statm")) {
 			return make_file(PROCFS_KIND_PID_STATM, pid);
 		}
+		if (str_eq(cursor, "/exe")) {
+			return make_file(PROCFS_KIND_PID_EXE, pid);
+		}
 		if (str_eq(cursor, "/fd")) {
 			return make_file(PROCFS_KIND_PID_FD, pid);
 		}
@@ -444,6 +464,9 @@ static u64 file_for_path(const char *path)
 
 static u64 file_size(u64 file)
 {
+	if (file_kind(file) == PROCFS_KIND_PID_EXE) {
+		return str_len(pid_cmdline(file_arg(file)));
+	}
 	if (file_kind(file) != PROCFS_KIND_PROC &&
 	    file_kind(file) != PROCFS_KIND_SELF &&
 	    file_kind(file) != PROCFS_KIND_PID &&
@@ -907,12 +930,15 @@ static int file_is_dir(u64 file)
 static void stat_reply(struct bunix_msg *reply, u64 file)
 {
 	const int is_dir = file_is_dir(file);
+	const int is_symlink = file_kind(file) == PROCFS_KIND_PID_EXE;
 
 	reply->words[0] = 0;
 	reply->words[1] = file_size(file);
 	reply->words[2] = is_dir ?
 			  (0555 | ((u64)BUNIX_VFS_TYPE_DIRECTORY << 32)) :
-			  (0444 | ((u64)BUNIX_VFS_TYPE_REGULAR << 32));
+			  (is_symlink ?
+			   (0777 | ((u64)BUNIX_VFS_TYPE_SYMLINK << 32)) :
+			   (0444 | ((u64)BUNIX_VFS_TYPE_REGULAR << 32)));
 	reply->words[3] = 0;
 }
 
@@ -941,13 +967,16 @@ static const char *proc_dir_entry(u64 index, u64 *type)
 
 static const char *pid_dir_entry(u64 index, u64 *type)
 {
-	static const char *names[] = { "stat", "status", "cmdline", "statm", "fd" };
+	static const char *names[] = {
+		"stat", "status", "cmdline", "statm", "exe", "fd"
+	};
 
 	if (index >= sizeof(names) / sizeof(names[0])) {
 		return 0;
 	}
-	*type = index == 4 ? BUNIX_VFS_TYPE_DIRECTORY :
-			     BUNIX_VFS_TYPE_REGULAR;
+	*type = index == 5 ? BUNIX_VFS_TYPE_DIRECTORY :
+		(index == 4 ? BUNIX_VFS_TYPE_SYMLINK :
+			      BUNIX_VFS_TYPE_REGULAR);
 	return names[index];
 }
 
@@ -960,6 +989,20 @@ static const char *fd_dir_entry(u64 index, u64 *type)
 	}
 	*type = BUNIX_VFS_TYPE_REGULAR;
 	return names[index];
+}
+
+static void readlink_reply(struct bunix_msg *reply, u64 file)
+{
+	const char *target;
+
+	if (file_kind(file) != PROCFS_KIND_PID_EXE) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	target = pid_cmdline(file_arg(file));
+	reply->words[0] = 0;
+	reply->words[1] = str_len(target);
+	pack_path(&reply->words[2], target);
 }
 
 int main(void)
@@ -1052,6 +1095,22 @@ int main(void)
 						BUNIX_VFS_TYPE_REGULAR;
 				}
 			}
+			break;
+		}
+		case BUNIX_VFS_READLINK_BUFFER: {
+			char path[PROCFS_MAX_PATH];
+			const u64 cwd_len = message.words[0];
+			const u64 path_len = message.words[1];
+			const u64 file =
+				read_path_buffer(message.cap, cwd_len, path_len,
+						 path) == 0 ?
+				file_for_path(path) : 0;
+
+			if (file == 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			readlink_reply(&reply, file);
 			break;
 		}
 		case BUNIX_VFS_STAT_META: {
