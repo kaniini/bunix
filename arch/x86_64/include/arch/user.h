@@ -18,6 +18,8 @@ struct arch_syscall_frame {
 	u64 r13;
 	u64 r14;
 	u64 r15;
+	u64 r8;
+	u64 r9;
 };
 
 void arch_user_init(void);

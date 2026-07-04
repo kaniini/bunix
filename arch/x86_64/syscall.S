@@ -86,5 +86,7 @@ arch_user_resume:
 	movq 24(%rax), %rdx
 	movq 32(%rax), %r10
 	movq 8(%rax), %rdi
+	movq 112(%rax), %r8
+	movq 120(%rax), %r9
 	xorq %rax, %rax
 	sysretq

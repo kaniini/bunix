@@ -42,6 +42,10 @@ int server_task_start(struct task *parent, u64 task_handle, u64 entry);
 int server_task_start_at(struct task *parent, u64 task_handle, u64 entry,
 			 u64 stack);
 int server_task_kill(struct task *parent, u64 task_handle);
+struct task *server_task_fork_current_stopped(
+	const struct arch_syscall_frame *frame);
+int server_task_start_fork(struct task *child,
+			   const struct arch_syscall_frame *frame);
 struct task *server_task_fork_current(const struct arch_syscall_frame *frame);
 u64 server_boot_module_size(void);
 int server_boot_module_read(u64 offset, void *buffer, u64 len);

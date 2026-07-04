@@ -626,11 +626,11 @@ int server_task_kill(struct task *parent, u64 task_handle)
 	return task_kill(task);
 }
 
-struct task *server_task_fork_current(const struct arch_syscall_frame *frame)
+struct task *server_task_fork_current_stopped(
+	const struct arch_syscall_frame *frame)
 {
 	struct task *parent = task_current();
-	if (parent == 0 || frame == 0 ||
-	    fork_start_count >= sizeof(fork_starts) / sizeof(fork_starts[0])) {
+	if (parent == 0 || frame == 0) {
 		return 0;
 	}
 
@@ -659,6 +659,7 @@ struct task *server_task_fork_current(const struct arch_syscall_frame *frame)
 					region->kind, region->object_type,
 					region->object_id,
 					region->offset) != 0) {
+			(void)task_kill(child);
 			return 0;
 		}
 	}
@@ -670,6 +671,18 @@ struct task *server_task_fork_current(const struct arch_syscall_frame *frame)
 	task_set_linux_mmap_next(child, mmap_next);
 	task_set_linux_fs_base(child, fs_base);
 
+	return child;
+}
+
+int server_task_start_fork(struct task *child,
+			   const struct arch_syscall_frame *frame)
+{
+	struct task *parent = task_current();
+	if (parent == 0 || child == 0 || frame == 0 ||
+	    fork_start_count >= sizeof(fork_starts) / sizeof(fork_starts[0])) {
+		return -1;
+	}
+
 	struct fork_start *start = &fork_starts[fork_start_count++];
 	start->frame = *frame;
 
@@ -678,7 +691,22 @@ struct task *server_task_fork_current(const struct arch_syscall_frame *frame)
 		       (const void *)frame->user_rip,
 		       (const void *)frame->user_rsp);
 	return thread_create(child, task_name(child), fork_entry_thread, start) != 0 ?
-	       child : 0;
+	       0 : -1;
+}
+
+struct task *server_task_fork_current(const struct arch_syscall_frame *frame)
+{
+	struct task *child = server_task_fork_current_stopped(frame);
+	if (child == 0) {
+		return 0;
+	}
+
+	if (server_task_start_fork(child, frame) != 0) {
+		(void)task_kill(child);
+		return 0;
+	}
+
+	return child;
 }
 
 static struct module_server_start *current_module_start(void)

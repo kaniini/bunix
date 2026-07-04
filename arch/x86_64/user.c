@@ -1352,7 +1352,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		LINUX_EXEC_STACK_TOP - LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE;
 
 	if (copy_cstr_from_user(path, user_path, sizeof(path)) != 0 ||
-	    str_len(path) >= 16 ||
+	    str_len(path) >= sizeof(path) ||
 	    linux_exec_collect_args(path, frame->arg1, &args) != 0) {
 		return (u64)-LINUX_EINVAL;
 	}
@@ -1847,16 +1847,26 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_CLONE:
 	case LINUX_SYSCALL_FORK:
 	case LINUX_SYSCALL_VFORK: {
-		struct task *child = server_task_fork_current(frame);
+		struct arch_syscall_frame child_frame = *frame;
+		struct task *child;
 		u64 pid;
 
+		if (number == LINUX_SYSCALL_CLONE && arg1 != 0) {
+			child_frame.user_rsp = arg1;
+		}
+		child = server_task_fork_current_stopped(&child_frame);
 		if (child == 0) {
 			return (u64)-LINUX_ENOMEM;
 		}
 
 		pid = linux_fork_process(task, child);
 		if ((i64)pid < 0) {
+			(void)task_kill(child);
 			return pid;
+		}
+		if (server_task_start_fork(child, &child_frame) != 0) {
+			(void)task_kill(child);
+			return (u64)-LINUX_ENOMEM;
 		}
 		console_printf("linux: fork parent=%u child=%u linux_pid=%u\n",
 			       task_id(task), task_id(child), (u32)pid);
