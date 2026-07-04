@@ -488,6 +488,38 @@ static u64 build_ipc(void)
 	append_str(&len, "fallback_invalid ");
 	append_u64(&len, stats.fallback_invalid);
 	append_char(&len, '\n');
+	for (u64 cpu = 0; cpu < BUNIX_IPC_STATS_CPUS; cpu++) {
+		if (stats.cpu_sends[cpu] == 0 &&
+		    stats.cpu_queued[cpu] == 0 &&
+		    stats.cpu_direct_delivered[cpu] == 0 &&
+		    stats.cpu_direct_handoff[cpu] == 0 &&
+		    stats.cpu_fallback_cross_cpu[cpu] == 0 &&
+		    stats.cpu_fallback_nested[cpu] == 0 &&
+		    stats.cpu_fallback_scheduler[cpu] == 0 &&
+		    stats.cpu_fallback_invalid[cpu] == 0) {
+			continue;
+		}
+
+		append_str(&len, "cpu");
+		append_u64(&len, cpu);
+		append_str(&len, " sends ");
+		append_u64(&len, stats.cpu_sends[cpu]);
+		append_str(&len, " queued ");
+		append_u64(&len, stats.cpu_queued[cpu]);
+		append_str(&len, " direct_delivered ");
+		append_u64(&len, stats.cpu_direct_delivered[cpu]);
+		append_str(&len, " direct_handoff ");
+		append_u64(&len, stats.cpu_direct_handoff[cpu]);
+		append_str(&len, " fallback_cross_cpu ");
+		append_u64(&len, stats.cpu_fallback_cross_cpu[cpu]);
+		append_str(&len, " fallback_nested ");
+		append_u64(&len, stats.cpu_fallback_nested[cpu]);
+		append_str(&len, " fallback_scheduler ");
+		append_u64(&len, stats.cpu_fallback_scheduler[cpu]);
+		append_str(&len, " fallback_invalid ");
+		append_u64(&len, stats.cpu_fallback_invalid[cpu]);
+		append_char(&len, '\n');
+	}
 	return len;
 }
 

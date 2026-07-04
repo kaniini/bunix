@@ -254,6 +254,18 @@ for expected in "direct_delivered [1-9][0-9]*" "direct_handoff [1-9][0-9]*"; do
 		sleep 1
 	done
 done
+for expected in "cpu[0-9][0-9]* sends [1-9][0-9]*"; do
+	i=0
+	while ! grep -E "$expected" "$log" >/dev/null 2>&1; do
+		i=$((i + 1))
+		if [ "$i" -gt 45 ]; then
+			echo "IPC per-CPU counter did not increase: $expected" >&2
+			tail -n 220 "$log" >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+done
 if grep -F "top:" "$log" >/dev/null 2>&1; then
 	echo "busybox top reported an error" >&2
 	tail -n 220 "$log" >&2 || true

@@ -44,6 +44,8 @@ struct task {
 	u64 linux_brk;
 	u64 linux_mmap_next;
 	u64 linux_fs_base;
+	u32 ipc_affinity_cpu;
+	u32 ipc_affinity_valid;
 	struct task_vm_region *vm_regions;
 	u32 vm_region_count;
 	u32 vm_region_capacity;
@@ -471,6 +473,8 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	task->linux_brk = 0x900000;
 	task->linux_mmap_next = 0x10000000;
 	task->linux_fs_base = 0;
+	task->ipc_affinity_cpu = 0;
+	task->ipc_affinity_valid = 0;
 	task->vm_regions = 0;
 	task->vm_region_count = 0;
 	task->vm_region_capacity = 0;
@@ -488,6 +492,43 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 struct vm_space *task_vm_space(struct task *task)
 {
 	return task != 0 ? task->vm_space : 0;
+}
+
+void task_set_ipc_affinity(struct task *task, u32 cpu_id)
+{
+	if (task == 0 || cpu_id >= sched_cpu_count) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	if (task->thread_count == 0) {
+		task->ipc_affinity_cpu = cpu_id;
+		task->ipc_affinity_valid = 1;
+	}
+	spin_unlock_irqrestore(&task->lock, flags);
+}
+
+static u32 task_select_cpu(struct task *task, const char **policy)
+{
+	if (task != 0) {
+		const u64 flags = spin_lock_irqsave(&task->lock);
+		const u32 valid = task->ipc_affinity_valid &&
+				  task->ipc_affinity_cpu < sched_cpu_count;
+		const u32 cpu = task->ipc_affinity_cpu;
+
+		spin_unlock_irqrestore(&task->lock, flags);
+		if (valid) {
+			if (policy != 0) {
+				*policy = "ipc-affinity";
+			}
+			return cpu;
+		}
+	}
+
+	if (policy != 0) {
+		*policy = "auto";
+	}
+	return sched_select_auto_cpu();
 }
 
 static struct thread *thread_create_placed(struct task *task, const char *name,
@@ -541,8 +582,11 @@ static struct thread *thread_create_placed(struct task *task, const char *name,
 struct thread *thread_create(struct task *task, const char *name,
 			     thread_entry_t entry, void *arg)
 {
+	const char *policy = "auto";
+	const u32 cpu_id = task_select_cpu(task, &policy);
+
 	return thread_create_placed(task, name, entry, arg,
-				    sched_select_auto_cpu(), "auto");
+				    cpu_id, policy);
 }
 
 struct thread *thread_create_on_cpu(struct task *task, const char *name,
@@ -574,12 +618,21 @@ u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights)
 		return 0;
 	}
 
+	u32 affinity_cpu = 0;
+	const int has_affinity =
+		(rights & TASK_RIGHT_SEND) != 0 &&
+		ipc_port_affinity_cpu(port, &affinity_cpu) == 0;
+
 	const u64 flags = spin_lock_irqsave(&task->lock);
 
 	for (u32 i = 0; i < task->handle_capacity; i++) {
 		if (task->handles[i].type == TASK_HANDLE_PORT &&
 		    task->handles[i].object == port &&
 		    task->handles[i].rights == rights) {
+			if (has_affinity && task->thread_count == 0) {
+				task->ipc_affinity_cpu = affinity_cpu;
+				task->ipc_affinity_valid = 1;
+			}
 			spin_unlock_irqrestore(&task->lock, flags);
 			return i + 1;
 		}
@@ -594,6 +647,10 @@ u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights)
 			task->handles[i].type = TASK_HANDLE_PORT;
 			task->handles[i].rights = rights;
 			task->handles[i].object = port;
+			if (has_affinity && task->thread_count == 0) {
+				task->ipc_affinity_cpu = affinity_cpu;
+				task->ipc_affinity_valid = 1;
+			}
 			ipc_port_retain(port);
 			console_printf("sched: grant task=%u handle=%u type=port rights=0x%x\n",
 				       task->pid, i + 1, rights);

@@ -30,6 +30,8 @@ struct ipc_port {
 	struct ipc_message_node *tail;
 	struct thread *receiver;
 	struct ipc_wait *receiver_wait;
+	u32 affinity_cpu;
+	u32 affinity_valid;
 	u32 queued;
 };
 
@@ -272,6 +274,32 @@ struct ipc_port *ipc_port_from_id(u64 id)
 	return 0;
 }
 
+int ipc_port_affinity_cpu(struct ipc_port *port, u32 *cpu_id)
+{
+	if (port == 0 || cpu_id == 0) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&ipc_lock);
+	if (!port->affinity_valid) {
+		spin_unlock_irqrestore(&ipc_lock, flags);
+		return -1;
+	}
+
+	*cpu_id = port->affinity_cpu;
+	spin_unlock_irqrestore(&ipc_lock, flags);
+	return 0;
+}
+
+static void ipc_stats_inc_cpu(u64 *counter)
+{
+	const u32 cpu = sched_current_cpu_id();
+
+	if (cpu < IPC_STATS_CPUS) {
+		counter[cpu]++;
+	}
+}
+
 int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 {
 	struct ipc_message_node *node;
@@ -288,6 +316,7 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 
 	const u64 direct_flags = spin_lock_irqsave(&ipc_lock);
 	ipc_counters.sends++;
+	ipc_stats_inc_cpu(ipc_counters.cpu_sends);
 	if (port->receiver != 0 && port->receiver_wait != 0 &&
 	    port->head == 0) {
 		receiver = port->receiver;
@@ -296,6 +325,7 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 		port->receiver = 0;
 		port->receiver_wait = 0;
 		ipc_counters.direct_delivered++;
+		ipc_stats_inc_cpu(ipc_counters.cpu_direct_delivered);
 	}
 	spin_unlock_irqrestore(&ipc_lock, direct_flags);
 	if (receiver != 0) {
@@ -307,14 +337,19 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 		const u64 flags = spin_lock_irqsave(&ipc_lock);
 		if (handoff == THREAD_HANDOFF_DIRECT) {
 			ipc_counters.direct_handoff++;
+			ipc_stats_inc_cpu(ipc_counters.cpu_direct_handoff);
 		} else if (handoff == THREAD_HANDOFF_CROSS_CPU) {
 			ipc_counters.fallback_cross_cpu++;
+			ipc_stats_inc_cpu(ipc_counters.cpu_fallback_cross_cpu);
 		} else if (handoff == THREAD_HANDOFF_NESTED) {
 			ipc_counters.fallback_nested++;
+			ipc_stats_inc_cpu(ipc_counters.cpu_fallback_nested);
 		} else if (handoff == THREAD_HANDOFF_SCHEDULER) {
 			ipc_counters.fallback_scheduler++;
+			ipc_stats_inc_cpu(ipc_counters.cpu_fallback_scheduler);
 		} else {
 			ipc_counters.fallback_invalid++;
+			ipc_stats_inc_cpu(ipc_counters.cpu_fallback_invalid);
 		}
 		spin_unlock_irqrestore(&ipc_lock, flags);
 		return handoff == THREAD_HANDOFF_INVALID ? -1 : 0;
@@ -341,6 +376,7 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 	port->tail = node;
 	port->queued++;
 	ipc_counters.queued++;
+	ipc_stats_inc_cpu(ipc_counters.cpu_queued);
 	if (ipc_should_log(port, &node->message)) {
 		console_printf("ipc: send port=%s proto=0x%x type=%u sender=%u queued=%u\n",
 			       port->name, node->message.protocol,
@@ -370,6 +406,8 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 		.delivered = 0,
 	};
 	u64 flags = spin_lock_irqsave(&ipc_lock);
+	port->affinity_cpu = sched_current_cpu_id();
+	port->affinity_valid = 1;
 	while (port->head == 0) {
 		port->receiver = thread_current();
 		port->receiver_wait = &wait;

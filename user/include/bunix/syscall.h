@@ -37,6 +37,7 @@ enum {
 	BUNIX_SYSCALL_EARLY_CONSOLE_LOGS_TO_RING = -58,
 	BUNIX_SYSCALL_IPC_STATS = -60,
 	BUNIX_IPC_WORDS = 4,
+	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
 	BUNIX_RIGHT_SEND = 1 << 0,
 	BUNIX_RIGHT_RECV = 1 << 1,
@@ -206,6 +207,14 @@ struct bunix_ipc_stats {
 	u64 fallback_nested;
 	u64 fallback_scheduler;
 	u64 fallback_invalid;
+	u64 cpu_sends[BUNIX_IPC_STATS_CPUS];
+	u64 cpu_queued[BUNIX_IPC_STATS_CPUS];
+	u64 cpu_direct_delivered[BUNIX_IPC_STATS_CPUS];
+	u64 cpu_direct_handoff[BUNIX_IPC_STATS_CPUS];
+	u64 cpu_fallback_cross_cpu[BUNIX_IPC_STATS_CPUS];
+	u64 cpu_fallback_nested[BUNIX_IPC_STATS_CPUS];
+	u64 cpu_fallback_scheduler[BUNIX_IPC_STATS_CPUS];
+	u64 cpu_fallback_invalid[BUNIX_IPC_STATS_CPUS];
 };
 
 static inline long bunix_syscall0(long number)
