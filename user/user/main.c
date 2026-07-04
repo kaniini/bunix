@@ -5,6 +5,8 @@ enum {
 	USER_MAX_CREDENTIALS = 32,
 	USER_MAX_GROUPS = 2,
 	USER_ID_KEEP = (u64)-1,
+	USER_LOGIN_ROOT = 0,
+	USER_LOGIN_KANIINI = 1000,
 };
 
 struct user_credential {
@@ -314,6 +316,42 @@ static long credential_can_access(u64 task, u64 owner, u64 group, u64 mode,
 	return 0;
 }
 
+static long credential_apply_login(u64 task, u64 login_uid)
+{
+	struct user_credential *credential = credential_find(task);
+
+	if (credential == 0) {
+		return -1;
+	}
+
+	if (login_uid == USER_LOGIN_ROOT) {
+		credential->uid = 0;
+		credential->gid = 0;
+		credential->euid = 0;
+		credential->egid = 0;
+		credential->suid = 0;
+		credential->sgid = 0;
+		credential->group_count = 2;
+		credential->groups[0] = 0;
+		credential->groups[1] = 1;
+		return 0;
+	}
+	if (login_uid == USER_LOGIN_KANIINI) {
+		credential->uid = USER_LOGIN_KANIINI;
+		credential->gid = USER_LOGIN_KANIINI;
+		credential->euid = USER_LOGIN_KANIINI;
+		credential->egid = USER_LOGIN_KANIINI;
+		credential->suid = USER_LOGIN_KANIINI;
+		credential->sgid = USER_LOGIN_KANIINI;
+		credential->group_count = 1;
+		credential->groups[0] = USER_LOGIN_KANIINI;
+		credential->groups[1] = 0;
+		return 0;
+	}
+
+	return -1;
+}
+
 int main(void)
 {
 	const char online[] = "user: online\n";
@@ -406,6 +444,10 @@ int main(void)
 								    message.words[3] >> 32,
 								    message.words[3] & 0xffffffff,
 								    &reply.words[1]);
+			break;
+		case BUNIX_USER_APPLY_LOGIN:
+			reply.words[0] = (u64)credential_apply_login(message.words[0],
+								     message.words[1]);
 			break;
 		default:
 			reply.words[0] = (u64)-1;

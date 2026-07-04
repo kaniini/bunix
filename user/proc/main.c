@@ -42,6 +42,7 @@ enum {
 	EXEC_HANDLE_PROC = 4,
 	PROC_MAX_PROCESSES = 16,
 	PROC_DYN_LOAD_BIAS = 0x400000,
+	PROC_LOGIN_KANIINI = 1000,
 };
 
 struct process {
@@ -654,8 +655,32 @@ static long register_linux_process(u64 task, u64 ppid, u64 *linux_pid)
 	return 0;
 }
 
+static long apply_login_to_task(u64 task, u64 login_uid)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_APPLY_LOGIN,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { task, login_uid, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = resolve_service(BUNIX_SERVICE_USER, BUNIX_RIGHT_SEND);
+
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+
+	return 0;
+}
+
 static long exec_path(u64 vfs, const char *path, const char *task_name,
-		      u64 linux_parent_pid, u64 *linux_pid,
+		      u64 linux_parent_pid, u64 login_uid, int set_login,
+		      u64 *linux_pid,
 		      u64 *task_handle)
 {
 	const struct bunix_launch_cap caps[] = {
@@ -808,6 +833,11 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 			bunix_handle_close((u64)task);
 			return -1;
 		}
+		if (set_login &&
+		    apply_login_to_task((u64)bunix_id, login_uid) != 0) {
+			bunix_handle_close((u64)task);
+			return -1;
+		}
 	}
 	const long started = bunix_task_start_at((u64)task, exec.entry, stack);
 
@@ -894,6 +924,7 @@ static long spawn_process(const char *path, u64 *pid)
 	u64 linux_pid = 0;
 	u64 task_handle = 0;
 	u64 linux_parent_pid = 0;
+	const int set_login = str_eq(path, "/bin/sh");
 	struct process *process = process_alloc();
 
 	if (process == 0 || pid == 0) {
@@ -918,7 +949,8 @@ static long spawn_process(const char *path, u64 *pid)
 	}
 
 	if (exec_path(vfs, path, task_name_for_path(path),
-		      linux_parent_pid, &linux_pid, &task_handle) != 0) {
+		      linux_parent_pid, PROC_LOGIN_KANIINI, set_login,
+		      &linux_pid, &task_handle) != 0) {
 		process_reset(process);
 		*pid = 0;
 		return -1;

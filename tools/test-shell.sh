@@ -35,7 +35,7 @@ TMPDIR=$tmp $timeout_cmd 90s "$qemu" -enable-kvm -machine q35 -cpu host -m 128M 
 qemu_pid=$!
 
 i=0
-while ! grep -F "/ # " "$log" >/dev/null 2>&1; do
+while ! grep -F "/ $ " "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
 	if ! kill -0 "$qemu_pid" 2>/dev/null; then
 		echo "qemu exited before shell prompt" >&2
@@ -68,10 +68,10 @@ while ! grep -F "load average" "$log" >/dev/null 2>&1; do
 done
 
 i=0
-while ! grep -F "uid=0" "$log" >/dev/null 2>&1; do
+while ! grep -F "uid=1000" "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
-		echo "busybox id did not report root identity" >&2
+		echo "busybox id did not report login identity" >&2
 		tail -n 120 "$log" >&2 || true
 		exit 1
 	fi
@@ -157,18 +157,23 @@ while ! grep -F "CTRL_C_OK" "$log" >/dev/null 2>&1; do
 	sleep 1
 done
 
-if ! grep -F "root secret" "$log" >/dev/null 2>&1; then
-	echo "busybox cat did not print /secret.txt" >&2
-	tail -n 160 "$log" >&2 || true
-	exit 1
-fi
-if grep -F "cat: can't open '/secret.txt'" "$log" >/dev/null 2>&1; then
-	echo "busybox cat failed for /secret.txt" >&2
+i=0
+while ! grep -F "cat: can't open '/secret.txt'" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox cat did not report denied /secret.txt access" >&2
+		tail -n 160 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+if grep -F "root secret" "$log" >/dev/null 2>&1; then
+	echo "busybox cat leaked /secret.txt to login user" >&2
 	tail -n 160 "$log" >&2 || true
 	exit 1
 fi
 
-if ! awk '{ sub(/\r$/, "") } /\/bin # pwd/ { prompt = NR } /^\/bin$/ && prompt { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
+if ! awk '{ sub(/\r$/, "") } /\/bin \$ pwd/ { prompt = NR } /^\/bin$/ && prompt { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
 	echo "busybox chdir/pwd regression failed" >&2
 	tail -n 160 "$log" >&2 || true
 	exit 1
