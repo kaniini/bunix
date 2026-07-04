@@ -153,7 +153,7 @@ int main(int argc, char **argv)
 {
 	if (argc < 4) {
 		fprintf(stderr,
-			"usage: mkrootfs OUT PATH FILE [--symlink PATH TARGET] ...\n");
+			"usage: mkrootfs OUT PATH FILE [--symlink PATH TARGET] [--dir PATH] ...\n");
 		return 1;
 	}
 
@@ -172,12 +172,21 @@ int main(int argc, char **argv)
 	}
 	for (int arg = 2; arg < argc;) {
 		const int is_symlink = strcmp(argv[arg], "--symlink") == 0;
+		const int is_dir = strcmp(argv[arg], "--dir") == 0;
 		const char *path;
 		const char *file;
 		FILE *in;
-		long size;
+		long size = 0;
 
-		if (is_symlink) {
+		if (is_dir) {
+			if (arg + 1 >= argc) {
+				fprintf(stderr, "mkrootfs: incomplete dir\n");
+				return 1;
+			}
+			path = argv[arg + 1];
+			file = NULL;
+			arg += 2;
+		} else if (is_symlink) {
 			if (arg + 2 >= argc) {
 				fprintf(stderr, "mkrootfs: incomplete symlink\n");
 				return 1;
@@ -204,7 +213,8 @@ int main(int argc, char **argv)
 			fprintf(stderr, "mkrootfs: path too long: %s\n", path);
 			return 1;
 		}
-		if (path[0] != '/' || path_exists(entries, entry_count, path)) {
+		if (path[0] != '/' ||
+		    (!is_dir && path_exists(entries, entry_count, path))) {
 			fprintf(stderr, "mkrootfs: invalid duplicate path: %s\n",
 				path);
 			return 1;
@@ -213,12 +223,17 @@ int main(int argc, char **argv)
 			fprintf(stderr, "mkrootfs: add parents for %s\n", path);
 			return 1;
 		}
+		if (is_dir && path_exists(entries, entry_count, path)) {
+			continue;
+		}
 		if (entry_count >= ROOTFS_MAX_ENTRIES) {
 			fprintf(stderr, "mkrootfs: too many entries\n");
 			return 1;
 		}
 
-		if (is_symlink) {
+		if (is_dir) {
+			size = 0;
+		} else if (is_symlink) {
 			if (strlen(file) >= ROOTFS_MAX_PATH) {
 				fprintf(stderr,
 					"mkrootfs: symlink target too long: %s\n",
@@ -246,18 +261,20 @@ int main(int argc, char **argv)
 		entries[entry_count].size = (uint64_t)size;
 		entries[entry_count].uid = 0;
 		entries[entry_count].gid = 0;
-		entries[entry_count].mode = is_symlink ? 0777 :
+		entries[entry_count].mode = is_dir ? 0555 :
+				  (is_symlink ? 0777 :
 				  (strncmp(path, "/bin/", 5) == 0 ?
-				   0555 : 0444);
+				   0555 : 0444));
 		if (strcmp(path, "/secret.txt") == 0) {
 			entries[entry_count].mode = 0400;
 		}
 		if (strcmp(path, "/etc/shadow") == 0) {
 			entries[entry_count].mode = 0400;
 		}
-		entries[entry_count].type = is_symlink ?
-					     ROOTFS_TYPE_SYMLINK :
-					     ROOTFS_TYPE_REGULAR;
+		entries[entry_count].type = is_dir ? ROOTFS_TYPE_DIRECTORY :
+					     (is_symlink ?
+					      ROOTFS_TYPE_SYMLINK :
+					      ROOTFS_TYPE_REGULAR);
 		entry_count++;
 	}
 
@@ -286,7 +303,9 @@ int main(int argc, char **argv)
 	}
 
 	for (int arg = 2; arg < argc;) {
-		if (strcmp(argv[arg], "--symlink") == 0) {
+		if (strcmp(argv[arg], "--dir") == 0) {
+			arg += 2;
+		} else if (strcmp(argv[arg], "--symlink") == 0) {
 			const char *path = argv[arg + 1];
 			const char *target = argv[arg + 2];
 
