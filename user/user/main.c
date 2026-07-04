@@ -343,6 +343,85 @@ static long shadow_authenticate(const char *name, u64 name_len,
 	return -1;
 }
 
+static int group_line_has_member(const char *text, u64 start, u64 end,
+				 const char *name, u64 name_len)
+{
+	u64 cursor = start;
+
+	while (cursor < end) {
+		const u64 member_start = cursor;
+
+		while (cursor < end && text[cursor] != ',' &&
+		       text[cursor] != '\n') {
+			cursor++;
+		}
+		if (str_eq_len(text + member_start, cursor - member_start,
+			       name, name_len)) {
+			return 1;
+		}
+		if (cursor < end && text[cursor] == ',') {
+			cursor++;
+		}
+	}
+	return 0;
+}
+
+static long login_groups_lookup(const char *name, u64 name_len,
+				u64 primary_gid, struct bunix_msg *reply)
+{
+	u64 len = 0;
+	u64 count = 0;
+	u64 groups[USER_MAX_GROUPS];
+
+	if (reply == 0 ||
+	    read_account_file("/etc/group", account_buffer,
+			      sizeof(account_buffer), &len) != 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < USER_MAX_GROUPS; i++) {
+		groups[i] = 0;
+	}
+	for (u64 cursor = 0; cursor < len && count < USER_MAX_GROUPS;) {
+		const u64 line = cursor;
+		u64 field;
+		u64 gid;
+		u64 members_start;
+		u64 members_end;
+
+		field = field_end(account_buffer, len, cursor, ':');
+		cursor = field < len ? field + 1 : field;
+		field = field_end(account_buffer, len, cursor, ':');
+		cursor = field < len ? field + 1 : field;
+		gid = parse_uint(account_buffer, len, &cursor);
+		if (cursor >= len || account_buffer[cursor] != ':') {
+			cursor = field_end(account_buffer, len, line, '\n') + 1;
+			continue;
+		}
+		cursor++;
+		members_start = cursor;
+		members_end = field_end(account_buffer, len, cursor, '\n');
+		if (gid == primary_gid ||
+		    group_line_has_member(account_buffer, members_start,
+					  members_end, name, name_len)) {
+			int duplicate = 0;
+
+			for (u64 i = 0; i < count; i++) {
+				if (groups[i] == gid) {
+					duplicate = 1;
+				}
+			}
+			if (!duplicate) {
+				groups[count++] = gid;
+			}
+		}
+		cursor = members_end < len ? members_end + 1 : members_end;
+	}
+	reply->words[1] = count;
+	reply->words[2] = groups[0];
+	reply->words[3] = USER_MAX_GROUPS > 1 ? groups[1] : 0;
+	return 0;
+}
+
 static long credential_register(u64 task)
 {
 	struct user_credential *credential;
@@ -876,6 +955,17 @@ int main(void)
 								   message.words[3],
 								   &reply);
 			break;
+		case BUNIX_USER_LOGIN_GROUPS: {
+			char name[USER_NAME_MAX];
+
+			unpack_text(name, sizeof(name), message.words[0],
+				    message.words[1]);
+			reply.words[0] = (u64)login_groups_lookup(name,
+								  text_len(name),
+								  message.words[2],
+								  &reply);
+			break;
+		}
 		case BUNIX_USER_SESSION_BEGIN:
 			reply.words[0] = (u64)session_begin(message.words[0],
 							    message.words[1],

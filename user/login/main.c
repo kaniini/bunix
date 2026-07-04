@@ -8,6 +8,7 @@ enum {
 	LINUX_SYSCALL_EXECVE = 59,
 	LINUX_SYSCALL_SETUID = 105,
 	LINUX_SYSCALL_SETGID = 106,
+	LINUX_SYSCALL_SETGROUPS = 116,
 	LINUX_SYSCALL_EXIT_GROUP = 231,
 	LINUX_TCGETS = 0x5401,
 	LINUX_TCSETS = 0x5402,
@@ -213,8 +214,53 @@ static long authenticate(u64 user, const char *name, const char *password,
 	return 0;
 }
 
-static long apply_login(u64 uid, u64 gid)
+static long login_groups(u64 user, const char *name, u64 gid, u64 *count,
+			 u64 *group0, u64 *group1)
 {
+	u64 words[2];
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_LOGIN_GROUPS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, gid, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (count == 0 || group0 == 0 || group1 == 0) {
+		return -1;
+	}
+	pack_text(words, name);
+	request.words[0] = words[0];
+	request.words[1] = words[1];
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[1] > 2) {
+		return -1;
+	}
+	*count = reply.words[1];
+	*group0 = reply.words[2];
+	*group1 = reply.words[3];
+	return 0;
+}
+
+static long apply_login(u64 uid, u64 gid, u64 group_count,
+			u64 group0, u64 group1)
+{
+	unsigned int groups[2];
+
+	if (group_count > 2) {
+		return -1;
+	}
+	groups[0] = (unsigned int)group0;
+	groups[1] = (unsigned int)group1;
+	if (linux_syscall4(LINUX_SYSCALL_SETGROUPS, group_count,
+			   (u64)groups, 0, 0) != 0) {
+		return -1;
+	}
 	if (linux_syscall4(LINUX_SYSCALL_SETGID, gid, 0, 0, 0) != 0) {
 		return -1;
 	}
@@ -285,6 +331,9 @@ int main(int argc, char **argv, char **envp)
 	char password[16];
 	u64 uid = 0;
 	u64 gid = 0;
+	u64 group_count = 0;
+	u64 group0 = 0;
+	u64 group1 = 0;
 	u64 user;
 	u64 session_id;
 	long nread;
@@ -319,9 +368,13 @@ int main(int argc, char **argv, char **envp)
 			write_text("login: user service missing\n");
 		} else if (authenticate(user, name, password, &uid, &gid) != 0) {
 			write_text("login: auth failed\n");
+		} else if (login_groups(user, name, gid, &group_count,
+					&group0, &group1) != 0) {
+			write_text("login: groups failed\n");
 		} else if (session_begin(user, uid, gid, &session_id) != 0) {
 			write_text("login: session failed\n");
-		} else if (apply_login(uid, gid) != 0) {
+		} else if (apply_login(uid, gid, group_count,
+				       group0, group1) != 0) {
 			write_text("login: apply failed\n");
 			(void)session_end(user, session_id);
 		} else {

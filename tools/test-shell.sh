@@ -127,6 +127,11 @@ while ! grep -F "uid=1000" "$log" >/dev/null 2>&1; do
 	fi
 	sleep 1
 done
+if ! grep -F "groups=1(wheel),1000(kaniini)" "$log" >/dev/null 2>&1; then
+	echo "busybox id did not report login supplementary groups" >&2
+	tail -n 120 "$log" >&2 || true
+	exit 1
+fi
 
 i=0
 while ! grep -F "erase = ^?" "$log" >/dev/null 2>&1; do
