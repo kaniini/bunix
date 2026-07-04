@@ -24,6 +24,8 @@ VFS_MODULE := $(BUILD_DIR)/modules/vfs.server
 VFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/vfs/main.c.o
 FIRST_MODULE := $(BUILD_DIR)/modules/first.user
 FIRST_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/first/main.c.o
+LOGIN_MODULE := $(BUILD_DIR)/modules/login.user
+LOGIN_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/login/main.c.o
 LXTEST_MODULE := $(BUILD_DIR)/modules/lxtest.user
 LXTEST_MODULE_OBJS := $(BUILD_DIR)/user/lxtest/main.S.o
 EXECOK_MODULE := $(BUILD_DIR)/modules/execok.user
@@ -36,6 +38,8 @@ BLOCK_IMAGE := $(BUILD_DIR)/modules/disk0.img
 ROOTFS_TOOL := $(BUILD_DIR)/tools/mkrootfs
 ROOTFS_HELLO := modules/hello.txt
 ROOTFS_SECRET := modules/secret.txt
+ROOTFS_PASSWD := modules/passwd
+ROOTFS_SHADOW := modules/shadow
 
 CC ?= gcc
 MUSL_CC ?= x86_64-alpine-linux-musl-gcc
@@ -98,6 +102,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/init/main.c.o \
 	$(BUILD_DIR)/user/block/main.c.o \
 	$(BUILD_DIR)/user/vfs/main.c.o \
 	$(BUILD_DIR)/user/first/main.c.o \
+	$(BUILD_DIR)/user/login/main.c.o \
 	$(BUILD_DIR)/user/lxtest/main.S.o \
 	$(BUILD_DIR)/user/execok/main.S.o \
 	$(BUILD_DIR)/user/ping/main.c.o
@@ -167,6 +172,10 @@ $(FIRST_MODULE): $(FIRST_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(FIRST_MODULE_OBJS)
 
+$(LOGIN_MODULE): $(LOGIN_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(LOGIN_MODULE_OBJS)
+
 $(LXTEST_MODULE): $(LXTEST_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(LXTEST_MODULE_OBJS)
@@ -187,9 +196,9 @@ $(ROOTFS_TOOL): tools/mkrootfs.c
 	mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror $< -o $@
 
-$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(FIRST_MODULE) $(LXTEST_MODULE) $(EXECOK_MODULE) $(MUSL_HELLO_MODULE) $(BUSYBOX_STATIC)
+$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(FIRST_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(EXECOK_MODULE) $(MUSL_HELLO_MODULE) $(BUSYBOX_STATIC)
 	mkdir -p $(dir $@)
-	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /bin/first $(FIRST_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/busybox $(BUSYBOX_STATIC) /bin/sh $(BUSYBOX_STATIC) /bin/dmesg $(BUSYBOX_STATIC) /bin/cat $(BUSYBOX_STATIC) /bin/stat $(BUSYBOX_STATIC) /bin/uptime $(BUSYBOX_STATIC)
+	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /bin/first $(FIRST_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/busybox $(BUSYBOX_STATIC) /bin/sh $(BUSYBOX_STATIC) /bin/dmesg $(BUSYBOX_STATIC) /bin/cat $(BUSYBOX_STATIC) /bin/stat $(BUSYBOX_STATIC) /bin/uptime $(BUSYBOX_STATIC)
 
 $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
@@ -357,9 +366,9 @@ test: $(EFI_BOOT_APP)
 	grep -F "init: musl process spawned" $(BUILD_DIR)/serial.log
 	grep -F "musl hello argc=1 argv0=/bin/musl-hello" $(BUILD_DIR)/serial.log
 	grep -F "init: musl process exited" $(BUILD_DIR)/serial.log
-	grep -F "proc: exec /bin/sh" $(BUILD_DIR)/serial.log
+	grep -F "proc: exec /bin/login" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=4" $(BUILD_DIR)/serial.log
-	grep -F "init: busybox shell spawned" $(BUILD_DIR)/serial.log
+	grep -F "init: login spawned" $(BUILD_DIR)/serial.log
 	grep -F "rootfs: module" $(BUILD_DIR)/serial.log
 	grep -F "init: bad cap denied" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server time" $(BUILD_DIR)/serial.log

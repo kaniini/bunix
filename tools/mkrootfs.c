@@ -7,7 +7,7 @@
 enum {
 	ROOTFS_MAGIC = 0x30534652,
 	ROOTFS_MAX_PATH = 32,
-	ROOTFS_MAX_ENTRIES = 16,
+	ROOTFS_MAX_ENTRIES = 32,
 	ROOTFS_TYPE_REGULAR = 1,
 	ROOTFS_TYPE_DIRECTORY = 2,
 };
@@ -178,6 +178,9 @@ int main(int argc, char **argv)
 		entries[entry_count].mode = strncmp(path, "/bin/", 5) == 0 ?
 				  0555 : 0444;
 		if (strcmp(path, "/secret.txt") == 0) {
+			entries[entry_count].mode = 0400;
+		}
+		if (strcmp(path, "/etc/shadow") == 0) {
 			entries[entry_count].mode = 0400;
 		}
 		entries[entry_count].type = ROOTFS_TYPE_REGULAR;

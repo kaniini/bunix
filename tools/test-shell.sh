@@ -35,16 +35,16 @@ TMPDIR=$tmp $timeout_cmd 90s "$qemu" -enable-kvm -machine q35 -cpu host -m 128M 
 qemu_pid=$!
 
 i=0
-while ! grep -F "/ $ " "$log" >/dev/null 2>&1; do
+while ! grep -F "login: " "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
 	if ! kill -0 "$qemu_pid" 2>/dev/null; then
-		echo "qemu exited before shell prompt" >&2
+		echo "qemu exited before login prompt" >&2
 		cat "$qemu_log" >&2 || true
 		tail -n 80 "$log" >&2 || true
 		exit 1
 	fi
 	if [ "$i" -gt 80 ]; then
-		echo "shell prompt did not appear" >&2
+		echo "login prompt did not appear" >&2
 		cat "$qemu_log" >&2 || true
 		tail -n 80 "$log" >&2 || true
 		exit 1
@@ -54,6 +54,19 @@ done
 
 sleep 3
 exec 3>"$pipe.in"
+printf 'kaniini\nbunix\n' >&3
+
+i=0
+while ! grep -F "/ $ " "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "shell prompt did not appear after login" >&2
+		tail -n 120 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
 printf 'uptime\nbusybox uptime\nbusybox stty -a\nbusybox id\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\nbusybox cat /secret.txt\necho POSTCAT\nbusybox stat /bin\nbusybox ecxx\177\177ho BACKSPACE_OK\ncat\n\003echo CTRL_C_OK\ncd /bin\npwd\nexit\n' >&3
 
 i=0

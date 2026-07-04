@@ -40,9 +40,10 @@ enum {
 	EXEC_HANDLE_STDERR = EXEC_HANDLE_STDOUT,
 	EXEC_HANDLE_TIME = 3,
 	EXEC_HANDLE_PROC = 4,
+	EXEC_HANDLE_NAMES = 5,
 	PROC_MAX_PROCESSES = 16,
 	PROC_DYN_LOAD_BIAS = 0x400000,
-	PROC_LOGIN_KANIINI = 1000,
+	PROC_SPAWN_SET_LOGIN = 1,
 };
 
 struct process {
@@ -111,10 +112,12 @@ static const char proc_exec[] = "proc: exec /bin/first\n";
 static const char proc_exec_linux[] = "proc: exec /bin/lxtest\n";
 static const char proc_exec_musl[] = "proc: exec /bin/musl-hello\n";
 static const char proc_exec_shell[] = "proc: exec /bin/sh\n";
+static const char proc_exec_login[] = "proc: exec /bin/login\n";
 static const char proc_spawned[] = "proc: spawned pid=1\n";
 static const char proc_spawned_linux[] = "proc: spawned pid=2\n";
 static const char proc_spawned_musl[] = "proc: spawned pid=3\n";
-static const char proc_spawned_shell[] = "proc: spawned pid=4\n";
+static const char proc_spawned_login[] = "proc: spawned pid=4\n";
+static const char proc_spawned_shell[] = "proc: spawned pid=5\n";
 static const char proc_exited[] = "proc: exited pid=1 status=0\n";
 static const char proc_waited[] = "proc: wait pid=1 status=0\n";
 static const char proc_register_failed[] = "proc: register failed\n";
@@ -220,6 +223,9 @@ static const char *task_name_for_path(const char *path)
 	}
 	if (str_eq(path, "/bin/sh") || str_eq(path, "/bin/busybox")) {
 		return "busybox";
+	}
+	if (str_eq(path, "/bin/login")) {
+		return "login";
 	}
 	return "first";
 }
@@ -538,7 +544,7 @@ static long build_initial_stack(u64 task, const char *path,
 				const struct exec_info *exec, u64 *stack)
 {
 	enum {
-		AUXV_PAIRS = 18,
+		AUXV_PAIRS = 19,
 		STACK_WORDS = 4 + AUXV_PAIRS * 2,
 	};
 
@@ -617,8 +623,10 @@ static long build_initial_stack(u64 task, const char *path,
 	words[35] = EXEC_HANDLE_TIME;
 	words[36] = BUNIX_AT_PROC;
 	words[37] = EXEC_HANDLE_PROC;
-	words[38] = AT_NULL;
-	words[39] = 0;
+	words[38] = BUNIX_AT_NAMES;
+	words[39] = EXEC_HANDLE_NAMES;
+	words[40] = AT_NULL;
+	words[41] = 0;
 
 	if (bunix_task_write(task, stack_base + sp, init_stack + sp,
 			     PROC_INIT_STACK_MAX - sp) != 0) {
@@ -687,6 +695,7 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 		{ PROC_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
 		{ PROC_HANDLE_TIME, BUNIX_RIGHT_SEND, 0 },
 		{ BUNIX_HANDLE_SELF, BUNIX_RIGHT_SEND, 0 },
+		{ PROC_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
 	};
 	struct elf64_ehdr ehdr;
 	struct elf64_phdr phdrs[PROC_MAX_PHDRS];
@@ -918,13 +927,13 @@ static struct process *process_alloc(void)
 	return 0;
 }
 
-static long spawn_process(const char *path, u64 *pid)
+static long spawn_process(const char *path, u64 login_uid, int set_login,
+			  u64 *pid)
 {
 	u64 vfs;
 	u64 linux_pid = 0;
 	u64 task_handle = 0;
 	u64 linux_parent_pid = 0;
-	const int set_login = str_eq(path, "/bin/sh");
 	struct process *process = process_alloc();
 
 	if (process == 0 || pid == 0) {
@@ -949,7 +958,7 @@ static long spawn_process(const char *path, u64 *pid)
 	}
 
 	if (exec_path(vfs, path, task_name_for_path(path),
-		      linux_parent_pid, PROC_LOGIN_KANIINI, set_login,
+		      linux_parent_pid, login_uid, set_login,
 		      &linux_pid, &task_handle) != 0) {
 		process_reset(process);
 		*pid = 0;
@@ -1004,7 +1013,10 @@ int main(void)
 			}
 			unpack_bytes((unsigned char *)path, &message.words[0],
 				     sizeof(path));
-			if (spawn_process(path, &pid) == 0) {
+			if (spawn_process(path, message.words[2],
+					  (message.words[3] &
+					   PROC_SPAWN_SET_LOGIN) != 0,
+					  &pid) == 0) {
 				reply.words[0] = 0;
 				reply.words[1] = pid;
 				if (str_eq(path, "/bin/lxtest")) {
@@ -1024,6 +1036,11 @@ int main(void)
 							    sizeof(proc_exec_shell) - 1);
 					bunix_console_write(proc_spawned_shell,
 							    sizeof(proc_spawned_shell) - 1);
+				} else if (str_eq(path, "/bin/login")) {
+					bunix_console_write(proc_exec_login,
+							    sizeof(proc_exec_login) - 1);
+					bunix_console_write(proc_spawned_login,
+							    sizeof(proc_spawned_login) - 1);
 				} else {
 					bunix_console_write(proc_exec,
 							    sizeof(proc_exec) - 1);
