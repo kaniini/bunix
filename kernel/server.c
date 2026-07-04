@@ -13,6 +13,7 @@
 
 static const struct server boot_servers[] = {
 	{ "names", 0 },
+	{ "consoled", 0 },
 	{ "init", 0 },
 	{ "time", 0 },
 	{ "user", 0 },
@@ -340,6 +341,15 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 {
 	if (str_eq(server_name, "names")) {
 		task_grant_port(task, ipc_port_find("console"),
+				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+		return;
+	}
+
+	if (str_eq(server_name, "consoled")) {
+		task_grant_port(task, ipc_port_find("console"),
+				TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+				TASK_RIGHT_DUP);
+		task_grant_port(task, ipc_port_find("names"),
 				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
 		return;
 	}
@@ -816,6 +826,8 @@ void server_start_boot_modules(u64 multiboot_info)
 	server_launch_module("vm");
 	sched_run();
 	server_launch_module("names");
+	server_launch_module("consoled");
+	sched_run();
 	server_launch_module("init");
 }
 

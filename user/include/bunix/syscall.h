@@ -32,6 +32,9 @@ enum {
 	BUNIX_SYSCALL_CONSOLE_READ = -48,
 	BUNIX_SYSCALL_TASK_KILL = -50,
 	BUNIX_SYSCALL_TASK_INFO = -52,
+	BUNIX_SYSCALL_EARLY_CONSOLE_WRITE = -54,
+	BUNIX_SYSCALL_EARLY_CONSOLE_LOG = -56,
+	BUNIX_SYSCALL_EARLY_CONSOLE_LOGS_TO_RING = -58,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
 	BUNIX_RIGHT_SEND = 1 << 0,
@@ -400,19 +403,48 @@ static inline u64 bunix_boot_module_size(void)
 	return (u64)bunix_syscall3(BUNIX_SYSCALL_BOOT_MODULE_READ, 0, 0, 0);
 }
 
-static inline long bunix_console_write(const char *text, usize len)
+static inline long bunix_console_send(unsigned int type, const char *text,
+				      usize len)
 {
-	const struct bunix_msg message = {
+	u64 buffer;
+	long result;
+	struct bunix_msg message = {
 		.protocol = BUNIX_PROTO_CONSOLE,
-		.type = BUNIX_CONSOLE_LOG,
+		.type = type,
 		.sender = 0,
-		.cap_rights = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
 		.reply = 0,
 		.cap = 0,
-		.words = { (u64)text, len, 0, 0 },
+		.words = { len, 0, 0, 0 },
 	};
 
-	return bunix_ipc_send(BUNIX_HANDLE_CONSOLE, &message);
+	if (len == 0) {
+		return 0;
+	}
+
+	buffer = bunix_buffer_create(len);
+	if (buffer == (u64)-1 ||
+	    bunix_buffer_write(buffer, 0, text, len) != 0) {
+		if (buffer != (u64)-1) {
+			bunix_handle_close(buffer);
+		}
+		return -1;
+	}
+
+	message.cap = buffer;
+	result = bunix_ipc_send(BUNIX_HANDLE_CONSOLE, &message);
+	bunix_handle_close(buffer);
+	return result;
+}
+
+static inline long bunix_console_write(const char *text, usize len)
+{
+	return bunix_console_send(BUNIX_CONSOLE_WRITE, text, len);
+}
+
+static inline long bunix_console_log(const char *text, usize len)
+{
+	return bunix_console_send(BUNIX_CONSOLE_LOG, text, len);
 }
 
 static inline long bunix_console_logs_to_ring(void)
@@ -428,6 +460,23 @@ static inline long bunix_console_logs_to_ring(void)
 	};
 
 	return bunix_ipc_send(BUNIX_HANDLE_CONSOLE, &message);
+}
+
+static inline long bunix_early_console_write(const char *text, usize len)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_EARLY_CONSOLE_WRITE,
+			      (u64)text, len);
+}
+
+static inline long bunix_early_console_log(const char *text, usize len)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_EARLY_CONSOLE_LOG,
+			      (u64)text, len);
+}
+
+static inline long bunix_early_console_logs_to_ring(void)
+{
+	return bunix_syscall0(BUNIX_SYSCALL_EARLY_CONSOLE_LOGS_TO_RING);
 }
 
 static inline long bunix_console_read(char *buffer, usize len)

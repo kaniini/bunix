@@ -997,13 +997,13 @@ int main(void)
 
 	bunix_map_init(&processes_by_pid);
 	bunix_map_init(&processes_by_linux_pid);
-	bunix_console_write(proc_online, sizeof(proc_online) - 1);
+	bunix_console_log(proc_online, sizeof(proc_online) - 1);
 	if (register_service(BUNIX_SERVICE_PROC, BUNIX_HANDLE_SELF) != 0) {
-		bunix_console_write(proc_register_failed,
+		bunix_console_log(proc_register_failed,
 				    sizeof(proc_register_failed) - 1);
 		return 1;
 	}
-	bunix_console_write(proc_ready, sizeof(proc_ready) - 1);
+	bunix_console_log(proc_ready, sizeof(proc_ready) - 1);
 
 	for (;;) {
 		struct bunix_msg reply = {
@@ -1044,31 +1044,31 @@ int main(void)
 				reply.words[0] = 0;
 				reply.words[1] = pid;
 				if (str_eq(path, "/bin/lxtest")) {
-					bunix_console_write(proc_exec_linux,
+					bunix_console_log(proc_exec_linux,
 							    sizeof(proc_exec_linux) - 1);
 					if (pid == 2) {
-						bunix_console_write(proc_spawned_linux,
+						bunix_console_log(proc_spawned_linux,
 								    sizeof(proc_spawned_linux) - 1);
 					}
 				} else if (str_eq(path, "/bin/musl-hello")) {
-					bunix_console_write(proc_exec_musl,
+					bunix_console_log(proc_exec_musl,
 							    sizeof(proc_exec_musl) - 1);
-					bunix_console_write(proc_spawned_musl,
+					bunix_console_log(proc_spawned_musl,
 							    sizeof(proc_spawned_musl) - 1);
 				} else if (str_eq(path, "/bin/sh")) {
-					bunix_console_write(proc_exec_shell,
+					bunix_console_log(proc_exec_shell,
 							    sizeof(proc_exec_shell) - 1);
-					bunix_console_write(proc_spawned_shell,
+					bunix_console_log(proc_spawned_shell,
 							    sizeof(proc_spawned_shell) - 1);
 				} else if (str_eq(path, "/bin/login")) {
-					bunix_console_write(proc_exec_login,
+					bunix_console_log(proc_exec_login,
 							    sizeof(proc_exec_login) - 1);
-					bunix_console_write(proc_spawned_login,
+					bunix_console_log(proc_spawned_login,
 							    sizeof(proc_spawned_login) - 1);
 				} else {
-					bunix_console_write(proc_exec,
+					bunix_console_log(proc_exec,
 							    sizeof(proc_exec) - 1);
-					bunix_console_write(proc_spawned,
+					bunix_console_log(proc_spawned,
 							    sizeof(proc_spawned) - 1);
 				}
 			} else {
@@ -1085,7 +1085,7 @@ int main(void)
 				reply.words[0] = 0;
 				reply.words[1] = process->pid;
 				reply.words[2] = process->status;
-				bunix_console_write(proc_waited,
+				bunix_console_log(proc_waited,
 						    sizeof(proc_waited) - 1);
 				process_reset(process);
 			} else if (message.reply != 0) {
@@ -1109,14 +1109,14 @@ int main(void)
 				process->status = message.words[1];
 				process->exited = 1;
 				reply.words[0] = 0;
-				bunix_console_write(proc_exited,
+				bunix_console_log(proc_exited,
 						    sizeof(proc_exited) - 1);
 				if (process->waiter != 0) {
 					reply_status(process->waiter,
 						     process->pid,
 						     process->status);
 					process->waiter = 0;
-					bunix_console_write(proc_waited,
+					bunix_console_log(proc_waited,
 							    sizeof(proc_waited) - 1);
 					process_reset(process);
 				}

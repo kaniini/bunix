@@ -30,11 +30,11 @@ int main(void)
 	const char ready[] = "time: ready\n";
 	struct bunix_msg message;
 
-	bunix_console_write(online, sizeof(online) - 1);
+	bunix_console_log(online, sizeof(online) - 1);
 	if (register_service(BUNIX_SERVICE_TIME, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
 	}
-	bunix_console_write(ready, sizeof(ready) - 1);
+	bunix_console_log(ready, sizeof(ready) - 1);
 
 	for (;;) {
 		struct bunix_msg reply = {

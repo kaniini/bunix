@@ -44,7 +44,7 @@ int main(void)
 	struct bunix_msg message;
 	const u64 disk_size = bunix_boot_module_size();
 
-	bunix_console_write(online, sizeof(online) - 1);
+	bunix_console_log(online, sizeof(online) - 1);
 	register_service(BUNIX_SERVICE_BLOCK, BUNIX_HANDLE_SELF);
 
 	for (;;) {

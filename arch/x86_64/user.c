@@ -51,6 +51,9 @@ enum {
 	SYSCALL_CONSOLE_READ = -48,
 	SYSCALL_TASK_KILL = -50,
 	SYSCALL_TASK_INFO = -52,
+	SYSCALL_EARLY_CONSOLE_WRITE = -54,
+	SYSCALL_EARLY_CONSOLE_LOG = -56,
+	SYSCALL_EARLY_CONSOLE_LOGS_TO_RING = -58,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -295,6 +298,7 @@ static int user_message_to_ipc(const struct user_ipc_message *user_message,
 	message->reply_port = task_port_from_handle(task_current(),
 						    user_message->reply,
 						    TASK_RIGHT_SEND);
+	ipc_port_retain(message->reply_port);
 	message->cap_type = IPC_CAP_NONE;
 	message->cap_object = 0;
 	if (user_message->cap == 0 && user_message->cap_rights != 0) {
@@ -322,6 +326,11 @@ static int user_message_to_ipc(const struct user_ipc_message *user_message,
 		message->cap_type = type == TASK_CAP_PORT ?
 			IPC_CAP_PORT : IPC_CAP_BUFFER;
 		message->cap_object = object;
+		if (message->cap_type == IPC_CAP_PORT) {
+			ipc_port_retain((struct ipc_port *)message->cap_object);
+		} else {
+			buffer_retain((struct shared_buffer *)message->cap_object);
+		}
 	}
 
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
@@ -3573,6 +3582,24 @@ static u64 native_sys_console_read(const struct native_syscall_args *args)
 	return nread;
 }
 
+static u64 native_sys_early_console_write(const struct native_syscall_args *args)
+{
+	return console_write_user(args->arg0, args->arg1) == 0 ? 0 : (u64)-1;
+}
+
+static u64 native_sys_early_console_log(const struct native_syscall_args *args)
+{
+	return console_log_user(args->arg0, args->arg1) == 0 ? 0 : (u64)-1;
+}
+
+static u64 native_sys_early_console_logs_to_ring(
+	const struct native_syscall_args *args)
+{
+	(void)args;
+	console_logs_to_ring();
+	return 0;
+}
+
 static u64 native_sys_ipc_send(const struct native_syscall_args *args)
 {
 	struct user_ipc_message user_message;
@@ -3586,30 +3613,16 @@ static u64 native_sys_ipc_send(const struct native_syscall_args *args)
 		return (u64)-1;
 	}
 
-	if (port != 0 &&
-	    user_message.protocol == USER_FOURCC_CONS &&
-	    str_eq(ipc_port_name(port), "console")) {
-		if (user_message.type == USER_CONSOLE_WRITE) {
-			return (u64)console_write_user(user_message.words[0],
-						      user_message.words[1]);
-		}
-		if (user_message.type == USER_CONSOLE_LOG) {
-			return (u64)console_log_user(user_message.words[0],
-						    user_message.words[1]);
-		}
-		if (user_message.type == USER_CONSOLE_LOGS_TO_RING) {
-			console_logs_to_ring();
-			return 0;
-		}
-	}
-
 	struct ipc_message message = { .protocol = 0, .type = 0 };
 
 	if (user_message_to_ipc(&user_message, &message) != 0) {
+		ipc_message_release(&message);
 		return (u64)-1;
 	}
 
-	return (u64)ipc_send(port, &message);
+	const int result = ipc_send(port, &message);
+	ipc_message_release(&message);
+	return (u64)result;
 }
 
 static u64 native_sys_ipc_recv(const struct native_syscall_args *args)
@@ -3627,8 +3640,10 @@ static u64 native_sys_ipc_recv(const struct native_syscall_args *args)
 	ipc_message_to_user(&message, &user_message);
 	if (write_current_user(args->arg1, &user_message,
 			       sizeof(user_message)) != 0) {
+		ipc_message_release(&message);
 		return (u64)-1;
 	}
+	ipc_message_release(&message);
 	return 0;
 }
 
@@ -3651,20 +3666,29 @@ static u64 native_sys_ipc_call(const struct native_syscall_args *args)
 	}
 
 	if (user_message_to_ipc(&user_request, &message) != 0) {
+		ipc_message_release(&message);
 		return (u64)-1;
 	}
 
+	ipc_port_release(message.reply_port);
 	message.reply_port = reply_port;
-	if (ipc_send(port, &message) != 0 ||
-	    ipc_recv(reply_port, &reply) != 0) {
+	ipc_port_retain(message.reply_port);
+	if (ipc_send(port, &message) != 0) {
+		ipc_message_release(&message);
+		return (u64)-1;
+	}
+	ipc_message_release(&message);
+	if (ipc_recv(reply_port, &reply) != 0) {
 		return (u64)-1;
 	}
 
 	ipc_message_to_user(&reply, &user_reply);
 	if (write_current_user(args->arg2, &user_reply,
 			       sizeof(user_reply)) != 0) {
+		ipc_message_release(&reply);
 		return (u64)-1;
 	}
+	ipc_message_release(&reply);
 	return 0;
 }
 
@@ -3698,6 +3722,12 @@ static const struct native_syscall_entry native_syscalls[] = {
 	  native_sys_task_clone_range },
 	{ SYSCALL_CONSOLE_READ, "console_read", native_sys_console_read },
 	{ SYSCALL_TASK_KILL, "task_kill", native_sys_task_kill },
+	{ SYSCALL_EARLY_CONSOLE_WRITE, "early_console_write",
+	  native_sys_early_console_write },
+	{ SYSCALL_EARLY_CONSOLE_LOG, "early_console_log",
+	  native_sys_early_console_log },
+	{ SYSCALL_EARLY_CONSOLE_LOGS_TO_RING, "early_console_logs_to_ring",
+	  native_sys_early_console_logs_to_ring },
 };
 
 static const struct native_syscall_entry *native_syscall_lookup(i64 number)

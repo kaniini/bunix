@@ -103,7 +103,7 @@ static void wake_waiters(const struct name_entry *entry)
 		send_resolve_reply(wait->reply, entry, wait->rights);
 		bunix_free(wait);
 		(void)bunix_id_remove(&waits, waits.slots[i].id);
-		bunix_console_write(resolved, sizeof(resolved) - 1);
+		bunix_console_log(resolved, sizeof(resolved) - 1);
 	}
 }
 
@@ -142,7 +142,7 @@ int main(void)
 
 	bunix_map_init(&names);
 	bunix_id_table_init(&waits);
-	bunix_console_write(online, sizeof(online) - 1);
+	bunix_console_log(online, sizeof(online) - 1);
 
 	for (;;) {
 		int should_reply = 1;
@@ -166,7 +166,7 @@ int main(void)
 		case BUNIX_NAMES_CREATE_NS:
 			reply.words[0] = 0;
 			reply.words[1] = next_namespace++;
-			bunix_console_write(namespace_created,
+			bunix_console_log(namespace_created,
 					    sizeof(namespace_created) - 1);
 			break;
 		case BUNIX_NAMES_REGISTER:
@@ -179,7 +179,7 @@ int main(void)
 				if (entry != 0) {
 					wake_waiters(entry);
 				}
-				bunix_console_write(registered,
+				bunix_console_log(registered,
 						    sizeof(registered) - 1);
 			} else {
 				reply.words[0] = (u64)-1;
@@ -194,7 +194,7 @@ int main(void)
 				reply.words[0] = 0;
 				reply.cap = entry->handle;
 				reply.cap_rights = (unsigned int)rights;
-				bunix_console_write(resolved,
+				bunix_console_log(resolved,
 						    sizeof(resolved) - 1);
 			} else {
 				reply.words[0] = (u64)-1;
@@ -210,11 +210,11 @@ int main(void)
 				reply.words[0] = 0;
 				reply.cap = entry->handle;
 				reply.cap_rights = (unsigned int)rights;
-				bunix_console_write(resolved,
+				bunix_console_log(resolved,
 						    sizeof(resolved) - 1);
 			} else if (add_waiter(&message, (unsigned int)rights) == 0) {
 				should_reply = 0;
-				bunix_console_write(waiting,
+				bunix_console_log(waiting,
 						    sizeof(waiting) - 1);
 			} else {
 				reply.words[0] = (u64)-1;

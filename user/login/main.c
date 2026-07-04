@@ -16,22 +16,12 @@ struct startup_aux {
 static void write_text(u64 handle, const char *text)
 {
 	u64 len = 0;
-	struct bunix_msg message = {
-		.protocol = BUNIX_PROTO_CONSOLE,
-		.type = BUNIX_CONSOLE_WRITE,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { (u64)text, 0, 0, 0 },
-	};
 
 	while (text[len] != '\0') {
 		len++;
 	}
-	message.words[1] = len;
 	if (handle != 0) {
-		bunix_ipc_send(handle, &message);
+		bunix_console_write(text, len);
 	}
 }
 

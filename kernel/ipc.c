@@ -1,3 +1,4 @@
+#include "buffer.h"
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
@@ -79,7 +80,40 @@ static struct ipc_message_node *message_alloc(void)
 
 static void message_free(struct ipc_message_node *node)
 {
+	if (node != 0) {
+		ipc_message_release(&node->message);
+	}
 	slab_free(node);
+}
+
+static void ipc_message_retain(struct ipc_message *message)
+{
+	if (message == 0) {
+		return;
+	}
+
+	ipc_port_retain(message->reply_port);
+	if (message->cap_type == IPC_CAP_PORT) {
+		ipc_port_retain((struct ipc_port *)message->cap_object);
+	} else if (message->cap_type == IPC_CAP_BUFFER) {
+		buffer_retain((struct shared_buffer *)message->cap_object);
+	}
+}
+
+void ipc_message_release(struct ipc_message *message)
+{
+	if (message != 0 && message->cap_type == IPC_CAP_PORT) {
+		ipc_port_release((struct ipc_port *)message->cap_object);
+	} else if (message != 0 && message->cap_type == IPC_CAP_BUFFER) {
+		buffer_release((struct shared_buffer *)message->cap_object);
+	}
+	if (message != 0) {
+		ipc_port_release(message->reply_port);
+		message->reply_port = 0;
+		message->cap_type = IPC_CAP_NONE;
+		message->cap_object = 0;
+		message->cap_rights = 0;
+	}
 }
 
 void ipc_init(void)
@@ -227,17 +261,17 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 		return -1;
 	}
 
-	const u64 flags = spin_lock_irqsave(&ipc_lock);
 	node = message_alloc();
 	if (node == 0) {
 		console_printf("ipc: message alloc failed port=%s\n", port->name);
-		spin_unlock_irqrestore(&ipc_lock, flags);
 		return -1;
 	}
 
 	node->message = *message;
 	node->message.sender = task_id(task_current());
+	ipc_message_retain(&node->message);
 
+	const u64 flags = spin_lock_irqsave(&ipc_lock);
 	if (port->tail != 0) {
 		port->tail->next = node;
 	} else {
@@ -291,6 +325,10 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 
 	port->queued--;
 	*message = node->message;
+	node->message.reply_port = 0;
+	node->message.cap_type = IPC_CAP_NONE;
+	node->message.cap_object = 0;
+	node->message.cap_rights = 0;
 	message_free(node);
 
 	if (ipc_should_log(port, message)) {

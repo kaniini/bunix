@@ -32,7 +32,7 @@ int main(void)
 	u64 sequence = 1;
 	const u64 interval_ns = 2000000000ULL;
 
-	bunix_console_write(online, sizeof(online) - 1);
+	bunix_console_log(online, sizeof(online) - 1);
 
 	for (;;) {
 		struct bunix_msg vm_message = {
@@ -44,7 +44,7 @@ int main(void)
 		};
 		const u64 now = time_call(BUNIX_TIME_SLEEP_NS, interval_ns);
 
-		bunix_console_write(heartbeat, sizeof(heartbeat) - 1);
+		bunix_console_log(heartbeat, sizeof(heartbeat) - 1);
 		vm_message.words[0] = sequence++;
 		vm_message.words[1] = now != 0 ? now :
 				      time_call(BUNIX_TIME_NOW_MONOTONIC, 0);

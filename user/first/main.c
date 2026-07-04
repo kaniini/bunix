@@ -27,18 +27,8 @@ static u64 proc_handle;
 
 static void stdout_write(const char *text, u64 len)
 {
-	const struct bunix_msg message = {
-		.protocol = BUNIX_PROTO_CONSOLE,
-		.type = BUNIX_CONSOLE_WRITE,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { (u64)text, len, 0, 0 },
-	};
-
 	if (stdout_handle != 0) {
-		bunix_ipc_send(stdout_handle, &message);
+		bunix_console_write(text, len);
 	}
 }
 

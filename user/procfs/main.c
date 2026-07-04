@@ -657,7 +657,7 @@ int main(void)
 	const char online[] = "procfs: online\n";
 	struct bunix_msg message;
 
-	bunix_console_write(online, sizeof(online) - 1);
+	bunix_console_log(online, sizeof(online) - 1);
 	bunix_id_table_init(&open_files);
 	if (register_service(BUNIX_SERVICE_PROCFS, BUNIX_HANDLE_SELF) != 0) {
 		return 1;

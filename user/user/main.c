@@ -780,11 +780,11 @@ int main(void)
 
 	bunix_map_init(&credentials);
 	bunix_id_table_init(&sessions);
-	bunix_console_write(online, sizeof(online) - 1);
+	bunix_console_log(online, sizeof(online) - 1);
 	if (register_service(BUNIX_SERVICE_USER) != 0) {
 		return 1;
 	}
-	bunix_console_write(ready, sizeof(ready) - 1);
+	bunix_console_log(ready, sizeof(ready) - 1);
 
 	for (;;) {
 		struct bunix_msg reply = {
@@ -815,7 +815,7 @@ int main(void)
 		case BUNIX_USER_REGISTER_PROCESS:
 			reply.words[0] = (u64)credential_register(message.words[0]);
 			if (reply.words[0] == 0) {
-				bunix_console_write(registered,
+				bunix_console_log(registered,
 						    sizeof(registered) - 1);
 			}
 			break;
@@ -823,7 +823,7 @@ int main(void)
 			reply.words[0] = (u64)credential_fork(message.words[0],
 							     message.words[1]);
 			if (reply.words[0] == 0) {
-				bunix_console_write(forked, sizeof(forked) - 1);
+				bunix_console_log(forked, sizeof(forked) - 1);
 			}
 			break;
 		case BUNIX_USER_EXIT_PROCESS:
@@ -882,14 +882,14 @@ int main(void)
 							    message.words[2],
 							    &reply);
 			if (reply.words[0] == 0) {
-				bunix_console_write(session_started,
+				bunix_console_log(session_started,
 						    sizeof(session_started) - 1);
 			}
 			break;
 		case BUNIX_USER_SESSION_END:
 			reply.words[0] = (u64)session_end(message.words[0]);
 			if (reply.words[0] == 0) {
-				bunix_console_write(session_ended,
+				bunix_console_log(session_ended,
 						    sizeof(session_ended) - 1);
 			}
 			break;

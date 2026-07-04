@@ -952,7 +952,7 @@ static void vfs_open_path(struct bunix_msg *message, struct bunix_msg *reply,
 	reply->words[1] = file;
 	reply->words[2] = entry->size;
 	reply->words[3] = entry->type;
-	bunix_console_write("vfs: open\n", 10);
+	bunix_console_log("vfs: open\n", 10);
 }
 
 static void vfs_stat_path(struct bunix_msg *message, struct bunix_msg *reply,
@@ -1023,7 +1023,7 @@ int main(void)
 	struct bunix_msg message;
 	u64 block = 0;
 
-	bunix_console_write(online, sizeof(online) - 1);
+	bunix_console_log(online, sizeof(online) - 1);
 	register_service(BUNIX_SERVICE_VFS, BUNIX_HANDLE_SELF);
 	block = resolve_service(BUNIX_SERVICE_BLOCK, BUNIX_RIGHT_SEND);
 	if (block == 0 || rootfs_mount(block) != 0) {
@@ -1031,7 +1031,7 @@ int main(void)
 	}
 	bunix_id_table_init(&mounts);
 	bunix_id_table_init(&open_files);
-	bunix_console_write(ready, sizeof(ready) - 1);
+	bunix_console_log(ready, sizeof(ready) - 1);
 
 	for (;;) {
 		struct bunix_msg reply = {
@@ -1348,7 +1348,7 @@ int main(void)
 			} else {
 				forget_open_file(message.words[0]);
 				reply.words[0] = 0;
-				bunix_console_write("vfs: close\n", 11);
+				bunix_console_log("vfs: close\n", 11);
 			}
 			break;
 		case BUNIX_VFS_MOUNT: {
@@ -1362,7 +1362,7 @@ int main(void)
 			} else {
 				reply.words[0] = 0;
 				message.cap = 0;
-				bunix_console_write("vfs: mounted translator\n", 24);
+				bunix_console_log("vfs: mounted translator\n", 24);
 			}
 			break;
 		}

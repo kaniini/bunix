@@ -17,7 +17,11 @@ cleanup() {
 	if [ "${cat_pid:-}" ]; then
 		kill "$cat_pid" 2>/dev/null || true
 	fi
-	rm -rf "$tmp"
+	if [ "${KEEP_TMP:-0}" != 1 ]; then
+		rm -rf "$tmp"
+	else
+		echo "kept test tmp: $tmp" >&2
+	fi
 }
 
 mkdir -p "$tmp"

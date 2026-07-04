@@ -1357,7 +1357,7 @@ static void linux_wake_parent(struct linux_process *child)
 	if (linux_store_wait_status(parent->wait_buffer,
 				    child->exit_status) == 0) {
 		child->waited = 1;
-		bunix_console_write(wait4_ok, sizeof(wait4_ok) - 1);
+		bunix_console_log(wait4_ok, sizeof(wait4_ok) - 1);
 		bunix_ipc_send(parent->waiter, &reply);
 		linux_process_reset(child);
 	}
@@ -1759,17 +1759,7 @@ static unsigned int tty_iflag(void)
 
 static void tty_echo(const char *text, u64 len)
 {
-	const struct bunix_msg console_message = {
-		.protocol = BUNIX_PROTO_CONSOLE,
-		.type = BUNIX_CONSOLE_WRITE,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { (u64)text, len, 0, 0 },
-	};
-
-	bunix_ipc_send(BUNIX_HANDLE_CONSOLE, &console_message);
+	(void)bunix_console_write(text, len);
 }
 
 static long tty_termios_get(u64 buffer)
@@ -2778,17 +2768,8 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 		return -LINUX_EBADF;
 	}
 
-	const struct bunix_msg console_message = {
-		.protocol = BUNIX_PROTO_CONSOLE,
-		.type = BUNIX_CONSOLE_WRITE,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { (u64)write_buffer, len, 0, 0 },
-	};
-
-	bunix_ipc_send(process->fds[fd].handle, &console_message);
+	(void)process;
+	bunix_console_write((const char *)write_buffer, len);
 	return (long)len;
 }
 
@@ -3051,7 +3032,7 @@ int main(void)
 	bunix_map_init(&process_by_pid);
 	bunix_map_init(&file_refs);
 	bunix_id_table_init(&pipe_ids);
-	bunix_console_write(online, sizeof(online) - 1);
+	bunix_console_log(online, sizeof(online) - 1);
 	for (;;) {
 		struct bunix_msg reply = {
 			.protocol = BUNIX_PROTO_LINUX,
@@ -3079,7 +3060,7 @@ int main(void)
 								     message.words[1],
 								     message.words[2]);
 			if ((long)reply.words[0] > 0) {
-				bunix_console_write(registered_ok,
+				bunix_console_log(registered_ok,
 						    sizeof(registered_ok) - 1);
 			}
 			if (message.reply != 0) {
@@ -3091,7 +3072,7 @@ int main(void)
 			reply.words[0] = (u64)linux_fork_process(message.words[0],
 								 message.words[1]);
 			if ((long)reply.words[0] > 0) {
-				bunix_console_write(registered_ok,
+				bunix_console_log(registered_ok,
 						    sizeof(registered_ok) - 1);
 			}
 			if (message.reply != 0) {
@@ -3112,7 +3093,7 @@ int main(void)
 		switch (message.type) {
 		case BUNIX_LINUX_GETPID:
 			reply.words[0] = process->pid;
-			bunix_console_write(process_ok, sizeof(process_ok) - 1);
+			bunix_console_log(process_ok, sizeof(process_ok) - 1);
 			break;
 		case BUNIX_LINUX_GETTID:
 			reply.words[0] = process->tid;
@@ -3235,7 +3216,7 @@ int main(void)
 			} else {
 				reply.words[0] = (u64)waited;
 				if (waited > 0) {
-					bunix_console_write(wait4_ok,
+					bunix_console_log(wait4_ok,
 							    sizeof(wait4_ok) - 1);
 				}
 				if (message.cap != 0) {
@@ -3252,7 +3233,7 @@ int main(void)
 							   message.words[2],
 							   message.cap);
 			if ((long)reply.words[0] >= 0) {
-				bunix_console_write(open_ok, sizeof(open_ok) - 1);
+				bunix_console_log(open_ok, sizeof(open_ok) - 1);
 			}
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
@@ -3263,7 +3244,7 @@ int main(void)
 							  message.words[0],
 							  message.cap);
 			if (reply.words[0] == 0) {
-				bunix_console_write(fstat_ok,
+				bunix_console_log(fstat_ok,
 						    sizeof(fstat_ok) - 1);
 			}
 			if (message.cap != 0) {
@@ -3345,7 +3326,7 @@ int main(void)
 							       message.words[2],
 							       &reply);
 			if (reply.words[0] == 0) {
-				bunix_console_write(newfstatat_ok,
+				bunix_console_log(newfstatat_ok,
 						    sizeof(newfstatat_ok) - 1);
 			}
 			if (message.cap != 0) {
@@ -3409,7 +3390,7 @@ int main(void)
 			reply.words[0] = (u64)linux_write_buffer(process, fd, len,
 								 message.cap);
 			if (reply.words[0] == (u64)-LINUX_EBADF) {
-				bunix_console_write(bad_fd, sizeof(bad_fd) - 1);
+				bunix_console_log(bad_fd, sizeof(bad_fd) - 1);
 			}
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
@@ -3420,13 +3401,13 @@ int main(void)
 			reply.words[0] = (u64)linux_close(process,
 							  message.words[0]);
 			if (reply.words[0] == 0) {
-				bunix_console_write(close_ok, sizeof(close_ok) - 1);
+				bunix_console_log(close_ok, sizeof(close_ok) - 1);
 			}
 			break;
 		case BUNIX_LINUX_EXIT_GROUP:
-			bunix_console_write(exit_group, sizeof(exit_group) - 1);
+			bunix_console_log(exit_group, sizeof(exit_group) - 1);
 			linux_process_exit_code(process, message.words[0], 0);
-			bunix_console_write(exited_ok, sizeof(exited_ok) - 1);
+			bunix_console_log(exited_ok, sizeof(exited_ok) - 1);
 			reply.words[0] = 0;
 			break;
 		default:

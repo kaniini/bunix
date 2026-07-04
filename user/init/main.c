@@ -145,8 +145,7 @@ int main(void)
 		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND | BUNIX_RIGHT_RECV, 0 },
 	};
 
-	bunix_console_write(launching, sizeof(launching) - 1);
-	register_service(BUNIX_SERVICE_CONSOLE, BUNIX_HANDLE_CONSOLE);
+	bunix_console_log(launching, sizeof(launching) - 1);
 	register_service(BUNIX_SERVICE_VM, BUNIX_HANDLE_VM);
 	console = resolve_service(BUNIX_SERVICE_CONSOLE,
 				  BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
@@ -155,7 +154,7 @@ int main(void)
 	if (console == 0 || vm == 0) {
 		return 1;
 	}
-	bunix_console_write(names_ready, sizeof(names_ready) - 1);
+	bunix_console_log(names_ready, sizeof(names_ready) - 1);
 
 	const struct bunix_launch_cap fs_caps[] = {
 		{ console, BUNIX_RIGHT_SEND, 0 },
@@ -195,6 +194,9 @@ int main(void)
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	vfs = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS,
 					BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
+	if (vfs == 0) {
+		return 1;
+	}
 	vfs_launch = vfs;
 	bunix_launch_module_with_caps("procfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
@@ -208,17 +210,20 @@ int main(void)
 					  vfs) != 0) {
 		return 1;
 	}
-	bunix_console_write(fs_namespace_ready,
+	bunix_console_log(fs_namespace_ready,
 			    sizeof(fs_namespace_ready) - 1);
 	vfs = resolve_service_in_namespace(fs_namespace, BUNIX_SERVICE_VFS,
 					   BUNIX_RIGHT_SEND);
-	bunix_console_write(fs_ready, sizeof(fs_ready) - 1);
+	if (vfs == 0) {
+		return 1;
+	}
+	bunix_console_log(fs_ready, sizeof(fs_ready) - 1);
 	pack_path(&vfs_request.words[0], "/hello.txt");
 	if (bunix_ipc_call(vfs, &vfs_request, &vfs_reply) == 0 &&
 	    vfs_reply.words[0] == 0 && vfs_reply.words[1] <= 16) {
 		unpack_bytes(file, &vfs_reply.words[2], vfs_reply.words[1]);
 		file[vfs_reply.words[1]] = '\0';
-		bunix_console_write(file, vfs_reply.words[1]);
+		bunix_console_log(file, vfs_reply.words[1]);
 	}
 
 	struct bunix_msg proc_request = {
@@ -247,12 +252,12 @@ int main(void)
 	    proc_reply.words[0] != 0) {
 		return 1;
 	}
-	bunix_console_write(first_done, sizeof(first_done) - 1);
+	bunix_console_log(first_done, sizeof(first_done) - 1);
 
 	if (bunix_launch_module_with_caps("ping", bad_caps,
 					  sizeof(bad_caps) /
 					  sizeof(bad_caps[0])) < 0) {
-		bunix_console_write(attenuated, sizeof(attenuated) - 1);
+		bunix_console_log(attenuated, sizeof(attenuated) - 1);
 	}
 	const struct bunix_launch_cap ping_caps[] = {
 		{ console, BUNIX_RIGHT_SEND, 0 },
@@ -276,14 +281,14 @@ int main(void)
 	    proc_reply.words[0] != 0) {
 		return 1;
 	}
-	bunix_console_write(linux_spawned, sizeof(linux_spawned) - 1);
+	bunix_console_log(linux_spawned, sizeof(linux_spawned) - 1);
 	proc_request.type = BUNIX_PROC_WAIT;
 	proc_request.words[0] = proc_reply.words[1];
 	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
 	    proc_reply.words[0] != 0) {
 		return 1;
 	}
-	bunix_console_write(linux_done, sizeof(linux_done) - 1);
+	bunix_console_log(linux_done, sizeof(linux_done) - 1);
 
 	proc_request.type = BUNIX_PROC_SPAWN;
 	pack_path(&proc_request.words[0], "/bin/musl-hello");
@@ -291,14 +296,14 @@ int main(void)
 	    proc_reply.words[0] != 0) {
 		return 1;
 	}
-	bunix_console_write(musl_spawned, sizeof(musl_spawned) - 1);
+	bunix_console_log(musl_spawned, sizeof(musl_spawned) - 1);
 	proc_request.type = BUNIX_PROC_WAIT;
 	proc_request.words[0] = proc_reply.words[1];
 	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
 	    proc_reply.words[0] != 0) {
 		return 1;
 	}
-	bunix_console_write(musl_done, sizeof(musl_done) - 1);
+	bunix_console_log(musl_done, sizeof(musl_done) - 1);
 
 	proc_request.type = BUNIX_PROC_SPAWN;
 	proc_request.words[2] = 0;
@@ -308,7 +313,7 @@ int main(void)
 	    proc_reply.words[0] != 0) {
 		return 1;
 	}
-	bunix_console_write(login_spawned, sizeof(login_spawned) - 1);
+	bunix_console_log(login_spawned, sizeof(login_spawned) - 1);
 	bunix_console_logs_to_ring();
 
 	return 0;
