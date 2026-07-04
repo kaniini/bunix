@@ -80,6 +80,11 @@ enum {
 	LINUX_S_IFSOCK = 0140000,
 	LINUX_S_IFIFO = 0010000,
 	LINUX_O_ACCMODE = 3,
+	LINUX_O_WRONLY = 1,
+	LINUX_O_RDWR = 2,
+	LINUX_O_CREAT = 0100,
+	LINUX_O_TRUNC = 01000,
+	LINUX_O_APPEND = 02000,
 	LINUX_O_DIRECTORY = 00200000,
 	LINUX_O_CLOEXEC = 02000000,
 	LINUX_DUP_CLOEXEC = 02000000,
@@ -94,6 +99,7 @@ enum {
 	LINUX_FD_NULL = 8,
 	LINUX_FD_ZERO = 9,
 	LINUX_FD_RANDOM = 10,
+	LINUX_FD_SCRATCH = 11,
 	LINUX_AF_UNIX = 1,
 	LINUX_SOCK_STREAM = 1,
 	LINUX_SOCK_NONBLOCK = 00004000,
@@ -172,6 +178,18 @@ struct linux_pipe {
 	char data[LINUX_PIPE_CAPACITY];
 };
 
+struct linux_scratch_file {
+	struct linux_scratch_file *next;
+	u64 refs;
+	u64 size;
+	u64 capacity;
+	u64 mode;
+	u64 uid;
+	u64 gid;
+	char path[LINUX_MAX_PATH];
+	char *data;
+};
+
 static struct bunix_map process_by_task;
 static struct bunix_map process_by_pid;
 static struct bunix_id_table pipe_ids;
@@ -182,6 +200,7 @@ static char tty_line[256];
 static u64 tty_line_offset;
 static u64 tty_line_len;
 static struct bunix_map file_refs;
+static struct linux_scratch_file *scratch_files;
 static u64 next_pid = 1;
 static u64 foreground_pgid = 1;
 static u64 random_state = 0x62756e69786f7321ull;
@@ -621,6 +640,26 @@ static int is_utmps_socket_path(const char *path)
 	return string_equal(path, "/run/utmps/.utmpd-socket");
 }
 
+static int path_has_prefix(const char *path, const char *prefix)
+{
+	u64 i = 0;
+
+	while (prefix[i] != '\0') {
+		if (path[i] != prefix[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return path[i] == '/';
+}
+
+static int is_scratch_path(const char *path)
+{
+	return path_has_prefix(path, "/tmp") ||
+	       path_has_prefix(path, "/run") ||
+	       path_has_prefix(path, "/var/tmp");
+}
+
 static void copy_literal(char *dst, u64 dst_len, const char *src)
 {
 	for (u64 i = 0; i < dst_len; i++) {
@@ -762,6 +801,82 @@ static void string_copy(char *dst, const char *src)
 		i++;
 	}
 	dst[i] = '\0';
+}
+
+static struct linux_scratch_file *scratch_find(const char *path)
+{
+	for (struct linux_scratch_file *file = scratch_files; file != 0;
+	     file = file->next) {
+		if (string_equal(file->path, path)) {
+			return file;
+		}
+	}
+	return 0;
+}
+
+static struct linux_scratch_file *scratch_create(const char *path, u64 mode)
+{
+	struct linux_scratch_file *file =
+		(struct linux_scratch_file *)bunix_calloc(1, sizeof(*file));
+
+	if (file == 0) {
+		return 0;
+	}
+	string_copy(file->path, path);
+	file->mode = mode & 0777;
+	file->uid = 0;
+	file->gid = 0;
+	file->next = scratch_files;
+	scratch_files = file;
+	return file;
+}
+
+static void scratch_ref_add(struct linux_scratch_file *file)
+{
+	if (file != 0) {
+		file->refs++;
+	}
+}
+
+static void scratch_ref_drop(struct linux_scratch_file *file)
+{
+	if (file != 0 && file->refs != 0) {
+		file->refs--;
+	}
+}
+
+static int scratch_resize(struct linux_scratch_file *file, u64 size)
+{
+	u64 capacity;
+	char *data;
+
+	if (file == 0) {
+		return -1;
+	}
+	if (size <= file->capacity) {
+		return 0;
+	}
+	capacity = file->capacity == 0 ? 64 : file->capacity;
+	while (capacity < size) {
+		capacity *= 2;
+	}
+	data = (char *)bunix_realloc(file->data, file->capacity, capacity);
+	if (data == 0) {
+		return -1;
+	}
+	for (u64 i = file->capacity; i < capacity; i++) {
+		data[i] = 0;
+	}
+	file->data = data;
+	file->capacity = capacity;
+	return 0;
+}
+
+static void scratch_truncate(struct linux_scratch_file *file)
+{
+	if (file != 0) {
+		file->size = 0;
+	}
 }
 
 static int path_normalize(const char *cwd, const char *input, char *out)
@@ -1275,6 +1390,9 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 		} else if (process->fds[fd].kind == LINUX_FD_PIPE_READ ||
 			   process->fds[fd].kind == LINUX_FD_PIPE_WRITE) {
 			linux_pipe_ref_add(&process->fds[fd]);
+		} else if (process->fds[fd].kind == LINUX_FD_SCRATCH) {
+			scratch_ref_add((struct linux_scratch_file *)
+					process->fds[fd].handle);
 		}
 	}
 	string_copy(process->cwd, parent->cwd);
@@ -2251,7 +2369,7 @@ static long linux_dirfd_base_handle(struct linux_process *process, u64 dirfd,
 }
 
 static long linux_openat(struct linux_process *process, u64 dirfd,
-			 u64 path_len, u64 flags, u64 path_buffer)
+			 u64 path_len, u64 flags, u64 mode, u64 path_buffer)
 {
 	char path[LINUX_MAX_PATH];
 	char full_path[LINUX_MAX_PATH];
@@ -2290,6 +2408,41 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		return alloc_fd(process, LINUX_FD_UTMP, 0,
 				linux_user_session_count() *
 				LINUX_UTMP_RECORD_SIZE);
+	}
+	if (is_scratch_path(full_path)) {
+		struct linux_scratch_file *file = scratch_find(full_path);
+		long fd;
+
+		if ((flags & LINUX_O_DIRECTORY) != 0) {
+			return -LINUX_ENOTDIR;
+		}
+		if (file == 0) {
+			if ((flags & LINUX_O_CREAT) == 0) {
+				return -LINUX_ENOENT;
+			}
+			file = scratch_create(full_path, mode & ~process->umask);
+			if (file == 0) {
+				return -LINUX_EMFILE;
+			}
+		}
+		if ((flags & LINUX_O_TRUNC) != 0 &&
+		    (flags & LINUX_O_ACCMODE) != 0) {
+			scratch_truncate(file);
+		}
+		scratch_ref_add(file);
+		fd = alloc_fd(process, LINUX_FD_SCRATCH, (u64)file,
+			      file->size);
+		if (fd < 0) {
+			scratch_ref_drop(file);
+			return fd;
+		}
+		if ((flags & LINUX_O_APPEND) != 0) {
+			process->fds[fd].offset = file->size;
+		}
+		if ((flags & LINUX_O_CLOEXEC) != 0) {
+			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
+		}
+		return fd;
 	}
 	if ((flags & LINUX_O_ACCMODE) != 0) {
 		return -LINUX_EINVAL;
@@ -2374,6 +2527,9 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 	    string_equal(full_path, "/dev/random") ||
 	    string_equal(full_path, "/dev/urandom") ||
 	    is_utmp_path(full_path)) {
+		return 0;
+	}
+	if (is_scratch_path(full_path) && scratch_find(full_path) != 0) {
 		return 0;
 	}
 
@@ -2492,6 +2648,16 @@ static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 		return linux_stat_write(stat_buffer, LINUX_S_IFIFO | 0600,
 					0, 0, 0);
 	}
+	if (process->fds[fd].kind == LINUX_FD_SCRATCH) {
+		struct linux_scratch_file *file =
+			(struct linux_scratch_file *)process->fds[fd].handle;
+
+		if (file == 0) {
+			return -LINUX_EBADF;
+		}
+		return linux_stat_write(stat_buffer, LINUX_S_IFREG | file->mode,
+					file->uid, file->gid, file->size);
+	}
 
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
@@ -2563,6 +2729,16 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 		out->words[2] = ((u64)BUNIX_VFS_TYPE_REGULAR << 32) | 0444;
 		out->words[3] = 0;
 		return 0;
+	}
+	if (is_scratch_path(full_path)) {
+		struct linux_scratch_file *file = scratch_find(full_path);
+
+		if (file != 0) {
+			out->words[1] = file->size;
+			out->words[2] = LINUX_S_IFREG | file->mode;
+			out->words[3] = file->uid | (file->gid << 32);
+			return 0;
+		}
 	}
 
 	if (linux_vfs_path_call_flags(process, BUNIX_VFS_STAT_PATH_META_BUFFER,
@@ -2985,6 +3161,30 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
 		return -LINUX_EISDIR;
 	}
+	if (process->fds[fd].kind == LINUX_FD_SCRATCH) {
+		struct linux_scratch_file *file =
+			(struct linux_scratch_file *)process->fds[fd].handle;
+		u64 nread;
+
+		if (file == 0) {
+			return -LINUX_EBADF;
+		}
+		if (process->fds[fd].offset >= file->size) {
+			return 0;
+		}
+		nread = file->size - process->fds[fd].offset;
+		if (nread > len) {
+			nread = len;
+		}
+		for (u64 i = 0; i < nread; i++) {
+			write_buffer[i] = file->data[process->fds[fd].offset + i];
+		}
+		if (bunix_buffer_write(buffer, 0, write_buffer, nread) != 0) {
+			return -LINUX_EINVAL;
+		}
+		process->fds[fd].offset += nread;
+		return (long)nread;
+	}
 	if (process->fds[fd].kind == LINUX_FD_FILE &&
 	    process->fds[fd].offset >= process->fds[fd].size) {
 		return 0;
@@ -3078,6 +3278,28 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 	    process->fds[fd].kind == LINUX_FD_RANDOM) {
 		return (long)len;
 	}
+	if (process->fds[fd].kind == LINUX_FD_SCRATCH) {
+		struct linux_scratch_file *file =
+			(struct linux_scratch_file *)process->fds[fd].handle;
+		const u64 end = process->fds[fd].offset + len;
+
+		if (file == 0) {
+			return -LINUX_EBADF;
+		}
+		if (end < process->fds[fd].offset ||
+		    scratch_resize(file, end) != 0) {
+			return -LINUX_EINVAL;
+		}
+		for (u64 i = 0; i < len; i++) {
+			file->data[process->fds[fd].offset + i] = write_buffer[i];
+		}
+		process->fds[fd].offset = end;
+		if (end > file->size) {
+			file->size = end;
+		}
+		process->fds[fd].size = file->size;
+		return (long)len;
+	}
 	if (process->fds[fd].kind != LINUX_FD_CONSOLE) {
 		return -LINUX_EBADF;
 	}
@@ -3136,6 +3358,10 @@ static long linux_close(struct linux_process *process, u64 fd)
 		linux_pipe_ref_drop(&process->fds[fd]);
 		linux_pipe_wake_reader(linux_pipe_find(pipe_id));
 	}
+	if (process->fds[fd].kind == LINUX_FD_SCRATCH) {
+		scratch_ref_drop((struct linux_scratch_file *)
+				 process->fds[fd].handle);
+	}
 
 	process->fds[fd].kind = 0;
 	process->fds[fd].handle = 0;
@@ -3152,6 +3378,8 @@ static void linux_fd_ref_add(const struct linux_fd *fd)
 	} else if (fd->kind == LINUX_FD_PIPE_READ ||
 		   fd->kind == LINUX_FD_PIPE_WRITE) {
 		linux_pipe_ref_add(fd);
+	} else if (fd->kind == LINUX_FD_SCRATCH) {
+		scratch_ref_add((struct linux_scratch_file *)fd->handle);
 	}
 }
 
@@ -3568,6 +3796,7 @@ int main(void)
 							   message.words[0],
 							   message.words[1],
 							   message.words[2],
+							   message.words[3],
 							   message.cap);
 			if ((long)reply.words[0] >= 0) {
 				bunix_console_log(open_ok, sizeof(open_ok) - 1);

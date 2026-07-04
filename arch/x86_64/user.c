@@ -3303,6 +3303,7 @@ poll_again:
 		const u64 dirfd = number == LINUX_SYSCALL_OPEN ?
 				  (u64)-100 : arg0;
 		const u64 flags = number == LINUX_SYSCALL_OPEN ? arg1 : arg2;
+		const u64 mode = number == LINUX_SYSCALL_OPEN ? arg2 : arg3;
 		u64 len = 0;
 
 		if (path == 0) {
@@ -3325,7 +3326,7 @@ poll_again:
 		request.words[0] = dirfd;
 		request.words[1] = len;
 		request.words[2] = flags;
-		request.words[3] = 0;
+		request.words[3] = mode;
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_RECV;
 		request.cap_object = buffer;
