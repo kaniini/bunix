@@ -1,5 +1,6 @@
 #include <bunix/libbunix.h>
 #include <bunix/id_table.h>
+#include <bunix/tree.h>
 
 enum {
 	VFS_HANDLE_NAMES = 3,
@@ -37,6 +38,7 @@ struct rootfs_disk_entry {
 };
 
 struct vfs_mount {
+	struct bunix_tree_node node;
 	char *path;
 	u64 service;
 };
@@ -52,7 +54,7 @@ struct vfs_open {
 
 static struct rootfs_entry *root_entries;
 static unsigned int root_entry_count;
-static struct bunix_id_table mounts;
+static struct bunix_tree mounts;
 static struct bunix_id_table open_files;
 static u64 user_service;
 static u64 root_block;
@@ -349,9 +351,10 @@ static struct vfs_mount *mount_for_path(const char *path)
 	struct vfs_mount *best = 0;
 	u64 best_len = 0;
 
-	for (u64 i = 0; i < mounts.capacity; i++) {
+	for (struct bunix_tree_node *node = bunix_tree_first_node(&mounts);
+	     node != 0; node = bunix_tree_next_node(node)) {
 		struct vfs_mount *mount =
-			(struct vfs_mount *)mounts.slots[i].value;
+			(struct vfs_mount *)node->value;
 		const u64 len = mount != 0 ? str_len(mount->path) : 0;
 
 		if (mount == 0 || len < best_len ||
@@ -873,18 +876,15 @@ static int forward_remote_handle(struct vfs_open *open,
 static long mount_translator(const char *path, u64 service)
 {
 	struct vfs_mount *mount;
-	u64 id;
 
 	if (path == 0 || path[0] != '/' || service == 0) {
 		return -1;
 	}
 
-	for (u64 i = 0; i < mounts.capacity; i++) {
-		mount = (struct vfs_mount *)mounts.slots[i].value;
-		if (mount != 0 && path_eq(mount->path, path)) {
-			mount->service = service;
-			return 0;
-		}
+	mount = (struct vfs_mount *)bunix_tree_get(&mounts, path);
+	if (mount != 0) {
+		mount->service = service;
+		return 0;
 	}
 
 	mount = (struct vfs_mount *)bunix_calloc(1, sizeof(*mount));
@@ -897,8 +897,8 @@ static long mount_translator(const char *path, u64 service)
 		return -1;
 	}
 	mount->service = service;
-	id = bunix_id_alloc(&mounts, (u64)mount);
-	if (id == 0) {
+	if (bunix_tree_insert_node(&mounts, &mount->node, mount->path,
+				   (u64)mount) != 0) {
 		bunix_free(mount->path);
 		bunix_free(mount);
 		return -1;
@@ -1073,7 +1073,7 @@ int main(void)
 	if (block == 0 || rootfs_mount(block) != 0) {
 		return 1;
 	}
-	bunix_id_table_init(&mounts);
+	bunix_tree_init(&mounts);
 	bunix_id_table_init(&open_files);
 	bunix_console_log(ready, sizeof(ready) - 1);
 
