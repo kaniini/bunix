@@ -25,6 +25,13 @@ enum {
 
 static struct bunix_id_table open_files;
 static char text[PROCFS_MAX_TEXT];
+static u64 proc_handle;
+
+struct proc_info {
+	u64 pid;
+	u64 task_id;
+	u64 linux_pid;
+};
 
 static u64 build_kthreads(void);
 
@@ -174,6 +181,116 @@ static void pack_path(u64 *words, const char *path)
 	}
 }
 
+static u64 get_proc_handle(void)
+{
+	if (proc_handle == 0) {
+		proc_handle = resolve_service(BUNIX_SERVICE_PROC,
+					      BUNIX_RIGHT_SEND);
+	}
+	return proc_handle;
+}
+
+static int proc_call(u64 type, u64 arg, struct bunix_msg *reply)
+{
+	const u64 proc = get_proc_handle();
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = type,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { arg, 0, 0, 0 },
+	};
+
+	if (proc == 0 || bunix_ipc_call(proc, &request, reply) != 0 ||
+	    reply->words[0] != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static int proc_info(u64 pid, struct proc_info *info)
+{
+	struct bunix_msg reply;
+
+	if (pid == 0 || info == 0 ||
+	    proc_call(BUNIX_PROC_INFO, pid, &reply) != 0) {
+		return -1;
+	}
+	info->pid = reply.words[1];
+	info->task_id = reply.words[2];
+	info->linux_pid = reply.words[3];
+	return 0;
+}
+
+static int proc_at(u64 index, struct proc_info *info)
+{
+	struct bunix_msg reply;
+
+	if (info == 0 || proc_call(BUNIX_PROC_AT, index, &reply) != 0) {
+		return -1;
+	}
+	info->pid = reply.words[1];
+	info->task_id = reply.words[2];
+	info->linux_pid = reply.words[3];
+	return 0;
+}
+
+static int proc_cmdline(u64 pid, char *out, u64 out_size)
+{
+	struct bunix_msg reply;
+	u64 len;
+
+	if (out == 0 || out_size == 0 ||
+	    proc_call(BUNIX_PROC_CMDLINE, pid, &reply) != 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < out_size; i++) {
+		out[i] = '\0';
+	}
+	len = reply.words[1];
+	if (len >= out_size) {
+		len = out_size - 1;
+	}
+	for (u64 i = 0; i < len && i < 16; i++) {
+		const u64 slot = 2 + (i / 8);
+		const u64 shift = (i % 8) * 8;
+
+		out[i] = (char)((reply.words[slot] >> shift) & 0xff);
+	}
+	return 0;
+}
+
+static u64 proc_self_pid(void)
+{
+	struct proc_info info;
+	u64 fallback = 0;
+
+	for (u64 index = 0; proc_at(index, &info) == 0; index++) {
+		char cmdline[32];
+
+		if (fallback == 0 && info.linux_pid != 0) {
+			fallback = info.pid;
+		}
+		if (proc_cmdline(info.pid, cmdline, sizeof(cmdline)) == 0 &&
+		    str_eq(cmdline, "/bin/sh")) {
+			return info.pid;
+		}
+	}
+	return fallback;
+}
+
+static u64 proc_path_pid(u64 pid)
+{
+	struct proc_info info;
+
+	if (pid == 0) {
+		pid = proc_self_pid();
+	}
+	return proc_info(pid, &info) == 0 ? pid : 0;
+}
+
 static long mount_procfs(void)
 {
 	const u64 vfs = resolve_service(BUNIX_SERVICE_VFS,
@@ -227,28 +344,42 @@ static u64 file_for_path(const char *path)
 		return make_file(PROCFS_KIND_MOUNTS, 0);
 	}
 	if (str_eq(path, "/proc/self")) {
-		return make_file(PROCFS_KIND_SELF, 0);
+		const u64 pid = proc_path_pid(0);
+
+		return pid == 0 ? 0 : make_file(PROCFS_KIND_SELF, pid);
 	}
 	if (str_eq(path, "/proc/self/stat")) {
-		return make_file(PROCFS_KIND_PID_STAT, 0);
+		const u64 pid = proc_path_pid(0);
+
+		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_STAT, pid);
 	}
 	if (str_eq(path, "/proc/self/status")) {
-		return make_file(PROCFS_KIND_PID_STATUS, 0);
+		const u64 pid = proc_path_pid(0);
+
+		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_STATUS, pid);
 	}
 	if (str_eq(path, "/proc/self/cmdline")) {
-		return make_file(PROCFS_KIND_PID_CMDLINE, 0);
+		const u64 pid = proc_path_pid(0);
+
+		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_CMDLINE, pid);
 	}
 	if (str_eq(path, "/proc/self/statm")) {
-		return make_file(PROCFS_KIND_PID_STATM, 0);
+		const u64 pid = proc_path_pid(0);
+
+		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_STATM, pid);
 	}
 	if (str_eq(path, "/proc/self/fd")) {
-		return make_file(PROCFS_KIND_PID_FD, 0);
+		const u64 pid = proc_path_pid(0);
+
+		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_FD, pid);
 	}
 	if (path_has_prefix(path, "/proc/self/fd/")) {
 		const char *cursor = path + 14;
 		u64 fd;
+		const u64 pid = proc_path_pid(0);
 
-		if (parse_u64_component(&cursor, &fd) == 0 && *cursor == '\0') {
+		if (pid != 0 &&
+		    parse_u64_component(&cursor, &fd) == 0 && *cursor == '\0') {
 			return make_file(PROCFS_KIND_PID_FD_ENTRY, fd);
 		}
 	}
@@ -257,6 +388,9 @@ static u64 file_for_path(const char *path)
 		u64 pid;
 
 		if (parse_u64_component(&cursor, &pid) != 0 || pid == 0) {
+			return 0;
+		}
+		if (proc_path_pid(pid) == 0) {
 			return 0;
 		}
 		if (*cursor == '\0') {
@@ -331,6 +465,32 @@ static void append_u64(u64 *len, u64 value)
 	while (pos != 0) {
 		append_char(len, tmp[--pos]);
 	}
+}
+
+static void u64_to_dec(char *out, u64 out_size, u64 value)
+{
+	char tmp[20];
+	u64 pos = 0;
+	u64 len = 0;
+
+	if (out_size == 0) {
+		return;
+	}
+	if (value == 0) {
+		out[0] = '0';
+		if (out_size > 1) {
+			out[1] = '\0';
+		}
+		return;
+	}
+	while (value != 0 && pos < sizeof(tmp)) {
+		tmp[pos++] = (char)('0' + (value % 10));
+		value /= 10;
+	}
+	while (pos != 0 && len + 1 < out_size) {
+		out[len++] = tmp[--pos];
+	}
+	out[len] = '\0';
 }
 
 static void append_task_name(u64 *len, const u64 *words)
@@ -429,6 +589,12 @@ static u64 build_proc_stat(void)
 	const u64 user = ticks / 4;
 	const u64 system = ticks / 8;
 	const u64 idle = ticks;
+	struct proc_info info;
+	u64 processes = 0;
+
+	while (proc_at(processes, &info) == 0) {
+		processes++;
+	}
 
 	append_str(&len, "cpu  ");
 	append_u64(&len, user);
@@ -449,8 +615,12 @@ static u64 build_proc_stat(void)
 	append_u64(&len, ticks);
 	append_char(&len, '\n');
 	append_str(&len, "btime 0\n");
-	append_str(&len, "processes 4\n");
-	append_str(&len, "procs_running 1\n");
+	append_str(&len, "processes ");
+	append_u64(&len, processes);
+	append_char(&len, '\n');
+	append_str(&len, "procs_running ");
+	append_u64(&len, processes == 0 ? 0 : 1);
+	append_char(&len, '\n');
 	append_str(&len, "procs_blocked 0\n");
 	return len;
 }
@@ -525,38 +695,37 @@ static u64 build_ipc(void)
 
 static const char *pid_name(u64 pid)
 {
-	switch (pid) {
-	case 0:
-		return "sh";
-	case 1:
-		return "lxtest";
-	case 2:
-		return "sh";
-	case 3:
-		return "musl-hello";
-	case 4:
-		return "login";
-	default:
+	static char name[32];
+	char cmdline[32];
+	u64 start = 0;
+	u64 len = 0;
+
+	if (proc_cmdline(pid, cmdline, sizeof(cmdline)) != 0 ||
+	    cmdline[0] == '\0') {
 		return "process";
 	}
+	for (u64 i = 0; cmdline[i] != '\0'; i++) {
+		if (cmdline[i] == '/') {
+			start = i + 1;
+		}
+	}
+	while (cmdline[start + len] != '\0' && len + 1 < sizeof(name)) {
+		name[len] = cmdline[start + len];
+		len++;
+	}
+	name[len] = '\0';
+	return len == 0 ? "process" : name;
 }
 
 static const char *pid_cmdline(u64 pid)
 {
-	switch (pid) {
-	case 0:
-		return "/bin/sh";
-	case 1:
-		return "/bin/lxtest";
-	case 2:
-		return "/bin/sh";
-	case 3:
-		return "/bin/musl-hello";
-	case 4:
-		return "/bin/login";
-	default:
+	static char cmdline[32];
+
+	if (proc_cmdline(pid, cmdline, sizeof(cmdline)) != 0 ||
+	    cmdline[0] == '\0') {
 		return "/bin/process";
 	}
+	return cmdline;
 }
 
 static u64 build_pid_stat(u64 pid)
@@ -692,16 +861,23 @@ static const char *proc_dir_entry(u64 index, u64 *type)
 {
 	static const char *names[] = {
 		"kthreads", "uptime", "stat", "ipc", "loadavg", "meminfo",
-		"mounts", "self",
-		"1", "2", "3", "4"
+		"mounts", "self"
 	};
+	static char pid_name_buf[20];
+	struct proc_info info;
+	const u64 static_count = sizeof(names) / sizeof(names[0]);
 
-	if (index >= sizeof(names) / sizeof(names[0])) {
+	if (index < static_count) {
+		*type = index == 7 ? BUNIX_VFS_TYPE_DIRECTORY :
+				     BUNIX_VFS_TYPE_REGULAR;
+		return names[index];
+	}
+	if (proc_at(index - static_count, &info) != 0) {
 		return 0;
 	}
-	*type = index >= 8 ? BUNIX_VFS_TYPE_DIRECTORY :
-			     BUNIX_VFS_TYPE_REGULAR;
-	return names[index];
+	u64_to_dec(pid_name_buf, sizeof(pid_name_buf), info.pid);
+	*type = BUNIX_VFS_TYPE_DIRECTORY;
+	return pid_name_buf;
 }
 
 static const char *pid_dir_entry(u64 index, u64 *type)

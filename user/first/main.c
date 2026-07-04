@@ -1,7 +1,6 @@
 #include <bunix/libbunix.h>
 
 enum {
-	FIRST_PID = 1,
 	AT_NULL = 0,
 	AT_PHDR = 3,
 	AT_PHENT = 4,
@@ -52,18 +51,31 @@ static void time_sleep(u64 ns)
 
 static void proc_exit(u64 status)
 {
-	const struct bunix_msg request = {
+	struct bunix_msg self_request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = BUNIX_PROC_SELF,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg self_reply;
+	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_PROC,
 		.type = BUNIX_PROC_EXIT,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply = 0,
 		.cap = 0,
-		.words = { FIRST_PID, status, 0, 0 },
+		.words = { 0, status, 0, 0 },
 	};
 	struct bunix_msg reply;
 
-	if (proc_handle != 0) {
+	if (proc_handle != 0 &&
+	    bunix_ipc_call(proc_handle, &self_request, &self_reply) == 0 &&
+	    self_reply.words[0] == 0) {
+		request.words[0] = self_reply.words[1];
 		bunix_ipc_call(proc_handle, &request, &reply);
 	}
 }

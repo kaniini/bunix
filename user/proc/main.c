@@ -50,11 +50,14 @@ enum {
 
 struct process {
 	u64 pid;
+	u64 task_id;
 	u64 linux_pid;
 	u64 task_handle;
 	u64 status;
 	u64 exited;
 	u64 waiter;
+	u64 cmd_words[2];
+	u64 cmd_len;
 };
 
 struct elf64_ehdr {
@@ -104,6 +107,7 @@ struct exec_info {
 };
 
 static struct bunix_map processes_by_pid;
+static struct bunix_map processes_by_task_id;
 static struct bunix_map processes_by_linux_pid;
 static u64 next_pid = 1;
 static u64 first_linux_pid;
@@ -697,11 +701,11 @@ static long apply_login_to_task(u64 task, u64 login_uid)
 	return 0;
 }
 
-static long exec_path(u64 vfs, const char *path, const char *task_name,
+static long exec_path(u64 vfs, struct process *process,
+		      const char *path, const char *task_name,
 		      u64 linux_parent_pid, u64 login_uid, int set_login,
 		      u64 session_id,
-		      u64 *linux_pid,
-		      u64 *task_handle)
+		      u64 *linux_pid)
 {
 	const struct bunix_launch_cap caps[] = {
 		{ PROC_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
@@ -718,6 +722,7 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 	long task;
 	u64 stack = 0;
 	u64 load_bias = 0;
+	long bunix_id = 0;
 
 	io_buffer = bunix_buffer_create(PROC_SEGMENT_MAX);
 	if (io_buffer <= 0 ||
@@ -762,6 +767,17 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 		bunix_handle_close((u64)io_buffer);
 		return -1;
 	}
+	bunix_id = bunix_task_id((u64)task);
+	if (bunix_id <= 0 ||
+	    bunix_map_set(&processes_by_task_id, (u64)bunix_id,
+			  (u64)process) != 0) {
+		vfs_close(vfs, file.handle);
+		bunix_handle_close((u64)io_buffer);
+		bunix_handle_close((u64)task);
+		return -1;
+	}
+	process->task_id = (u64)bunix_id;
+	process->task_handle = (u64)task;
 
 	for (u64 i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {
 		if (bunix_task_grant((u64)task, caps[i].handle,
@@ -846,28 +862,18 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 	vfs_close(vfs, file.handle);
 	bunix_handle_close((u64)io_buffer);
 	if (is_linux_path(path)) {
-		const long bunix_id = bunix_task_id((u64)task);
-
-		if (bunix_id <= 0 ||
-		    register_linux_process((u64)bunix_id, linux_parent_pid,
+		if (register_linux_process((u64)bunix_id, linux_parent_pid,
 					   session_id,
 					   linux_pid) != 0) {
-			bunix_handle_close((u64)task);
 			return -1;
 		}
 		if (set_login &&
 		    apply_login_to_task((u64)bunix_id, login_uid) != 0) {
-			bunix_handle_close((u64)task);
 			return -1;
 		}
 	}
 	const long started = bunix_task_start_at((u64)task, exec.entry, stack);
 
-	if (started != 0 || task_handle == 0) {
-		bunix_handle_close((u64)task);
-	} else {
-		*task_handle = (u64)task;
-	}
 	return started;
 }
 
@@ -896,16 +902,24 @@ static void process_reset(struct process *process)
 		bunix_handle_close(process->task_handle);
 	}
 	(void)bunix_map_remove(&processes_by_pid, process->pid);
+	if (process->task_id != 0) {
+		(void)bunix_map_remove(&processes_by_task_id,
+				       process->task_id);
+	}
 	if (process->linux_pid != 0) {
 		(void)bunix_map_remove(&processes_by_linux_pid,
 				       process->linux_pid);
 	}
 	process->pid = 0;
+	process->task_id = 0;
 	process->linux_pid = 0;
 	process->task_handle = 0;
 	process->status = 0;
 	process->exited = 0;
 	process->waiter = 0;
+	process->cmd_words[0] = 0;
+	process->cmd_words[1] = 0;
+	process->cmd_len = 0;
 	bunix_free(process);
 }
 
@@ -924,6 +938,41 @@ static struct process *process_find_linux_pid(u64 linux_pid)
 		bunix_map_get(&processes_by_linux_pid, linux_pid);
 }
 
+static struct process *process_find_task_id(u64 task_id)
+{
+	if (task_id == 0) {
+		return 0;
+	}
+
+	return (struct process *)
+		bunix_map_get(&processes_by_task_id, task_id);
+}
+
+static struct process *process_at(u64 index)
+{
+	if (processes_by_pid.slots == 0) {
+		return 0;
+	}
+
+	for (u64 i = 0; i < processes_by_pid.capacity; i++) {
+		struct process *process;
+
+		if (processes_by_pid.slots[i].key == 0) {
+			continue;
+		}
+		process = (struct process *)processes_by_pid.slots[i].value;
+		if (process == 0 || process->pid == 0) {
+			continue;
+		}
+		if (index == 0) {
+			return process;
+		}
+		index--;
+	}
+
+	return 0;
+}
+
 static struct process *process_alloc(void)
 {
 	return (struct process *)bunix_calloc(1, sizeof(struct process));
@@ -934,7 +983,6 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 {
 	u64 vfs;
 	u64 linux_pid = 0;
-	u64 task_handle = 0;
 	u64 linux_parent_pid = 0;
 	struct process *process;
 
@@ -954,11 +1002,14 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 	}
 
 	process->pid = next_pid++;
+	process->task_id = 0;
 	process->linux_pid = 0;
 	process->task_handle = 0;
 	process->status = 0;
 	process->exited = 0;
 	process->waiter = 0;
+	pack_path(process->cmd_words, path);
+	process->cmd_len = str_len(path);
 	*pid = process->pid;
 	if (bunix_map_set(&processes_by_pid, process->pid,
 			  (u64)process) != 0) {
@@ -971,16 +1022,15 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 		linux_parent_pid = first_linux_pid;
 	}
 
-	if (exec_path(vfs, path, task_name_for_path(path),
+	if (exec_path(vfs, process, path, task_name_for_path(path),
 		      linux_parent_pid, login_uid, set_login, session_id,
-		      &linux_pid, &task_handle) != 0) {
+		      &linux_pid) != 0) {
 		process_reset(process);
 		*pid = 0;
 		return -1;
 	}
 
 	process->linux_pid = linux_pid;
-	process->task_handle = task_handle;
 	if (linux_pid != 0 &&
 	    bunix_map_set(&processes_by_linux_pid, linux_pid,
 			  (u64)process) != 0) {
@@ -999,6 +1049,7 @@ int main(void)
 	struct bunix_msg message;
 
 	bunix_map_init(&processes_by_pid);
+	bunix_map_init(&processes_by_task_id);
 	bunix_map_init(&processes_by_linux_pid);
 	bunix_console_log(proc_online, sizeof(proc_online) - 1);
 	if (register_service(BUNIX_SERVICE_PROC, BUNIX_HANDLE_SELF) != 0) {
@@ -1125,6 +1176,59 @@ int main(void)
 				}
 			} else {
 				reply.words[0] = (u64)-1;
+			}
+			break;
+		}
+		case BUNIX_PROC_SELF: {
+			struct process *process =
+				process_find_task_id(message.sender);
+
+			if (process == 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				reply.words[0] = 0;
+				reply.words[1] = process->pid;
+				reply.words[2] = process->task_id;
+				reply.words[3] = process->linux_pid;
+			}
+			break;
+		}
+		case BUNIX_PROC_INFO: {
+			struct process *process = process_find(message.words[0]);
+
+			if (process == 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				reply.words[0] = 0;
+				reply.words[1] = process->pid;
+				reply.words[2] = process->task_id;
+				reply.words[3] = process->linux_pid;
+			}
+			break;
+		}
+		case BUNIX_PROC_AT: {
+			struct process *process = process_at(message.words[0]);
+
+			if (process == 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				reply.words[0] = 0;
+				reply.words[1] = process->pid;
+				reply.words[2] = process->task_id;
+				reply.words[3] = process->linux_pid;
+			}
+			break;
+		}
+		case BUNIX_PROC_CMDLINE: {
+			struct process *process = process_find(message.words[0]);
+
+			if (process == 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				reply.words[0] = 0;
+				reply.words[1] = process->cmd_len;
+				reply.words[2] = process->cmd_words[0];
+				reply.words[3] = process->cmd_words[1];
 			}
 			break;
 		}
