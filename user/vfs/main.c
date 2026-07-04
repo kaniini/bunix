@@ -1,5 +1,5 @@
+#include <bunix/alloc.h>
 #include <bunix/libbunix.h>
-#include <bunix/id_table.h>
 #include <bunix/tree.h>
 
 enum {
@@ -44,6 +44,8 @@ struct vfs_mount {
 };
 
 struct vfs_open {
+	struct bunix_u64_tree_node node;
+	u64 id;
 	u64 kind;
 	const struct rootfs_entry *entry;
 	u64 service;
@@ -55,7 +57,8 @@ struct vfs_open {
 static struct rootfs_entry *root_entries;
 static unsigned int root_entry_count;
 static struct bunix_tree mounts;
-static struct bunix_id_table open_files;
+static struct bunix_u64_tree open_files;
+static u64 next_open_id = 1;
 static u64 user_service;
 static u64 root_block;
 
@@ -720,8 +723,13 @@ static u64 open_root_file(const struct rootfs_entry *entry)
 	}
 	open->kind = VFS_OPEN_ROOT;
 	open->entry = entry;
-	handle = bunix_id_alloc(&open_files, (u64)open);
-	if (handle == 0) {
+	handle = next_open_id++;
+	while (handle == 0 || bunix_u64_tree_get(&open_files, handle) != 0) {
+		handle = next_open_id++;
+	}
+	open->id = handle;
+	if (bunix_u64_tree_insert_node(&open_files, &open->node, handle,
+				       (u64)open) != 0) {
 		bunix_free(open);
 		return 0;
 	}
@@ -750,17 +758,23 @@ static u64 open_remote_file(u64 service, u64 remote_handle, const char *path,
 		bunix_free(open);
 		return 0;
 	}
-	handle = bunix_id_alloc(&open_files, (u64)open);
-	if (handle == 0) {
+	handle = next_open_id++;
+	while (handle == 0 || bunix_u64_tree_get(&open_files, handle) != 0) {
+		handle = next_open_id++;
+	}
+	open->id = handle;
+	if (bunix_u64_tree_insert_node(&open_files, &open->node, handle,
+				       (u64)open) != 0) {
 		bunix_free(open->path);
 		bunix_free(open);
+		return 0;
 	}
 	return handle;
 }
 
 static struct vfs_open *open_from_handle(u64 handle)
 {
-	return (struct vfs_open *)bunix_id_get(&open_files, handle);
+	return (struct vfs_open *)bunix_u64_tree_get(&open_files, handle);
 }
 
 static const struct rootfs_entry *root_file_from_handle(u64 handle)
@@ -775,12 +789,12 @@ static void forget_open_file(u64 handle)
 	struct vfs_open *open = open_from_handle(handle);
 
 	if (open != 0) {
+		bunix_u64_tree_remove_node(&open_files, &open->node);
 		if (open->path != 0) {
 			bunix_free(open->path);
 		}
 		bunix_free(open);
 	}
-	(void)bunix_id_remove(&open_files, handle);
 }
 
 static int forward_mount_path(struct vfs_mount *mount, struct bunix_msg *message,
@@ -1074,7 +1088,8 @@ int main(void)
 		return 1;
 	}
 	bunix_tree_init(&mounts);
-	bunix_id_table_init(&open_files);
+	bunix_u64_tree_init(&open_files);
+	next_open_id = 1;
 	bunix_console_log(ready, sizeof(ready) - 1);
 
 	for (;;) {
