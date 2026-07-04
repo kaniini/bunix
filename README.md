@@ -2,48 +2,58 @@
 
 An experimental microkernel-oriented operating system in C.
 
-This first slice boots a freestanding x86_64 kernel through Multiboot2,
+The current slice boots a freestanding x86_64 kernel through Multiboot2,
 initializes serial and VGA text consoles, parses Multiboot2 modules, starts the
 kernel-hosted VM server, and enters a user-space init server which launches
-other user servers. The current boot proves a synthetic filesystem read, a
-VFS-backed first process with stdout/exit status, and a user-space heartbeat
+other user servers. It can boot into a login prompt and run a static BusyBox
+shell over the serial console, with VFS-backed reads, pipes, procfs, dmesg,
+basic multiuser login/session accounting, and a user-space Linux personality
 server:
 
 ```text
-rootfs: module
-first: stdout ready
-first: exit 0
-ping: heartbeat
+login: root
+/ # busybox echo PIPE_OK | busybox cat
+PIPE_OK
+/ # busybox cat /hello.txt
+hello from rootfs
 ```
 
 ## Current shape
 
 - `arch/x86_64/`: x86_64 Multiboot2 entry code and low-level I/O.
 - `boot/`: GRUB config.
-- `kernel/`: bootstrap, console, PMM/VM mechanisms, scheduler, name registry, and boot module launcher.
+- `kernel/`: bootstrap, console/dmesg ring buffer, PMM/VM mechanisms,
+  scheduler, name registry, syscall forwarding, and boot module launcher.
 - `modules/`: raw Multiboot2 boot modules.
-- `servers/`: initial server stubs, including the skeletal VM server.
+- `servers/`: kernel-hosted VM server facade.
+- `user/`: freestanding ring-3 servers and test/user programs.
 - `Makefile`: build, EFI ISO, and QEMU/KVM targets.
 
-The init, names, time, linux, proc, block, VFS, and ping servers are
-freestanding C ELF images loaded as Multiboot2 modules and entered in ring 3.
-The first native process and a tiny Linux-syscall smoke test are packaged into
-the generated rootfs and loaded by proc through VFS as `/bin/first` and
-`/bin/lxtest`. The VM server remains kernel-hosted for the current
-performance-oriented design, but still exposes a VM IPC port for events and
-the kernel exports low-level task memory primitives for allocation and range
-cloning. Tasks now track simple VM region metadata so fork can clone recorded
-ELF, stack, brk, and mmap regions rather than hardcoded address bands. The
-next microkernel steps are to replace the toy rootfs with a real filesystem
-format while continuing to shrink the kernel bootstrap policy into explicit
-capability handoff.
+The init, names, time, user, linux, proc, procfs, block, VFS, and ping servers
+are freestanding C ELF images loaded as Multiboot2 modules and entered in ring 3.
+The generated rootfs includes native smoke tests, Linux-syscall tests, login,
+BusyBox applet links, `/etc/passwd`, `/etc/shadow`, and small data files. Proc
+loads ELF images through VFS and owns Bunix process lifetime. The Linux
+personality server owns Linux PID/session/fd state and receives Linux syscalls
+as `LINX` protocol messages. The VM server remains kernel-hosted for the
+current performance-oriented design, but still exposes a VM IPC port for events
+and the kernel exports low-level task memory primitives for allocation and range
+cloning.
+
+Userspace servers now have a small buddy allocator backed by native task
+allocation, and their object registries grow dynamically instead of using fixed
+server-side pools. The remaining fixed sizes are mostly ABI/protocol-sized
+buffers, per-architecture bootstrap structures, and kernel-internal tables that
+have not been generalized yet.
 
 The tree is split so future ports can add a sibling such as `arch/arm64/` with
 its own boot path, interrupt setup, MMU setup, and device I/O while reusing the
 common kernel and server code.
 
 Kernel logging uses `console_printf`, a small freestanding formatter supporting
-`%s`, `%c`, `%d`, `%i`, `%u`, `%x`, `%p`, and `%%`.
+`%s`, `%c`, `%d`, `%i`, `%u`, `%x`, `%p`, and `%%`. Once Linux userspace starts,
+kernel/server logs route into the kernel ring buffer and BusyBox `dmesg` can
+read them without trampling the interactive shell.
 
 ## IPC shape
 
@@ -66,9 +76,9 @@ attenuated inherited handles in caller-specified order.
 
 The boot policy grants init `self`, `console`, `vm`, and `names`; init registers
 console and VM with the user-space names server, resolves them back as
-delegable capabilities, then launches time, proc, block, VFS, ping, and the
-Linux personality server with
-attenuated caps. Init waits for the time server to register `TIME`, then passes
+delegable capabilities, then launches time, user, linux, proc, procfs, block,
+VFS, and ping with attenuated caps. Init waits for the time server to register
+`TIME`, then passes
 that capability to proc so proc can delegate sleep authority to the first
 process. The returned launch value is a send-capability to the child's service
 port in the parent task. `recv` blocks the current thread and wakes when a
@@ -78,13 +88,12 @@ use without learning anything else about the caller. A task can also close one
 of its own handles, which clears only that task-local capability slot; the
 underlying object and any other task's capabilities remain untouched.
 
-The proc server is the first higher-level lifetime authority above low-level
-tasks. It owns PID assignment for the first process, asks VFS for `/bin/first`,
-parses the ELF program headers in user space, maps loadable segments through
-generic task syscalls, starts the task at the ELF entry point, and implements
-wait/exit over the `PROC` FourCC protocol. The first process starts with
-fd-like stdout mapped to a console send capability plus time and proc
-capabilities.
+The proc server is the higher-level lifetime authority above low-level tasks.
+It owns Bunix PID assignment, asks VFS for executable images, parses ELF program
+headers in user space, maps loadable segments through generic task syscalls,
+starts tasks at the ELF entry point, and implements wait/exit over the `PROC`
+FourCC protocol. Linux PID 1 is deliberately owned by the Linux personality, not
+by Bunix init; Bunix task IDs and Linux PIDs remain separate identities.
 
 Names are scoped by namespace objects. The names server starts with a root
 namespace for boot services, and clients can request new namespace IDs. Register
@@ -104,32 +113,40 @@ event-port style IPC, currently exercised by the ping heartbeat server.
 
 ## Filesystem Path
 
-The first filesystem slice is a server-to-server read flow. The build generates
-a tiny `disk0` image containing `/hello.txt`, `/bin/first`, and `/bin/lxtest`,
-then GRUB loads that image as a Multiboot2 data module. The kernel assigns that
+The filesystem path is still a server-to-server read flow. The build generates
+a tiny `disk0` image containing `/hello.txt`, `/secret.txt`, `/etc/passwd`,
+`/etc/shadow`, `/bin/first`, `/bin/lxtest`, `/bin/login`, `/bin/musl-hello`,
+`/bin/busybox`, and BusyBox applet links, then GRUB loads that image as a
+Multiboot2 data module. The kernel assigns that
 boot module only to the block server. Init launches a block server and a VFS
 server with only console and names capabilities. The block server registers
 `BLK0` in the root namespace and serves read-only bytes from its assigned disk
 image. VFS resolves `BLK0`, registers `VFS0`, parses the generated rootfs entry
-table, and serves pathname reads. Init creates a filesystem namespace,
-re-exports `VFS0` there, resolves it from that namespace, reads `/hello.txt`,
-and prints `rootfs: module`.
+table, and serves pathname reads, metadata, directory enumeration, and delegated
+procfs paths.
 
 This is intentionally not a real disk filesystem yet. The useful primitive is
 the capability-shaped chain `init/proc -> names -> vfs -> block -> disk0`,
 which is the path that can later point at a real disk image and then at an
 Alpine root filesystem format.
 
+`procfs.server` is a separate user-space server mounted through VFS for `/proc`.
+It currently exposes `/proc/kthreads`, showing internal Bunix tasks as kernel
+threads for observability from Linux userspace.
+
 ## User Mode
 
 User modules are built as freestanding C x86_64 ELFs with a tiny `crt0.S` and
 the native `libbunix` header surface over inline syscall wrappers. Init, names,
-time, linux, proc, block, VFS, first, and ping all link at the normal
-`0x400000` user base and enter with the same `0x800000` user stack top. The
+time, user, linux, proc, procfs, block, VFS, first, login, and ping all link at
+the normal `0x400000` user base and enter with the same `0x800000` user stack top. The
 small user ABI exposes negative-number syscalls for thread exit, timer ticks,
 monotonic nanosecond time, blocking nanosecond sleep, module launch with
 inherited handles, private port creation, IPC send/receive, IPC call, and
 generic task create/map/grant/start operations used by proc's ELF loader.
+Native userspace can also allocate into its own task with `task_alloc(0, ...)`;
+the server-side buddy allocator builds on that to provide growable maps and
+object tables.
 Shared buffer capabilities provide bulk byte transport for servers. VFS exposes
 the exec-facing file operations proc needs now: open a named regular file,
 query its size/type, read positioned byte ranges through a shared buffer, and
@@ -145,34 +162,41 @@ has an internal bootstrap name registry, but it is no longer exposed as a normal
 user authority path.
 
 Linux syscall numbers are kept separate from the native negative Bunix syscall
-space. For the current MVP, nonnegative syscall numbers trap into the kernel.
-The minimal tracked `brk` is still answered directly by the kernel, while
-Linux identity and file-oriented calls are marshalled as synchronous `LINX`
-protocol requests to the user-space linux personality server. Proc explicitly
-registers Linux tasks with that server before starting them, carrying the
-backing Bunix task id and Linux parent PID. The server owns a small Linux PID
-namespace table keyed by the backing Bunix task id, so the first Linux process
-sees PID/TID 1 even though its Bunix task id is different. Each Linux process
-object also owns its fd table, initialized with stdout/stderr and allocating
-VFS-backed file fds from 3 independently. `exit_group` marks the Linux process
-exited and records its status before the kernel tears down the backing task
-thread; `wait4(-1, &status, 0, NULL)` can block on a child and returns the
-child PID with a Linux wait status. This keeps Bunix task identity available for
-observability without conflating it with Linux process identity. The kernel
-attaches user buffers as shared-buffer capabilities and blocks the caller on a
-reply port, then returns the server's Linux-style result value. `/bin/lxtest`
-contains no Bunix headers or crt0; it issues raw x86_64 Linux syscall numbers
-for `write`, `getpid`, `gettid`, `openat`, `fstat`, `newfstatat`, `read`,
-`close`, `mmap`, `munmap`, `wait4`, and `exit_group`, verifies returned byte
-counts, metadata, Linux PID/TID values, page-backed `brk`, anonymous writable
-mappings, forked child creation with cloned mmap contents, fd allocation, child
-waiting, and `-EBADF` for invalid fds, then exits successfully. Init launches
-two `/bin/lxtest` instances to prove their Linux PID and fd namespaces are
-separate; the first also forks and waits for its child. Console writes use the
-server's delegated console capability, while
-`openat(AT_FDCWD, path, O_RDONLY)`, `fstat`, `newfstatat`, `read`, and `close`
-proxy to VFS using shared-buffer capabilities. Linux `mmap` is currently an
-anonymous/private compatibility path implemented on top of task memory
+space. Nonnegative syscall numbers trap into the kernel. The kernel still owns
+low-level memory operations such as `brk`, `mmap`, `munmap`, `mprotect`,
+`fork`, `clone`-style task creation, and `execve` image replacement, but most
+Linux identity, fd, tty, session, pipe, VFS, user, signal, wait, and process
+operations are marshalled as synchronous `LINX` protocol requests to the
+user-space Linux personality server. The kernel attaches user buffers as
+shared-buffer capabilities and blocks the caller on a reply port, then returns
+the server's Linux-style result value.
+
+Proc explicitly registers Linux tasks with the Linux server before starting
+them, carrying the backing Bunix task id and Linux parent PID. The Linux server
+owns dynamic maps keyed by Bunix task id and Linux PID, so Linux PID 1 exists
+inside the personality even though its Bunix task id is different. Each Linux
+process owns a dynamically growing fd table initialized with stdin/stdout/stderr
+on the console. Pipes are in-memory Linux-server objects with blocking read
+semantics; `pipe`, `pipe2`, `dup`, `dup2`, `dup3`, `fcntl`, `sendfile`, and
+VFS-backed file/dir fds are implemented enough for the current BusyBox shell.
+`exit_group` marks the Linux process exited and records its status before the
+kernel tears down the backing task thread; `wait4` can block on a child and
+returns the child PID with a Linux wait status.
+
+The current rootfs can run a statically linked musl hello program and a static
+BusyBox shell through `/bin/login`. BusyBox applets currently exercised by the
+test loop include `cat`, `echo`, `stat`, `ls`, `uptime`, `id`, `stty`, `kill`,
+`sleep`, `dmesg`, `pwd`, and `cd` through the shell. Backspace, canonical tty
+input, Ctrl-C delivery to foreground jobs, login prompt respawn after shell
+exit, `/secret.txt` permission denial for the login user, and applet argv
+handling are covered by `make test-shell`.
+
+`/bin/lxtest` contains no Bunix headers or crt0; it issues raw x86_64 Linux
+syscall numbers for the compatibility path and verifies returned byte counts,
+metadata, Linux PID/TID values, page-backed `brk`, anonymous writable mappings,
+forked child creation with cloned mmap contents, fd allocation, child waiting,
+and `-EBADF` for invalid fds, then exits successfully. Linux `mmap` is currently
+an anonymous/private compatibility path implemented on top of task memory
 allocation, and `munmap` removes, trims, or splits VM region records. Linux
 `fork` is built on a saved syscall frame plus task VM region cloning.
 Page-table teardown now clears unmapped pages and returns their frames to the
@@ -225,8 +249,10 @@ the thread-table slot to the empty pool. A task with no threads remains a valid
 low-level container until a future higher-level process/session layer decides
 what destruction means.
 
-Each task owns a `vm_space` granted by the VM server facade. On x86_64, a VM
-space contains a real PML4, PDPT, and page directory, currently identity-mapping
+Each task owns a `vm_space` granted by the VM server facade. Tasks track simple
+VM region metadata so fork can clone recorded ELF, stack, brk, and mmap regions
+rather than hardcoded address bands. On x86_64, a VM space contains a real
+PML4, PDPT, and page directory, currently identity-mapping
 the low 1 GiB so the kernel can keep running after CR3 switches. User ELF and
 stack pages are mapped privately by splitting those 2 MiB identity mappings into
 4 KiB page tables where needed. A future higher-half kernel split should remove
@@ -257,19 +283,24 @@ make test
 
 `make test` boots through OVMF/GRUB with KVM, captures serial output in
 `build/serial.log`, and checks that GRUB passed Multiboot2 modules, the kernel
-started VM, names, time, and init, init received its boot capabilities, and init
-registered and resolved services through the user-space names server before
-launching time, proc, block, VFS, and ping with attenuated inherited handles.
-The test checks namespace creation, VFS re-export into the filesystem namespace,
-the `VFS0 -> BLK0 -> disk0` read, and the resulting `rootfs: module` console
-output. Init also proves the OCAP launch rule by asking for a receive right it
-does not hold, which the kernel rejects before the module is marked launched.
-Init asks proc to spawn `/bin/first`; proc reads that ELF through VFS, maps its
-loadable segments, starts the task, and init waits for its exit status before
-launching ping with console, VM, and time capabilities. Ping asks the time
-server to sleep for two-second intervals, logs `ping: heartbeat`, and forwards
-an incrementing heartbeat value plus the time server's monotonic timestamp as a
-VMEM FourCC event through its inherited VM capability.
+started VM, names, time, user, linux, proc, procfs, block, VFS, and ping, init
+received its boot capabilities, and services registered/resolved through the
+user-space names server. It checks namespace creation, VFS re-export into the
+filesystem namespace, proc-spawned native and Linux test programs, Linux
+credentials, fork/wait, `brk`, `mmap`/`munmap`, VFS metadata, procfs startup,
+OCAP launch denial, and heartbeat startup.
+
+For the interactive BusyBox shell regression:
+
+```sh
+make test-shell
+```
+
+`make test-shell` drives the serial console, logs in, runs BusyBox applets,
+checks pipes and file reads, verifies login/session-visible `uptime`, checks
+`id`, `stat`, `ls`, `cat`, shell `cd`/`pwd`, backspace, Ctrl-C, permission
+denial for `/secret.txt`, and confirms that exiting the shell returns to the
+login prompt.
 
 For an interactive serial console:
 
