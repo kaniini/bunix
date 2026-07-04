@@ -67,7 +67,7 @@ while ! grep -F "/ $ " "$log" >/dev/null 2>&1; do
 	sleep 1
 done
 
-printf 'uptime\nbusybox uptime\nbusybox stty -a\nbusybox id\nbusybox kill -0 $$ && echo KILL_ZERO_OK\nbusybox kill -0 -$$ && echo KILL_PGRP_OK\nbusybox sleep 1 && echo BUSYBOX_SLEEP_OK\nsleep 1 && echo DIRECT_SLEEP_OK\nbusybox sleep 5\n\003echo SLEEP_CTRL_C_OK\nbusybox echo PIPE_OK | busybox cat\nbusybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\n' >&3
+printf 'uptime\nbusybox uptime\nbusybox stty -a\nbusybox id\nbusybox kill -0 $$ && echo KILL_ZERO_OK\nbusybox kill -0 -$$ && echo KILL_PGRP_OK\nbusybox sleep 1 && echo BUSYBOX_SLEEP_OK\nsleep 1 && echo DIRECT_SLEEP_OK\nbusybox sleep 5\n\003echo SLEEP_CTRL_C_OK\nbusybox echo PIPE_OK | busybox cat\nbusybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_OK\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\n' >&3
 
 i=0
 while ! grep -F "load average" "$log" >/dev/null 2>&1; do
@@ -175,6 +175,17 @@ while ! grep -F "PIPE_FILE_OK" "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
 		echo "busybox cat pipe did not complete" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+i=0
+while ! grep -F "PROCFS_OK" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "procfs translator read did not complete" >&2
 		tail -n 180 "$log" >&2 || true
 		exit 1
 	fi

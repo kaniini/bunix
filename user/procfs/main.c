@@ -13,6 +13,26 @@ static char text[PROCFS_MAX_TEXT];
 
 static u64 build_kthreads(void);
 
+static u64 resolve_service(u64 service, unsigned int rights)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_WAIT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { BUNIX_NAMES_ROOT, service, rights, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(PROCFS_HANDLE_NAMES, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return 0;
+	}
+	return reply.cap;
+}
+
 static long register_service(u64 service, u64 handle)
 {
 	struct bunix_msg request = {
@@ -63,6 +83,44 @@ static void pack_name(u64 *words, const char *name)
 
 		words[slot] |= ((u64)(unsigned char)name[i]) << shift;
 	}
+}
+
+static void pack_path(u64 *words, const char *path)
+{
+	words[0] = 0;
+	words[1] = 0;
+	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
+		const u64 slot = i / 8;
+		const u64 shift = (i % 8) * 8;
+
+		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
+	}
+}
+
+static long mount_procfs(void)
+{
+	const u64 vfs = resolve_service(BUNIX_SERVICE_VFS,
+					BUNIX_RIGHT_SEND);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_MOUNT,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = BUNIX_HANDLE_SELF,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (vfs == 0) {
+		return -1;
+	}
+	pack_path(&request.words[0], "/proc");
+	if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+	return 0;
 }
 
 static u64 file_for_path(const char *path)
@@ -191,6 +249,9 @@ int main(void)
 	bunix_console_write(online, sizeof(online) - 1);
 	bunix_id_table_init(&open_files);
 	if (register_service(BUNIX_SERVICE_PROCFS, BUNIX_HANDLE_SELF) != 0) {
+		return 1;
+	}
+	if (mount_procfs() != 0) {
 		return 1;
 	}
 

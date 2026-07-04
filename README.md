@@ -130,9 +130,10 @@ the capability-shaped chain `init/proc -> names -> vfs -> block -> disk0`,
 which is the path that can later point at a real disk image and then at an
 Alpine root filesystem format.
 
-`procfs.server` is a separate user-space server mounted through VFS for `/proc`.
-It currently exposes `/proc/kthreads`, showing internal Bunix tasks as kernel
-threads for observability from Linux userspace.
+`procfs.server` is a separate user-space server that dynamically attaches
+itself to VFS as the `/proc` translator. It currently exposes `/proc/kthreads`,
+showing internal Bunix tasks as kernel threads for observability from Linux
+userspace.
 
 ## User Mode
 

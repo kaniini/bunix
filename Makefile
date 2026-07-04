@@ -364,6 +364,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "vfs: online" $(BUILD_DIR)/serial.log
 	grep -F "procfs: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: mounted block" $(BUILD_DIR)/serial.log
+	grep -F "vfs: mounted translator" $(BUILD_DIR)/serial.log
 	grep -F "init: launching servers" $(BUILD_DIR)/serial.log
 	grep -F "init: names ready" $(BUILD_DIR)/serial.log
 	grep -F "init: fs namespace" $(BUILD_DIR)/serial.log

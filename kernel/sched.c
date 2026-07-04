@@ -12,8 +12,8 @@
 
 enum {
 	MAX_CPUS = 8,
-	MAX_TASK_HANDLES = 32,
-	MAX_TASK_VM_REGIONS = 256,
+	INITIAL_TASK_HANDLES = 16,
+	INITIAL_TASK_VM_REGIONS = 32,
 	KERNEL_STACK_SIZE = 32768,
 	SCHED_QUANTUM_TICKS = 5,
 };
@@ -44,10 +44,12 @@ struct task {
 	u64 linux_brk;
 	u64 linux_mmap_next;
 	u64 linux_fs_base;
-	struct task_vm_region vm_regions[MAX_TASK_VM_REGIONS];
+	struct task_vm_region *vm_regions;
 	u32 vm_region_count;
+	u32 vm_region_capacity;
 	struct ipc_port *reply_port;
-	struct task_handle handles[MAX_TASK_HANDLES];
+	struct task_handle *handles;
+	u32 handle_capacity;
 	struct spinlock lock;
 };
 
@@ -102,6 +104,86 @@ static struct spinlock sleep_lock = SPINLOCK_INIT("sched-sleep");
 
 static void task_handle_release(enum task_handle_type type, void *object);
 static void task_release(struct task *task);
+
+static void mem_copy(void *dst, const void *src, u64 len)
+{
+	u8 *out = (u8 *)dst;
+	const u8 *in = (const u8 *)src;
+
+	for (u64 i = 0; i < len; i++) {
+		out[i] = in[i];
+	}
+}
+
+static int task_grow_handles_locked(struct task *task, u32 min_capacity)
+{
+	u32 old_capacity;
+	u32 new_capacity;
+	struct task_handle *handles;
+
+	if (task == 0) {
+		return -1;
+	}
+	if (task->handle_capacity >= min_capacity) {
+		return 0;
+	}
+
+	old_capacity = task->handle_capacity;
+	new_capacity = old_capacity == 0 ? INITIAL_TASK_HANDLES : old_capacity;
+	while (new_capacity < min_capacity) {
+		new_capacity *= 2;
+	}
+
+	handles = slab_zalloc((u64)new_capacity * sizeof(handles[0]));
+	if (handles == 0) {
+		return -1;
+	}
+	if (task->handles != 0) {
+		mem_copy(handles, task->handles,
+			 (u64)old_capacity * sizeof(handles[0]));
+		slab_free(task->handles);
+	}
+	task->handles = handles;
+	task->handle_capacity = new_capacity;
+	return 0;
+}
+
+static int task_grow_vm_regions_locked(struct task *task, u32 min_capacity)
+{
+	u32 old_capacity;
+	u32 new_capacity;
+	struct task_vm_region *regions;
+
+	if (task == 0) {
+		return -1;
+	}
+	if (task->vm_region_capacity >= min_capacity) {
+		return 0;
+	}
+
+	old_capacity = task->vm_region_capacity;
+	new_capacity = old_capacity == 0 ? INITIAL_TASK_VM_REGIONS :
+		       old_capacity;
+	while (new_capacity < min_capacity) {
+		new_capacity *= 2;
+	}
+
+	regions = slab_zalloc((u64)new_capacity * sizeof(regions[0]));
+	if (regions == 0) {
+		return -1;
+	}
+	if (task->vm_regions != 0) {
+		mem_copy(regions, task->vm_regions,
+			 (u64)old_capacity * sizeof(regions[0]));
+		slab_free(task->vm_regions);
+	}
+	task->vm_regions = regions;
+	task->vm_region_capacity = new_capacity;
+	return 0;
+}
+
+static int task_append_vm_region_locked(struct task *task,
+					struct task_vm_region region);
 
 static struct cpu_sched *sched_current_cpu(void)
 {
@@ -301,14 +383,13 @@ void sched_init(void)
 	kernel_task.linux_brk = 0;
 	kernel_task.linux_mmap_next = 0;
 	kernel_task.linux_fs_base = 0;
+	kernel_task.vm_regions = 0;
 	kernel_task.vm_region_count = 0;
+	kernel_task.vm_region_capacity = 0;
 	kernel_task.reply_port = 0;
+	kernel_task.handles = 0;
+	kernel_task.handle_capacity = 0;
 	spinlock_init(&kernel_task.lock, "task");
-	for (u32 handle = 0; handle < MAX_TASK_HANDLES; handle++) {
-		kernel_task.handles[handle].type = TASK_HANDLE_EMPTY;
-		kernel_task.handles[handle].rights = 0;
-		kernel_task.handles[handle].object = 0;
-	}
 
 	tasks = 0;
 	sched_cpu_count = arch_smp_cpu_count();
@@ -387,14 +468,13 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	task->linux_brk = 0x900000;
 	task->linux_mmap_next = 0x10000000;
 	task->linux_fs_base = 0;
+	task->vm_regions = 0;
 	task->vm_region_count = 0;
+	task->vm_region_capacity = 0;
 	task->reply_port = 0;
+	task->handles = 0;
+	task->handle_capacity = 0;
 	spinlock_init(&task->lock, "task");
-	for (u32 handle = 0; handle < MAX_TASK_HANDLES; handle++) {
-		task->handles[handle].type = TASK_HANDLE_EMPTY;
-		task->handles[handle].rights = 0;
-		task->handles[handle].object = 0;
-	}
 	tasks = task;
 	console_printf("sched: task pid=%u name=%s vm=%u\n",
 		       task->pid, name, task->vm_space->id);
@@ -493,7 +573,7 @@ u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights)
 
 	const u64 flags = spin_lock_irqsave(&task->lock);
 
-	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
+	for (u32 i = 0; i < task->handle_capacity; i++) {
 		if (task->handles[i].type == TASK_HANDLE_PORT &&
 		    task->handles[i].object == port &&
 		    task->handles[i].rights == rights) {
@@ -502,23 +582,29 @@ u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights)
 		}
 	}
 
-	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
-		if (task->handles[i].type != TASK_HANDLE_EMPTY) {
-			continue;
-		}
+	for (;;) {
+		for (u32 i = 0; i < task->handle_capacity; i++) {
+			if (task->handles[i].type != TASK_HANDLE_EMPTY) {
+				continue;
+			}
 
-		task->handles[i].type = TASK_HANDLE_PORT;
-		task->handles[i].rights = rights;
-		task->handles[i].object = port;
-		ipc_port_retain(port);
-		console_printf("sched: grant task=%u handle=%u type=port rights=0x%x\n",
-			       task->pid, i + 1, rights);
-		spin_unlock_irqrestore(&task->lock, flags);
-		return i + 1;
+			task->handles[i].type = TASK_HANDLE_PORT;
+			task->handles[i].rights = rights;
+			task->handles[i].object = port;
+			ipc_port_retain(port);
+			console_printf("sched: grant task=%u handle=%u type=port rights=0x%x\n",
+				       task->pid, i + 1, rights);
+			spin_unlock_irqrestore(&task->lock, flags);
+			return i + 1;
+		}
+		if (task_grow_handles_locked(task,
+					     task->handle_capacity + 1) != 0) {
+			break;
+		}
 	}
 
 	spin_unlock_irqrestore(&task->lock, flags);
-	console_printf("sched: handle table full task=%u\n", task->pid);
+	console_printf("sched: handle table grow failed task=%u\n", task->pid);
 	return 0;
 }
 
@@ -531,7 +617,7 @@ u64 task_grant_buffer(struct task *task, struct shared_buffer *buffer,
 
 	const u64 flags = spin_lock_irqsave(&task->lock);
 
-	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
+	for (u32 i = 0; i < task->handle_capacity; i++) {
 		if (task->handles[i].type == TASK_HANDLE_BUFFER &&
 		    task->handles[i].object == buffer &&
 		    task->handles[i].rights == rights) {
@@ -540,23 +626,30 @@ u64 task_grant_buffer(struct task *task, struct shared_buffer *buffer,
 		}
 	}
 
-	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
-		if (task->handles[i].type != TASK_HANDLE_EMPTY) {
-			continue;
-		}
+	for (;;) {
+		for (u32 i = 0; i < task->handle_capacity; i++) {
+			if (task->handles[i].type != TASK_HANDLE_EMPTY) {
+				continue;
+			}
 
-		task->handles[i].type = TASK_HANDLE_BUFFER;
-		task->handles[i].rights = rights;
-		task->handles[i].object = buffer;
-		buffer_retain(buffer);
-		console_printf("sched: grant task=%u handle=%u type=buffer rights=0x%x target=%u\n",
-			       task->pid, i + 1, rights, (u32)buffer_id(buffer));
-		spin_unlock_irqrestore(&task->lock, flags);
-		return i + 1;
+			task->handles[i].type = TASK_HANDLE_BUFFER;
+			task->handles[i].rights = rights;
+			task->handles[i].object = buffer;
+			buffer_retain(buffer);
+			console_printf("sched: grant task=%u handle=%u type=buffer rights=0x%x target=%u\n",
+				       task->pid, i + 1, rights,
+				       (u32)buffer_id(buffer));
+			spin_unlock_irqrestore(&task->lock, flags);
+			return i + 1;
+		}
+		if (task_grow_handles_locked(task,
+					     task->handle_capacity + 1) != 0) {
+			break;
+		}
 	}
 
 	spin_unlock_irqrestore(&task->lock, flags);
-	console_printf("sched: handle table full task=%u\n", task->pid);
+	console_printf("sched: handle table grow failed task=%u\n", task->pid);
 	return 0;
 }
 
@@ -568,7 +661,7 @@ u64 task_grant_task(struct task *owner, struct task *target, u32 rights)
 
 	const u64 flags = spin_lock_irqsave(&owner->lock);
 
-	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
+	for (u32 i = 0; i < owner->handle_capacity; i++) {
 		if (owner->handles[i].type == TASK_HANDLE_TASK &&
 		    owner->handles[i].object == target &&
 		    owner->handles[i].rights == rights) {
@@ -577,36 +670,46 @@ u64 task_grant_task(struct task *owner, struct task *target, u32 rights)
 		}
 	}
 
-	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
-		if (owner->handles[i].type != TASK_HANDLE_EMPTY) {
-			continue;
-		}
+	for (;;) {
+		for (u32 i = 0; i < owner->handle_capacity; i++) {
+			if (owner->handles[i].type != TASK_HANDLE_EMPTY) {
+				continue;
+			}
 
-		owner->handles[i].type = TASK_HANDLE_TASK;
-		owner->handles[i].rights = rights;
-		owner->handles[i].object = target;
-		const u64 target_flags = spin_lock_irqsave(&target->lock);
-		if (target->dead) {
+			owner->handles[i].type = TASK_HANDLE_TASK;
+			owner->handles[i].rights = rights;
+			owner->handles[i].object = target;
+			const u64 target_flags = spin_lock_irqsave(&target->lock);
+			if (target->dead) {
+				owner->handles[i].type = TASK_HANDLE_EMPTY;
+				owner->handles[i].rights = 0;
+				owner->handles[i].object = 0;
+				spin_unlock_irqrestore(&target->lock,
+						       target_flags);
+				spin_unlock_irqrestore(&owner->lock, flags);
+				return 0;
+			}
+			target->ref_count++;
 			spin_unlock_irqrestore(&target->lock, target_flags);
+			console_printf("sched: grant task=%u handle=%u type=task rights=0x%x target=%u\n",
+				       owner->pid, i + 1, rights, target->pid);
 			spin_unlock_irqrestore(&owner->lock, flags);
-			return 0;
+			return i + 1;
 		}
-		target->ref_count++;
-		spin_unlock_irqrestore(&target->lock, target_flags);
-		console_printf("sched: grant task=%u handle=%u type=task rights=0x%x target=%u\n",
-			       owner->pid, i + 1, rights, target->pid);
-		spin_unlock_irqrestore(&owner->lock, flags);
-		return i + 1;
+		if (task_grow_handles_locked(owner,
+					     owner->handle_capacity + 1) != 0) {
+			break;
+		}
 	}
 
 	spin_unlock_irqrestore(&owner->lock, flags);
-	console_printf("sched: handle table full task=%u\n", owner->pid);
+	console_printf("sched: handle table grow failed task=%u\n", owner->pid);
 	return 0;
 }
 
 struct task *task_from_handle(struct task *owner, u64 handle, u32 rights)
 {
-	if (owner == 0 || handle == 0 || handle > MAX_TASK_HANDLES) {
+	if (owner == 0 || handle == 0 || handle > owner->handle_capacity) {
 		return 0;
 	}
 
@@ -631,7 +734,7 @@ struct task *task_from_handle(struct task *owner, u64 handle, u32 rights)
 
 int task_can_inherit_handle(struct task *src, u64 handle, u32 rights)
 {
-	if (src == 0 || handle == 0 || handle > MAX_TASK_HANDLES ||
+	if (src == 0 || handle == 0 || handle > src->handle_capacity ||
 	    rights == 0) {
 		return -1;
 	}
@@ -683,7 +786,7 @@ u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
 int task_export_cap(struct task *task, u64 handle, u32 rights,
 		    enum task_cap_type *type, void **object)
 {
-	if (task == 0 || handle == 0 || handle > MAX_TASK_HANDLES ||
+	if (task == 0 || handle == 0 || handle > task->handle_capacity ||
 	    type == 0 || object == 0) {
 		return -1;
 	}
@@ -711,7 +814,7 @@ int task_export_cap(struct task *task, u64 handle, u32 rights,
 struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
 				       u32 rights)
 {
-	if (task == 0 || handle == 0 || handle > MAX_TASK_HANDLES) {
+	if (task == 0 || handle == 0 || handle > task->handle_capacity) {
 		return 0;
 	}
 
@@ -736,7 +839,7 @@ struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
 struct shared_buffer *task_buffer_from_handle(struct task *task, u64 handle,
 					      u32 rights)
 {
-	if (task == 0 || handle == 0 || handle > MAX_TASK_HANDLES) {
+	if (task == 0 || handle == 0 || handle > task->handle_capacity) {
 		return 0;
 	}
 
@@ -760,7 +863,7 @@ struct shared_buffer *task_buffer_from_handle(struct task *task, u64 handle,
 
 int task_close_handle(struct task *task, u64 handle)
 {
-	if (task == 0 || handle == 0 || handle > MAX_TASK_HANDLES) {
+	if (task == 0 || handle == 0 || handle > task->handle_capacity) {
 		return -1;
 	}
 
@@ -825,9 +928,11 @@ static void task_teardown(struct task *task)
 		return;
 	}
 
-	struct task_handle handles[MAX_TASK_HANDLES];
+	struct task_handle *handles;
+	u32 handle_count;
 	struct ipc_port *reply_port;
 	struct vm_space *space;
+	struct task_vm_region *vm_regions;
 	const u32 pid = task->pid;
 	const char *name = task->name;
 
@@ -844,21 +949,24 @@ static void task_teardown(struct task *task)
 	}
 
 	const u64 flags = spin_lock_irqsave(&task->lock);
-	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
-		handles[i] = task->handles[i];
-		task->handles[i].type = TASK_HANDLE_EMPTY;
-		task->handles[i].rights = 0;
-		task->handles[i].object = 0;
-	}
+	handles = task->handles;
+	handle_count = task->handle_capacity;
+	task->handles = 0;
+	task->handle_capacity = 0;
 	reply_port = task->reply_port;
 	task->reply_port = 0;
 	space = task->vm_space;
 	task->vm_space = 0;
+	vm_regions = task->vm_regions;
+	task->vm_regions = 0;
+	task->vm_region_capacity = 0;
 	spin_unlock_irqrestore(&task->lock, flags);
 
-	for (u32 i = 0; i < MAX_TASK_HANDLES; i++) {
+	for (u32 i = 0; i < handle_count; i++) {
 		task_handle_release(handles[i].type, handles[i].object);
 	}
+	slab_free(handles);
+	slab_free(vm_regions);
 	ipc_port_release(reply_port);
 	vm_rpc_destroy_space(space);
 	task_remove_from_list(task);
@@ -1373,12 +1481,6 @@ int task_add_vm_mapping(struct task *task, u64 base, u64 len, u32 prot,
 		}
 	}
 
-	if (task->vm_region_count >= MAX_TASK_VM_REGIONS) {
-		spin_unlock_irqrestore(&task->lock, irq_flags);
-		console_printf("sched: vma table full task=%u\n", task->pid);
-		return -1;
-	}
-
 	for (u32 i = 0; i < task->vm_region_count; i++) {
 		const struct task_vm_region *region = &task->vm_regions[i];
 
@@ -1390,8 +1492,14 @@ int task_add_vm_mapping(struct task *task, u64 base, u64 len, u32 prot,
 		}
 	}
 
-	struct task_vm_region *region =
-		&task->vm_regions[task->vm_region_count++];
+	if (task_grow_vm_regions_locked(task, task->vm_region_count + 1) != 0) {
+		spin_unlock_irqrestore(&task->lock, irq_flags);
+		console_printf("sched: vma table grow failed task=%u\n",
+			       task->pid);
+		return -1;
+	}
+
+	struct task_vm_region *region = &task->vm_regions[task->vm_region_count++];
 	region->base = base;
 	region->len = len;
 	region->offset = offset;
@@ -1505,7 +1613,7 @@ static int task_vm_range_is_covered_locked(struct task *task, u64 base, u64 len)
 static int task_append_vm_region_locked(struct task *task,
 					struct task_vm_region region)
 {
-	if (task->vm_region_count >= MAX_TASK_VM_REGIONS) {
+	if (task_grow_vm_regions_locked(task, task->vm_region_count + 1) != 0) {
 		console_printf("sched: vma protect split denied task=%u\n",
 			       task->pid);
 		return -1;
@@ -1616,15 +1724,15 @@ int task_remove_vm_region(struct task *task, u64 base, u64 len)
 		} else if (end == region_end) {
 			region->len = base - region_base;
 		} else {
-			if (task->vm_region_count >= MAX_TASK_VM_REGIONS) {
+			struct task_vm_region right = *region;
+
+			if (task_grow_vm_regions_locked(task,
+							task->vm_region_count + 1) != 0) {
 				spin_unlock_irqrestore(&task->lock, flags);
 				console_printf("sched: vma split denied task=%u\n",
 					       task->pid);
 				return -1;
 			}
-
-			struct task_vm_region right = *region;
-
 			right.base = end;
 			right.len = region_end - end;
 			region->len = base - region_base;
