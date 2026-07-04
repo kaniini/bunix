@@ -402,6 +402,30 @@ while ! awk '{ sub(/\r$/, "") } /^CTRL_C_OK$/ { found = 1 } END { exit found ? 0
 	sleep 1
 done
 
+printf 'busybox watch -n 1 busybox echo WATCH_OK & watch_pid=$!\nbusybox sleep 3\nbusybox kill $watch_pid\necho WATCH_DONE\n' >&3
+
+i=0
+while ! awk '{ sub(/\r$/, "") } /^WATCH_OK$/ { count++ } END { exit count >= 2 ? 0 : 1 }' "$log"; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox watch did not repeatedly run child command" >&2
+		tail -n 220 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+i=0
+while ! awk '{ sub(/\r$/, "") } /^WATCH_DONE$/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox watch was not killed after repeated child runs" >&2
+		tail -n 220 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
 printf 'cd /bin\npwd\nexit\n' >&3
 
 i=0

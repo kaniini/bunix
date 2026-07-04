@@ -126,6 +126,7 @@ enum {
 	LINUX_SYSCALL_PRLIMIT64 = 302,
 	LINUX_SYSCALL_GETRANDOM = 318,
 	LINUX_SYSCALL_EXIT_GROUP = 231,
+	LINUX_CLONE_VFORK = 0x00004000,
 	LINUX_EBADF = 9,
 	LINUX_EAGAIN = 11,
 	LINUX_ENOMEM = 12,
@@ -263,9 +264,16 @@ struct linux_exec_args {
 	char values[LINUX_EXEC_MAX_ARGS][LINUX_EXEC_MAX_ARG];
 };
 
+struct linux_vfork_wait {
+	u32 child_task;
+	u32 done;
+};
+
 static u8 syscall_copy_buffer[LINUX_MAX_SYSCALL_BUFFER];
 static u8 console_input_buffer[LINUX_MAX_SYSCALL_BUFFER];
 static struct spinlock syscall_copy_lock = SPINLOCK_INIT("syscall-copy");
+static struct spinlock linux_vfork_lock = SPINLOCK_INIT("linux-vfork");
+static struct linux_vfork_wait linux_vfork_waiters[32];
 static int str_eq(const char *left, const char *right);
 struct user_ipc_message {
 	u32 protocol;
@@ -1051,6 +1059,70 @@ static int linux_syscall_forwards_scalar(u64 number)
 	}
 }
 
+static struct linux_vfork_wait *linux_vfork_begin(u32 child_task)
+{
+	const u64 flags = spin_lock_irqsave(&linux_vfork_lock);
+	struct linux_vfork_wait *waiter = 0;
+
+	for (u64 i = 0; i < sizeof(linux_vfork_waiters) /
+	     sizeof(linux_vfork_waiters[0]); i++) {
+		if (linux_vfork_waiters[i].child_task == 0) {
+			linux_vfork_waiters[i].child_task = child_task;
+			linux_vfork_waiters[i].done = 0;
+			waiter = &linux_vfork_waiters[i];
+			break;
+		}
+	}
+
+	spin_unlock_irqrestore(&linux_vfork_lock, flags);
+	return waiter;
+}
+
+static void linux_vfork_cancel(struct linux_vfork_wait *waiter)
+{
+	if (waiter == 0) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&linux_vfork_lock);
+	waiter->child_task = 0;
+	waiter->done = 0;
+	spin_unlock_irqrestore(&linux_vfork_lock, flags);
+}
+
+static int linux_vfork_is_done(struct linux_vfork_wait *waiter)
+{
+	int done;
+	const u64 flags = spin_lock_irqsave(&linux_vfork_lock);
+
+	done = waiter == 0 || waiter->done != 0;
+	spin_unlock_irqrestore(&linux_vfork_lock, flags);
+	return done;
+}
+
+static void linux_vfork_wait(struct linux_vfork_wait *waiter)
+{
+	while (!linux_vfork_is_done(waiter)) {
+		thread_sleep_ns(1000000ull);
+	}
+	linux_vfork_cancel(waiter);
+}
+
+static void linux_vfork_complete_task(u32 child_task)
+{
+	const u64 flags = spin_lock_irqsave(&linux_vfork_lock);
+
+	for (u64 i = 0; i < sizeof(linux_vfork_waiters) /
+	     sizeof(linux_vfork_waiters[0]); i++) {
+		if (linux_vfork_waiters[i].child_task == child_task) {
+			linux_vfork_waiters[i].done = 1;
+			break;
+		}
+	}
+
+	spin_unlock_irqrestore(&linux_vfork_lock, flags);
+}
+
 static u64 linux_exit_current(u64 status)
 {
 	struct ipc_port *linux = ipc_port_find("linux");
@@ -1069,6 +1141,7 @@ static u64 linux_exit_current(u64 status)
 
 	(void)linux_forward_message(linux, reply_port, &request, &reply);
 	console_printf("linux: exit_group status=%u\n", (u32)status);
+	linux_vfork_complete_task(task_id(task_current()));
 	__asm__ volatile ("sti");
 	thread_exit();
 }
@@ -1413,7 +1486,12 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 
 	frame->user_rip = entry;
 	frame->user_rsp = new_sp;
-	(void)linux_exec_process(task);
+	const u64 exec_result = linux_exec_process(task);
+	if ((i64)exec_result < 0) {
+		slab_free(image);
+		return exec_result;
+	}
+	linux_vfork_complete_task(task_id(task));
 	console_printf("linux: execve task=%u path=%s entry=%p stack=%p\n",
 		       task_id(task), path, (const void *)entry,
 		       (const void *)new_sp);
@@ -1849,6 +1927,10 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_VFORK: {
 		struct arch_syscall_frame child_frame = *frame;
 		struct task *child;
+		struct linux_vfork_wait *vfork_waiter = 0;
+		const int is_vfork = number == LINUX_SYSCALL_VFORK ||
+				     (number == LINUX_SYSCALL_CLONE &&
+				      (arg0 & LINUX_CLONE_VFORK) != 0);
 		u64 pid;
 
 		if (number == LINUX_SYSCALL_CLONE && arg1 != 0) {
@@ -1858,15 +1940,27 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		if (child == 0) {
 			return (u64)-LINUX_ENOMEM;
 		}
+		if (is_vfork) {
+			vfork_waiter = linux_vfork_begin(task_id(child));
+			if (vfork_waiter == 0) {
+				(void)task_kill(child);
+				return (u64)-LINUX_ENOMEM;
+			}
+		}
 
 		pid = linux_fork_process(task, child);
 		if ((i64)pid < 0) {
+			linux_vfork_cancel(vfork_waiter);
 			(void)task_kill(child);
 			return pid;
 		}
 		if (server_task_start_fork(child, &child_frame) != 0) {
+			linux_vfork_cancel(vfork_waiter);
 			(void)task_kill(child);
 			return (u64)-LINUX_ENOMEM;
+		}
+		if (is_vfork) {
+			linux_vfork_wait(vfork_waiter);
 		}
 		console_printf("linux: fork parent=%u child=%u linux_pid=%u\n",
 			       task_id(task), task_id(child), (u32)pid);
