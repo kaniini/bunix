@@ -178,7 +178,7 @@ static char *str_dup(const char *text)
 	return copy;
 }
 
-static int read_path_buffer(u64 buffer, u64 len, char *path)
+static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
 {
 	if (buffer == 0 || len == 0 || len > VFS_MAX_PATH) {
 		return -1;
@@ -186,11 +186,104 @@ static int read_path_buffer(u64 buffer, u64 len, char *path)
 	for (u64 i = 0; i < VFS_MAX_PATH; i++) {
 		path[i] = '\0';
 	}
-	if (bunix_buffer_read(buffer, 0, path, len) != 0 ||
+	if (bunix_buffer_read(buffer, offset, path, len) != 0 ||
 	    path[len - 1] != '\0') {
 		return -1;
 	}
 	return str_len(path) < VFS_MAX_PATH ? 0 : -1;
+}
+
+static int path_component_eq(const char *component, const char *literal)
+{
+	u64 i = 0;
+
+	while (component[i] != '\0' && literal[i] != '\0') {
+		if (component[i] != literal[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return component[i] == literal[i];
+}
+
+static int vfs_resolve_path(const char *cwd, const char *input, char *out)
+{
+	char temp[VFS_MAX_PATH];
+	u64 pos = 0;
+	u64 in = 0;
+
+	if (input == 0 || input[0] == '\0' ||
+	    cwd == 0 || cwd[0] != '/') {
+		return -1;
+	}
+	if (input[0] == '/') {
+		temp[pos++] = '/';
+	} else {
+		const u64 cwd_len = str_len(cwd);
+
+		for (u64 i = 0; i < cwd_len && pos < sizeof(temp) - 1; i++) {
+			temp[pos++] = cwd[i];
+		}
+		if (pos == 0) {
+			temp[pos++] = '/';
+		}
+		if (pos > 1 && pos < sizeof(temp) - 1) {
+			temp[pos++] = '/';
+		}
+	}
+
+	while (input[in] != '\0') {
+		char component[VFS_MAX_PATH];
+		u64 comp_len = 0;
+
+		while (input[in] == '/') {
+			in++;
+		}
+		while (input[in] != '\0' && input[in] != '/') {
+			if (comp_len + 1 >= sizeof(component)) {
+				return -1;
+			}
+			component[comp_len++] = input[in++];
+		}
+		component[comp_len] = '\0';
+		if (comp_len == 0 || path_component_eq(component, ".")) {
+			continue;
+		}
+		if (path_component_eq(component, "..")) {
+			if (pos > 1) {
+				if (temp[pos - 1] == '/') {
+					pos--;
+				}
+				while (pos > 1 && temp[pos - 1] != '/') {
+					pos--;
+				}
+			}
+			temp[pos] = '\0';
+			continue;
+		}
+		if (pos > 1) {
+			if (pos + 1 >= sizeof(temp)) {
+				return -1;
+			}
+			temp[pos++] = '/';
+		}
+		if (pos + comp_len >= sizeof(temp)) {
+			return -1;
+		}
+		for (u64 i = 0; i < comp_len; i++) {
+			temp[pos++] = component[i];
+		}
+		temp[pos] = '\0';
+	}
+
+	if (pos == 0) {
+		temp[pos++] = '/';
+	}
+	temp[pos] = '\0';
+	for (u64 i = 0; i <= pos; i++) {
+		out[i] = temp[i];
+	}
+	return 0;
 }
 
 static int path_is_at_or_under(const char *path, const char *prefix)
@@ -847,11 +940,18 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_OPEN_BUFFER: {
+			char cwd[VFS_MAX_PATH];
+			char input[VFS_MAX_PATH];
 			char path[VFS_MAX_PATH];
+			const u64 cwd_len = message.words[0];
+			const u64 path_len = message.words[1];
 
 			if ((message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
-			    read_path_buffer(message.cap, message.words[0],
-					     path) != 0) {
+			    read_path_buffer_at(message.cap, 0, cwd_len,
+						cwd) != 0 ||
+			    read_path_buffer_at(message.cap, cwd_len, path_len,
+						input) != 0 ||
+			    vfs_resolve_path(cwd, input, path) != 0) {
 				reply.words[0] = (u64)-1;
 				break;
 			}
@@ -866,11 +966,18 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_STAT_PATH_META_BUFFER: {
+			char cwd[VFS_MAX_PATH];
+			char input[VFS_MAX_PATH];
 			char path[VFS_MAX_PATH];
+			const u64 cwd_len = message.words[0];
+			const u64 path_len = message.words[1];
 
 			if ((message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
-			    read_path_buffer(message.cap, message.words[0],
-					     path) != 0) {
+			    read_path_buffer_at(message.cap, 0, cwd_len,
+						cwd) != 0 ||
+			    read_path_buffer_at(message.cap, cwd_len, path_len,
+						input) != 0 ||
+			    vfs_resolve_path(cwd, input, path) != 0) {
 				reply.words[0] = (u64)-1;
 				break;
 			}

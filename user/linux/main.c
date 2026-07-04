@@ -1930,10 +1930,12 @@ static u64 linux_mode_for_type(u64 type, u64 mode)
 	return LINUX_S_IFREG | mode;
 }
 
-static long linux_vfs_path_call(u64 type, const char *path, u64 task,
-				struct bunix_msg *reply)
+static long linux_vfs_path_call(struct linux_process *process, u64 type,
+				const char *path, struct bunix_msg *reply)
 {
-	const u64 len = string_len(path) + 1;
+	const u64 cwd_len = string_len(process->cwd) + 1;
+	const u64 path_len = string_len(path) + 1;
+	const u64 len = cwd_len + path_len;
 	const long path_buffer = bunix_buffer_create(len);
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
@@ -1942,12 +1944,17 @@ static long linux_vfs_path_call(u64 type, const char *path, u64 task,
 		.cap_rights = BUNIX_RIGHT_RECV,
 		.reply = 0,
 		.cap = (u64)path_buffer,
-		.words = { len, 0, 0, task },
+		.words = { cwd_len, path_len, 0, process->bunix_task },
 	};
 	long result;
 
-	if (path_buffer < 0 || len == 0 || len > LINUX_MAX_PATH ||
-	    bunix_buffer_write((u64)path_buffer, 0, path, len) != 0) {
+	if (path_buffer < 0 || cwd_len == 0 || path_len == 0 ||
+	    cwd_len > LINUX_MAX_PATH || path_len > LINUX_MAX_PATH ||
+	    len > LINUX_MAX_PATH * 2 ||
+	    bunix_buffer_write((u64)path_buffer, 0, process->cwd,
+			       cwd_len) != 0 ||
+	    bunix_buffer_write((u64)path_buffer, cwd_len, path,
+			       path_len) != 0) {
 		if (path_buffer >= 0) {
 			bunix_handle_close((u64)path_buffer);
 		}
@@ -1990,8 +1997,8 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		return -LINUX_EINVAL;
 	}
 
-	if (linux_vfs_path_call(BUNIX_VFS_OPEN_BUFFER, full_path,
-				process->bunix_task, &reply) != 0) {
+	if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER,
+				path, &reply) != 0) {
 		return -LINUX_ENOENT;
 	}
 	if (reply.words[0] != 0) {
@@ -2149,8 +2156,8 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 		return 0;
 	}
 
-	if (linux_vfs_path_call(BUNIX_VFS_STAT_PATH_META_BUFFER, full_path,
-				process->bunix_task, &reply) != 0 ||
+	if (linux_vfs_path_call(process, BUNIX_VFS_STAT_PATH_META_BUFFER,
+				path, &reply) != 0 ||
 	    reply.words[0] != 0) {
 		return -LINUX_ENOENT;
 	}
@@ -2295,8 +2302,8 @@ static long linux_chdir(struct linux_process *process, u64 path_len,
 		return -LINUX_EINVAL;
 	}
 
-	if (linux_vfs_path_call(BUNIX_VFS_OPEN_BUFFER, full_path,
-				process->bunix_task, &reply) != 0) {
+	if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER,
+				path, &reply) != 0) {
 		return -LINUX_ENOENT;
 	}
 	if (reply.words[0] != 0) {
