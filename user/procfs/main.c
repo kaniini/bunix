@@ -4,8 +4,19 @@
 enum {
 	PROCFS_HANDLE_NAMES = 3,
 	PROCFS_MAX_TEXT = 2048,
-	PROCFS_FILE_PROC = 1,
-	PROCFS_FILE_KTHREADS = 2,
+	PROCFS_MAX_PATH = 256,
+	PROCFS_KIND_PROC = 1,
+	PROCFS_KIND_KTHREADS = 2,
+	PROCFS_KIND_UPTIME = 3,
+	PROCFS_KIND_MEMINFO = 4,
+	PROCFS_KIND_MOUNTS = 5,
+	PROCFS_KIND_SELF = 6,
+	PROCFS_KIND_PID = 7,
+	PROCFS_KIND_PID_STAT = 8,
+	PROCFS_KIND_PID_STATUS = 9,
+	PROCFS_KIND_PID_CMDLINE = 10,
+	PROCFS_KIND_PID_FD = 11,
+	PROCFS_KIND_PID_FD_ENTRY = 12,
 };
 
 static struct bunix_id_table open_files;
@@ -62,15 +73,77 @@ static int str_eq(const char *left, const char *right)
 	return *left == '\0' && *right == '\0';
 }
 
+static int path_has_prefix(const char *path, const char *prefix)
+{
+	u64 i = 0;
+
+	while (prefix[i] != '\0') {
+		if (path[i] != prefix[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return 1;
+}
+
+static u64 make_file(u64 kind, u64 arg)
+{
+	return kind | (arg << 8);
+}
+
+static u64 file_kind(u64 file)
+{
+	return file & 0xff;
+}
+
+static u64 file_arg(u64 file)
+{
+	return file >> 8;
+}
+
+static int parse_u64_component(const char **cursor, u64 *value)
+{
+	const char *p = *cursor;
+	u64 out = 0;
+
+	if (*p < '0' || *p > '9') {
+		return -1;
+	}
+	while (*p >= '0' && *p <= '9') {
+		out = out * 10 + (u64)(*p - '0');
+		p++;
+	}
+	*cursor = p;
+	*value = out;
+	return 0;
+}
+
 static void unpack_path(char *path, const u64 *words)
 {
+	for (u64 i = 0; i < PROCFS_MAX_PATH; i++) {
+		path[i] = '\0';
+	}
 	for (u64 i = 0; i < 16; i++) {
 		const u64 slot = i / 8;
 		const u64 shift = (i % 8) * 8;
 
 		path[i] = (char)((words[slot] >> shift) & 0xff);
 	}
-	path[31] = '\0';
+}
+
+static int read_path_buffer(u64 buffer, u64 offset, u64 len, char *path)
+{
+	if (buffer == 0 || len == 0 || len > PROCFS_MAX_PATH) {
+		return -1;
+	}
+	for (u64 i = 0; i < PROCFS_MAX_PATH; i++) {
+		path[i] = '\0';
+	}
+	if (bunix_buffer_read(buffer, offset, path, len) != 0 ||
+	    path[len - 1] != '\0') {
+		return -1;
+	}
+	return 0;
 }
 
 static void pack_name(u64 *words, const char *name)
@@ -126,17 +199,82 @@ static long mount_procfs(void)
 static u64 file_for_path(const char *path)
 {
 	if (str_eq(path, "/proc")) {
-		return PROCFS_FILE_PROC;
+		return make_file(PROCFS_KIND_PROC, 0);
 	}
 	if (str_eq(path, "/proc/kthreads")) {
-		return PROCFS_FILE_KTHREADS;
+		return make_file(PROCFS_KIND_KTHREADS, 0);
+	}
+	if (str_eq(path, "/proc/uptime")) {
+		return make_file(PROCFS_KIND_UPTIME, 0);
+	}
+	if (str_eq(path, "/proc/meminfo")) {
+		return make_file(PROCFS_KIND_MEMINFO, 0);
+	}
+	if (str_eq(path, "/proc/mounts")) {
+		return make_file(PROCFS_KIND_MOUNTS, 0);
+	}
+	if (str_eq(path, "/proc/self")) {
+		return make_file(PROCFS_KIND_SELF, 1);
+	}
+	if (str_eq(path, "/proc/self/stat")) {
+		return make_file(PROCFS_KIND_PID_STAT, 1);
+	}
+	if (str_eq(path, "/proc/self/status")) {
+		return make_file(PROCFS_KIND_PID_STATUS, 1);
+	}
+	if (str_eq(path, "/proc/self/cmdline")) {
+		return make_file(PROCFS_KIND_PID_CMDLINE, 1);
+	}
+	if (str_eq(path, "/proc/self/fd")) {
+		return make_file(PROCFS_KIND_PID_FD, 1);
+	}
+	if (path_has_prefix(path, "/proc/self/fd/")) {
+		const char *cursor = path + 14;
+		u64 fd;
+
+		if (parse_u64_component(&cursor, &fd) == 0 && *cursor == '\0') {
+			return make_file(PROCFS_KIND_PID_FD_ENTRY, fd);
+		}
+	}
+	if (path_has_prefix(path, "/proc/")) {
+		const char *cursor = path + 6;
+		u64 pid;
+
+		if (parse_u64_component(&cursor, &pid) != 0 || pid == 0) {
+			return 0;
+		}
+		if (*cursor == '\0') {
+			return make_file(PROCFS_KIND_PID, pid);
+		}
+		if (str_eq(cursor, "/stat")) {
+			return make_file(PROCFS_KIND_PID_STAT, pid);
+		}
+		if (str_eq(cursor, "/status")) {
+			return make_file(PROCFS_KIND_PID_STATUS, pid);
+		}
+		if (str_eq(cursor, "/cmdline")) {
+			return make_file(PROCFS_KIND_PID_CMDLINE, pid);
+		}
+		if (str_eq(cursor, "/fd")) {
+			return make_file(PROCFS_KIND_PID_FD, pid);
+		}
+		if (path_has_prefix(cursor, "/fd/")) {
+			cursor += 4;
+			if (parse_u64_component(&cursor, &pid) == 0 &&
+			    *cursor == '\0') {
+				return make_file(PROCFS_KIND_PID_FD_ENTRY, pid);
+			}
+		}
 	}
 	return 0;
 }
 
 static u64 file_size(u64 file)
 {
-	if (file == PROCFS_FILE_KTHREADS) {
+	if (file_kind(file) != PROCFS_KIND_PROC &&
+	    file_kind(file) != PROCFS_KIND_SELF &&
+	    file_kind(file) != PROCFS_KIND_PID &&
+	    file_kind(file) != PROCFS_KIND_PID_FD) {
 		return PROCFS_MAX_TEXT;
 	}
 	return 0;
@@ -216,6 +354,119 @@ static u64 build_kthreads(void)
 	return len;
 }
 
+static void append_fixed2(u64 *len, u64 value)
+{
+	append_u64(len, value);
+	append_str(len, ".00");
+}
+
+static u64 build_uptime(void)
+{
+	u64 len = 0;
+	const u64 seconds = bunix_clock_monotonic_ns() / 1000000000ull;
+
+	append_fixed2(&len, seconds);
+	append_char(&len, ' ');
+	append_fixed2(&len, seconds);
+	append_char(&len, '\n');
+	return len;
+}
+
+static u64 build_meminfo(void)
+{
+	u64 len = 0;
+
+	append_str(&len, "MemTotal:       131072 kB\n");
+	append_str(&len, "MemFree:         65536 kB\n");
+	append_str(&len, "MemAvailable:    65536 kB\n");
+	append_str(&len, "Buffers:             0 kB\n");
+	append_str(&len, "Cached:              0 kB\n");
+	append_str(&len, "SwapTotal:           0 kB\n");
+	append_str(&len, "SwapFree:            0 kB\n");
+	return len;
+}
+
+static u64 build_mounts(void)
+{
+	u64 len = 0;
+
+	append_str(&len, "rootfs / rootfs ro 0 0\n");
+	append_str(&len, "proc /proc proc rw 0 0\n");
+	return len;
+}
+
+static u64 build_pid_stat(u64 pid)
+{
+	u64 len = 0;
+
+	append_u64(&len, pid);
+	append_str(&len, " (sh) S 0 1 1 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ");
+	append_u64(&len, bunix_timer_ticks());
+	append_str(&len, " 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n");
+	return len;
+}
+
+static u64 build_pid_status(u64 pid)
+{
+	u64 len = 0;
+
+	append_str(&len, "Name:\tsh\n");
+	append_str(&len, "State:\tS (sleeping)\n");
+	append_str(&len, "Pid:\t");
+	append_u64(&len, pid);
+	append_char(&len, '\n');
+	append_str(&len, "PPid:\t0\n");
+	append_str(&len, "Uid:\t1000\t1000\t1000\t1000\n");
+	append_str(&len, "Gid:\t1000\t1000\t1000\t1000\n");
+	append_str(&len, "Groups:\t1000\n");
+	append_str(&len, "Threads:\t1\n");
+	return len;
+}
+
+static u64 build_pid_cmdline(u64 pid)
+{
+	u64 len = 0;
+
+	(void)pid;
+	append_str(&len, "/bin/sh");
+	append_char(&len, '\0');
+	return len;
+}
+
+static u64 build_fd_entry(u64 fd)
+{
+	u64 len = 0;
+
+	append_str(&len, "fd ");
+	append_u64(&len, fd);
+	append_char(&len, '\n');
+	return len;
+}
+
+static u64 build_file_text(u64 file)
+{
+	switch (file_kind(file)) {
+	case PROCFS_KIND_KTHREADS:
+		return build_kthreads();
+	case PROCFS_KIND_UPTIME:
+		return build_uptime();
+	case PROCFS_KIND_MEMINFO:
+		return build_meminfo();
+	case PROCFS_KIND_MOUNTS:
+		return build_mounts();
+	case PROCFS_KIND_PID_STAT:
+		return build_pid_stat(file_arg(file));
+	case PROCFS_KIND_PID_STATUS:
+		return build_pid_status(file_arg(file));
+	case PROCFS_KIND_PID_CMDLINE:
+		return build_pid_cmdline(file_arg(file));
+	case PROCFS_KIND_PID_FD_ENTRY:
+		return build_fd_entry(file_arg(file));
+	default:
+		return 0;
+	}
+}
+
 static u64 open_file(u64 file)
 {
 	return bunix_id_alloc(&open_files, file);
@@ -231,14 +482,64 @@ static void close_file(u64 handle)
 	(void)bunix_id_remove(&open_files, handle);
 }
 
+static int file_is_dir(u64 file)
+{
+	const u64 kind = file_kind(file);
+
+	return kind == PROCFS_KIND_PROC ||
+	       kind == PROCFS_KIND_SELF ||
+	       kind == PROCFS_KIND_PID ||
+	       kind == PROCFS_KIND_PID_FD;
+}
+
 static void stat_reply(struct bunix_msg *reply, u64 file)
 {
+	const int is_dir = file_is_dir(file);
+
 	reply->words[0] = 0;
 	reply->words[1] = file_size(file);
-	reply->words[2] = file == PROCFS_FILE_PROC ?
+	reply->words[2] = is_dir ?
 			  (0555 | ((u64)BUNIX_VFS_TYPE_DIRECTORY << 32)) :
 			  (0444 | ((u64)BUNIX_VFS_TYPE_REGULAR << 32));
 	reply->words[3] = 0;
+}
+
+static const char *proc_dir_entry(u64 index, u64 *type)
+{
+	static const char *names[] = {
+		"kthreads", "uptime", "meminfo", "mounts", "self",
+		"1", "2", "3", "4"
+	};
+
+	if (index >= sizeof(names) / sizeof(names[0])) {
+		return 0;
+	}
+	*type = index >= 4 ? BUNIX_VFS_TYPE_DIRECTORY :
+			     BUNIX_VFS_TYPE_REGULAR;
+	return names[index];
+}
+
+static const char *pid_dir_entry(u64 index, u64 *type)
+{
+	static const char *names[] = { "stat", "status", "cmdline", "fd" };
+
+	if (index >= sizeof(names) / sizeof(names[0])) {
+		return 0;
+	}
+	*type = index == 3 ? BUNIX_VFS_TYPE_DIRECTORY :
+			     BUNIX_VFS_TYPE_REGULAR;
+	return names[index];
+}
+
+static const char *fd_dir_entry(u64 index, u64 *type)
+{
+	static const char *names[] = { "0", "1", "2" };
+
+	if (index >= sizeof(names) / sizeof(names[0])) {
+		return 0;
+	}
+	*type = BUNIX_VFS_TYPE_REGULAR;
+	return names[index];
 }
 
 int main(void)
@@ -275,7 +576,7 @@ int main(void)
 		switch (message.type) {
 		case BUNIX_VFS_OPEN:
 		case BUNIX_VFS_STAT_PATH_META: {
-			char path[32];
+			char path[PROCFS_MAX_PATH];
 			const u64 file = (unpack_path(path, &message.words[0]),
 					  file_for_path(path));
 
@@ -294,7 +595,39 @@ int main(void)
 					reply.words[0] = 0;
 					reply.words[1] = handle;
 					reply.words[2] = file_size(file);
-					reply.words[3] = file == PROCFS_FILE_PROC ?
+					reply.words[3] = file_is_dir(file) ?
+						BUNIX_VFS_TYPE_DIRECTORY :
+						BUNIX_VFS_TYPE_REGULAR;
+				}
+			}
+			break;
+		}
+		case BUNIX_VFS_OPEN_BUFFER:
+		case BUNIX_VFS_STAT_PATH_META_BUFFER: {
+			char path[PROCFS_MAX_PATH];
+			const u64 cwd_len = message.words[0];
+			const u64 path_len = message.words[1];
+			const u64 file =
+				read_path_buffer(message.cap, cwd_len, path_len,
+						 path) == 0 ?
+				file_for_path(path) : 0;
+
+			if (file == 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			if (message.type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
+				stat_reply(&reply, file);
+			} else {
+				const u64 handle = open_file(file);
+
+				if (handle == 0) {
+					reply.words[0] = (u64)-1;
+				} else {
+					reply.words[0] = 0;
+					reply.words[1] = handle;
+					reply.words[2] = file_size(file);
+					reply.words[3] = file_is_dir(file) ?
 						BUNIX_VFS_TYPE_DIRECTORY :
 						BUNIX_VFS_TYPE_REGULAR;
 				}
@@ -317,11 +650,11 @@ int main(void)
 			u64 len = message.words[2];
 			u64 size;
 
-			if (file != PROCFS_FILE_KTHREADS || message.cap == 0) {
+			if (file == 0 || file_is_dir(file) || message.cap == 0) {
 				reply.words[0] = (u64)-1;
 				break;
 			}
-			size = build_kthreads();
+			size = build_file_text(file);
 			if (offset >= size) {
 				len = 0;
 			} else if (len > size - offset) {
@@ -336,18 +669,28 @@ int main(void)
 		}
 		case BUNIX_VFS_READDIR: {
 			const u64 file = file_from_handle(message.words[0]);
+			const char *name = 0;
+			u64 type = BUNIX_VFS_TYPE_REGULAR;
 
-			if (file != PROCFS_FILE_PROC) {
+			if (!file_is_dir(file)) {
 				reply.words[0] = BUNIX_VFS_ERR_NOTDIR;
 				break;
 			}
-			if (message.words[1] != 0) {
+			if (file_kind(file) == PROCFS_KIND_PROC) {
+				name = proc_dir_entry(message.words[1], &type);
+			} else if (file_kind(file) == PROCFS_KIND_PID_FD) {
+				name = fd_dir_entry(message.words[1], &type);
+			} else {
+				name = pid_dir_entry(message.words[1], &type);
+			}
+			if (name == 0) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
 			reply.words[0] = 0;
-			reply.words[1] = 1 | ((u64)BUNIX_VFS_TYPE_REGULAR << 32);
-			pack_name(&reply.words[2], "kthreads");
+			reply.words[1] = (message.words[1] + 1) |
+					 (type << 32);
+			pack_name(&reply.words[2], name);
 			break;
 		}
 		case BUNIX_VFS_CLOSE:

@@ -160,13 +160,6 @@ static u64 str_len(const char *text)
 	return len;
 }
 
-static void pack_path(u64 *words, const char *path)
-{
-	words[0] = 0;
-	words[1] = 0;
-	pack_bytes(words, (const unsigned char *)path, str_len(path) + 1);
-}
-
 static char *str_dup(const char *text)
 {
 	const u64 len = str_len(text);
@@ -696,7 +689,9 @@ static int forward_mount_path(struct vfs_mount *mount, struct bunix_msg *message
 		reply->words[0] = (u64)-1;
 		return -1;
 	}
-	if (message->type == BUNIX_VFS_OPEN && reply->words[0] == 0) {
+	if ((message->type == BUNIX_VFS_OPEN ||
+	     message->type == BUNIX_VFS_OPEN_BUFFER) &&
+	    reply->words[0] == 0) {
 		const u64 remote_handle = reply->words[1];
 		const u64 local_handle =
 			open_remote_file(mount->service, remote_handle);
@@ -720,6 +715,38 @@ static int forward_mount_path(struct vfs_mount *mount, struct bunix_msg *message
 		reply->words[1] = local_handle;
 	}
 	return 0;
+}
+
+static int forward_mount_buffer_path(struct vfs_mount *mount,
+				     struct bunix_msg *message,
+				     struct bunix_msg *reply,
+				     const char *path)
+{
+	const char root[] = "/";
+	const u64 cwd_len = 2;
+	const u64 path_len = str_len(path) + 1;
+	const long buffer = bunix_buffer_create(cwd_len + path_len);
+	struct bunix_msg forwarded = *message;
+	int result;
+
+	if (buffer < 0 ||
+	    bunix_buffer_write((u64)buffer, 0, root, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, cwd_len, path, path_len) != 0) {
+		if (buffer >= 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		reply->words[0] = (u64)-1;
+		return -1;
+	}
+
+	forwarded.cap = (u64)buffer;
+	forwarded.cap_rights = BUNIX_RIGHT_RECV;
+	forwarded.words[0] = cwd_len;
+	forwarded.words[1] = path_len;
+	forwarded.words[2] = 0;
+	result = forward_mount_path(mount, &forwarded, reply);
+	bunix_handle_close((u64)buffer);
+	return result;
 }
 
 static int forward_remote_handle(struct vfs_open *open,
@@ -787,11 +814,9 @@ static void vfs_open_path(struct bunix_msg *message, struct bunix_msg *reply,
 		struct bunix_msg forwarded = *message;
 
 		if (message->type == BUNIX_VFS_OPEN_BUFFER) {
-			forwarded.type = BUNIX_VFS_OPEN;
-			forwarded.cap = 0;
-			forwarded.cap_rights = 0;
-			pack_path(&forwarded.words[0], path);
-			forwarded.words[3] = message->words[3];
+			(void)forward_mount_buffer_path(mount, message, reply,
+							path);
+			return;
 		}
 		(void)forward_mount_path(mount, &forwarded, reply);
 		return;
@@ -835,11 +860,9 @@ static void vfs_stat_path(struct bunix_msg *message, struct bunix_msg *reply,
 		struct bunix_msg forwarded = *message;
 
 		if (message->type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
-			forwarded.type = BUNIX_VFS_STAT_PATH_META;
-			forwarded.cap = 0;
-			forwarded.cap_rights = 0;
-			pack_path(&forwarded.words[0], path);
-			forwarded.words[3] = message->words[3];
+			(void)forward_mount_buffer_path(mount, message, reply,
+							path);
+			return;
 		}
 		(void)forward_mount_path(mount, &forwarded, reply);
 		return;
