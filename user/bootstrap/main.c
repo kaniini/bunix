@@ -250,6 +250,12 @@ int main(void)
 				      BUNIX_RIGHT_SEND) == 0) {
 		return 1;
 	}
+	bunix_launch_module_with_caps("unionfs", fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_UNIONFS,
+				      BUNIX_RIGHT_SEND) == 0) {
+		return 1;
+	}
 	fs_namespace = create_namespace();
 	if (fs_namespace == 0 ||
 	    register_service_in_namespace(fs_namespace, BUNIX_SERVICE_VFS,

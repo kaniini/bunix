@@ -650,14 +650,16 @@ int main(void)
 	bunix_tree_init(&files);
 	bunix_u64_tree_init(&open_files);
 	next_open_id = 1;
-	if (register_service(BUNIX_SERVICE_TMPFS, BUNIX_HANDLE_SELF) != 0 ||
-	    vfs == 0) {
+	if (vfs == 0) {
 		return 1;
 	}
 	for (u64 i = 0; i < TMPFS_ROOT_COUNT; i++) {
 		if (mount_path(vfs, tmpfs_roots[i]) != 0) {
 			return 1;
 		}
+	}
+	if (register_service(BUNIX_SERVICE_TMPFS, BUNIX_HANDLE_SELF) != 0) {
+		return 1;
 	}
 	bunix_console_log(mounted, sizeof(mounted) - 1);
 

@@ -658,6 +658,7 @@ static u64 build_filesystems(void)
 	append_str(&len, "nodev\tproc\n");
 	append_str(&len, "nodev\tdevtmpfs\n");
 	append_str(&len, "nodev\ttmpfs\n");
+	append_str(&len, "nodev\tunionfs\n");
 	append_str(&len, "\trootfs\n");
 	return len;
 }
@@ -685,6 +686,7 @@ static u64 build_mounts(void)
 	append_str(&len, "tmpfs /tmp tmpfs rw 0 0\n");
 	append_str(&len, "tmpfs /run tmpfs rw 0 0\n");
 	append_str(&len, "tmpfs /var/tmp tmpfs rw 0 0\n");
+	append_str(&len, "unionfs /mnt/union unionfs rw 0 0\n");
 	return len;
 }
 
