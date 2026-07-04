@@ -1015,6 +1015,18 @@ static void vfs_access_path(struct bunix_msg *message, struct bunix_msg *reply,
 	reply->words[0] = 0;
 }
 
+static void vfs_mutate_path(struct bunix_msg *message, struct bunix_msg *reply,
+			    const char *path)
+{
+	struct vfs_mount *mount = mount_for_path(path);
+
+	if (mount != 0) {
+		(void)forward_mount_buffer_path(mount, message, reply, path);
+		return;
+	}
+	reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+}
+
 static void vfs_readlink_path(struct bunix_msg *message,
 			      struct bunix_msg *reply, const char *path)
 {
@@ -1253,6 +1265,60 @@ int main(void)
 			vfs_access_path(&message, &reply, path);
 			break;
 		}
+		case BUNIX_VFS_CREATE_BUFFER:
+		case BUNIX_VFS_UNLINK_BUFFER: {
+			char cwd[VFS_MAX_PATH];
+			char input[VFS_MAX_PATH];
+			char path[VFS_MAX_PATH];
+			const u64 cwd_len = message.words[0];
+			const u64 path_len = message.words[1];
+			u64 error = (u64)-1;
+
+			if ((message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+			    read_path_buffer_at(message.cap, 0, cwd_len,
+						cwd) != 0 ||
+			    read_path_buffer_at(message.cap, cwd_len, path_len,
+						input) != 0 ||
+			    vfs_resolve_with_base(message.words[2], cwd,
+						  input, path, &error) != 0) {
+				reply.words[0] = error;
+				break;
+			}
+			vfs_mutate_path(&message, &reply, path);
+			break;
+		}
+		case BUNIX_VFS_TRUNCATE: {
+			struct vfs_open *open = open_from_handle(message.words[0]);
+
+			if (message.cap != 0) {
+				char cwd[VFS_MAX_PATH];
+				char input[VFS_MAX_PATH];
+				char path[VFS_MAX_PATH];
+				const u64 cwd_len = message.words[0];
+				const u64 path_len = message.words[1];
+				u64 error = (u64)-1;
+
+				if ((message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+				    read_path_buffer_at(message.cap, 0, cwd_len,
+							cwd) != 0 ||
+				    read_path_buffer_at(message.cap, cwd_len,
+							path_len, input) != 0 ||
+				    vfs_resolve_with_base(message.words[2], cwd,
+							  input, path,
+							  &error) != 0) {
+					reply.words[0] = error;
+					break;
+				}
+				vfs_mutate_path(&message, &reply, path);
+				break;
+			}
+			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
+				(void)forward_remote_handle(open, &message, &reply);
+			} else {
+				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
+			}
+			break;
+		}
 		case BUNIX_VFS_READLINK_BUFFER: {
 			char cwd[VFS_MAX_PATH];
 			char input[VFS_MAX_PATH];
@@ -1350,6 +1416,16 @@ int main(void)
 			} else {
 				reply.words[0] = 0;
 				reply.words[1] = (u64)read_len;
+			}
+			break;
+		}
+		case BUNIX_VFS_WRITE_FILE_BUFFER: {
+			struct vfs_open *open = open_from_handle(message.words[0]);
+
+			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
+				(void)forward_remote_handle(open, &message, &reply);
+			} else {
+				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
 			}
 			break;
 		}

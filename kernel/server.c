@@ -21,6 +21,7 @@ static const struct server boot_servers[] = {
 	{ "linux", 0 },
 	{ "proc", 0 },
 	{ "procfs", 0 },
+	{ "tmpfs", 0 },
 	{ "block", 0 },
 	{ "vfs", 0 },
 	{ "ping", 0 },

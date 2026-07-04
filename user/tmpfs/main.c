@@ -1,0 +1,703 @@
+#include <bunix/libbunix.h>
+#include <bunix/id_table.h>
+
+enum {
+	TMPFS_HANDLE_NAMES = 3,
+	TMPFS_MAX_PATH = 256,
+	TMPFS_MAX_NAME = 64,
+	TMPFS_ROOT_COUNT = 3,
+	TMPFS_OPEN_DIR = 1,
+	TMPFS_OPEN_FILE = 2,
+};
+
+struct tmpfs_file {
+	struct tmpfs_file *next;
+	char *path;
+	char *data;
+	u64 size;
+	u64 capacity;
+	u64 refs;
+	int deleted;
+	unsigned int mode;
+	unsigned int uid;
+	unsigned int gid;
+};
+
+struct tmpfs_open {
+	u64 kind;
+	struct tmpfs_file *file;
+	char path[TMPFS_MAX_PATH];
+};
+
+static const char *tmpfs_roots[TMPFS_ROOT_COUNT] = {
+	"/tmp",
+	"/run",
+	"/var/tmp",
+};
+static struct tmpfs_file *files;
+static struct bunix_id_table open_files;
+
+static u64 str_len(const char *text)
+{
+	u64 len = 0;
+
+	while (len < TMPFS_MAX_PATH && text[len] != '\0') {
+		len++;
+	}
+	return len;
+}
+
+static int str_eq(const char *left, const char *right)
+{
+	while (*left != '\0' && *right != '\0') {
+		if (*left++ != *right++) {
+			return 0;
+		}
+	}
+	return *left == '\0' && *right == '\0';
+}
+
+static char *str_dup(const char *text)
+{
+	const u64 len = str_len(text);
+	char *copy;
+
+	if (text == 0 || len == TMPFS_MAX_PATH) {
+		return 0;
+	}
+	copy = (char *)bunix_alloc(len + 1);
+	if (copy == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i <= len; i++) {
+		copy[i] = text[i];
+	}
+	return copy;
+}
+
+static int path_has_prefix_child(const char *path, const char *prefix)
+{
+	u64 i = 0;
+
+	while (prefix[i] != '\0') {
+		if (path[i] != prefix[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return path[i] == '/';
+}
+
+static int path_is_root(const char *path)
+{
+	for (u64 i = 0; i < TMPFS_ROOT_COUNT; i++) {
+		if (str_eq(path, tmpfs_roots[i])) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int path_is_under_root(const char *path)
+{
+	for (u64 i = 0; i < TMPFS_ROOT_COUNT; i++) {
+		if (path_has_prefix_child(path, tmpfs_roots[i])) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int path_parent_is_root(const char *path)
+{
+	u64 last = 0;
+
+	if (!path_is_under_root(path)) {
+		return 0;
+	}
+	for (u64 i = 1; path[i] != '\0'; i++) {
+		if (path[i] == '/') {
+			last = i;
+		}
+	}
+	if (last == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < TMPFS_ROOT_COUNT; i++) {
+		const u64 len = str_len(tmpfs_roots[i]);
+
+		if (last == len) {
+			int match = 1;
+
+			for (u64 j = 0; j < len; j++) {
+				if (path[j] != tmpfs_roots[i][j]) {
+					match = 0;
+				}
+			}
+			if (match) {
+				return 1;
+			}
+		}
+	}
+	return 0;
+}
+
+static const char *path_name_in_dir(const char *path, const char *dir)
+{
+	const u64 len = str_len(dir);
+
+	return path + len + 1;
+}
+
+static int file_is_child_of(const struct tmpfs_file *file, const char *dir)
+{
+	const u64 len = str_len(dir);
+	u64 pos;
+
+	if (file == 0 || file->deleted || !path_has_prefix_child(file->path, dir)) {
+		return 0;
+	}
+	pos = len + 1;
+	while (file->path[pos] != '\0') {
+		if (file->path[pos] == '/') {
+			return 0;
+		}
+		pos++;
+	}
+	return 1;
+}
+
+static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
+{
+	words[0] = 0;
+	words[1] = 0;
+	for (u64 i = 0; i < len && i < BUNIX_IPC_DATA_BYTES; i++) {
+		const u64 slot = i / 8;
+		const u64 shift = (i % 8) * 8;
+
+		words[slot] |= ((u64)data[i]) << shift;
+	}
+}
+
+static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
+{
+	if (buffer == 0 || len == 0 || len > TMPFS_MAX_PATH) {
+		return -1;
+	}
+	for (u64 i = 0; i < TMPFS_MAX_PATH; i++) {
+		path[i] = '\0';
+	}
+	if (bunix_buffer_read(buffer, offset, path, len) != 0 ||
+	    path[len - 1] != '\0') {
+		return -1;
+	}
+	return 0;
+}
+
+static int read_resolved_path(const struct bunix_msg *message, char *path)
+{
+	char cwd[TMPFS_MAX_PATH];
+	char input[TMPFS_MAX_PATH];
+
+	if ((message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    read_path_buffer_at(message->cap, 0, message->words[0], cwd) != 0 ||
+	    read_path_buffer_at(message->cap, message->words[0],
+				message->words[1], input) != 0) {
+		return -1;
+	}
+	(void)cwd;
+	if (input[0] != '/') {
+		return -1;
+	}
+	for (u64 i = 0; i < TMPFS_MAX_PATH; i++) {
+		path[i] = input[i];
+		if (input[i] == '\0') {
+			return 0;
+		}
+	}
+	return -1;
+}
+
+static struct tmpfs_file *file_find(const char *path)
+{
+	for (struct tmpfs_file *file = files; file != 0; file = file->next) {
+		if (!file->deleted && str_eq(file->path, path)) {
+			return file;
+		}
+	}
+	return 0;
+}
+
+static void file_release(struct tmpfs_file *file)
+{
+	if (file == 0) {
+		return;
+	}
+	if (file->refs != 0) {
+		file->refs--;
+	}
+	if (file->refs == 0 && file->deleted) {
+		if (file->data != 0) {
+			bunix_free(file->data);
+		}
+		bunix_free(file->path);
+		bunix_free(file);
+	}
+}
+
+static int file_resize(struct tmpfs_file *file, u64 size)
+{
+	u64 capacity;
+	char *data;
+
+	if (file == 0) {
+		return -1;
+	}
+	if (size <= file->capacity) {
+		return 0;
+	}
+	capacity = file->capacity == 0 ? 64 : file->capacity;
+	while (capacity < size) {
+		capacity *= 2;
+	}
+	data = (char *)bunix_realloc(file->data, file->capacity, capacity);
+	if (data == 0) {
+		return -1;
+	}
+	for (u64 i = file->capacity; i < capacity; i++) {
+		data[i] = 0;
+	}
+	file->data = data;
+	file->capacity = capacity;
+	return 0;
+}
+
+static int file_set_size(struct tmpfs_file *file, u64 size)
+{
+	const u64 old_size = file != 0 ? file->size : 0;
+
+	if (file == 0 || file_resize(file, size) != 0) {
+		return -1;
+	}
+	if (size > old_size) {
+		for (u64 i = old_size; i < size; i++) {
+			file->data[i] = 0;
+		}
+	}
+	file->size = size;
+	return 0;
+}
+
+static struct tmpfs_file *file_create(const char *path, u64 mode)
+{
+	struct tmpfs_file *file;
+
+	if (!path_parent_is_root(path) || file_find(path) != 0) {
+		return 0;
+	}
+	file = (struct tmpfs_file *)bunix_calloc(1, sizeof(*file));
+	if (file == 0) {
+		return 0;
+	}
+	file->path = str_dup(path);
+	if (file->path == 0) {
+		bunix_free(file);
+		return 0;
+	}
+	file->mode = (unsigned int)(mode & 0777);
+	file->uid = 0;
+	file->gid = 0;
+	file->next = files;
+	files = file;
+	return file;
+}
+
+static u64 open_dir(const char *path)
+{
+	struct tmpfs_open *open;
+	u64 handle;
+
+	open = (struct tmpfs_open *)bunix_calloc(1, sizeof(*open));
+	if (open == 0) {
+		return 0;
+	}
+	open->kind = TMPFS_OPEN_DIR;
+	for (u64 i = 0; i <= str_len(path); i++) {
+		open->path[i] = path[i];
+	}
+	handle = bunix_id_alloc(&open_files, (u64)open);
+	if (handle == 0) {
+		bunix_free(open);
+	}
+	return handle;
+}
+
+static u64 open_file(struct tmpfs_file *file)
+{
+	struct tmpfs_open *open;
+	u64 handle;
+
+	if (file == 0 || file->deleted) {
+		return 0;
+	}
+	open = (struct tmpfs_open *)bunix_calloc(1, sizeof(*open));
+	if (open == 0) {
+		return 0;
+	}
+	open->kind = TMPFS_OPEN_FILE;
+	open->file = file;
+	file->refs++;
+	handle = bunix_id_alloc(&open_files, (u64)open);
+	if (handle == 0) {
+		file_release(file);
+		bunix_free(open);
+	}
+	return handle;
+}
+
+static struct tmpfs_open *open_from_handle(u64 handle)
+{
+	return (struct tmpfs_open *)bunix_id_get(&open_files, handle);
+}
+
+static void close_handle(u64 handle)
+{
+	struct tmpfs_open *open = open_from_handle(handle);
+
+	if (open != 0) {
+		if (open->kind == TMPFS_OPEN_FILE) {
+			file_release(open->file);
+		}
+		bunix_free(open);
+	}
+	(void)bunix_id_remove(&open_files, handle);
+}
+
+static void stat_file(struct bunix_msg *reply, const struct tmpfs_file *file)
+{
+	reply->words[0] = 0;
+	reply->words[1] = file->size;
+	reply->words[2] = file->mode | ((u64)BUNIX_VFS_TYPE_REGULAR << 32);
+	reply->words[3] = file->uid | ((u64)file->gid << 32);
+}
+
+static void stat_dir(struct bunix_msg *reply)
+{
+	reply->words[0] = 0;
+	reply->words[1] = 0;
+	reply->words[2] = 0777 | ((u64)BUNIX_VFS_TYPE_DIRECTORY << 32);
+	reply->words[3] = 0;
+}
+
+static void pack_path(u64 *words, const char *path)
+{
+	words[0] = 0;
+	words[1] = 0;
+	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
+		const u64 slot = i / 8;
+		const u64 shift = (i % 8) * 8;
+
+		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
+	}
+}
+
+static u64 resolve_service(u64 service, unsigned int rights)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_WAIT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { BUNIX_NAMES_ROOT, service, rights, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(TMPFS_HANDLE_NAMES, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return 0;
+	}
+	return reply.cap;
+}
+
+static long register_service(u64 service, u64 handle)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_REGISTER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = handle,
+		.words = { BUNIX_NAMES_ROOT, service, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(TMPFS_HANDLE_NAMES, &request, &reply) != 0) {
+		return -1;
+	}
+	return reply.words[0] == 0 ? 0 : -1;
+}
+
+static long mount_path(u64 vfs, const char *path)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_MOUNT,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = BUNIX_HANDLE_SELF,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	pack_path(&request.words[0], path);
+	return bunix_ipc_call(vfs, &request, &reply) == 0 &&
+	       reply.words[0] == 0 ? 0 : -1;
+}
+
+int main(void)
+{
+	const char online[] = "tmpfs: online\n";
+	const char mounted[] = "tmpfs: mounted\n";
+	struct bunix_msg message;
+	const u64 vfs = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
+
+	bunix_console_log(online, sizeof(online) - 1);
+	bunix_id_table_init(&open_files);
+	if (register_service(BUNIX_SERVICE_TMPFS, BUNIX_HANDLE_SELF) != 0 ||
+	    vfs == 0) {
+		return 1;
+	}
+	for (u64 i = 0; i < TMPFS_ROOT_COUNT; i++) {
+		if (mount_path(vfs, tmpfs_roots[i]) != 0) {
+			return 1;
+		}
+	}
+	bunix_console_log(mounted, sizeof(mounted) - 1);
+
+	for (;;) {
+		struct bunix_msg reply = {
+			.protocol = BUNIX_PROTO_VFS,
+			.type = 0,
+			.sender = 0,
+			.cap_rights = 0,
+			.reply = 0,
+			.cap = 0,
+			.words = { 0, 0, 0, 0 },
+		};
+		char path[TMPFS_MAX_PATH];
+		struct tmpfs_file *file;
+		struct tmpfs_open *open;
+
+		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
+		    message.protocol != BUNIX_PROTO_VFS) {
+			continue;
+		}
+
+		reply.type = message.type;
+		switch (message.type) {
+		case BUNIX_VFS_OPEN_BUFFER:
+			if (read_resolved_path(&message, path) != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			if (path_is_root(path)) {
+				reply.words[1] = open_dir(path);
+				reply.words[2] = 0;
+				reply.words[3] = BUNIX_VFS_TYPE_DIRECTORY;
+				reply.words[0] = reply.words[1] == 0 ?
+						 (u64)-1 : 0;
+				break;
+			}
+			file = file_find(path);
+			if (file == 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			reply.words[1] = open_file(file);
+			reply.words[2] = file->size;
+			reply.words[3] = BUNIX_VFS_TYPE_REGULAR;
+			reply.words[0] = reply.words[1] == 0 ? (u64)-1 : 0;
+			break;
+		case BUNIX_VFS_CREATE_BUFFER:
+			if (read_resolved_path(&message, path) != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			file = file_find(path);
+			if (file == 0) {
+				file = file_create(path, message.words[3] >> 32);
+			}
+			reply.words[0] = file == 0 ? (u64)-1 : 0;
+			break;
+		case BUNIX_VFS_STAT_PATH_META_BUFFER:
+		case BUNIX_VFS_ACCESS_BUFFER:
+			if (read_resolved_path(&message, path) != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			if (path_is_root(path)) {
+				stat_dir(&reply);
+				break;
+			}
+			file = file_find(path);
+			if (file == 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+			} else if (message.type == BUNIX_VFS_ACCESS_BUFFER) {
+				reply.words[0] = 0;
+			} else {
+				stat_file(&reply, file);
+			}
+			break;
+		case BUNIX_VFS_STAT_META:
+			open = open_from_handle(message.words[0]);
+			if (open == 0) {
+				reply.words[0] = (u64)-1;
+			} else if (open->kind == TMPFS_OPEN_DIR) {
+				stat_dir(&reply);
+			} else {
+				stat_file(&reply, open->file);
+			}
+			break;
+		case BUNIX_VFS_READ_FILE_BUFFER:
+			open = open_from_handle(message.words[0]);
+			if (open == 0 || open->kind != TMPFS_OPEN_FILE ||
+			    message.cap == 0 ||
+			    (message.cap_rights & BUNIX_RIGHT_SEND) == 0) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
+			if (message.words[1] >= open->file->size) {
+				reply.words[0] = 0;
+				reply.words[1] = 0;
+				break;
+			}
+			u64 nread = open->file->size - message.words[1];
+			if (nread > message.words[2]) {
+				nread = message.words[2];
+			}
+			if (bunix_buffer_write(message.cap, 0,
+					       open->file->data + message.words[1],
+					       nread) != 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				reply.words[0] = 0;
+				reply.words[1] = nread;
+			}
+			break;
+		case BUNIX_VFS_WRITE_FILE_BUFFER:
+			open = open_from_handle(message.words[0]);
+			if (open == 0 || open->kind != TMPFS_OPEN_FILE ||
+			    message.cap == 0 ||
+			    (message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+			    file_resize(open->file, message.words[1] +
+					message.words[2]) != 0 ||
+			    bunix_buffer_read(message.cap, 0,
+					      open->file->data + message.words[1],
+					      message.words[2]) != 0) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
+			if (message.words[1] + message.words[2] > open->file->size) {
+				open->file->size = message.words[1] + message.words[2];
+			}
+			reply.words[0] = 0;
+			reply.words[1] = message.words[2];
+			break;
+		case BUNIX_VFS_TRUNCATE:
+			if (message.cap != 0) {
+				if (read_resolved_path(&message, path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+					break;
+				}
+				file = file_find(path);
+				reply.words[0] = file_set_size(file,
+							       message.words[3]) == 0 ?
+						 0 : BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			open = open_from_handle(message.words[0]);
+			reply.words[0] = open != 0 &&
+					 open->kind == TMPFS_OPEN_FILE &&
+					 file_set_size(open->file,
+						       message.words[1]) == 0 ?
+					 0 : (u64)-1;
+			break;
+		case BUNIX_VFS_UNLINK_BUFFER:
+			if (read_resolved_path(&message, path) != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			file = file_find(path);
+			if (file == 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			file->deleted = 1;
+			if (files == file) {
+				files = file->next;
+			} else {
+				for (struct tmpfs_file *prev = files; prev != 0;
+				     prev = prev->next) {
+					if (prev->next == file) {
+						prev->next = file->next;
+						break;
+					}
+				}
+			}
+			file_release(file);
+			reply.words[0] = 0;
+			break;
+		case BUNIX_VFS_READDIR:
+			open = open_from_handle(message.words[0]);
+			if (open == 0 || open->kind != TMPFS_OPEN_DIR) {
+				reply.words[0] = BUNIX_VFS_ERR_NOTDIR;
+				break;
+			}
+			u64 current = 0;
+			for (file = files; file != 0; file = file->next) {
+				if (!file_is_child_of(file, open->path)) {
+					continue;
+				}
+				if (current == message.words[1]) {
+					const char *name =
+						path_name_in_dir(file->path,
+								 open->path);
+					reply.words[0] = 0;
+					reply.words[1] = (message.words[1] + 1) |
+							 ((u64)BUNIX_VFS_TYPE_REGULAR << 32);
+					pack_bytes(&reply.words[2],
+						   (const unsigned char *)name,
+						   str_len(name) + 1);
+					break;
+				}
+				current++;
+			}
+			if (reply.words[0] != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+			}
+			break;
+		case BUNIX_VFS_CLOSE:
+			if (open_from_handle(message.words[0]) == 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				close_handle(message.words[0]);
+				reply.words[0] = 0;
+			}
+			break;
+		default:
+			reply.words[0] = (u64)-1;
+			break;
+		}
+
+		if (message.cap != 0) {
+			bunix_handle_close(message.cap);
+		}
+		if (message.reply != 0) {
+			bunix_ipc_send(message.reply, &reply);
+		}
+	}
+}

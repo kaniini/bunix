@@ -99,7 +99,6 @@ enum {
 	LINUX_FD_NULL = 8,
 	LINUX_FD_ZERO = 9,
 	LINUX_FD_RANDOM = 10,
-	LINUX_FD_SCRATCH = 11,
 	LINUX_AF_UNIX = 1,
 	LINUX_SOCK_STREAM = 1,
 	LINUX_SOCK_NONBLOCK = 00004000,
@@ -178,18 +177,6 @@ struct linux_pipe {
 	char data[LINUX_PIPE_CAPACITY];
 };
 
-struct linux_scratch_file {
-	struct linux_scratch_file *next;
-	u64 refs;
-	u64 size;
-	u64 capacity;
-	u64 mode;
-	u64 uid;
-	u64 gid;
-	char path[LINUX_MAX_PATH];
-	char *data;
-};
-
 static struct bunix_map process_by_task;
 static struct bunix_map process_by_pid;
 static struct bunix_id_table pipe_ids;
@@ -200,7 +187,6 @@ static char tty_line[256];
 static u64 tty_line_offset;
 static u64 tty_line_len;
 static struct bunix_map file_refs;
-static struct linux_scratch_file *scratch_files;
 static u64 next_pid = 1;
 static u64 foreground_pgid = 1;
 static u64 random_state = 0x62756e69786f7321ull;
@@ -803,127 +789,6 @@ static void string_copy(char *dst, const char *src)
 	dst[i] = '\0';
 }
 
-static struct linux_scratch_file *scratch_find(const char *path)
-{
-	for (struct linux_scratch_file *file = scratch_files; file != 0;
-	     file = file->next) {
-		if (string_equal(file->path, path)) {
-			return file;
-		}
-	}
-	return 0;
-}
-
-static struct linux_scratch_file *scratch_create(const char *path, u64 mode)
-{
-	struct linux_scratch_file *file =
-		(struct linux_scratch_file *)bunix_calloc(1, sizeof(*file));
-
-	if (file == 0) {
-		return 0;
-	}
-	string_copy(file->path, path);
-	file->mode = mode & 0777;
-	file->uid = 0;
-	file->gid = 0;
-	file->next = scratch_files;
-	scratch_files = file;
-	return file;
-}
-
-static void scratch_ref_add(struct linux_scratch_file *file)
-{
-	if (file != 0) {
-		file->refs++;
-	}
-}
-
-static void scratch_ref_drop(struct linux_scratch_file *file)
-{
-	if (file != 0 && file->refs != 0) {
-		file->refs--;
-	}
-	if (file != 0 && file->refs == 0 && file->path[0] == '\0') {
-		if (file->data != 0) {
-			bunix_free(file->data);
-		}
-		bunix_free(file);
-	}
-}
-
-static int scratch_resize(struct linux_scratch_file *file, u64 size)
-{
-	u64 capacity;
-	char *data;
-
-	if (file == 0) {
-		return -1;
-	}
-	if (size <= file->capacity) {
-		return 0;
-	}
-	capacity = file->capacity == 0 ? 64 : file->capacity;
-	while (capacity < size) {
-		capacity *= 2;
-	}
-	data = (char *)bunix_realloc(file->data, file->capacity, capacity);
-	if (data == 0) {
-		return -1;
-	}
-	for (u64 i = file->capacity; i < capacity; i++) {
-		data[i] = 0;
-	}
-	file->data = data;
-	file->capacity = capacity;
-	return 0;
-}
-
-static void scratch_truncate(struct linux_scratch_file *file)
-{
-	if (file != 0) {
-		file->size = 0;
-	}
-}
-
-static int scratch_set_size(struct linux_scratch_file *file, u64 size)
-{
-	const u64 old_size = file != 0 ? file->size : 0;
-
-	if (file == 0 || scratch_resize(file, size) != 0) {
-		return -1;
-	}
-	if (size > old_size) {
-		for (u64 i = old_size; i < size; i++) {
-			file->data[i] = 0;
-		}
-	}
-	file->size = size;
-	return 0;
-}
-
-static long scratch_unlink_path(const char *path)
-{
-	struct linux_scratch_file *prev = 0;
-	struct linux_scratch_file *file = scratch_files;
-
-	while (file != 0) {
-		if (string_equal(file->path, path)) {
-			if (prev == 0) {
-				scratch_files = file->next;
-			} else {
-				prev->next = file->next;
-			}
-			file->next = 0;
-			file->path[0] = '\0';
-			scratch_ref_drop(file);
-			return 0;
-		}
-		prev = file;
-		file = file->next;
-	}
-	return -LINUX_ENOENT;
-}
-
 static int path_normalize(const char *cwd, const char *input, char *out)
 {
 	char temp[LINUX_MAX_PATH];
@@ -1435,9 +1300,6 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 		} else if (process->fds[fd].kind == LINUX_FD_PIPE_READ ||
 			   process->fds[fd].kind == LINUX_FD_PIPE_WRITE) {
 			linux_pipe_ref_add(&process->fds[fd]);
-		} else if (process->fds[fd].kind == LINUX_FD_SCRATCH) {
-			scratch_ref_add((struct linux_scratch_file *)
-					process->fds[fd].handle);
 		}
 	}
 	string_copy(process->cwd, parent->cwd);
@@ -2302,9 +2164,22 @@ static u64 linux_mode_for_type(u64 type, u64 mode)
 	return LINUX_S_IFREG | mode;
 }
 
+static long linux_vfs_path_call_word3(struct linux_process *process, u64 type,
+				      u64 base_handle, const char *path,
+				      u64 word3, struct bunix_msg *reply);
+
 static long linux_vfs_path_call_flags(struct linux_process *process, u64 type,
 				      u64 base_handle, const char *path,
 				      u64 flags, struct bunix_msg *reply)
+{
+	return linux_vfs_path_call_word3(process, type, base_handle, path,
+					 process->bunix_task | (flags << 32),
+					 reply);
+}
+
+static long linux_vfs_path_call_word3(struct linux_process *process, u64 type,
+				      u64 base_handle, const char *path,
+				      u64 word3, struct bunix_msg *reply)
 {
 	const u64 cwd_len = string_len(process->cwd) + 1;
 	const u64 path_len = string_len(path) + 1;
@@ -2317,8 +2192,7 @@ static long linux_vfs_path_call_flags(struct linux_process *process, u64 type,
 		.cap_rights = BUNIX_RIGHT_RECV,
 		.reply = 0,
 		.cap = (u64)path_buffer,
-		.words = { cwd_len, path_len, base_handle,
-			   process->bunix_task | (flags << 32) },
+		.words = { cwd_len, path_len, base_handle, word3 },
 	};
 	long result;
 
@@ -2413,6 +2287,9 @@ static long linux_dirfd_base_handle(struct linux_process *process, u64 dirfd,
 	return 0;
 }
 
+static long linux_ftruncate(struct linux_process *process, u64 fd, u64 length);
+static long linux_close(struct linux_process *process, u64 fd);
+
 static long linux_openat(struct linux_process *process, u64 dirfd,
 			 u64 path_len, u64 flags, u64 mode, u64 path_buffer)
 {
@@ -2454,48 +2331,29 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 				linux_user_session_count() *
 				LINUX_UTMP_RECORD_SIZE);
 	}
-	if (is_scratch_path(full_path)) {
-		struct linux_scratch_file *file = scratch_find(full_path);
-		long fd;
-
-		if ((flags & LINUX_O_DIRECTORY) != 0) {
-			return -LINUX_ENOTDIR;
-		}
-		if (file == 0) {
-			if ((flags & LINUX_O_CREAT) == 0) {
-				return -LINUX_ENOENT;
-			}
-			file = scratch_create(full_path, mode & ~process->umask);
-			if (file == 0) {
-				return -LINUX_EMFILE;
-			}
-		}
-		if ((flags & LINUX_O_TRUNC) != 0 &&
-		    (flags & LINUX_O_ACCMODE) != 0) {
-			scratch_truncate(file);
-		}
-		scratch_ref_add(file);
-		fd = alloc_fd(process, LINUX_FD_SCRATCH, (u64)file,
-			      file->size);
-		if (fd < 0) {
-			scratch_ref_drop(file);
-			return fd;
-		}
-		if ((flags & LINUX_O_APPEND) != 0) {
-			process->fds[fd].offset = file->size;
-		}
-		if ((flags & LINUX_O_CLOEXEC) != 0) {
-			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
-		}
-		return fd;
-	}
 	if ((flags & LINUX_O_ACCMODE) != 0) {
-		return -LINUX_EINVAL;
+		if (!is_scratch_path(full_path)) {
+			return -LINUX_EINVAL;
+		}
 	}
 
 	if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER, base_handle,
 				path, &reply) != 0) {
 		return -LINUX_ENOENT;
+	}
+	if (reply.words[0] == BUNIX_VFS_ERR_NOENT &&
+	    is_scratch_path(full_path) &&
+	    (flags & LINUX_O_CREAT) != 0) {
+		if (linux_vfs_path_call_word3(process, BUNIX_VFS_CREATE_BUFFER,
+					      base_handle, path,
+					      process->bunix_task |
+					      (((mode & ~process->umask) & 0777) << 32),
+					      &reply) != 0 ||
+		    reply.words[0] != 0 ||
+		    linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER,
+					base_handle, path, &reply) != 0) {
+			return -LINUX_ENOENT;
+		}
 	}
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
@@ -2538,6 +2396,13 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	if ((flags & LINUX_O_CLOEXEC) != 0) {
 		process->fds[fd].flags |= LINUX_FD_CLOEXEC;
 	}
+	if ((flags & LINUX_O_TRUNC) != 0 &&
+	    (flags & LINUX_O_ACCMODE) != 0 &&
+	    process->fds[fd].kind == LINUX_FD_FILE &&
+	    linux_ftruncate(process, (u64)fd, 0) != 0) {
+		(void)linux_close(process, (u64)fd);
+		return -LINUX_EINVAL;
+	}
 	return fd;
 }
 
@@ -2574,10 +2439,6 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 	    is_utmp_path(full_path)) {
 		return 0;
 	}
-	if (is_scratch_path(full_path) && scratch_find(full_path) != 0) {
-		return 0;
-	}
-
 	if (linux_vfs_path_call_flags(process, BUNIX_VFS_ACCESS_BUFFER,
 				      base_handle, path, mode,
 				      &reply) != 0 ||
@@ -2592,6 +2453,7 @@ static long linux_unlinkat(struct linux_process *process, u64 dirfd,
 {
 	char path[LINUX_MAX_PATH];
 	char full_path[LINUX_MAX_PATH];
+	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
 
@@ -2611,7 +2473,17 @@ static long linux_unlinkat(struct linux_process *process, u64 dirfd,
 	if (!is_scratch_path(full_path)) {
 		return -LINUX_EINVAL;
 	}
-	return scratch_unlink_path(full_path);
+	if (linux_vfs_path_call_word3(process, BUNIX_VFS_UNLINK_BUFFER,
+				      base_handle, path,
+				      process->bunix_task | (flags << 32),
+				      &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (reply.words[0] != 0) {
+			return linux_vfs_error(reply.words[0]);
+		}
+		return -LINUX_EINVAL;
+	}
+	return 0;
 }
 
 static long linux_truncate(struct linux_process *process, u64 dirfd,
@@ -2619,7 +2491,7 @@ static long linux_truncate(struct linux_process *process, u64 dirfd,
 {
 	char path[LINUX_MAX_PATH];
 	char full_path[LINUX_MAX_PATH];
-	struct linux_scratch_file *file;
+	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
 
@@ -2639,11 +2511,15 @@ static long linux_truncate(struct linux_process *process, u64 dirfd,
 	if (!is_scratch_path(full_path)) {
 		return -LINUX_EINVAL;
 	}
-	file = scratch_find(full_path);
-	if (file == 0) {
-		return -LINUX_ENOENT;
+	if (linux_vfs_path_call_word3(process, BUNIX_VFS_TRUNCATE,
+				      base_handle, path, length, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (reply.words[0] != 0) {
+			return linux_vfs_error(reply.words[0]);
+		}
+		return -LINUX_EINVAL;
 	}
-	return scratch_set_size(file, length) == 0 ? 0 : -LINUX_EINVAL;
+	return 0;
 }
 
 static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
@@ -2752,17 +2628,6 @@ static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 		return linux_stat_write(stat_buffer, LINUX_S_IFIFO | 0600,
 					0, 0, 0);
 	}
-	if (process->fds[fd].kind == LINUX_FD_SCRATCH) {
-		struct linux_scratch_file *file =
-			(struct linux_scratch_file *)process->fds[fd].handle;
-
-		if (file == 0) {
-			return -LINUX_EBADF;
-		}
-		return linux_stat_write(stat_buffer, LINUX_S_IFREG | file->mode,
-					file->uid, file->gid, file->size);
-	}
-
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
 		.type = BUNIX_VFS_STAT_META,
@@ -2784,24 +2649,33 @@ static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 
 static long linux_ftruncate(struct linux_process *process, u64 fd, u64 length)
 {
-	struct linux_scratch_file *file;
-
 	if ((length >> 63) != 0) {
 		return -LINUX_EINVAL;
 	}
 	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
-	if (process->fds[fd].kind != LINUX_FD_SCRATCH) {
+	if (process->fds[fd].kind != LINUX_FD_FILE) {
 		return -LINUX_EINVAL;
 	}
-	file = (struct linux_scratch_file *)process->fds[fd].handle;
-	if (scratch_set_size(file, length) != 0) {
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_TRUNCATE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { process->fds[fd].handle, length, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
 		return -LINUX_EINVAL;
 	}
-	process->fds[fd].size = file->size;
-	if (process->fds[fd].offset > file->size) {
-		process->fds[fd].offset = file->size;
+	process->fds[fd].size = length;
+	if (process->fds[fd].offset > length) {
+		process->fds[fd].offset = length;
 	}
 	return 0;
 }
@@ -2858,17 +2732,6 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 		out->words[3] = 0;
 		return 0;
 	}
-	if (is_scratch_path(full_path)) {
-		struct linux_scratch_file *file = scratch_find(full_path);
-
-		if (file != 0) {
-			out->words[1] = file->size;
-			out->words[2] = LINUX_S_IFREG | file->mode;
-			out->words[3] = file->uid | (file->gid << 32);
-			return 0;
-		}
-	}
-
 	if (linux_vfs_path_call_flags(process, BUNIX_VFS_STAT_PATH_META_BUFFER,
 				      base_handle, path, flags != 0 ? 1 : 0,
 				      &reply) != 0 ||
@@ -3289,30 +3152,6 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
 		return -LINUX_EISDIR;
 	}
-	if (process->fds[fd].kind == LINUX_FD_SCRATCH) {
-		struct linux_scratch_file *file =
-			(struct linux_scratch_file *)process->fds[fd].handle;
-		u64 nread;
-
-		if (file == 0) {
-			return -LINUX_EBADF;
-		}
-		if (process->fds[fd].offset >= file->size) {
-			return 0;
-		}
-		nread = file->size - process->fds[fd].offset;
-		if (nread > len) {
-			nread = len;
-		}
-		for (u64 i = 0; i < nread; i++) {
-			write_buffer[i] = file->data[process->fds[fd].offset + i];
-		}
-		if (bunix_buffer_write(buffer, 0, write_buffer, nread) != 0) {
-			return -LINUX_EINVAL;
-		}
-		process->fds[fd].offset += nread;
-		return (long)nread;
-	}
 	if (process->fds[fd].kind == LINUX_FD_FILE &&
 	    process->fds[fd].offset >= process->fds[fd].size) {
 		return 0;
@@ -3406,27 +3245,38 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 	    process->fds[fd].kind == LINUX_FD_RANDOM) {
 		return (long)len;
 	}
-	if (process->fds[fd].kind == LINUX_FD_SCRATCH) {
-		struct linux_scratch_file *file =
-			(struct linux_scratch_file *)process->fds[fd].handle;
-		const u64 end = process->fds[fd].offset + len;
+	if (process->fds[fd].kind == LINUX_FD_FILE) {
+		const long tmp = bunix_buffer_create(len == 0 ? 1 : len);
+		struct bunix_msg request = {
+			.protocol = BUNIX_PROTO_VFS,
+			.type = BUNIX_VFS_WRITE_FILE_BUFFER,
+			.sender = 0,
+			.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
+			.reply = 0,
+			.cap = (u64)tmp,
+			.words = { process->fds[fd].handle,
+				   process->fds[fd].offset, len, 0 },
+		};
+		struct bunix_msg reply;
 
-		if (file == 0) {
-			return -LINUX_EBADF;
-		}
-		if (end < process->fds[fd].offset ||
-		    scratch_resize(file, end) != 0) {
+		if (tmp < 0 ||
+		    bunix_buffer_write((u64)tmp, 0, write_buffer, len) != 0) {
+			if (tmp >= 0) {
+				bunix_handle_close((u64)tmp);
+			}
 			return -LINUX_EINVAL;
 		}
-		for (u64 i = 0; i < len; i++) {
-			file->data[process->fds[fd].offset + i] = write_buffer[i];
+		if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
+		    reply.words[0] != 0) {
+			bunix_handle_close((u64)tmp);
+			return -LINUX_EBADF;
 		}
-		process->fds[fd].offset = end;
-		if (end > file->size) {
-			file->size = end;
+		bunix_handle_close((u64)tmp);
+		process->fds[fd].offset += reply.words[1];
+		if (process->fds[fd].offset > process->fds[fd].size) {
+			process->fds[fd].size = process->fds[fd].offset;
 		}
-		process->fds[fd].size = file->size;
-		return (long)len;
+		return (long)reply.words[1];
 	}
 	if (process->fds[fd].kind != LINUX_FD_CONSOLE) {
 		return -LINUX_EBADF;
@@ -3486,11 +3336,6 @@ static long linux_close(struct linux_process *process, u64 fd)
 		linux_pipe_ref_drop(&process->fds[fd]);
 		linux_pipe_wake_reader(linux_pipe_find(pipe_id));
 	}
-	if (process->fds[fd].kind == LINUX_FD_SCRATCH) {
-		scratch_ref_drop((struct linux_scratch_file *)
-				 process->fds[fd].handle);
-	}
-
 	process->fds[fd].kind = 0;
 	process->fds[fd].handle = 0;
 	process->fds[fd].offset = 0;
@@ -3506,8 +3351,6 @@ static void linux_fd_ref_add(const struct linux_fd *fd)
 	} else if (fd->kind == LINUX_FD_PIPE_READ ||
 		   fd->kind == LINUX_FD_PIPE_WRITE) {
 		linux_pipe_ref_add(fd);
-	} else if (fd->kind == LINUX_FD_SCRATCH) {
-		scratch_ref_add((struct linux_scratch_file *)fd->handle);
 	}
 }
 

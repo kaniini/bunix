@@ -682,6 +682,9 @@ static u64 build_mounts(void)
 
 	append_str(&len, "rootfs / rootfs ro 0 0\n");
 	append_str(&len, "proc /proc proc rw 0 0\n");
+	append_str(&len, "tmpfs /tmp tmpfs rw 0 0\n");
+	append_str(&len, "tmpfs /run tmpfs rw 0 0\n");
+	append_str(&len, "tmpfs /var/tmp tmpfs rw 0 0\n");
 	return len;
 }
 
