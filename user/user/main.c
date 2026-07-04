@@ -8,6 +8,8 @@ enum {
 	USER_ACCOUNT_BUFFER = 512,
 	USER_NAME_MAX = 16,
 	USER_PASSWORD_MAX = 16,
+	USER_MAX_SESSIONS = 8,
+	USER_TTY_CONSOLE = 1,
 };
 
 struct user_account {
@@ -28,8 +30,18 @@ struct user_credential {
 	u64 groups[USER_MAX_GROUPS];
 };
 
+struct user_session {
+	u64 id;
+	u64 uid;
+	u64 gid;
+	u64 tty;
+	u64 foreground;
+};
+
 static struct user_credential credentials[USER_MAX_CREDENTIALS];
+static struct user_session sessions[USER_MAX_SESSIONS];
 static char account_buffer[USER_ACCOUNT_BUFFER];
+static u64 next_session_id = 1;
 
 static u64 resolve_service(u64 service, unsigned int rights)
 {
@@ -643,12 +655,98 @@ static long credential_auth_login(u64 name_left, u64 name_right,
 	return 0;
 }
 
+static struct user_session *session_find(u64 session_id)
+{
+	if (session_id == 0) {
+		return 0;
+	}
+
+	for (u64 i = 0; i < USER_MAX_SESSIONS; i++) {
+		if (sessions[i].id == session_id) {
+			return &sessions[i];
+		}
+	}
+
+	return 0;
+}
+
+static long session_begin(u64 uid, u64 gid, u64 tty, struct bunix_msg *reply)
+{
+	if (reply == 0 || uid == (u64)-1 || gid == (u64)-1) {
+		return -1;
+	}
+	if (tty == 0) {
+		tty = USER_TTY_CONSOLE;
+	}
+
+	for (u64 i = 0; i < USER_MAX_SESSIONS; i++) {
+		if (sessions[i].id == 0) {
+			sessions[i].id = next_session_id++;
+			if (next_session_id == 0) {
+				next_session_id = 1;
+			}
+			sessions[i].uid = uid;
+			sessions[i].gid = gid;
+			sessions[i].tty = tty;
+			sessions[i].foreground = 0;
+			reply->words[1] = sessions[i].id;
+			return 0;
+		}
+	}
+
+	return -1;
+}
+
+static long session_end(u64 session_id)
+{
+	struct user_session *session = session_find(session_id);
+
+	if (session == 0) {
+		return -1;
+	}
+
+	session->id = 0;
+	session->uid = 0;
+	session->gid = 0;
+	session->tty = 0;
+	session->foreground = 0;
+	return 0;
+}
+
+static long session_get(u64 session_id, struct bunix_msg *reply)
+{
+	struct user_session *session = session_find(session_id);
+
+	if (session == 0 || reply == 0) {
+		return -1;
+	}
+
+	reply->words[1] = session->uid;
+	reply->words[2] = session->gid;
+	reply->words[3] = (session->tty << 32) | session->foreground;
+	return 0;
+}
+
+static long session_set_foreground(u64 session_id, u64 foreground)
+{
+	struct user_session *session = session_find(session_id);
+
+	if (session == 0 || foreground == 0) {
+		return -1;
+	}
+
+	session->foreground = foreground;
+	return 0;
+}
+
 int main(void)
 {
 	const char online[] = "user: online\n";
 	const char ready[] = "user: ready\n";
 	const char registered[] = "user: registered\n";
 	const char forked[] = "user: forked\n";
+	const char session_started[] = "user: session begin\n";
+	const char session_ended[] = "user: session end\n";
 	struct bunix_msg message;
 
 	bunix_console_write(online, sizeof(online) - 1);
@@ -746,6 +844,31 @@ int main(void)
 								   message.words[2],
 								   message.words[3],
 								   &reply);
+			break;
+		case BUNIX_USER_SESSION_BEGIN:
+			reply.words[0] = (u64)session_begin(message.words[0],
+							    message.words[1],
+							    message.words[2],
+							    &reply);
+			if (reply.words[0] == 0) {
+				bunix_console_write(session_started,
+						    sizeof(session_started) - 1);
+			}
+			break;
+		case BUNIX_USER_SESSION_END:
+			reply.words[0] = (u64)session_end(message.words[0]);
+			if (reply.words[0] == 0) {
+				bunix_console_write(session_ended,
+						    sizeof(session_ended) - 1);
+			}
+			break;
+		case BUNIX_USER_SESSION_GET:
+			reply.words[0] = (u64)session_get(message.words[0],
+							  &reply);
+			break;
+		case BUNIX_USER_SESSION_SET_FOREGROUND:
+			reply.words[0] = (u64)session_set_foreground(message.words[0],
+								     message.words[1]);
 			break;
 		default:
 			reply.words[0] = (u64)-1;

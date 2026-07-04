@@ -197,5 +197,4 @@ if ! awk '{ sub(/\r$/, "") } /login: session ended/ { ended = NR } /login: $/ &&
 	tail -n 180 "$log" >&2 || true
 	exit 1
 fi
-
 echo "shell regression ok"

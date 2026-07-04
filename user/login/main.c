@@ -111,7 +111,7 @@ static u64 resolve_service(u64 names, u64 service, unsigned int rights)
 }
 
 static long authenticate(u64 user, const char *name, const char *password,
-			 u64 *uid)
+			 u64 *uid, u64 *gid)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_USER,
@@ -128,11 +128,14 @@ static long authenticate(u64 user, const char *name, const char *password,
 	pack_text(&request.words[2], password);
 	if (user == 0 ||
 	    bunix_ipc_call(user, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
+	    reply.words[0] != 0 ||
+	    uid == 0 ||
+	    gid == 0) {
 		return -1;
 	}
 
 	*uid = reply.words[1];
+	*gid = reply.words[2];
 	return 0;
 }
 
@@ -159,6 +162,75 @@ static long spawn_shell(u64 proc, u64 uid, u64 *pid)
 	}
 
 	*pid = reply.words[1];
+	return 0;
+}
+
+static long session_begin(u64 user, u64 uid, u64 gid, u64 *session_id)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_SESSION_BEGIN,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { uid, gid, 1, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (user == 0 ||
+	    session_id == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[1] == 0) {
+		return -1;
+	}
+
+	*session_id = reply.words[1];
+	return 0;
+}
+
+static long session_end(u64 user, u64 session_id)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_SESSION_END,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { session_id, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+
+	return 0;
+}
+
+static long session_set_foreground(u64 user, u64 session_id, u64 foreground)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_SESSION_SET_FOREGROUND,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { session_id, foreground, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -190,8 +262,10 @@ int main(int argc, char **argv, char **envp)
 	char name[16];
 	char password[16];
 	u64 uid = 0;
+	u64 gid = 0;
 	u64 user;
 	u64 shell_pid;
+	u64 session_id;
 	long nread;
 
 	(void)argc;
@@ -213,12 +287,20 @@ int main(int argc, char **argv, char **envp)
 		}
 		strip_line(password, (u64)nread);
 
-		if (authenticate(user, name, password, &uid) == 0 &&
-		    spawn_shell(aux.proc_handle, uid, &shell_pid) == 0) {
-			write_text(aux.stdout_handle, "login: shell spawned\n");
-			(void)wait_process(aux.proc_handle, shell_pid);
-			write_text(aux.stdout_handle, "login: session ended\n");
-			continue;
+		if (authenticate(user, name, password, &uid, &gid) == 0 &&
+		    session_begin(user, uid, gid, &session_id) == 0) {
+			if (spawn_shell(aux.proc_handle, uid, &shell_pid) == 0) {
+				(void)session_set_foreground(user, session_id,
+							     shell_pid);
+				write_text(aux.stdout_handle,
+					   "login: shell spawned\n");
+				(void)wait_process(aux.proc_handle, shell_pid);
+				(void)session_end(user, session_id);
+				write_text(aux.stdout_handle,
+					   "login: session ended\n");
+				continue;
+			}
+			(void)session_end(user, session_id);
 		}
 		write_text(aux.stdout_handle, "login: authentication failed\n");
 	}
