@@ -11,6 +11,9 @@ enum {
 	LINUX_EISDIR = 21,
 	LINUX_EINVAL = 22,
 	LINUX_EMFILE = 24,
+	LINUX_EAFNOSUPPORT = 97,
+	LINUX_EPROTONOSUPPORT = 93,
+	LINUX_ENOTSOCK = 88,
 	LINUX_ESRCH = 3,
 	LINUX_ECHILD = 10,
 	LINUX_WAIT_BLOCK = 0x7fffffff,
@@ -68,6 +71,7 @@ enum {
 	LINUX_S_IFCHR = 0020000,
 	LINUX_S_IFDIR = 0040000,
 	LINUX_S_IFREG = 0100000,
+	LINUX_S_IFSOCK = 0140000,
 	LINUX_O_ACCMODE = 3,
 	LINUX_O_DIRECTORY = 00200000,
 	LINUX_O_CLOEXEC = 02000000,
@@ -77,6 +81,16 @@ enum {
 	LINUX_FD_FILE = 2,
 	LINUX_FD_DIR = 3,
 	LINUX_FD_UTMP = 4,
+	LINUX_FD_SOCKET = 5,
+	LINUX_AF_UNIX = 1,
+	LINUX_SOCK_STREAM = 1,
+	LINUX_SOCK_NONBLOCK = 00004000,
+	LINUX_SOCK_CLOEXEC = 02000000,
+	LINUX_SOCKET_UNIX_STREAM = 1,
+	LINUX_SOCKET_UTMPD = 2,
+	LINUX_UTMPS_NONE = 0,
+	LINUX_UTMPS_REWIND = 'r',
+	LINUX_UTMPS_GETENT = 'e',
 	LINUX_AT_FDCWD = (u64)-100,
 	LINUX_F_DUPFD = 0,
 	LINUX_F_GETFD = 1,
@@ -554,6 +568,11 @@ static int is_utmp_path(const char *path)
 	       string_equal(path, "/var/run/utmp");
 }
 
+static int is_utmps_socket_path(const char *path)
+{
+	return string_equal(path, "/run/utmps/.utmpd-socket");
+}
+
 static void copy_literal(char *dst, u64 dst_len, const char *src)
 {
 	for (u64 i = 0; i < dst_len; i++) {
@@ -635,6 +654,44 @@ static long read_utmp(u64 offset, u64 len, u64 buffer)
 		return -LINUX_EINVAL;
 	}
 	return (long)done;
+}
+
+static long utmps_recv_response(struct linux_fd *fd, u64 len, u64 buffer)
+{
+	u64 response_len = 1;
+
+	if (fd == 0 || buffer == 0 || fd->handle != LINUX_SOCKET_UTMPD) {
+		return -LINUX_ENOTSOCK;
+	}
+	if (len == 0) {
+		return 0;
+	}
+
+	zero_bytes(utmp_buffer, sizeof(utmp_buffer));
+	if (fd->size == LINUX_UTMPS_REWIND) {
+		fd->offset = 0;
+		utmp_buffer[0] = 0;
+	} else if (fd->size == LINUX_UTMPS_GETENT) {
+		if (fd->offset >= linux_user_session_count()) {
+			utmp_buffer[0] = LINUX_ENOENT;
+		} else {
+			utmp_buffer[0] = 0;
+			build_utmp_record(utmp_buffer + 1, fd->offset);
+			fd->offset++;
+			response_len = LINUX_UTMP_RECORD_SIZE + 1;
+		}
+	} else {
+		utmp_buffer[0] = LINUX_EINVAL;
+	}
+
+	fd->size = LINUX_UTMPS_NONE;
+	if (response_len > len) {
+		response_len = len;
+	}
+	if (bunix_buffer_write(buffer, 0, utmp_buffer, response_len) != 0) {
+		return -LINUX_EINVAL;
+	}
+	return (long)response_len;
 }
 
 static u64 string_len(const char *text)
@@ -1721,6 +1778,10 @@ static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 					linux_user_session_count() *
 					LINUX_UTMP_RECORD_SIZE);
 	}
+	if (process->fds[fd].kind == LINUX_FD_SOCKET) {
+		return linux_stat_write(stat_buffer, LINUX_S_IFSOCK | 0700,
+					0, 0, 0);
+	}
 
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
@@ -1943,6 +2004,105 @@ static long linux_chdir(struct linux_process *process, u64 word0, u64 word1)
 	(void)bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply);
 	string_copy(process->cwd, full_path);
 	return 0;
+}
+
+static long linux_socket(struct linux_process *process, u64 domain, u64 type,
+			 u64 protocol)
+{
+	const u64 base_type = type & ~(LINUX_SOCK_NONBLOCK |
+				       LINUX_SOCK_CLOEXEC);
+	long fd;
+
+	if (domain != LINUX_AF_UNIX) {
+		return -LINUX_EAFNOSUPPORT;
+	}
+	if (base_type != LINUX_SOCK_STREAM || protocol != 0) {
+		return -LINUX_EPROTONOSUPPORT;
+	}
+
+	fd = alloc_fd(process, LINUX_FD_SOCKET, LINUX_SOCKET_UNIX_STREAM, 0);
+	if (fd >= 0 && (type & LINUX_SOCK_CLOEXEC) != 0) {
+		process->fds[fd].flags |= LINUX_FD_CLOEXEC;
+	}
+	return fd;
+}
+
+static long linux_connect(struct linux_process *process, u64 fd, u64 addr_len,
+			  u64 addr_buffer)
+{
+	char addr[128];
+	char path[LINUX_MAX_PATH];
+	u64 path_len = 0;
+	unsigned int family;
+
+	if (fd >= LINUX_MAX_FDS ||
+	    process->fds[fd].kind != LINUX_FD_SOCKET) {
+		return -LINUX_ENOTSOCK;
+	}
+	if (addr_buffer == 0 || addr_len < 3 || addr_len > sizeof(addr) ||
+	    bunix_buffer_read(addr_buffer, 0, addr, addr_len) != 0) {
+		return -LINUX_EINVAL;
+	}
+
+	family = ((unsigned int)(unsigned char)addr[0]) |
+		 ((unsigned int)(unsigned char)addr[1] << 8);
+	if (family != LINUX_AF_UNIX) {
+		return -LINUX_EAFNOSUPPORT;
+	}
+	for (u64 i = 2; i < addr_len && path_len + 1 < sizeof(path); i++) {
+		path[path_len++] = addr[i];
+		if (addr[i] == '\0') {
+			break;
+		}
+	}
+	if (path_len == 0 || path[path_len - 1] != '\0') {
+		return -LINUX_EINVAL;
+	}
+
+	if (!is_utmps_socket_path(path)) {
+		return -LINUX_ENOENT;
+	}
+	process->fds[fd].handle = LINUX_SOCKET_UTMPD;
+	process->fds[fd].offset = 0;
+	process->fds[fd].size = LINUX_UTMPS_NONE;
+	return 0;
+}
+
+static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
+			 u64 buffer)
+{
+	char command;
+
+	if (fd >= LINUX_MAX_FDS ||
+	    process->fds[fd].kind != LINUX_FD_SOCKET) {
+		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle != LINUX_SOCKET_UTMPD) {
+		return -LINUX_EINVAL;
+	}
+	if (len != 1 || buffer == 0 ||
+	    bunix_buffer_read(buffer, 0, &command, 1) != 0) {
+		return -LINUX_EINVAL;
+	}
+	if (command != LINUX_UTMPS_REWIND &&
+	    command != LINUX_UTMPS_GETENT) {
+		return -LINUX_EINVAL;
+	}
+	if (command == LINUX_UTMPS_REWIND) {
+		process->fds[fd].offset = 0;
+	}
+	process->fds[fd].size = (u64)(unsigned char)command;
+	return 1;
+}
+
+static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
+			   u64 buffer)
+{
+	if (fd >= LINUX_MAX_FDS ||
+	    process->fds[fd].kind != LINUX_FD_SOCKET) {
+		return -LINUX_ENOTSOCK;
+	}
+	return utmps_recv_response(&process->fds[fd], len, buffer);
 }
 
 static long linux_read(struct linux_process *process, u64 fd, u64 len,
@@ -2487,6 +2647,39 @@ int main(void)
 							   message.words[1],
 							   message.words[2],
 							   1, 0);
+			break;
+		case BUNIX_LINUX_SOCKET:
+			reply.words[0] = (u64)linux_socket(process,
+							   message.words[0],
+							   message.words[1],
+							   message.words[2]);
+			break;
+		case BUNIX_LINUX_CONNECT:
+			reply.words[0] = (u64)linux_connect(process,
+							    message.words[0],
+							    message.words[1],
+							    message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_SENDTO:
+			reply.words[0] = (u64)linux_sendto(process,
+							   message.words[0],
+							   message.words[1],
+							   message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_RECVFROM:
+			reply.words[0] = (u64)linux_recvfrom(process,
+							     message.words[0],
+							     message.words[1],
+							     message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
 			break;
 		case BUNIX_LINUX_EXEC_PROCESS:
 			reply.words[0] = (u64)linux_exec_process(process);

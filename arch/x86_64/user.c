@@ -68,6 +68,10 @@ enum {
 	LINUX_SYSCALL_DUP = 32,
 	LINUX_SYSCALL_DUP2 = 33,
 	LINUX_SYSCALL_SENDFILE = 40,
+	LINUX_SYSCALL_SOCKET = 41,
+	LINUX_SYSCALL_CONNECT = 42,
+	LINUX_SYSCALL_SENDTO = 44,
+	LINUX_SYSCALL_RECVFROM = 45,
 	LINUX_SYSCALL_FCNTL = 72,
 	LINUX_SYSCALL_GETCWD = 79,
 	LINUX_SYSCALL_CHDIR = 80,
@@ -104,6 +108,7 @@ enum {
 	LINUX_SYSCALL_GETTID = 186,
 	LINUX_SYSCALL_GETDENTS64 = 217,
 	LINUX_SYSCALL_NEWFSTATAT = 262,
+	LINUX_SYSCALL_PPOLL = 271,
 	LINUX_SYSCALL_SET_ROBUST_LIST = 273,
 	LINUX_SYSCALL_DUP3 = 292,
 	LINUX_SYSCALL_OPENAT = 257,
@@ -131,6 +136,7 @@ enum {
 	LINUX_TIOCGWINSZ = 0x5413,
 	ARCH_USER_MAX_CPUS = 8,
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
+	LINUX_MAX_SOCKADDR = 128,
 	LINUX_EXEC_MAX_IMAGE = 2 * 1024 * 1024,
 	LINUX_EXEC_MAX_PATH = 32,
 	LINUX_EXEC_MAX_ARGS = 8,
@@ -887,6 +893,7 @@ static int linux_syscall_forwards_scalar(u64 number)
 	case LINUX_SYSCALL_SETRESGID:
 	case LINUX_SYSCALL_GETPGID:
 	case LINUX_SYSCALL_SETPGID:
+	case LINUX_SYSCALL_SOCKET:
 		return 1;
 	default:
 		return 0;
@@ -1350,6 +1357,14 @@ static const char *linux_syscall_name(u64 number)
 		return "dup2";
 	case LINUX_SYSCALL_SENDFILE:
 		return "sendfile";
+	case LINUX_SYSCALL_SOCKET:
+		return "socket";
+	case LINUX_SYSCALL_CONNECT:
+		return "connect";
+	case LINUX_SYSCALL_SENDTO:
+		return "sendto";
+	case LINUX_SYSCALL_RECVFROM:
+		return "recvfrom";
 	case LINUX_SYSCALL_GETCWD:
 		return "getcwd";
 	case LINUX_SYSCALL_CHDIR:
@@ -1422,6 +1437,8 @@ static const char *linux_syscall_name(u64 number)
 		return "getdents64";
 	case LINUX_SYSCALL_NEWFSTATAT:
 		return "newfstatat";
+	case LINUX_SYSCALL_PPOLL:
+		return "ppoll";
 	case LINUX_SYSCALL_SET_ROBUST_LIST:
 		return "set_robust_list";
 	case LINUX_SYSCALL_DUP3:
@@ -1934,7 +1951,8 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 		return (u64)-LINUX_ENOSYS;
 	}
-	case LINUX_SYSCALL_POLL: {
+	case LINUX_SYSCALL_POLL:
+	case LINUX_SYSCALL_PPOLL: {
 		struct {
 			int fd;
 			short events;
@@ -2093,6 +2111,109 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 		return linux_write_one(linux, reply_port, arg0, arg1, arg2);
+	}
+	case LINUX_SYSCALL_CONNECT: {
+		struct shared_buffer *buffer;
+		const u64 len = arg2 > LINUX_MAX_SOCKADDR ?
+				LINUX_MAX_SOCKADDR : arg2;
+
+		if (arg1 == 0 || len == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		buffer = buffer_create(len);
+		if (buffer == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (read_current_user(arg1, syscall_copy_buffer, len) != 0 ||
+		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = LINUX_SYSCALL_CONNECT;
+		request.words[0] = arg0;
+		request.words[1] = len;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_RECV;
+		request.cap_object = buffer;
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_ENOSYS;
+		}
+		buffer_release(buffer);
+		return reply.words[0];
+	}
+	case LINUX_SYSCALL_SENDTO: {
+		struct shared_buffer *buffer;
+		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
+				LINUX_MAX_SYSCALL_BUFFER : arg2;
+
+		if (arg1 == 0 && len != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		buffer = buffer_create(len == 0 ? 1 : len);
+		if (buffer == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (len != 0 &&
+		    (read_current_user(arg1, syscall_copy_buffer, len) != 0 ||
+		     buffer_write(buffer, 0, syscall_copy_buffer, len) != 0)) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = LINUX_SYSCALL_SENDTO;
+		request.words[0] = arg0;
+		request.words[1] = len;
+		request.words[2] = arg3;
+		request.words[3] = 0;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_RECV;
+		request.cap_object = buffer;
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_ENOSYS;
+		}
+		buffer_release(buffer);
+		return reply.words[0];
+	}
+	case LINUX_SYSCALL_RECVFROM: {
+		struct shared_buffer *buffer;
+		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
+				LINUX_MAX_SYSCALL_BUFFER : arg2;
+
+		if (arg1 == 0 && len != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		buffer = buffer_create(len == 0 ? 1 : len);
+		if (buffer == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = LINUX_SYSCALL_RECVFROM;
+		request.words[0] = arg0;
+		request.words[1] = len;
+		request.words[2] = arg3;
+		request.words[3] = 0;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_SEND;
+		request.cap_object = buffer;
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_ENOSYS;
+		}
+		if ((i64)reply.words[0] > 0 &&
+		    buffer_read(buffer, 0, (void *)arg1, reply.words[0]) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+		buffer_release(buffer);
+		return reply.words[0];
 	}
 	case LINUX_SYSCALL_SENDFILE:
 		return (u64)-LINUX_EINVAL;

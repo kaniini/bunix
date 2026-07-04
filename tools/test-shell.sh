@@ -81,6 +81,17 @@ while ! grep -F "load average" "$log" >/dev/null 2>&1; do
 done
 
 i=0
+while ! grep -F " 1 users" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox uptime did not report login session" >&2
+		tail -n 160 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+i=0
 while ! grep -F "uid=1000" "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
