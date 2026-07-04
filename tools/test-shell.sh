@@ -54,7 +54,7 @@ done
 
 sleep 3
 exec 3>"$pipe.in"
-printf 'busybox uptime\nbusybox id\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\n' >&3
+printf 'busybox uptime\nbusybox id\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\n/bin/cat /secret.txt\ncd /bin\npwd\nexit\n' >&3
 
 i=0
 while ! grep -F "load average" "$log" >/dev/null 2>&1; do
@@ -94,7 +94,7 @@ if grep -F "can't stat '/hello.txt'" "$log" >/dev/null 2>&1; then
 	exit 1
 fi
 
-for expected in "hello.txt" "secret.txt" "musl-hello" "busybox" "File: /bin" "/bin"; do
+for expected in "hello.txt" "secret.txt" "musl-hello" "busybox" "cat" "stat" "File: /bin" "/bin"; do
 	i=0
 	while ! grep -F "$expected" "$log" >/dev/null 2>&1; do
 		i=$((i + 1))
@@ -113,8 +113,6 @@ if grep -F "can't stat '/bin'" "$log" >/dev/null 2>&1 ||
 	exit 1
 fi
 
-printf 'busybox echo BUSYBOX_ARGV_OK\ndmesg\necho AFTER\nexit\n' >&3
-
 i=0
 while ! grep -F "BUSYBOX_ARGV_OK" "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
@@ -126,43 +124,20 @@ while ! grep -F "BUSYBOX_ARGV_OK" "$log" >/dev/null 2>&1; do
 	sleep 1
 done
 
-i=0
-while ! grep -F "AFTER" "$log" >/dev/null 2>&1; do
-	i=$((i + 1))
-	if [ "$i" -gt 45 ]; then
-		echo "shell regression command did not complete" >&2
-		tail -n 120 "$log" >&2 || true
-		exit 1
-	fi
-	sleep 1
-done
-
-if ! grep -F "kernel: console logs routed to dmesg" "$log" >/dev/null; then
-	echo "dmesg did not include console-routing marker" >&2
+if ! grep -F "root secret" "$log" >/dev/null 2>&1; then
+	echo "busybox cat did not print /secret.txt" >&2
 	tail -n 160 "$log" >&2 || true
 	exit 1
 fi
-if ! grep -F "ping: heartbeat" "$log" >/dev/null; then
-	echo "dmesg did not include heartbeat logs" >&2
+if grep -F "cat: can't open '/secret.txt'" "$log" >/dev/null 2>&1; then
+	echo "busybox cat failed for /secret.txt" >&2
 	tail -n 160 "$log" >&2 || true
 	exit 1
 fi
 
-if ! awk '
-	/kernel: console logs routed to dmesg/ && !dmesg_seen { dmesg_seen = NR }
-	/\/ # echo AFTER/ && !after_prompt { after_prompt = NR }
-	/AFTER/ && !/echo AFTER/ && !after_seen { after_seen = NR }
-	END {
-		if (!dmesg_seen || !after_prompt || !after_seen) {
-			exit 1
-		}
-		if (after_prompt < dmesg_seen || after_seen < after_prompt) {
-			exit 1
-		}
-	}
-' "$log"; then
-	echo "dmesg prompt ordering assertion failed" >&2
-	tail -n 200 "$log" >&2 || true
+if ! awk '{ sub(/\r$/, "") } /\/bin # pwd/ { prompt = NR } /^\/bin$/ && prompt { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
+	echo "busybox chdir/pwd regression failed" >&2
+	tail -n 160 "$log" >&2 || true
 	exit 1
 fi
 

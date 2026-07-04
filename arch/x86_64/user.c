@@ -64,6 +64,7 @@ enum {
 	LINUX_SYSCALL_RT_SIGPROCMASK = 14,
 	LINUX_SYSCALL_IOCTL = 16,
 	LINUX_SYSCALL_WRITEV = 20,
+	LINUX_SYSCALL_SENDFILE = 40,
 	LINUX_SYSCALL_FCNTL = 72,
 	LINUX_SYSCALL_GETCWD = 79,
 	LINUX_SYSCALL_CHDIR = 80,
@@ -162,6 +163,9 @@ enum {
 	USER_LINUX_FSTAT = 5,
 	USER_LINUX_IOCTL = 16,
 	USER_LINUX_GETPID = 39,
+	USER_LINUX_GETCWD = 79,
+	USER_LINUX_CHDIR = 80,
+	USER_LINUX_SENDFILE = 40,
 	USER_LINUX_GETUID = 102,
 	USER_LINUX_GETGID = 104,
 	USER_LINUX_SETUID = 105,
@@ -1061,6 +1065,8 @@ static const char *linux_syscall_name(u64 number)
 		return "ioctl";
 	case LINUX_SYSCALL_WRITEV:
 		return "writev";
+	case LINUX_SYSCALL_SENDFILE:
+		return "sendfile";
 	case LINUX_SYSCALL_GETCWD:
 		return "getcwd";
 	case LINUX_SYSCALL_CHDIR:
@@ -1516,17 +1522,6 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	}
 	case LINUX_SYSCALL_KILL:
 		return 0;
-	case LINUX_SYSCALL_GETCWD: {
-		const char cwd[] = "/";
-
-		if (arg0 == 0 || arg1 < sizeof(cwd)) {
-			return (u64)-LINUX_EINVAL;
-		}
-		return write_current_user(arg0, cwd, sizeof(cwd)) == 0 ?
-		       sizeof(cwd) : (u64)-LINUX_EINVAL;
-	}
-	case LINUX_SYSCALL_CHDIR:
-		return (u64)-LINUX_EINVAL;
 	case LINUX_SYSCALL_SET_ROBUST_LIST:
 	case LINUX_SYSCALL_RT_SIGPROCMASK:
 		return 0;
@@ -1742,19 +1737,21 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	switch (number) {
 	case LINUX_SYSCALL_READ: {
 		struct shared_buffer *buffer;
+		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
+				LINUX_MAX_SYSCALL_BUFFER : arg2;
 
-		if (arg1 == 0 || arg2 > LINUX_MAX_SYSCALL_BUFFER) {
+		if (arg1 == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
 
-		buffer = buffer_create(arg2 == 0 ? 1 : arg2);
+		buffer = buffer_create(len == 0 ? 1 : len);
 		if (buffer == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
 
 		request.type = USER_LINUX_READ;
 		request.words[0] = arg0;
-		request.words[1] = arg2;
+		request.words[1] = len;
 		request.words[2] = 0;
 		request.words[3] = 0;
 		request.cap_type = IPC_CAP_BUFFER;
@@ -1809,6 +1806,94 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 		return linux_write_one(linux, reply_port, arg0, arg1, arg2);
+	}
+	case LINUX_SYSCALL_SENDFILE: {
+		struct shared_buffer *buffer;
+		const u64 len = arg3 > LINUX_MAX_SYSCALL_BUFFER ?
+				LINUX_MAX_SYSCALL_BUFFER : arg3;
+		u64 offset = (u64)-1;
+
+		if (arg2 != 0 &&
+		    read_current_user(arg2, &offset, sizeof(offset)) != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		if (len == 0) {
+			return 0;
+		}
+		buffer = buffer_create(len);
+		if (buffer == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		request.type = USER_LINUX_SENDFILE;
+		request.words[0] = arg0;
+		request.words[1] = arg1;
+		request.words[2] = len;
+		request.words[3] = offset;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+				     TASK_RIGHT_DUP;
+		request.cap_object = buffer;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_ENOSYS;
+		}
+		if (arg2 != 0 && (i64)reply.words[0] > 0 &&
+		    write_current_user(arg2, &reply.words[1],
+				       sizeof(reply.words[1])) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
+		buffer_release(buffer);
+		return reply.words[0];
+	}
+	case LINUX_SYSCALL_GETCWD: {
+		char cwd[16];
+		u64 len;
+
+		if (arg0 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		request.type = USER_LINUX_GETCWD;
+		request.words[0] = arg1;
+		request.words[1] = 0;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		if ((i64)reply.words[0] < 0) {
+			return reply.words[0];
+		}
+		len = reply.words[0];
+		if (len == 0 || len > sizeof(cwd)) {
+			return (u64)-LINUX_EINVAL;
+		}
+		mem_zero((u8 *)cwd, sizeof(cwd));
+		mem_copy((u8 *)cwd, (const u8 *)&reply.words[1], len);
+		return write_current_user(arg0, cwd, len) == 0 ?
+		       len : (u64)-LINUX_EINVAL;
+	}
+	case LINUX_SYSCALL_CHDIR: {
+		char path[16];
+		u64 packed[2] = { 0, 0 };
+
+		if (copy_cstr_from_user(path, (const char *)arg0,
+					sizeof(path)) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		mem_copy((u8 *)packed, (const u8 *)path, sizeof(packed));
+		request.type = USER_LINUX_CHDIR;
+		request.words[0] = packed[0];
+		request.words[1] = packed[1];
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
 	}
 	case LINUX_SYSCALL_GETPID:
 		request.type = USER_LINUX_GETPID;

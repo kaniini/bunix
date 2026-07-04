@@ -504,7 +504,7 @@ static void linux_process_init_fds(struct linux_process *process)
 static long alloc_fd(struct linux_process *process, u64 kind, u64 handle,
 		     u64 size)
 {
-	for (u64 fd = 3; fd < LINUX_MAX_FDS; fd++) {
+	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
 		if (process->fds[fd].kind == 0) {
 			process->fds[fd].kind = kind;
 			process->fds[fd].handle = handle;
@@ -1452,6 +1452,61 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	return (long)reply.words[1];
 }
 
+static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
+			       u64 buffer)
+{
+	if (fd >= LINUX_MAX_FDS ||
+	    process->fds[fd].kind != LINUX_FD_CONSOLE) {
+		return -LINUX_EBADF;
+	}
+	if (buffer == 0 || len > sizeof(write_buffer) ||
+	    bunix_buffer_read(buffer, 0, write_buffer, len) != 0) {
+		return -LINUX_EINVAL;
+	}
+
+	const struct bunix_msg console_message = {
+		.protocol = BUNIX_PROTO_CONSOLE,
+		.type = BUNIX_CONSOLE_WRITE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { (u64)write_buffer, len, 0, 0 },
+	};
+
+	bunix_ipc_send(process->fds[fd].handle, &console_message);
+	return (long)len;
+}
+
+static long linux_sendfile(struct linux_process *process, u64 out_fd,
+			   u64 in_fd, u64 len, u64 offset, u64 buffer,
+			   u64 *next_offset)
+{
+	u64 saved_offset = 0;
+	const int positioned = offset != (u64)-1;
+	long nread;
+
+	if (in_fd >= LINUX_MAX_FDS || process->fds[in_fd].kind == 0) {
+		return -LINUX_EBADF;
+	}
+	if (positioned) {
+		saved_offset = process->fds[in_fd].offset;
+		process->fds[in_fd].offset = offset;
+	}
+
+	nread = linux_read(process, in_fd, len, buffer);
+	if (positioned) {
+		if (next_offset != 0 && nread > 0) {
+			*next_offset = process->fds[in_fd].offset;
+		}
+		process->fds[in_fd].offset = saved_offset;
+	}
+	if (nread <= 0) {
+		return nread;
+	}
+	return linux_write_buffer(process, out_fd, (u64)nread, buffer);
+}
+
 static long linux_close(struct linux_process *process, u64 fd)
 {
 	struct bunix_msg request = {
@@ -1466,8 +1521,7 @@ static long linux_close(struct linux_process *process, u64 fd)
 	struct bunix_msg reply;
 
 	if (fd >= LINUX_MAX_FDS ||
-	    process->fds[fd].kind == 0 ||
-	    fd < 3) {
+	    process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
 
@@ -1527,7 +1581,7 @@ static void linux_close_process_fds(struct linux_process *process)
 		return;
 	}
 
-	for (u64 fd = 3; fd < LINUX_MAX_FDS; fd++) {
+	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
 		if (process->fds[fd].kind != 0) {
 			(void)linux_close(process, fd);
 		}
@@ -1808,6 +1862,19 @@ int main(void)
 				bunix_handle_close(message.cap);
 			}
 			break;
+		case BUNIX_LINUX_SENDFILE:
+			reply.words[1] = message.words[3];
+			reply.words[0] = (u64)linux_sendfile(process,
+							     message.words[0],
+							     message.words[1],
+							     message.words[2],
+							     message.words[3],
+							     message.cap,
+							     &reply.words[1]);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
 		case BUNIX_LINUX_GETDENTS64:
 			reply.words[0] = (u64)linux_getdents64(process,
 							       message.words[0],
@@ -1821,28 +1888,10 @@ int main(void)
 			const u64 fd = message.words[0];
 			const u64 len = message.words[1];
 
-			if (fd >= LINUX_MAX_FDS ||
-			    process->fds[fd].kind != LINUX_FD_CONSOLE) {
+			reply.words[0] = (u64)linux_write_buffer(process, fd, len,
+								 message.cap);
+			if (reply.words[0] == (u64)-LINUX_EBADF) {
 				bunix_console_write(bad_fd, sizeof(bad_fd) - 1);
-				reply.words[0] = (u64)-LINUX_EBADF;
-			} else if (message.cap == 0 || len > sizeof(write_buffer) ||
-				   bunix_buffer_read(message.cap, 0,
-						     write_buffer, len) != 0) {
-				reply.words[0] = (u64)-LINUX_EINVAL;
-			} else {
-				const struct bunix_msg console_message = {
-					.protocol = BUNIX_PROTO_CONSOLE,
-					.type = BUNIX_CONSOLE_WRITE,
-					.sender = 0,
-					.cap_rights = 0,
-					.reply = 0,
-					.cap = 0,
-					.words = { (u64)write_buffer, len, 0, 0 },
-				};
-
-				bunix_ipc_send(process->fds[fd].handle,
-					       &console_message);
-				reply.words[0] = len;
 			}
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
