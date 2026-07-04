@@ -1612,12 +1612,9 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			      LINUX_EXEC_INTERP_LOAD_BIAS : 0;
 		entry = interp_ehdr->entry + interp_bias;
 	}
-	if (linux_exec_apply_relative_relocations(image, ehdr, image_size,
-						  load_bias) != 0 ||
-	    (interp_image != 0 &&
-	     linux_exec_apply_relative_relocations(interp_image, interp_ehdr,
-						   interp_size,
-						   interp_bias) != 0) ||
+	if ((interp_image == 0 &&
+	     linux_exec_apply_relative_relocations(image, ehdr, image_size,
+						  load_bias) != 0) ||
 	    linux_exec_build_stack(path, &args, ehdr, load_bias, program_entry,
 				   interp_bias,
 				   stack_page, &new_sp) != 0) {
