@@ -80,6 +80,7 @@ enum {
 	LINUX_SYSCALL_DUP2 = 33,
 	LINUX_SYSCALL_TRUNCATE = 76,
 	LINUX_SYSCALL_FTRUNCATE = 77,
+	LINUX_SYSCALL_RMDIR = 84,
 	LINUX_SYSCALL_UNLINK = 87,
 	LINUX_SYSCALL_SENDFILE = 40,
 	LINUX_SYSCALL_SOCKET = 41,
@@ -92,6 +93,9 @@ enum {
 	LINUX_SYSCALL_MKDIR = 83,
 	LINUX_SYSCALL_CHMOD = 90,
 	LINUX_SYSCALL_FCHMOD = 91,
+	LINUX_SYSCALL_CHOWN = 92,
+	LINUX_SYSCALL_FCHOWN = 93,
+	LINUX_SYSCALL_LCHOWN = 94,
 	LINUX_SYSCALL_READLINK = 89,
 	LINUX_SYSCALL_GETTIMEOFDAY = 96,
 	LINUX_SYSCALL_UMASK = 95,
@@ -142,6 +146,7 @@ enum {
 	LINUX_SYSCALL_PIPE2 = 293,
 	LINUX_SYSCALL_OPENAT = 257,
 	LINUX_SYSCALL_MKDIRAT = 258,
+	LINUX_SYSCALL_FCHOWNAT = 260,
 	LINUX_SYSCALL_UNLINKAT = 263,
 	LINUX_SYSCALL_PRLIMIT64 = 302,
 	LINUX_SYSCALL_GETRANDOM = 318,
@@ -1230,6 +1235,7 @@ static int linux_syscall_forwards_scalar(u64 number)
 	case LINUX_SYSCALL_REBOOT:
 	case LINUX_SYSCALL_FTRUNCATE:
 	case LINUX_SYSCALL_FCHMOD:
+	case LINUX_SYSCALL_FCHOWN:
 		return 1;
 	default:
 		return 0;
@@ -1963,10 +1969,18 @@ static const char *linux_syscall_name(u64 number)
 		return "truncate";
 	case LINUX_SYSCALL_FTRUNCATE:
 		return "ftruncate";
+	case LINUX_SYSCALL_RMDIR:
+		return "rmdir";
 	case LINUX_SYSCALL_CHMOD:
 		return "chmod";
 	case LINUX_SYSCALL_FCHMOD:
 		return "fchmod";
+	case LINUX_SYSCALL_CHOWN:
+		return "chown";
+	case LINUX_SYSCALL_FCHOWN:
+		return "fchown";
+	case LINUX_SYSCALL_LCHOWN:
+		return "lchown";
 	case LINUX_SYSCALL_UNLINK:
 		return "unlink";
 	case LINUX_SYSCALL_NANOSLEEP:
@@ -2091,6 +2105,8 @@ static const char *linux_syscall_name(u64 number)
 		return "openat";
 	case LINUX_SYSCALL_MKDIRAT:
 		return "mkdirat";
+	case LINUX_SYSCALL_FCHOWNAT:
+		return "fchownat";
 	case LINUX_SYSCALL_UNLINKAT:
 		return "unlinkat";
 	case LINUX_SYSCALL_PRLIMIT64:
@@ -3368,7 +3384,8 @@ poll_again:
 	}
 	case LINUX_SYSCALL_UNLINK:
 	case LINUX_SYSCALL_UNLINKAT:
-	case LINUX_SYSCALL_TRUNCATE: {
+	case LINUX_SYSCALL_TRUNCATE:
+	case LINUX_SYSCALL_RMDIR: {
 		struct shared_buffer *buffer;
 		const char *path = number == LINUX_SYSCALL_UNLINKAT ?
 				    (const char *)arg1 : (const char *)arg0;
@@ -3395,7 +3412,9 @@ poll_again:
 		}
 
 		request.type = number == LINUX_SYSCALL_TRUNCATE ?
-			       LINUX_SYSCALL_TRUNCATE : LINUX_SYSCALL_UNLINKAT;
+			       LINUX_SYSCALL_TRUNCATE :
+			       (number == LINUX_SYSCALL_RMDIR ?
+				LINUX_SYSCALL_RMDIR : LINUX_SYSCALL_UNLINKAT);
 		request.words[0] = dirfd;
 		request.words[1] = len;
 		request.words[2] = number == LINUX_SYSCALL_TRUNCATE ?
@@ -3414,18 +3433,30 @@ poll_again:
 	case LINUX_SYSCALL_MKDIR:
 	case LINUX_SYSCALL_MKDIRAT:
 	case LINUX_SYSCALL_CHMOD:
-	case LINUX_SYSCALL_FCHMODAT: {
+	case LINUX_SYSCALL_FCHMODAT:
+	case LINUX_SYSCALL_CHOWN:
+	case LINUX_SYSCALL_LCHOWN:
+	case LINUX_SYSCALL_FCHOWNAT: {
 		struct shared_buffer *buffer;
 		const int is_mkdir = number == LINUX_SYSCALL_MKDIR ||
 				     number == LINUX_SYSCALL_MKDIRAT;
+		const int is_chown = number == LINUX_SYSCALL_CHOWN ||
+				     number == LINUX_SYSCALL_LCHOWN ||
+				     number == LINUX_SYSCALL_FCHOWNAT;
 		const int is_at = number == LINUX_SYSCALL_MKDIRAT ||
-				  number == LINUX_SYSCALL_FCHMODAT;
+				  number == LINUX_SYSCALL_FCHMODAT ||
+				  number == LINUX_SYSCALL_FCHOWNAT;
 		const char *path = is_at ? (const char *)arg1 :
 				   (const char *)arg0;
 		const u64 dirfd = is_at ? arg0 : (u64)-100;
 		const u64 mode = is_at ? arg2 : arg1;
-		const u64 flags = number == LINUX_SYSCALL_FCHMODAT ?
-				  arg3 : 0;
+		const u64 owner = is_at ? arg2 : arg1;
+		const u64 group = is_at ? arg3 : arg2;
+		const u64 flags = number == LINUX_SYSCALL_FCHMODAT ? arg3 :
+				  (number == LINUX_SYSCALL_FCHOWNAT ?
+				   frame->r8 :
+				   (number == LINUX_SYSCALL_LCHOWN ?
+				    LINUX_AT_SYMLINK_NOFOLLOW : 0));
 		u64 len = 0;
 
 		if (path == 0) {
@@ -3445,11 +3476,14 @@ poll_again:
 		}
 
 		request.type = is_mkdir ? LINUX_SYSCALL_MKDIRAT :
-			       LINUX_SYSCALL_FCHMODAT;
+			       (is_chown ? LINUX_SYSCALL_FCHOWNAT :
+				LINUX_SYSCALL_FCHMODAT);
 		request.words[0] = dirfd;
 		request.words[1] = len;
-		request.words[2] = mode;
-		request.words[3] = flags;
+		request.words[2] = is_chown ? owner : mode;
+		request.words[3] = is_chown ?
+				   ((flags & 0xffffffff) << 32) |
+				   (group & 0xffffffff) : flags;
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_RECV;
 		request.cap_object = buffer;

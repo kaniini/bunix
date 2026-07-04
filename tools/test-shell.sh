@@ -72,7 +72,7 @@ while ! grep -F "~ $ " "$log" >/dev/null 2>&1; do
 done
 
 printf 'uptime\nbusybox uptime\nbusybox uname\nbusybox uname -r\nbusybox stty -a\nbusybox id\nenv\n/usr/bin/env >/dev/null && echo USR_ENV_OK\nbusybox test -x /bin/sh && echo ACCESS_X_OK\nbusybox test -r /hello.txt && echo ACCESS_R_OK\nbusybox test ! -r /secret.txt && echo ACCESS_DENY_OK\ncd ~\npwd\ncd /\nbusybox kill -0 $$ && echo KILL_ZERO_OK\nbusybox kill -0 -$$ && echo KILL_PGRP_OK\ntrap "" INT\nbusybox kill -INT $$\necho SIGINT_IGNORE_OK\ntrap - INT\nbusybox sleep 1 && echo BUSYBOX_SLEEP_OK\nsleep 1 && echo DIRECT_SLEEP_OK\nbusybox sleep 5\n\003echo SLEEP_CTRL_C_OK\nbusybox echo PIPE_OK | busybox cat\nbusybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK\nbusybox cat /usr/share/bunix/nested/hello.txt && echo NESTED_CAT_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_OK\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox stat /usr/share\nbusybox stat /tmp\nbusybox stat /run\nbusybox stat /var/tmp\nbusybox stat /usr/bin/env\nbusybox ls /\nbusybox ls /bin\nbusybox readlink /bin/cat && echo SYMLINK_READLINK_OK\nbusybox ls -l /bin/cat && echo SYMLINK_LS_OK\nbusybox ls /usr/share/bunix/nested\nbusybox stat /bin\ncd /tmp\npwd\ncd /usr/share/bunix/nested\npwd\nbusybox ls .\nbusybox cat ../nested/./hello.txt && echo VFS_DOTDOT_OK\ncd /\nbusybox cat //usr///share/bunix/nested/hello.txt && echo VFS_SLASH_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_STILL_OK\nbusybox cat /proc/self/status && echo PROC_STATUS_OK\nbusybox ls /proc/self/fd && echo PROC_FD_OK\nbusybox readlink /proc/self/exe && echo PROC_EXE_OK\nbusybox cat /proc/stat && echo PROC_STAT_OK\nbusybox cat /proc/ipc && echo PROC_IPC_OK\nbusybox cat /proc/filesystems && echo PROC_FILESYSTEMS_OK\nbusybox cat /proc/cpuinfo && echo PROC_CPUINFO_OK\nbusybox cat /proc/self/cmdline && echo PROC_CMDLINE_OK\nbusybox stat /dev/zero && echo DEV_ZERO_STAT_OK\nbusybox stat /dev/urandom && echo DEV_URANDOM_STAT_OK\nbusybox test -r /dev/zero && echo DEV_ZERO_ACCESS_OK\nbusybox head -c 4 /dev/zero >/dev/null && echo DEV_ZERO_READ_OK\nbusybox head -c 4 /dev/urandom >/dev/null && echo DEV_URANDOM_READ_OK\necho TMP_WRITE_OK > /tmp/bunix-write.txt\nbusybox cat /tmp/bunix-write.txt && echo TMP_CAT_OK\nbusybox stat /tmp/bunix-write.txt && echo TMP_STAT_OK\nbusybox sh -c "echo RUN_WRITE_OK > /run/bunix-run.txt"\nbusybox cat /run/bunix-run.txt && echo RUN_CAT_OK\necho TRUNCATE_PAYLOAD > /tmp/bunix-trunc.txt\nbusybox truncate -s 4 /tmp/bunix-trunc.txt && echo TRUNCATE_OK\nbusybox cat /tmp/bunix-trunc.txt && echo TRUNCATE_CAT_OK\nbusybox rm /tmp/bunix-trunc.txt && echo UNLINK_OK\nbusybox test ! -e /tmp/bunix-trunc.txt && echo UNLINK_GONE_OK\n/bin/dyn-hello && echo DYN_HELLO_OK\nbusybox top -b -n 1 >/dev/null && echo PROC_TOP_OK\nbusybox ps && echo PROC_PS_OK\nbusybox free && echo PROC_FREE_OK\nbusybox mount && echo PROC_MOUNT_OK\n' >&3
-printf 'busybox stat -c "%%u:%%g %%a" /tmp/bunix-write.txt\nbusybox mkdir /tmp/bunix-dir && echo TMP_MKDIR_OK\nbusybox test -d /tmp/bunix-dir && echo TMP_MKDIR_STAT_OK\nbusybox chmod 700 /tmp/bunix-write.txt && echo TMP_CHMOD_OK\nbusybox stat -c "%%a" /tmp/bunix-write.txt\n' >&3
+printf 'busybox stat -c "%%u:%%g %%a" /tmp/bunix-write.txt\nbusybox mkdir /tmp/bunix-dir && echo TMP_MKDIR_OK\nbusybox test -d /tmp/bunix-dir && echo TMP_MKDIR_STAT_OK\nbusybox mkdir /tmp/bunix-rmdir\nbusybox rmdir /tmp/bunix-rmdir\nbusybox test ! -e /tmp/bunix-rmdir && echo RMDIR_OK\nbusybox chmod 700 /tmp/bunix-write.txt && echo TMP_CHMOD_OK\nbusybox stat -c "%%a" /tmp/bunix-write.txt\nbusybox chown root:root /tmp/bunix-write.txt || echo TMP_CHOWN_DENY_OK\n' >&3
 
 i=0
 while ! grep -F "load average" "$log" >/dev/null 2>&1; do
@@ -256,7 +256,7 @@ while ! grep -F "PROCFS_STILL_OK" "$log" >/dev/null 2>&1; do
 	sleep 1
 done
 
-for expected in "PROC_STATUS_OK" "PROC_FD_OK" "PROC_EXE_OK" "/bin/sh" "PROC_STAT_OK" "PROC_IPC_OK" "nodev" "PROC_FILESYSTEMS_OK" "Bunix virtual CPU" "PROC_CPUINFO_OK" "PROC_CMDLINE_OK" "DEV_ZERO_STAT_OK" "DEV_URANDOM_STAT_OK" "DEV_ZERO_ACCESS_OK" "DEV_ZERO_READ_OK" "DEV_URANDOM_READ_OK" "TMP_WRITE_OK" "TMP_CAT_OK" "TMP_STAT_OK" "1000:1000 644" "TMP_MKDIR_OK" "TMP_MKDIR_STAT_OK" "TMP_CHMOD_OK" "700" "RUN_WRITE_OK" "RUN_CAT_OK" "TRUNCATE_OK" "TRUN" "TRUNCATE_CAT_OK" "UNLINK_OK" "UNLINK_GONE_OK" "DYN_HELLO_OK" "PROC_TOP_OK" "PROC_PS_OK" "PROC_FREE_OK" "tmpfs on /tmp type tmpfs (rw)" "tmpfs on /run type tmpfs (rw)" "tmpfs on /var/tmp type tmpfs (rw)" "PROC_MOUNT_OK"; do
+for expected in "PROC_STATUS_OK" "PROC_FD_OK" "PROC_EXE_OK" "/bin/sh" "PROC_STAT_OK" "PROC_IPC_OK" "nodev" "PROC_FILESYSTEMS_OK" "Bunix virtual CPU" "PROC_CPUINFO_OK" "PROC_CMDLINE_OK" "DEV_ZERO_STAT_OK" "DEV_URANDOM_STAT_OK" "DEV_ZERO_ACCESS_OK" "DEV_ZERO_READ_OK" "DEV_URANDOM_READ_OK" "TMP_WRITE_OK" "TMP_CAT_OK" "TMP_STAT_OK" "1000:1000 644" "TMP_MKDIR_OK" "TMP_MKDIR_STAT_OK" "RMDIR_OK" "TMP_CHMOD_OK" "700" "TMP_CHOWN_DENY_OK" "RUN_WRITE_OK" "RUN_CAT_OK" "TRUNCATE_OK" "TRUN" "TRUNCATE_CAT_OK" "UNLINK_OK" "UNLINK_GONE_OK" "DYN_HELLO_OK" "PROC_TOP_OK" "PROC_PS_OK" "PROC_FREE_OK" "tmpfs on /tmp type tmpfs (rw)" "tmpfs on /run type tmpfs (rw)" "tmpfs on /var/tmp type tmpfs (rw)" "PROC_MOUNT_OK"; do
 	i=0
 	while ! grep -F "$expected" "$log" >/dev/null 2>&1; do
 		i=$((i + 1))
@@ -547,7 +547,7 @@ while [ "$(grep -F -c "~ # " "$log" 2>/dev/null || true)" -le "$root_prompts_bef
 	sleep 1
 done
 
-printf 'busybox id\nenv\nbusybox cat /secret.txt && echo ROOT_SECRET_OK\nexit\n' >&3
+printf 'busybox id\nenv\nbusybox cat /secret.txt && echo ROOT_SECRET_OK\nbusybox chown root:root /tmp/bunix-write.txt && echo ROOT_CHOWN_OK\nbusybox stat -c "%%u:%%g" /tmp/bunix-write.txt\nexit\n' >&3
 
 i=0
 while ! grep -F "uid=0(root)" "$log" >/dev/null 2>&1; do
@@ -578,6 +578,26 @@ while ! awk '{ sub(/\r$/, "") } /^ROOT_SECRET_OK$/ { found = 1 } END { exit foun
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
 		echo "root login could not read /secret.txt" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+i=0
+while ! awk '{ sub(/\r$/, "") } /^ROOT_CHOWN_OK$/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "root login could not chown tmpfs file" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+i=0
+while ! awk '{ sub(/\r$/, "") } /^0:0$/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "tmpfs chown did not update owner" >&2
 		tail -n 180 "$log" >&2 || true
 		exit 1
 	fi

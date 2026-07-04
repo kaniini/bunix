@@ -1267,7 +1267,9 @@ int main(void)
 		}
 		case BUNIX_VFS_CREATE_BUFFER:
 		case BUNIX_VFS_CHMOD_BUFFER:
+		case BUNIX_VFS_CHOWN_BUFFER:
 		case BUNIX_VFS_MKDIR_BUFFER:
+		case BUNIX_VFS_RMDIR_BUFFER:
 		case BUNIX_VFS_UNLINK_BUFFER: {
 			char cwd[VFS_MAX_PATH];
 			char input[VFS_MAX_PATH];
@@ -1290,6 +1292,16 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_CHMOD: {
+			struct vfs_open *open = open_from_handle(message.words[0]);
+
+			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
+				(void)forward_remote_handle(open, &message, &reply);
+			} else {
+				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
+			}
+			break;
+		}
+		case BUNIX_VFS_CHOWN: {
 			struct vfs_open *open = open_from_handle(message.words[0]);
 
 			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
