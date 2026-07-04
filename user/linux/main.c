@@ -52,6 +52,7 @@ enum {
 	LINUX_VTIME = 5,
 	LINUX_VMIN = 6,
 	LINUX_SIGINT = 2,
+	LINUX_SIGTERM = 15,
 	LINUX_ICRNL = 0000400,
 	LINUX_OPOST = 0000001,
 	LINUX_ONLCR = 0000004,
@@ -1005,6 +1006,32 @@ static struct linux_process *linux_process_find_pid(u64 pid)
 	return 0;
 }
 
+static int linux_same_session(const struct linux_process *left,
+			      const struct linux_process *right)
+{
+	if (left == 0 || right == 0) {
+		return 0;
+	}
+	if (left->session_id != 0 || right->session_id != 0) {
+		return left->session_id != 0 &&
+		       left->session_id == right->session_id;
+	}
+	return left->sid == right->sid;
+}
+
+static int linux_pgrp_exists(u64 pgid)
+{
+	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
+		if (processes[i].pid != 0 &&
+		    !processes[i].exited &&
+		    processes[i].pgid == pgid) {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
 static int linux_child_matches(const struct linux_process *parent,
 			       const struct linux_process *child, long pid)
 {
@@ -1172,9 +1199,12 @@ static int linux_signal_process(struct linux_process *process, u64 signal)
 	if (process == 0 || process->exited || signal >= 64) {
 		return 0;
 	}
+	if (signal == 0) {
+		return 1;
+	}
 
 	process->pending_signals |= 1ull << signal;
-	if (signal == LINUX_SIGINT) {
+	if (signal == LINUX_SIGINT || signal == LINUX_SIGTERM) {
 		linux_process_exit_status(process, 128 + signal, 1);
 		return 1;
 	}
@@ -1228,6 +1258,51 @@ static int linux_signal_foreground(struct linux_process *source, u64 signal)
 	}
 
 	return delivered;
+}
+
+static long linux_kill(struct linux_process *source, long pid, u64 signal)
+{
+	int delivered = 0;
+
+	if (signal >= 64) {
+		return -LINUX_EINVAL;
+	}
+	if (pid > 0) {
+		struct linux_process *target = linux_process_find_pid((u64)pid);
+
+		if (target == 0 || target->exited) {
+			return -LINUX_ESRCH;
+		}
+		return linux_signal_process(target, signal) ? 0 : -LINUX_ESRCH;
+	}
+	if (pid == 0) {
+		for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
+			if (processes[i].pid != 0 &&
+			    !processes[i].exited &&
+			    processes[i].pgid == source->pgid &&
+			    linux_same_session(source, &processes[i])) {
+				delivered |= linux_signal_process(&processes[i],
+								  signal);
+			}
+		}
+		return delivered ? 0 : -LINUX_ESRCH;
+	}
+	if (pid < -1) {
+		const u64 pgid = (u64)(-pid);
+
+		for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
+			if (processes[i].pid != 0 &&
+			    !processes[i].exited &&
+			    processes[i].pgid == pgid &&
+			    linux_same_session(source, &processes[i])) {
+				delivered |= linux_signal_process(&processes[i],
+								  signal);
+			}
+		}
+		return delivered ? 0 : -LINUX_ESRCH;
+	}
+
+	return -LINUX_EINVAL;
 }
 
 static long linux_user_credential(struct linux_process *process, u64 type)
@@ -1371,6 +1446,7 @@ static long linux_setpgid(struct linux_process *process, u64 pid, u64 pgid)
 {
 	struct linux_process *target = pid == 0 ? process :
 				       linux_process_find_pid(pid);
+	struct linux_process *leader;
 
 	if (target == 0) {
 		return -LINUX_ESRCH;
@@ -1379,7 +1455,21 @@ static long linux_setpgid(struct linux_process *process, u64 pid, u64 pgid)
 	    target->parent != linux_process_index(process)) {
 		return -LINUX_ESRCH;
 	}
-	target->pgid = pgid == 0 ? target->pid : pgid;
+	if (!linux_same_session(process, target)) {
+		return -LINUX_ESRCH;
+	}
+	if (target->sid == target->pid) {
+		return -LINUX_EPERM;
+	}
+	if (pgid == 0) {
+		pgid = target->pid;
+	}
+	leader = linux_process_find_pid(pgid);
+	if (leader != 0 &&
+	    (leader->pgid != pgid || !linux_same_session(target, leader))) {
+		return -LINUX_EPERM;
+	}
+	target->pgid = pgid;
 	return 0;
 }
 
@@ -1387,6 +1477,9 @@ static long linux_setsid(struct linux_process *process)
 {
 	if (process == 0) {
 		return -LINUX_ESRCH;
+	}
+	if (linux_pgrp_exists(process->pid)) {
+		return -LINUX_EPERM;
 	}
 
 	process->sid = process->pid;
@@ -2566,6 +2659,11 @@ int main(void)
 			break;
 		case BUNIX_LINUX_SETSID:
 			reply.words[0] = (u64)linux_setsid(process);
+			break;
+		case BUNIX_LINUX_KILL:
+			reply.words[0] = (u64)linux_kill(process,
+							 (long)message.words[0],
+							 message.words[1]);
 			break;
 		case BUNIX_LINUX_IOCTL:
 			reply.words[0] = (u64)linux_ioctl(process,

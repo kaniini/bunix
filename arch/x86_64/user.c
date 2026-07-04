@@ -894,6 +894,7 @@ static int linux_syscall_forwards_scalar(u64 number)
 	case LINUX_SYSCALL_GETPGID:
 	case LINUX_SYSCALL_SETPGID:
 	case LINUX_SYSCALL_SOCKET:
+	case LINUX_SYSCALL_KILL:
 		return 1;
 	default:
 		return 0;
