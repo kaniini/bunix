@@ -308,11 +308,11 @@ static const struct rootfs_entry *rootfs_find_ref(const char *path)
 	return 0;
 }
 
-static long user_credential_value(u64 task, u64 type, u64 *value)
+static int user_can_access(u64 task, const struct rootfs_entry *entry, u64 mask)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_USER,
-		.type = type,
+		.type = BUNIX_USER_CAN_ACCESS,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply = 0,
@@ -322,32 +322,16 @@ static long user_credential_value(u64 task, u64 type, u64 *value)
 	struct bunix_msg reply;
 	const u64 user = service_user();
 
-	if (value == 0 || user == 0) {
-		return -1;
+	if (entry == 0) {
+		return 0;
 	}
-	if (bunix_ipc_call(user, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		return -1;
+	if (task == 0) {
+		return 1;
 	}
 
-	*value = reply.words[1];
-	return 0;
-}
-
-static int user_has_group(u64 task, u64 gid)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_USER,
-		.type = BUNIX_USER_HAS_GROUP,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { task, gid, 0, 0 },
-	};
-	struct bunix_msg reply;
-	const u64 user = service_user();
-
+	request.words[1] = entry->uid;
+	request.words[2] = entry->gid;
+	request.words[3] = ((u64)entry->mode << 32) | mask;
 	if (user == 0 ||
 	    bunix_ipc_call(user, &request, &reply) != 0 ||
 	    reply.words[0] != 0) {
@@ -359,56 +343,12 @@ static int user_has_group(u64 task, u64 gid)
 
 static int can_read_entry(const struct rootfs_entry *entry, u64 task)
 {
-	u64 euid;
-	u64 egid;
-
-	if (entry == 0) {
-		return 0;
-	}
-	if (task == 0) {
-		return 1;
-	}
-	if (user_credential_value(task, BUNIX_USER_GETEUID, &euid) != 0 ||
-	    user_credential_value(task, BUNIX_USER_GETEGID, &egid) != 0) {
-		return 0;
-	}
-	if (euid == 0) {
-		return 1;
-	}
-	if (euid == entry->uid) {
-		return (entry->mode & 0400) != 0;
-	}
-	if (egid == entry->gid || user_has_group(task, entry->gid)) {
-		return (entry->mode & 0040) != 0;
-	}
-	return (entry->mode & 0004) != 0;
+	return user_can_access(task, entry, 04);
 }
 
 static int can_search_entry(const struct rootfs_entry *entry, u64 task)
 {
-	u64 euid;
-	u64 egid;
-
-	if (entry == 0) {
-		return 0;
-	}
-	if (task == 0) {
-		return 1;
-	}
-	if (user_credential_value(task, BUNIX_USER_GETEUID, &euid) != 0 ||
-	    user_credential_value(task, BUNIX_USER_GETEGID, &egid) != 0) {
-		return 0;
-	}
-	if (euid == 0) {
-		return 1;
-	}
-	if (euid == entry->uid) {
-		return (entry->mode & 0100) != 0;
-	}
-	if (egid == entry->gid || user_has_group(task, entry->gid)) {
-		return (entry->mode & 0010) != 0;
-	}
-	return (entry->mode & 0001) != 0;
+	return user_can_access(task, entry, 01);
 }
 
 static void stat_meta_reply(struct bunix_msg *reply,

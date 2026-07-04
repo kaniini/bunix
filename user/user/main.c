@@ -281,6 +281,39 @@ static long credential_has_group(u64 task, u64 gid, u64 *has_group)
 	return 0;
 }
 
+static long credential_can_access(u64 task, u64 owner, u64 group, u64 mode,
+				  u64 mask, u64 *allowed)
+{
+	struct user_credential *credential = credential_find(task);
+	u64 group_member = 0;
+
+	if (allowed == 0 || credential == 0) {
+		return -1;
+	}
+
+	*allowed = 0;
+	if (credential->euid == 0) {
+		*allowed = 1;
+		return 0;
+	}
+
+	if (credential->euid == owner) {
+		*allowed = (mode & (mask << 6)) == (mask << 6);
+		return 0;
+	}
+
+	if (credential_has_group(task, group, &group_member) != 0) {
+		return -1;
+	}
+	if (credential->egid == group || group_member) {
+		*allowed = (mode & (mask << 3)) == (mask << 3);
+		return 0;
+	}
+
+	*allowed = (mode & mask) == mask;
+	return 0;
+}
+
 int main(void)
 {
 	const char online[] = "user: online\n";
@@ -365,6 +398,14 @@ int main(void)
 			reply.words[0] = (u64)credential_has_group(message.words[0],
 								   message.words[1],
 								   &reply.words[1]);
+			break;
+		case BUNIX_USER_CAN_ACCESS:
+			reply.words[0] = (u64)credential_can_access(message.words[0],
+								    message.words[1],
+								    message.words[2],
+								    message.words[3] >> 32,
+								    message.words[3] & 0xffffffff,
+								    &reply.words[1]);
 			break;
 		default:
 			reply.words[0] = (u64)-1;
