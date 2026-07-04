@@ -85,6 +85,7 @@ struct cpu_sched {
 	struct thread *reap;
 	struct thread scheduler_thread;
 	u32 quantum_left;
+	u32 handoff_depth;
 };
 
 static struct task *tasks;
@@ -1250,6 +1251,39 @@ void thread_unblock(struct thread *thread)
 	}
 
 	sched_enqueue_on(&cpus[thread->cpu_id], thread);
+}
+
+int thread_handoff(struct thread *thread)
+{
+	struct cpu_sched *cpu = sched_current_cpu();
+	struct thread *prev = cpu->current;
+
+	if (thread == 0 || thread->state != THREAD_BLOCKED) {
+		return -1;
+	}
+	if (prev == &cpu->scheduler_thread || thread->cpu_id != cpu->id ||
+	    cpu->handoff_depth != 0) {
+		thread_unblock(thread);
+		return 0;
+	}
+	if (thread_task_is_killing(prev)) {
+		thread_unblock(thread);
+		thread_exit();
+	}
+
+	sched_enqueue_on(cpu, prev);
+	thread->state = THREAD_RUNNING;
+	cpu->current = thread;
+	sched_reset_quantum(cpu);
+	sched_activate_thread_space(thread);
+	cpu->handoff_depth++;
+	arch_thread_switch(&prev->context, &thread->context);
+	cpu->handoff_depth--;
+	sched_activate_thread_space(cpu->current);
+	struct thread *dead = cpu->reap;
+	cpu->reap = 0;
+	sched_reap_thread(dead);
+	return 0;
 }
 
 static void sched_cancel_sleep(struct thread *thread)

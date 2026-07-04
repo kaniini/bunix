@@ -15,6 +15,11 @@ struct ipc_message_node {
 	struct ipc_message_node *next;
 };
 
+struct ipc_wait {
+	struct ipc_message *message;
+	u32 delivered;
+};
+
 struct ipc_port {
 	const char *name;
 	u64 id;
@@ -24,6 +29,7 @@ struct ipc_port {
 	struct ipc_message_node *head;
 	struct ipc_message_node *tail;
 	struct thread *receiver;
+	struct ipc_wait *receiver_wait;
 	u32 queued;
 };
 
@@ -256,10 +262,35 @@ struct ipc_port *ipc_port_from_id(u64 id)
 int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 {
 	struct ipc_message_node *node;
+	struct thread *receiver = 0;
+	struct ipc_message direct_message;
 
 	if (port == 0 || message == 0) {
 		return -1;
 	}
+
+	direct_message = *message;
+	direct_message.sender = task_id(task_current());
+	ipc_message_retain(&direct_message);
+
+	const u64 direct_flags = spin_lock_irqsave(&ipc_lock);
+	if (port->receiver != 0 && port->receiver_wait != 0 &&
+	    port->head == 0) {
+		receiver = port->receiver;
+		*port->receiver_wait->message = direct_message;
+		port->receiver_wait->delivered = 1;
+		port->receiver = 0;
+		port->receiver_wait = 0;
+	}
+	spin_unlock_irqrestore(&ipc_lock, direct_flags);
+	if (receiver != 0) {
+		if (message->reply_port != 0) {
+			thread_unblock(receiver);
+			return 0;
+		}
+		return thread_handoff(receiver);
+	}
+	ipc_message_release(&direct_message);
 
 	node = message_alloc();
 	if (node == 0) {
@@ -287,9 +318,10 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 			       port->queued);
 	}
 
-	struct thread *receiver = port->receiver;
+	receiver = port->receiver;
 	if (port->receiver != 0) {
 		port->receiver = 0;
+		port->receiver_wait = 0;
 	}
 
 	spin_unlock_irqrestore(&ipc_lock, flags);
@@ -303,9 +335,15 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 		return -1;
 	}
 
+	struct ipc_wait wait = {
+		.message = message,
+		.delivered = 0,
+	};
 	u64 flags = spin_lock_irqsave(&ipc_lock);
 	while (port->head == 0) {
 		port->receiver = thread_current();
+		port->receiver_wait = &wait;
+		wait.delivered = 0;
 		if (!str_eq(port->name, "block") &&
 		    !str_eq(port->name, "vfs") &&
 		    !str_eq(port->name, "reply")) {
@@ -315,6 +353,10 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 		spin_unlock_irqrestore(&ipc_lock, flags);
 		thread_block_prepared();
 		flags = spin_lock_irqsave(&ipc_lock);
+		if (wait.delivered) {
+			spin_unlock_irqrestore(&ipc_lock, flags);
+			return 0;
+		}
 	}
 
 	struct ipc_message_node *node = port->head;
@@ -351,6 +393,7 @@ void ipc_cancel_thread(struct thread *thread)
 	for (struct ipc_port *port = ports; port != 0; port = port->next) {
 		if (port->receiver == thread) {
 			port->receiver = 0;
+			port->receiver_wait = 0;
 		}
 	}
 
