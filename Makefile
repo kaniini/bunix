@@ -18,6 +18,8 @@ LINUX_SERVER_MODULE := $(BUILD_DIR)/modules/linux.server
 LINUX_SERVER_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/linux/main.c.o
 PROC_MODULE := $(BUILD_DIR)/modules/proc.server
 PROC_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/proc/main.c.o
+PROCFS_MODULE := $(BUILD_DIR)/modules/procfs.server
+PROCFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/procfs/main.c.o
 BLOCK_MODULE := $(BUILD_DIR)/modules/block.server
 BLOCK_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/block/main.c.o
 VFS_MODULE := $(BUILD_DIR)/modules/vfs.server
@@ -99,6 +101,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/init/main.c.o \
 	$(BUILD_DIR)/user/user/main.c.o \
 	$(BUILD_DIR)/user/linux/main.c.o \
 	$(BUILD_DIR)/user/proc/main.c.o \
+	$(BUILD_DIR)/user/procfs/main.c.o \
 	$(BUILD_DIR)/user/block/main.c.o \
 	$(BUILD_DIR)/user/vfs/main.c.o \
 	$(BUILD_DIR)/user/first/main.c.o \
@@ -160,6 +163,10 @@ $(PROC_MODULE): $(PROC_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PROC_MODULE_OBJS)
 
+$(PROCFS_MODULE): $(PROCFS_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PROCFS_MODULE_OBJS)
+
 $(BLOCK_MODULE): $(BLOCK_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(BLOCK_MODULE_OBJS)
@@ -200,7 +207,7 @@ $(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_PASSWD)
 	mkdir -p $(dir $@)
 	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /bin/first $(FIRST_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/busybox $(BUSYBOX_STATIC) /bin/sh $(BUSYBOX_STATIC) /bin/dmesg $(BUSYBOX_STATIC) /bin/cat $(BUSYBOX_STATIC) /bin/stat $(BUSYBOX_STATIC) /bin/uptime $(BUSYBOX_STATIC) /bin/sleep $(BUSYBOX_STATIC)
 
-$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -215,13 +222,14 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODUL
 		"modules/user.server=$(USER_MODULE)" \
 		"modules/linux.server=$(LINUX_SERVER_MODULE)" \
 		"modules/proc.server=$(PROC_MODULE)" \
+		"modules/procfs.server=$(PROCFS_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/vfs.server=$(VFS_MODULE)" \
 		"modules/ping.server=$(PING_MODULE)" \
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -238,6 +246,7 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_M
 	cp $(USER_MODULE) $(ISO_ROOT)/modules/user.server
 	cp $(LINUX_SERVER_MODULE) $(ISO_ROOT)/modules/linux.server
 	cp $(PROC_MODULE) $(ISO_ROOT)/modules/proc.server
+	cp $(PROCFS_MODULE) $(ISO_ROOT)/modules/procfs.server
 	cp $(BLOCK_MODULE) $(ISO_ROOT)/modules/block.server
 	cp $(VFS_MODULE) $(ISO_ROOT)/modules/vfs.server
 	cp $(PING_MODULE) $(ISO_ROOT)/modules/ping.server
@@ -353,6 +362,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux-server: exit_group" $(BUILD_DIR)/serial.log
 	grep -F "block: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: online" $(BUILD_DIR)/serial.log
+	grep -F "procfs: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: mounted block" $(BUILD_DIR)/serial.log
 	grep -F "init: launching servers" $(BUILD_DIR)/serial.log
 	grep -F "init: names ready" $(BUILD_DIR)/serial.log
@@ -375,6 +385,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "kernel: launching module server user" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server linux" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server proc" $(BUILD_DIR)/serial.log
+	grep -F "kernel: launching module server procfs" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server block" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server vfs" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server ping" $(BUILD_DIR)/serial.log

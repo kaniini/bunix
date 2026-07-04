@@ -196,6 +196,12 @@ int main(void)
 	vfs = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS,
 					BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	vfs_launch = vfs;
+	bunix_launch_module_with_caps("procfs", fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROCFS,
+				      BUNIX_RIGHT_SEND) == 0) {
+		return 1;
+	}
 	fs_namespace = create_namespace();
 	if (fs_namespace == 0 ||
 	    register_service_in_namespace(fs_namespace, BUNIX_SERVICE_VFS,

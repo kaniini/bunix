@@ -67,7 +67,7 @@ while ! grep -F "/ $ " "$log" >/dev/null 2>&1; do
 	sleep 1
 done
 
-printf 'uptime\nbusybox uptime\nbusybox stty -a\nbusybox id\nbusybox kill -0 $$ && echo KILL_ZERO_OK\nbusybox kill -0 -$$ && echo KILL_PGRP_OK\nbusybox sleep 1 && echo BUSYBOX_SLEEP_OK\nsleep 1 && echo DIRECT_SLEEP_OK\nbusybox sleep 5\n\003echo SLEEP_CTRL_C_OK\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\nbusybox cat /secret.txt\necho POSTCAT\nbusybox stat /bin\nbusybox ecxx\177\177ho BACKSPACE_OK\ncat\n\003echo CTRL_C_OK\ncd /bin\npwd\nexit\n' >&3
+printf 'uptime\nbusybox uptime\nbusybox stty -a\nbusybox id\nbusybox kill -0 $$ && echo KILL_ZERO_OK\nbusybox kill -0 -$$ && echo KILL_PGRP_OK\nbusybox sleep 1 && echo BUSYBOX_SLEEP_OK\nsleep 1 && echo DIRECT_SLEEP_OK\nbusybox sleep 5\n\003echo SLEEP_CTRL_C_OK\nbusybox echo PIPE_OK | busybox cat\nbusybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\n' >&3
 
 i=0
 while ! grep -F "load average" "$log" >/dev/null 2>&1; do
@@ -160,6 +160,28 @@ while ! grep -F "BUSYBOX_ARGV_OK" "$log" >/dev/null 2>&1; do
 done
 
 i=0
+while ! grep -F "PIPE_OK" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox echo pipe did not complete" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+i=0
+while ! grep -F "PIPE_FILE_OK" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox cat pipe did not complete" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+i=0
 while ! grep -F "BUSYBOX_SLEEP_OK" "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
@@ -214,27 +236,7 @@ while ! grep -F "KILL_PGRP_OK" "$log" >/dev/null 2>&1; do
 	sleep 1
 done
 
-i=0
-while ! grep -F "BACKSPACE_OK" "$log" >/dev/null 2>&1; do
-	i=$((i + 1))
-	if [ "$i" -gt 45 ]; then
-		echo "busybox backspace-edited command did not complete" >&2
-		tail -n 160 "$log" >&2 || true
-		exit 1
-	fi
-	sleep 1
-done
-
-i=0
-while ! grep -F "CTRL_C_OK" "$log" >/dev/null 2>&1; do
-	i=$((i + 1))
-	if [ "$i" -gt 45 ]; then
-		echo "foreground Ctrl-C did not return to shell" >&2
-		tail -n 180 "$log" >&2 || true
-		exit 1
-	fi
-	sleep 1
-done
+printf 'busybox cat /secret.txt\necho POSTCAT\n' >&3
 
 i=0
 while ! grep -F "cat: can't open '/secret.txt'" "$log" >/dev/null 2>&1; do
@@ -252,11 +254,59 @@ if grep -F "root secret" "$log" >/dev/null 2>&1; then
 	exit 1
 fi
 
-if ! awk '{ sub(/\r$/, "") } /\/bin \$ pwd/ { prompt = NR } /^\/bin$/ && prompt { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
-	echo "busybox chdir/pwd regression failed" >&2
-	tail -n 160 "$log" >&2 || true
-	exit 1
-fi
+i=0
+while ! grep -F "POSTCAT" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "shell did not continue after denied cat" >&2
+		tail -n 160 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+printf 'ecxx\177\177ho BACKSPACE_OK\n' >&3
+
+i=0
+while ! awk '{ sub(/\r$/, "") } /^BACKSPACE_OK$/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox backspace-edited command did not complete" >&2
+		tail -n 160 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+printf 'cat\n' >&3
+sleep 1
+printf '\003' >&3
+sleep 1
+printf 'echo CTRL_C_OK\n' >&3
+
+i=0
+while ! awk '{ sub(/\r$/, "") } /^CTRL_C_OK$/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "foreground Ctrl-C did not return to shell" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+printf 'cd /bin\npwd\nexit\n' >&3
+
+i=0
+while ! awk '{ sub(/\r$/, "") } /\/bin \$ pwd/ { prompt = NR } /^\/bin$/ && prompt { found = 1 } END { exit found ? 0 : 1 }' "$log"; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox chdir/pwd regression failed" >&2
+		tail -n 160 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
 
 if ! awk '{ sub(/\r$/, "") } /login: session ended/ { ended = NR } /login: $/ && ended && NR > ended { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
 	echo "login prompt did not return after shell exit" >&2

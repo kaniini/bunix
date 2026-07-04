@@ -6,6 +6,7 @@ enum {
 	ROOTFS_MAX_PATH = 32,
 	ROOTFS_MAX_ENTRIES = 32,
 	VFS_MAX_OPEN_FILES = 16,
+	VFS_REMOTE_PROCFS = 1ull << 63,
 };
 
 struct rootfs_header {
@@ -27,6 +28,7 @@ static struct rootfs_entry root_entries[ROOTFS_MAX_ENTRIES];
 static unsigned int root_entry_count;
 static const struct rootfs_entry *open_files[VFS_MAX_OPEN_FILES];
 static u64 user_service;
+static u64 procfs_service;
 
 static long register_service(u64 service, u64 handle)
 {
@@ -77,6 +79,56 @@ static u64 service_user(void)
 	}
 
 	return user_service;
+}
+
+static u64 service_procfs(void)
+{
+	if (procfs_service == 0) {
+		procfs_service = resolve_service(BUNIX_SERVICE_PROCFS,
+						  BUNIX_RIGHT_SEND);
+	}
+
+	return procfs_service;
+}
+
+static int path_is_procfs(const char *path)
+{
+	if (path[0] != '/' || path[1] != 'p' || path[2] != 'r' ||
+	    path[3] != 'o' || path[4] != 'c') {
+		return 0;
+	}
+	return path[5] == '\0' || path[5] == '/';
+}
+
+static int handle_is_procfs(u64 handle)
+{
+	return (handle & VFS_REMOTE_PROCFS) != 0;
+}
+
+static u64 procfs_handle(u64 handle)
+{
+	return handle & ~VFS_REMOTE_PROCFS;
+}
+
+static int forward_procfs(struct bunix_msg *message, struct bunix_msg *reply)
+{
+	const u64 procfs = service_procfs();
+
+	if (procfs == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return -1;
+	}
+	if (handle_is_procfs(message->words[0])) {
+		message->words[0] = procfs_handle(message->words[0]);
+	}
+	if (bunix_ipc_call(procfs, message, reply) != 0) {
+		reply->words[0] = (u64)-1;
+		return -1;
+	}
+	if (message->type == BUNIX_VFS_OPEN && reply->words[0] == 0) {
+		reply->words[1] |= VFS_REMOTE_PROCFS;
+	}
+	return 0;
 }
 
 static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
@@ -558,6 +610,10 @@ int main(void)
 				path[i] = '\0';
 			}
 			unpack_bytes((unsigned char *)path, &message.words[0], 16);
+			if (path_is_procfs(path)) {
+				(void)forward_procfs(&message, &reply);
+				break;
+			}
 			entry = rootfs_find_ref(path);
 			if (entry == 0) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
@@ -593,6 +649,10 @@ int main(void)
 				path[i] = '\0';
 			}
 			unpack_bytes((unsigned char *)path, &message.words[0], 16);
+			if (path_is_procfs(path)) {
+				(void)forward_procfs(&message, &reply);
+				break;
+			}
 			entry = rootfs_find_ref(path);
 			if (entry == 0) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
@@ -605,6 +665,10 @@ int main(void)
 			const struct rootfs_entry *entry =
 				file_from_handle(message.words[0]);
 
+			if (handle_is_procfs(message.words[0])) {
+				(void)forward_procfs(&message, &reply);
+				break;
+			}
 			if (entry == 0) {
 				reply.words[0] = (u64)-1;
 			} else {
@@ -618,6 +682,10 @@ int main(void)
 			const struct rootfs_entry *entry =
 				file_from_handle(message.words[0]);
 
+			if (handle_is_procfs(message.words[0])) {
+				(void)forward_procfs(&message, &reply);
+				break;
+			}
 			if (entry == 0) {
 				reply.words[0] = (u64)-1;
 			} else {
@@ -632,6 +700,10 @@ int main(void)
 			u64 len = message.words[2];
 			int read_len;
 
+			if (handle_is_procfs(message.words[0])) {
+				(void)forward_procfs(&message, &reply);
+				break;
+			}
 			if (entry == 0 ||
 			    entry->type != BUNIX_VFS_TYPE_REGULAR ||
 			    message.cap == 0 ||
@@ -671,6 +743,10 @@ int main(void)
 			const struct rootfs_entry *child;
 			const char *name;
 
+			if (handle_is_procfs(message.words[0])) {
+				(void)forward_procfs(&message, &reply);
+				break;
+			}
 			if (directory == 0 ||
 			    directory->type != BUNIX_VFS_TYPE_DIRECTORY) {
 				reply.words[0] = BUNIX_VFS_ERR_NOTDIR;
@@ -692,6 +768,10 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_CLOSE:
+			if (handle_is_procfs(message.words[0])) {
+				(void)forward_procfs(&message, &reply);
+				break;
+			}
 			if (file_from_handle(message.words[0]) == 0) {
 				reply.words[0] = (u64)-1;
 			} else {

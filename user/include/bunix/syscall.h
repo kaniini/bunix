@@ -31,6 +31,7 @@ enum {
 	BUNIX_SYSCALL_TASK_CLONE_RANGE = -46,
 	BUNIX_SYSCALL_CONSOLE_READ = -48,
 	BUNIX_SYSCALL_TASK_KILL = -50,
+	BUNIX_SYSCALL_TASK_INFO = -52,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
 	BUNIX_RIGHT_SEND = 1 << 0,
@@ -44,6 +45,7 @@ enum {
 	BUNIX_PROTO_PROC = ('P') | ('R' << 8) | ('O' << 16) | ('C' << 24),
 	BUNIX_PROTO_BLOCK = ('B') | ('L' << 8) | ('K' << 16) | ('0' << 24),
 	BUNIX_PROTO_VFS = ('V') | ('F' << 8) | ('S' << 16) | ('0' << 24),
+	BUNIX_PROTO_PROCFS = ('P') | ('F' << 8) | ('S' << 16) | ('0' << 24),
 	BUNIX_PROTO_LINUX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
 	BUNIX_PROTO_USER = ('U') | ('S' << 8) | ('E' << 16) | ('R' << 24),
 	BUNIX_NAMES_REGISTER = 1,
@@ -76,6 +78,7 @@ enum {
 	BUNIX_LINUX_CLOSE = 3,
 	BUNIX_LINUX_FSTAT = 5,
 	BUNIX_LINUX_IOCTL = 16,
+	BUNIX_LINUX_PIPE = 22,
 	BUNIX_LINUX_DUP = 32,
 	BUNIX_LINUX_DUP2 = 33,
 	BUNIX_LINUX_SENDFILE = 40,
@@ -109,6 +112,7 @@ enum {
 	BUNIX_LINUX_OPENAT = 257,
 	BUNIX_LINUX_NEWFSTATAT = 262,
 	BUNIX_LINUX_DUP3 = 292,
+	BUNIX_LINUX_PIPE2 = 293,
 	BUNIX_LINUX_REGISTER_PROCESS = 1000,
 	BUNIX_LINUX_FORK_PROCESS = 1001,
 	BUNIX_LINUX_EXEC_PROCESS = 1002,
@@ -126,6 +130,7 @@ enum {
 	BUNIX_SERVICE_LINUX = BUNIX_PROTO_LINUX,
 	BUNIX_SERVICE_BLOCK = BUNIX_PROTO_BLOCK,
 	BUNIX_SERVICE_VFS = BUNIX_PROTO_VFS,
+	BUNIX_SERVICE_PROCFS = BUNIX_PROTO_PROCFS,
 	BUNIX_SERVICE_USER = BUNIX_PROTO_USER,
 	BUNIX_USER_GETUID = 1,
 	BUNIX_USER_GETGID = 2,
@@ -293,6 +298,13 @@ static inline long bunix_task_create(const char *name)
 static inline long bunix_task_id(u64 task)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_TASK_ID, task);
+}
+
+static inline long bunix_task_info(u64 index, u64 *pid_threads_flags,
+				   u64 *name_words)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_TASK_INFO, index,
+			      (u64)pid_threads_flags, (u64)name_words);
 }
 
 static inline long bunix_task_map(u64 task, u64 vaddr, const void *src,

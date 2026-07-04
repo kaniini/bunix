@@ -113,6 +113,7 @@ void sched_tick(void);
 void thread_exit(void) __attribute__((noreturn));
 
 u32 task_id(const struct task *task);
+int task_info_at(u64 index, u64 *pid_threads_flags, u64 *name_words);
 u64 task_linux_brk(const struct task *task);
 void task_set_linux_brk(struct task *task, u64 brk);
 u64 task_linux_mmap_next(const struct task *task);

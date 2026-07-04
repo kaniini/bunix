@@ -1264,6 +1264,41 @@ u32 task_id(const struct task *task)
 	return task != 0 ? task->pid : 0;
 }
 
+int task_info_at(u64 index, u64 *pid_threads_flags, u64 *name_words)
+{
+	u64 seen = 0;
+	const u64 flags = spin_lock_irqsave(&task_table_lock);
+
+	for (struct task *task = tasks; task != 0; task = task->next) {
+		if (seen++ != index) {
+			continue;
+		}
+
+		u64 packed_name[2] = { 0, 0 };
+		const char *name = task->name != 0 ? task->name : "";
+
+		for (u64 i = 0; i < 16 && name[i] != '\0'; i++) {
+			packed_name[i / 8] |= ((u64)(u8)name[i]) << ((i % 8) * 8);
+		}
+		if (pid_threads_flags != 0) {
+			*pid_threads_flags = ((u64)task->pid) |
+					     ((u64)task->thread_count << 32) |
+					     ((u64)task->dead << 48) |
+					     ((u64)task->killing << 49);
+		}
+		if (name_words != 0) {
+			name_words[0] = packed_name[0];
+			name_words[1] = packed_name[1];
+		}
+
+		spin_unlock_irqrestore(&task_table_lock, flags);
+		return 0;
+	}
+
+	spin_unlock_irqrestore(&task_table_lock, flags);
+	return -1;
+}
+
 u64 task_linux_brk(const struct task *task)
 {
 	return task != 0 ? task->linux_brk : 0;

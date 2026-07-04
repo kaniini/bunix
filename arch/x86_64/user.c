@@ -49,6 +49,7 @@ enum {
 	SYSCALL_TASK_CLONE_RANGE = -46,
 	SYSCALL_CONSOLE_READ = -48,
 	SYSCALL_TASK_KILL = -50,
+	SYSCALL_TASK_INFO = -52,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -65,6 +66,7 @@ enum {
 	LINUX_SYSCALL_RT_SIGPROCMASK = 14,
 	LINUX_SYSCALL_IOCTL = 16,
 	LINUX_SYSCALL_WRITEV = 20,
+	LINUX_SYSCALL_PIPE = 22,
 	LINUX_SYSCALL_NANOSLEEP = 35,
 	LINUX_SYSCALL_DUP = 32,
 	LINUX_SYSCALL_DUP2 = 33,
@@ -113,6 +115,7 @@ enum {
 	LINUX_SYSCALL_PPOLL = 271,
 	LINUX_SYSCALL_SET_ROBUST_LIST = 273,
 	LINUX_SYSCALL_DUP3 = 292,
+	LINUX_SYSCALL_PIPE2 = 293,
 	LINUX_SYSCALL_OPENAT = 257,
 	LINUX_SYSCALL_PRLIMIT64 = 302,
 	LINUX_SYSCALL_GETRANDOM = 318,
@@ -1405,6 +1408,8 @@ static const char *linux_syscall_name(u64 number)
 		return "ioctl";
 	case LINUX_SYSCALL_WRITEV:
 		return "writev";
+	case LINUX_SYSCALL_PIPE:
+		return "pipe";
 	case LINUX_SYSCALL_NANOSLEEP:
 		return "nanosleep";
 	case LINUX_SYSCALL_DUP:
@@ -1501,6 +1506,8 @@ static const char *linux_syscall_name(u64 number)
 		return "set_robust_list";
 	case LINUX_SYSCALL_DUP3:
 		return "dup3";
+	case LINUX_SYSCALL_PIPE2:
+		return "pipe2";
 	case LINUX_SYSCALL_OPENAT:
 		return "openat";
 	case LINUX_SYSCALL_PRLIMIT64:
@@ -2183,6 +2190,30 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 		return linux_write_one(linux, reply_port, arg0, arg1, arg2);
+	}
+	case LINUX_SYSCALL_PIPE:
+	case LINUX_SYSCALL_PIPE2: {
+		int fds[2];
+
+		if (arg0 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		request.type = number == LINUX_SYSCALL_PIPE ?
+			       LINUX_SYSCALL_PIPE : LINUX_SYSCALL_PIPE2;
+		request.words[0] = number == LINUX_SYSCALL_PIPE ? 0 : arg1;
+		request.words[1] = 0;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		if ((i64)reply.words[0] < 0) {
+			return reply.words[0];
+		}
+		fds[0] = (int)reply.words[1];
+		fds[1] = (int)reply.words[2];
+		return write_current_user(arg0, fds, sizeof(fds)) == 0 ?
+		       0 : (u64)-LINUX_EINVAL;
 	}
 	case LINUX_SYSCALL_CONNECT: {
 		struct shared_buffer *buffer;
@@ -2892,6 +2923,23 @@ static u64 native_sys_task_id(const struct native_syscall_args *args)
 	return task != 0 ? task_id(task) : (u64)-1;
 }
 
+static u64 native_sys_task_info(const struct native_syscall_args *args)
+{
+	u64 pid_threads_flags = 0;
+	u64 name_words[2] = { 0, 0 };
+
+	if (args->arg1 == 0 || args->arg2 == 0 ||
+	    task_info_at(args->arg0, &pid_threads_flags, name_words) != 0 ||
+	    write_current_user(args->arg1, &pid_threads_flags,
+			       sizeof(pid_threads_flags)) != 0 ||
+	    write_current_user(args->arg2, name_words,
+			       sizeof(name_words)) != 0) {
+		return (u64)-1;
+	}
+
+	return 0;
+}
+
 static u64 native_sys_task_map(const struct native_syscall_args *sys_args)
 {
 	u64 args[6];
@@ -3239,6 +3287,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_TASK_WRITE, "task_write", native_sys_task_write },
 	{ SYSCALL_TASK_START_AT, "task_start_at", native_sys_task_start_at },
 	{ SYSCALL_TASK_ID, "task_id", native_sys_task_id },
+	{ SYSCALL_TASK_INFO, "task_info", native_sys_task_info },
 	{ SYSCALL_TASK_ALLOC, "task_alloc", native_sys_task_alloc },
 	{ SYSCALL_TASK_CLONE_RANGE, "task_clone_range",
 	  native_sys_task_clone_range },

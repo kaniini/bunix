@@ -6,11 +6,13 @@ enum {
 	LINUX_EPERM = 1,
 	LINUX_ENOENT = 2,
 	LINUX_EBADF = 9,
+	LINUX_EAGAIN = 11,
 	LINUX_EACCES = 13,
 	LINUX_ENOTDIR = 20,
 	LINUX_EISDIR = 21,
 	LINUX_EINVAL = 22,
 	LINUX_EMFILE = 24,
+	LINUX_EPIPE = 32,
 	LINUX_EAFNOSUPPORT = 97,
 	LINUX_EPROTONOSUPPORT = 93,
 	LINUX_ENOTSOCK = 88,
@@ -66,13 +68,16 @@ enum {
 	LINUX_MAX_WRITE = 4096,
 	LINUX_MAX_PATH = 32,
 	LINUX_STAT_SIZE = 144,
-	LINUX_MAX_PROCESSES = 16,
+	LINUX_MAX_PROCESSES = 64,
 	LINUX_MAX_FDS = 16,
 	LINUX_MAX_FILE_REFS = 32,
+	LINUX_MAX_PIPES = 8,
+	LINUX_PIPE_CAPACITY = 4096,
 	LINUX_S_IFCHR = 0020000,
 	LINUX_S_IFDIR = 0040000,
 	LINUX_S_IFREG = 0100000,
 	LINUX_S_IFSOCK = 0140000,
+	LINUX_S_IFIFO = 0010000,
 	LINUX_O_ACCMODE = 3,
 	LINUX_O_DIRECTORY = 00200000,
 	LINUX_O_CLOEXEC = 02000000,
@@ -83,6 +88,8 @@ enum {
 	LINUX_FD_DIR = 3,
 	LINUX_FD_UTMP = 4,
 	LINUX_FD_SOCKET = 5,
+	LINUX_FD_PIPE_READ = 6,
+	LINUX_FD_PIPE_WRITE = 7,
 	LINUX_AF_UNIX = 1,
 	LINUX_SOCK_STREAM = 1,
 	LINUX_SOCK_NONBLOCK = 00004000,
@@ -136,7 +143,20 @@ struct linux_process {
 	struct linux_fd fds[LINUX_MAX_FDS];
 };
 
+struct linux_pipe {
+	u64 id;
+	u64 read_refs;
+	u64 write_refs;
+	u64 start;
+	u64 len;
+	u64 reader_reply;
+	u64 reader_buffer;
+	u64 reader_len;
+	char data[LINUX_PIPE_CAPACITY];
+};
+
 static struct linux_process processes[LINUX_MAX_PROCESSES];
+static struct linux_pipe pipes[LINUX_MAX_PIPES];
 static char write_buffer[LINUX_MAX_WRITE];
 static char utmp_buffer[LINUX_MAX_WRITE];
 static char tty_termios[LINUX_TERM_SIZE];
@@ -146,6 +166,7 @@ static u64 tty_line_len;
 static u64 file_ref_handles[LINUX_MAX_FILE_REFS];
 static u64 file_ref_counts[LINUX_MAX_FILE_REFS];
 static u64 next_pid = 1;
+static u64 next_pipe_id = 1;
 static u64 foreground_pgid = 1;
 static u64 user_service;
 
@@ -831,6 +852,168 @@ static long alloc_fd(struct linux_process *process, u64 kind, u64 handle,
 	return -LINUX_EMFILE;
 }
 
+static struct linux_pipe *linux_pipe_find(u64 id)
+{
+	if (id == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < LINUX_MAX_PIPES; i++) {
+		if (pipes[i].id == id) {
+			return &pipes[i];
+		}
+	}
+	return 0;
+}
+
+static void linux_pipe_ref_add(const struct linux_fd *fd)
+{
+	struct linux_pipe *pipe = linux_pipe_find(fd->handle);
+
+	if (pipe == 0) {
+		return;
+	}
+	if (fd->kind == LINUX_FD_PIPE_READ) {
+		pipe->read_refs++;
+	} else if (fd->kind == LINUX_FD_PIPE_WRITE) {
+		pipe->write_refs++;
+	}
+}
+
+static void linux_pipe_ref_drop(const struct linux_fd *fd)
+{
+	struct linux_pipe *pipe = linux_pipe_find(fd->handle);
+
+	if (pipe == 0) {
+		return;
+	}
+	if (fd->kind == LINUX_FD_PIPE_READ && pipe->read_refs != 0) {
+		pipe->read_refs--;
+	} else if (fd->kind == LINUX_FD_PIPE_WRITE && pipe->write_refs != 0) {
+		pipe->write_refs--;
+	}
+	if (pipe->read_refs == 0 && pipe->write_refs == 0) {
+		if (pipe->reader_buffer != 0) {
+			bunix_handle_close(pipe->reader_buffer);
+		}
+		pipe->id = 0;
+		pipe->start = 0;
+		pipe->len = 0;
+		pipe->reader_reply = 0;
+		pipe->reader_buffer = 0;
+		pipe->reader_len = 0;
+	}
+}
+
+static long linux_pipe_create(struct linux_process *process, u64 flags,
+			      u64 *read_fd, u64 *write_fd)
+{
+	struct linux_pipe *pipe = 0;
+	long left;
+	long right;
+
+	if ((flags & ~LINUX_O_CLOEXEC) != 0 ||
+	    read_fd == 0 || write_fd == 0) {
+		return -LINUX_EINVAL;
+	}
+	for (u64 i = 0; i < LINUX_MAX_PIPES; i++) {
+		if (pipes[i].id == 0) {
+			pipe = &pipes[i];
+			break;
+		}
+	}
+	if (pipe == 0) {
+		return -LINUX_EMFILE;
+	}
+
+	pipe->id = next_pipe_id++;
+	if (next_pipe_id == 0) {
+		next_pipe_id = 1;
+	}
+	pipe->read_refs = 1;
+	pipe->write_refs = 1;
+	pipe->start = 0;
+	pipe->len = 0;
+	pipe->reader_reply = 0;
+	pipe->reader_buffer = 0;
+	pipe->reader_len = 0;
+
+	left = alloc_fd(process, LINUX_FD_PIPE_READ, pipe->id, 0);
+	if (left < 0) {
+		pipe->id = 0;
+		return left;
+	}
+	right = alloc_fd(process, LINUX_FD_PIPE_WRITE, pipe->id, 0);
+	if (right < 0) {
+		process->fds[left].kind = 0;
+		pipe->id = 0;
+		return right;
+	}
+	if ((flags & LINUX_O_CLOEXEC) != 0) {
+		process->fds[left].flags |= LINUX_FD_CLOEXEC;
+		process->fds[right].flags |= LINUX_FD_CLOEXEC;
+	}
+	*read_fd = (u64)left;
+	*write_fd = (u64)right;
+	return 0;
+}
+
+static long linux_pipe_read_available(struct linux_pipe *pipe, u64 len,
+				      u64 buffer)
+{
+	u64 nread;
+
+	if (pipe == 0 || buffer == 0) {
+		return -LINUX_EBADF;
+	}
+	if (pipe->len == 0) {
+		return pipe->write_refs == 0 ? 0 : -LINUX_EAGAIN;
+	}
+	nread = len < pipe->len ? len : pipe->len;
+	for (u64 i = 0; i < nread; i++) {
+		write_buffer[i] = pipe->data[(pipe->start + i) %
+					     LINUX_PIPE_CAPACITY];
+	}
+	pipe->start = (pipe->start + nread) % LINUX_PIPE_CAPACITY;
+	pipe->len -= nread;
+	if (bunix_buffer_write(buffer, 0, write_buffer, nread) != 0) {
+		return -LINUX_EINVAL;
+	}
+	return (long)nread;
+}
+
+static void linux_pipe_wake_reader(struct linux_pipe *pipe)
+{
+	struct bunix_msg reply = {
+		.protocol = BUNIX_PROTO_LINUX,
+		.type = BUNIX_LINUX_READ,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	u64 reply_handle;
+	u64 buffer;
+	long nread;
+
+	if (pipe == 0 || pipe->reader_reply == 0 ||
+	    (pipe->len == 0 && pipe->write_refs != 0)) {
+		return;
+	}
+
+	reply_handle = pipe->reader_reply;
+	buffer = pipe->reader_buffer;
+	pipe->reader_reply = 0;
+	pipe->reader_buffer = 0;
+	nread = linux_pipe_read_available(pipe, pipe->reader_len, buffer);
+	pipe->reader_len = 0;
+	reply.words[0] = (u64)nread;
+	(void)bunix_ipc_send(reply_handle, &reply);
+	if (buffer != 0) {
+		bunix_handle_close(buffer);
+	}
+}
+
 static void linux_file_ref_add(u64 handle)
 {
 	if (handle == 0) {
@@ -981,6 +1164,9 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 					linux_file_ref_add(processes[i].fds[fd].handle);
 				} else if (processes[i].fds[fd].kind == LINUX_FD_DIR) {
 					linux_file_ref_add(processes[i].fds[fd].handle);
+				} else if (processes[i].fds[fd].kind == LINUX_FD_PIPE_READ ||
+					   processes[i].fds[fd].kind == LINUX_FD_PIPE_WRITE) {
+					linux_pipe_ref_add(&processes[i].fds[fd]);
 				}
 			}
 			string_copy(processes[i].cwd, parent->cwd);
@@ -1246,24 +1432,6 @@ static long linux_set_foreground_pgid(struct linux_process *process, u64 pgid)
 	}
 	foreground_pgid = pgid;
 	return 0;
-}
-
-static int linux_signal_foreground(struct linux_process *source, u64 signal)
-{
-	int delivered = 0;
-	const u64 pgid = linux_foreground_pgid(source);
-
-	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
-		if (processes[i].pid != 0 &&
-		    processes[i].pgid == pgid &&
-		    (source == 0 ||
-		     source->session_id == 0 ||
-		     processes[i].session_id == source->session_id)) {
-			delivered |= linux_signal_process(&processes[i], signal);
-		}
-	}
-
-	return delivered;
 }
 
 static long linux_kill(struct linux_process *source, long pid, u64 signal)
@@ -1565,10 +1733,11 @@ static long tty_termios_set(u64 buffer)
 	return 0;
 }
 
-static long tty_read_raw(u64 len, u64 buffer)
+static long tty_read_raw(struct linux_process *process, u64 len, u64 buffer)
 {
 	u64 done = 0;
 	const unsigned int lflag = tty_lflag();
+	const char intr = tty_termios[LINUX_TERM_CC + LINUX_VINTR];
 
 	while (done < len) {
 		char c;
@@ -1579,6 +1748,13 @@ static long tty_read_raw(u64 len, u64 buffer)
 				return (long)done;
 			}
 			return -LINUX_EINVAL;
+		}
+		if ((lflag & LINUX_ISIG) != 0 && c == intr) {
+			if ((lflag & LINUX_ECHO) != 0) {
+				tty_echo("^C\n", 3);
+			}
+			(void)process;
+			return done != 0 ? (long)done : 0;
 		}
 		write_buffer[done++] = c;
 		if ((lflag & LINUX_ECHO) != 0) {
@@ -1619,8 +1795,8 @@ static long tty_fill_canonical_line(struct linux_process *process)
 			}
 			tty_line_offset = 0;
 			tty_line_len = 0;
-			(void)linux_signal_foreground(process, LINUX_SIGINT);
-			return -LINUX_EINTR;
+			(void)process;
+			return 0;
 		}
 		if ((c == erase || c == '\b') && used != 0) {
 			used--;
@@ -1655,9 +1831,11 @@ static long tty_fill_canonical_line(struct linux_process *process)
 static long tty_read_canonical(struct linux_process *process, u64 len,
 			       u64 buffer)
 {
+	long filled;
+
 	if (tty_line_offset >= tty_line_len &&
-	    tty_fill_canonical_line(process) != 0) {
-		return -LINUX_EINVAL;
+	    (filled = tty_fill_canonical_line(process)) != 0) {
+		return filled;
 	}
 
 	const u64 remaining = tty_line_len - tty_line_offset;
@@ -1686,7 +1864,7 @@ static long tty_read(struct linux_process *process, u64 len, u64 buffer)
 	if ((tty_lflag() & LINUX_ICANON) != 0) {
 		return tty_read_canonical(process, len, buffer);
 	}
-	return tty_read_raw(len, buffer);
+	return tty_read_raw(process, len, buffer);
 }
 
 static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
@@ -1879,6 +2057,11 @@ static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 	}
 	if (process->fds[fd].kind == LINUX_FD_SOCKET) {
 		return linux_stat_write(stat_buffer, LINUX_S_IFSOCK | 0700,
+					0, 0, 0);
+	}
+	if (process->fds[fd].kind == LINUX_FD_PIPE_READ ||
+	    process->fds[fd].kind == LINUX_FD_PIPE_WRITE) {
+		return linux_stat_write(stat_buffer, LINUX_S_IFIFO | 0600,
 					0, 0, 0);
 	}
 
@@ -2205,7 +2388,7 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 }
 
 static long linux_read(struct linux_process *process, u64 fd, u64 len,
-		       u64 buffer)
+		       u64 buffer, u64 reply_handle, int *blocked)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
@@ -2239,6 +2422,29 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 		}
 		return nread;
 	}
+	if (process->fds[fd].kind == LINUX_FD_PIPE_READ) {
+		struct linux_pipe *pipe = linux_pipe_find(process->fds[fd].handle);
+
+		if (pipe == 0) {
+			return -LINUX_EBADF;
+		}
+		if (pipe->len == 0) {
+			if (pipe->write_refs == 0) {
+				return 0;
+			}
+			if (reply_handle == 0 || pipe->reader_reply != 0) {
+				return -LINUX_EAGAIN;
+			}
+			pipe->reader_reply = reply_handle;
+			pipe->reader_buffer = buffer;
+			pipe->reader_len = len;
+			if (blocked != 0) {
+				*blocked = 1;
+			}
+			return 0;
+		}
+		return linux_pipe_read_available(pipe, len, buffer);
+	}
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
 		return -LINUX_EISDIR;
 	}
@@ -2261,13 +2467,40 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 			       u64 buffer)
 {
-	if (fd >= LINUX_MAX_FDS ||
-	    process->fds[fd].kind != LINUX_FD_CONSOLE) {
+	if (fd >= LINUX_MAX_FDS || process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
 	if (buffer == 0 || len > sizeof(write_buffer) ||
 	    bunix_buffer_read(buffer, 0, write_buffer, len) != 0) {
 		return -LINUX_EINVAL;
+	}
+
+	if (process->fds[fd].kind == LINUX_FD_PIPE_WRITE) {
+		struct linux_pipe *pipe = linux_pipe_find(process->fds[fd].handle);
+		u64 space;
+		u64 nwritten;
+
+		if (pipe == 0) {
+			return -LINUX_EBADF;
+		}
+		if (pipe->read_refs == 0) {
+			return -LINUX_EPIPE;
+		}
+		space = LINUX_PIPE_CAPACITY - pipe->len;
+		if (space == 0) {
+			return -LINUX_EAGAIN;
+		}
+		nwritten = len < space ? len : space;
+		for (u64 i = 0; i < nwritten; i++) {
+			pipe->data[(pipe->start + pipe->len + i) %
+				   LINUX_PIPE_CAPACITY] = write_buffer[i];
+		}
+		pipe->len += nwritten;
+		linux_pipe_wake_reader(pipe);
+		return (long)nwritten;
+	}
+	if (process->fds[fd].kind != LINUX_FD_CONSOLE) {
+		return -LINUX_EBADF;
 	}
 
 	const struct bunix_msg console_message = {
@@ -2300,7 +2533,7 @@ static long linux_sendfile(struct linux_process *process, u64 out_fd,
 		process->fds[in_fd].offset = offset;
 	}
 
-	nread = linux_read(process, in_fd, len, buffer);
+	nread = linux_read(process, in_fd, len, buffer, 0, 0);
 	if (positioned) {
 		if (next_offset != 0 && nread > 0) {
 			*next_offset = process->fds[in_fd].offset;
@@ -2341,11 +2574,19 @@ static long linux_close(struct linux_process *process, u64 fd)
 			}
 		}
 	}
+	if (process->fds[fd].kind == LINUX_FD_PIPE_READ ||
+	    process->fds[fd].kind == LINUX_FD_PIPE_WRITE) {
+		const u64 pipe_id = process->fds[fd].handle;
+
+		linux_pipe_ref_drop(&process->fds[fd]);
+		linux_pipe_wake_reader(linux_pipe_find(pipe_id));
+	}
 
 	process->fds[fd].kind = 0;
 	process->fds[fd].handle = 0;
 	process->fds[fd].offset = 0;
 	process->fds[fd].size = 0;
+	process->fds[fd].flags = 0;
 	return 0;
 }
 
@@ -2353,6 +2594,9 @@ static void linux_fd_ref_add(const struct linux_fd *fd)
 {
 	if (fd->kind == LINUX_FD_FILE || fd->kind == LINUX_FD_DIR) {
 		linux_file_ref_add(fd->handle);
+	} else if (fd->kind == LINUX_FD_PIPE_READ ||
+		   fd->kind == LINUX_FD_PIPE_WRITE) {
+		linux_pipe_ref_add(fd);
 	}
 }
 
@@ -2752,6 +2996,13 @@ int main(void)
 							   message.words[2],
 							   1, 0);
 			break;
+		case BUNIX_LINUX_PIPE:
+		case BUNIX_LINUX_PIPE2:
+			reply.words[0] = (u64)linux_pipe_create(process,
+								message.words[0],
+								&reply.words[1],
+								&reply.words[2]);
+			break;
 		case BUNIX_LINUX_SOCKET:
 			reply.words[0] = (u64)linux_socket(process,
 							   message.words[0],
@@ -2803,14 +3054,22 @@ int main(void)
 			}
 			break;
 		case BUNIX_LINUX_READ:
+		{
+			int blocked = 0;
+
 			reply.words[0] = (u64)linux_read(process,
 							 message.words[0],
 							 message.words[1],
-							 message.cap);
-			if (message.cap != 0) {
+							 message.cap,
+							 message.reply,
+							 &blocked);
+			if (blocked) {
+				should_reply = 0;
+			} else if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
 			break;
+		}
 		case BUNIX_LINUX_SENDFILE:
 			reply.words[1] = message.words[3];
 			reply.words[0] = (u64)linux_sendfile(process,
