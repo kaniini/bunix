@@ -11,17 +11,19 @@ enum {
 	VGA_ATTR = 0x0f,
 	COM1 = 0x3f8,
 	CONSOLE_LOG_BUFFER_SIZE = 32768,
+	CONSOLE_INPUT_PENDING_SIZE = 8192,
 };
 
 static u16 *const vga = (u16 *)VGA_TEXT_BUFFER;
 static u32 cursor_row;
 static u32 cursor_col;
 static struct spinlock console_lock = SPINLOCK_INIT("console");
+static struct spinlock console_input_lock = SPINLOCK_INIT("console-input");
 static char console_log_buffer[CONSOLE_LOG_BUFFER_SIZE];
 static u64 console_log_start;
 static u64 console_log_len;
 static int console_log_ring_only;
-static char console_input_pending[32];
+static char console_input_pending[CONSOLE_INPUT_PENDING_SIZE];
 static u64 console_input_pending_start;
 static u64 console_input_pending_len;
 static u32 console_cpr_state;
@@ -197,23 +199,75 @@ static void serial_putc(char c)
 	arch_outb(COM1, (u8)c);
 }
 
-static int serial_try_getc(char *out)
+static int console_input_enqueue_locked(char c)
 {
-	if (console_input_pending_len != 0) {
-		*out = console_input_pending[console_input_pending_start];
-		console_input_pending_start =
-			(console_input_pending_start + 1) %
-			sizeof(console_input_pending);
-		console_input_pending_len--;
-		return 1;
-	}
-
-	if ((arch_inb(COM1 + 5) & 0x01) == 0) {
+	if (console_input_pending_len >= sizeof(console_input_pending)) {
 		return 0;
 	}
 
-	*out = (char)arch_inb(COM1);
+	const u64 index = (console_input_pending_start +
+			   console_input_pending_len) %
+			  sizeof(console_input_pending);
+
+	console_input_pending[index] = c;
+	console_input_pending_len++;
 	return 1;
+}
+
+static int console_input_dequeue_locked(char *out)
+{
+	if (console_input_pending_len == 0) {
+		return 0;
+	}
+
+	*out = console_input_pending[console_input_pending_start];
+	console_input_pending_start =
+		(console_input_pending_start + 1) %
+		sizeof(console_input_pending);
+	console_input_pending_len--;
+	return 1;
+}
+
+static int console_poll_input_locked(int consume_control, char *control)
+{
+	int saw_control = 0;
+
+	while ((arch_inb(COM1 + 5) & 0x01) != 0) {
+		const char c = (char)arch_inb(COM1);
+
+		if (consume_control && c == 3 && !saw_control) {
+			if (control != 0) {
+				*control = c;
+			}
+			saw_control = 1;
+			continue;
+		}
+		(void)console_input_enqueue_locked(c);
+	}
+
+	return saw_control;
+}
+
+static int serial_try_getc(char *out)
+{
+	const u64 flags = spin_lock_irqsave(&console_input_lock);
+	int ok;
+
+	if (console_input_pending_len == 0) {
+		(void)console_poll_input_locked(0, 0);
+	}
+	ok = console_input_dequeue_locked(out);
+	spin_unlock_irqrestore(&console_input_lock, flags);
+	return ok;
+}
+
+int console_poll_control_input(char *out)
+{
+	const u64 flags = spin_lock_irqsave(&console_input_lock);
+	const int ok = console_poll_input_locked(1, out);
+
+	spin_unlock_irqrestore(&console_input_lock, flags);
+	return ok;
 }
 
 static char serial_getc(void)
@@ -229,23 +283,29 @@ static char serial_getc(void)
 
 int console_can_read(void)
 {
+	const u64 flags = spin_lock_irqsave(&console_input_lock);
+	int can_read;
+
 	if (console_input_pending_len != 0) {
+		spin_unlock_irqrestore(&console_input_lock, flags);
 		return 1;
 	}
-	return (arch_inb(COM1 + 5) & 0x01) != 0;
+	(void)console_poll_input_locked(0, 0);
+	can_read = console_input_pending_len != 0;
+	spin_unlock_irqrestore(&console_input_lock, flags);
+	return can_read;
 }
 
 static void console_queue_input_raw(const char *text)
 {
-	while (*text != '\0' &&
-	       console_input_pending_len < sizeof(console_input_pending)) {
-		const u64 index = (console_input_pending_start +
-				   console_input_pending_len) %
-				  sizeof(console_input_pending);
+	const u64 flags = spin_lock_irqsave(&console_input_lock);
 
-		console_input_pending[index] = *text++;
-		console_input_pending_len++;
+	while (*text != '\0') {
+		if (!console_input_enqueue_locked(*text++)) {
+			break;
+		}
 	}
+	spin_unlock_irqrestore(&console_input_lock, flags);
 }
 
 static void console_track_vt_query_raw(char c)

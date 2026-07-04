@@ -1491,18 +1491,34 @@ static long linux_set_foreground_pgid(struct linux_process *process, u64 pgid)
 	if (pgid == 0) {
 		return -LINUX_EINVAL;
 	}
+	foreground_pgid = pgid;
 	if (process != 0 && process->session_id != 0) {
 		return linux_user_session_set_foreground(process->session_id,
 							 pgid);
 	}
-	foreground_pgid = pgid;
 	return 0;
+}
+
+static int linux_signal_pgrp(struct linux_process *source, u64 pgid, u64 signal)
+{
+	int delivered = 0;
+
+	for (u64 i = 0; i < process_by_pid.capacity; i++) {
+		struct linux_process *process =
+			(struct linux_process *)process_by_pid.slots[i].value;
+
+		if (process != 0 && !process->exited &&
+		    process->pgid == pgid &&
+		    (source == 0 || linux_same_session(source, process))) {
+			delivered |= linux_signal_process(process, signal);
+		}
+	}
+
+	return delivered;
 }
 
 static long linux_kill(struct linux_process *source, long pid, u64 signal)
 {
-	int delivered = 0;
-
 	if (signal >= 64) {
 		return -LINUX_EINVAL;
 	}
@@ -1515,36 +1531,13 @@ static long linux_kill(struct linux_process *source, long pid, u64 signal)
 		return linux_signal_process(target, signal) ? 0 : -LINUX_ESRCH;
 	}
 	if (pid == 0) {
-		for (u64 i = 0; i < process_by_pid.capacity; i++) {
-			struct linux_process *process =
-				(struct linux_process *)process_by_pid.slots[i].value;
-
-			if (process != 0 && !process->exited &&
-			    process->pgid == source->pgid &&
-			    linux_same_session(source, process)) {
-				delivered |= linux_signal_process(process,
-								  signal);
-			}
-		}
-		return delivered ? 0 : -LINUX_ESRCH;
+		return linux_signal_pgrp(source, source->pgid, signal) ?
+		       0 : -LINUX_ESRCH;
 	}
 	if (pid < -1) {
-		const u64 pgid = (u64)(-pid);
-
-		for (u64 i = 0; i < process_by_pid.capacity; i++) {
-			struct linux_process *process =
-				(struct linux_process *)process_by_pid.slots[i].value;
-
-			if (process != 0 && !process->exited &&
-			    process->pgid == pgid &&
-			    linux_same_session(source, process)) {
-				delivered |= linux_signal_process(process,
-								  signal);
-			}
-		}
-		return delivered ? 0 : -LINUX_ESRCH;
+		return linux_signal_pgrp(source, (u64)(-pid), signal) ?
+		       0 : -LINUX_ESRCH;
 	}
-
 	return -LINUX_EINVAL;
 }
 
@@ -1802,6 +1795,23 @@ static long tty_termios_set(u64 buffer)
 	return 0;
 }
 
+static void tty_input_event(char c)
+{
+	const unsigned int lflag = tty_lflag();
+	const char intr = tty_termios[LINUX_TERM_CC + LINUX_VINTR];
+
+	if ((lflag & LINUX_ISIG) == 0 || c != intr) {
+		return;
+	}
+
+	if ((lflag & LINUX_ECHO) != 0) {
+		tty_echo("^C\n", 3);
+	}
+	tty_line_offset = 0;
+	tty_line_len = 0;
+	(void)linux_signal_pgrp(0, foreground_pgid, LINUX_SIGINT);
+}
+
 static long tty_read_raw(struct linux_process *process, u64 len, u64 buffer)
 {
 	u64 done = 0;
@@ -1822,7 +1832,9 @@ static long tty_read_raw(struct linux_process *process, u64 len, u64 buffer)
 			if ((lflag & LINUX_ECHO) != 0) {
 				tty_echo("^C\n", 3);
 			}
-			(void)process;
+			(void)linux_signal_pgrp(process,
+						linux_foreground_pgid(process),
+						LINUX_SIGINT);
 			return done != 0 ? (long)done : 0;
 		}
 		write_buffer[done++] = c;
@@ -1864,7 +1876,9 @@ static long tty_fill_canonical_line(struct linux_process *process)
 			}
 			tty_line_offset = 0;
 			tty_line_len = 0;
-			(void)process;
+			(void)linux_signal_pgrp(process,
+						linux_foreground_pgid(process),
+						LINUX_SIGINT);
 			return 0;
 		}
 		if ((c == erase || c == '\b') && used != 0) {
@@ -3056,6 +3070,10 @@ int main(void)
 		}
 
 		reply.type = message.type;
+		if (message.type == BUNIX_LINUX_TTY_INPUT) {
+			tty_input_event((char)(unsigned char)message.words[0]);
+			continue;
+		}
 		if (message.type == BUNIX_LINUX_REGISTER_PROCESS) {
 			reply.words[0] = (u64)linux_register_process(message.words[0],
 								     message.words[1],

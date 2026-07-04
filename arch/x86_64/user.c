@@ -2089,8 +2089,6 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return write_current_user(arg0, info, sizeof(info)) == 0 ?
 		       0 : (u64)-LINUX_EINVAL;
 	}
-	case LINUX_SYSCALL_KILL:
-		return 0;
 	case LINUX_SYSCALL_SET_ROBUST_LIST:
 		return 0;
 	case LINUX_SYSCALL_RT_SIGACTION: {

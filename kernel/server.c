@@ -62,10 +62,16 @@ static u32 fork_start_count;
 static char task_names[64][32];
 static u32 task_name_count;
 
+enum {
+	SERVER_PROTO_LINUX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
+	SERVER_LINUX_TTY_INPUT = 1003,
+};
+
 static int str_eq(const char *left, const char *right);
 static const struct server *find_boot_server(const char *name);
 static void grant_bootstrap_caps(struct task *task, const char *server_name);
 static u64 align_up(u64 value, u64 align);
+static void console_input_thread(void *arg);
 
 void server_start_all(void)
 {
@@ -804,9 +810,44 @@ void server_start_boot_modules(u64 multiboot_info)
 	struct ipc_port *console_port = ipc_port_create("console");
 	name_service_register("console", NAME_SERVICE_IPC_PORT,
 			      (u64)console_port);
+	(void)thread_create(task_current(), "console-input",
+			    console_input_thread, 0);
 	multiboot2_for_each_module(multiboot_info, record_boot_module, 0);
 	server_launch_module("vm");
 	sched_run();
 	server_launch_module("names");
 	server_launch_module("init");
+}
+
+static void console_input_thread(void *arg)
+{
+	struct ipc_port *linux = 0;
+
+	(void)arg;
+	for (;;) {
+		char c;
+
+		if (!console_poll_control_input(&c)) {
+			thread_sleep_ns(10000000ull);
+			continue;
+		}
+
+		if (linux == 0) {
+			linux = ipc_port_find("linux");
+		}
+		if (linux != 0) {
+			const struct ipc_message message = {
+				.protocol = SERVER_PROTO_LINUX,
+				.type = SERVER_LINUX_TTY_INPUT,
+				.sender = 0,
+				.cap_rights = 0,
+				.reply_port = 0,
+				.cap_type = IPC_CAP_NONE,
+				.cap_object = 0,
+				.words = { (u64)(unsigned char)c, 0, 0, 0 },
+			};
+
+			(void)ipc_send(linux, &message);
+		}
+	}
 }
