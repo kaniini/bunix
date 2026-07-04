@@ -1978,9 +1978,9 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	}
 	case LINUX_SYSCALL_UNAME: {
 		u8 uts[65 * 6];
-		const char sysname[] = "Linux";
+		const char sysname[] = "Bunix";
 		const char nodename[] = "bunix";
-		const char release[] = "6.0.0-bunix";
+		const char release[] = "0.1";
 		const char version[] = "#1";
 		const char machine[] = "x86_64";
 		const char domain[] = "local";
