@@ -89,6 +89,9 @@ enum {
 	LINUX_SYSCALL_FCNTL = 72,
 	LINUX_SYSCALL_GETCWD = 79,
 	LINUX_SYSCALL_CHDIR = 80,
+	LINUX_SYSCALL_MKDIR = 83,
+	LINUX_SYSCALL_CHMOD = 90,
+	LINUX_SYSCALL_FCHMOD = 91,
 	LINUX_SYSCALL_READLINK = 89,
 	LINUX_SYSCALL_GETTIMEOFDAY = 96,
 	LINUX_SYSCALL_UMASK = 95,
@@ -130,6 +133,7 @@ enum {
 	LINUX_SYSCALL_GETDENTS64 = 217,
 	LINUX_SYSCALL_NEWFSTATAT = 262,
 	LINUX_SYSCALL_READLINKAT = 267,
+	LINUX_SYSCALL_FCHMODAT = 268,
 	LINUX_SYSCALL_FACCESSAT = 269,
 	LINUX_AT_SYMLINK_NOFOLLOW = 0x100,
 	LINUX_SYSCALL_PPOLL = 271,
@@ -137,6 +141,7 @@ enum {
 	LINUX_SYSCALL_DUP3 = 292,
 	LINUX_SYSCALL_PIPE2 = 293,
 	LINUX_SYSCALL_OPENAT = 257,
+	LINUX_SYSCALL_MKDIRAT = 258,
 	LINUX_SYSCALL_UNLINKAT = 263,
 	LINUX_SYSCALL_PRLIMIT64 = 302,
 	LINUX_SYSCALL_GETRANDOM = 318,
@@ -1224,6 +1229,7 @@ static int linux_syscall_forwards_scalar(u64 number)
 	case LINUX_SYSCALL_KILL:
 	case LINUX_SYSCALL_REBOOT:
 	case LINUX_SYSCALL_FTRUNCATE:
+	case LINUX_SYSCALL_FCHMOD:
 		return 1;
 	default:
 		return 0;
@@ -1957,6 +1963,10 @@ static const char *linux_syscall_name(u64 number)
 		return "truncate";
 	case LINUX_SYSCALL_FTRUNCATE:
 		return "ftruncate";
+	case LINUX_SYSCALL_CHMOD:
+		return "chmod";
+	case LINUX_SYSCALL_FCHMOD:
+		return "fchmod";
 	case LINUX_SYSCALL_UNLINK:
 		return "unlink";
 	case LINUX_SYSCALL_NANOSLEEP:
@@ -1979,6 +1989,8 @@ static const char *linux_syscall_name(u64 number)
 		return "getcwd";
 	case LINUX_SYSCALL_CHDIR:
 		return "chdir";
+	case LINUX_SYSCALL_MKDIR:
+		return "mkdir";
 	case LINUX_SYSCALL_GETTIMEOFDAY:
 		return "gettimeofday";
 	case LINUX_SYSCALL_UMASK:
@@ -2061,6 +2073,8 @@ static const char *linux_syscall_name(u64 number)
 		return "newfstatat";
 	case LINUX_SYSCALL_READLINKAT:
 		return "readlinkat";
+	case LINUX_SYSCALL_FCHMODAT:
+		return "fchmodat";
 	case LINUX_SYSCALL_FACCESSAT:
 		return "faccessat";
 	case LINUX_SYSCALL_FACCESSAT2:
@@ -2075,6 +2089,8 @@ static const char *linux_syscall_name(u64 number)
 		return "pipe2";
 	case LINUX_SYSCALL_OPENAT:
 		return "openat";
+	case LINUX_SYSCALL_MKDIRAT:
+		return "mkdirat";
 	case LINUX_SYSCALL_UNLINKAT:
 		return "unlinkat";
 	case LINUX_SYSCALL_PRLIMIT64:
@@ -3385,6 +3401,55 @@ poll_again:
 		request.words[2] = number == LINUX_SYSCALL_TRUNCATE ?
 				   length : flags;
 		request.words[3] = 0;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_RECV;
+		request.cap_object = buffer;
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_ENOSYS;
+		}
+		buffer_release(buffer);
+		return reply.words[0];
+	}
+	case LINUX_SYSCALL_MKDIR:
+	case LINUX_SYSCALL_MKDIRAT:
+	case LINUX_SYSCALL_CHMOD:
+	case LINUX_SYSCALL_FCHMODAT: {
+		struct shared_buffer *buffer;
+		const int is_mkdir = number == LINUX_SYSCALL_MKDIR ||
+				     number == LINUX_SYSCALL_MKDIRAT;
+		const int is_at = number == LINUX_SYSCALL_MKDIRAT ||
+				  number == LINUX_SYSCALL_FCHMODAT;
+		const char *path = is_at ? (const char *)arg1 :
+				   (const char *)arg0;
+		const u64 dirfd = is_at ? arg0 : (u64)-100;
+		const u64 mode = is_at ? arg2 : arg1;
+		const u64 flags = number == LINUX_SYSCALL_FCHMODAT ?
+				  arg3 : 0;
+		u64 len = 0;
+
+		if (path == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (copy_cstr_from_user((char *)syscall_copy_buffer, path,
+					LINUX_MAX_SYSCALL_BUFFER) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		len = str_len((const char *)syscall_copy_buffer) + 1;
+
+		buffer = buffer_create(len);
+		if (buffer == 0 ||
+		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = is_mkdir ? LINUX_SYSCALL_MKDIRAT :
+			       LINUX_SYSCALL_FCHMODAT;
+		request.words[0] = dirfd;
+		request.words[1] = len;
+		request.words[2] = mode;
+		request.words[3] = flags;
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_RECV;
 		request.cap_object = buffer;

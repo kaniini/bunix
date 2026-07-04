@@ -2522,6 +2522,112 @@ static long linux_truncate(struct linux_process *process, u64 dirfd,
 	return 0;
 }
 
+static long linux_mkdirat(struct linux_process *process, u64 dirfd,
+			  u64 path_len, u64 mode, u64 path_buffer)
+{
+	char path[LINUX_MAX_PATH];
+	char full_path[LINUX_MAX_PATH];
+	struct bunix_msg reply;
+	u64 base_handle;
+	long base_result;
+
+	if (path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
+	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
+	    path[path_len - 1] != '\0' ||
+	    path_normalize(process->cwd, path, full_path) != 0) {
+		return -LINUX_EINVAL;
+	}
+	base_result = linux_dirfd_base_handle(process, dirfd, path,
+					      &base_handle);
+	if (base_result != 0) {
+		return base_result;
+	}
+	if (!is_scratch_path(full_path)) {
+		return -LINUX_EINVAL;
+	}
+	if (linux_vfs_path_call_word3(process, BUNIX_VFS_MKDIR_BUFFER,
+				      base_handle, path,
+				      process->bunix_task |
+				      (((mode & ~process->umask) & 0777) << 32),
+				      &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (reply.words[0] != 0) {
+			return linux_vfs_error(reply.words[0]);
+		}
+		return -LINUX_EINVAL;
+	}
+	return 0;
+}
+
+static long linux_chmodat(struct linux_process *process, u64 dirfd,
+			  u64 path_len, u64 mode, u64 flags,
+			  u64 path_buffer)
+{
+	char path[LINUX_MAX_PATH];
+	char full_path[LINUX_MAX_PATH];
+	struct bunix_msg reply;
+	u64 base_handle;
+	long base_result;
+
+	if ((flags & ~LINUX_AT_SYMLINK_NOFOLLOW) != 0 ||
+	    path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
+	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
+	    path[path_len - 1] != '\0' ||
+	    path_normalize(process->cwd, path, full_path) != 0) {
+		return -LINUX_EINVAL;
+	}
+	base_result = linux_dirfd_base_handle(process, dirfd, path,
+					      &base_handle);
+	if (base_result != 0) {
+		return base_result;
+	}
+	if (!is_scratch_path(full_path)) {
+		return -LINUX_EINVAL;
+	}
+	if (linux_vfs_path_call_word3(process, BUNIX_VFS_CHMOD_BUFFER,
+				      base_handle, path,
+				      process->bunix_task |
+				      ((mode & 0777) << 32),
+				      &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (reply.words[0] != 0) {
+			return linux_vfs_error(reply.words[0]);
+		}
+		return -LINUX_EINVAL;
+	}
+	return 0;
+}
+
+static long linux_fchmod(struct linux_process *process, u64 fd, u64 mode)
+{
+	struct bunix_msg request;
+	struct bunix_msg reply;
+
+	if (fd >= process->fd_capacity ||
+	    (process->fds[fd].kind != LINUX_FD_FILE &&
+	     process->fds[fd].kind != LINUX_FD_DIR)) {
+		return -LINUX_EBADF;
+	}
+	request.protocol = BUNIX_PROTO_VFS;
+	request.type = BUNIX_VFS_CHMOD;
+	request.sender = 0;
+	request.cap_rights = 0;
+	request.reply = 0;
+	request.cap = 0;
+	request.words[0] = process->fds[fd].handle;
+	request.words[1] = mode & 0777;
+	request.words[2] = 0;
+	request.words[3] = process->bunix_task;
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (reply.words[0] != 0) {
+			return linux_vfs_error(reply.words[0]);
+		}
+		return -LINUX_EINVAL;
+	}
+	return 0;
+}
+
 static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
 			     u64 size)
 {
@@ -3810,6 +3916,29 @@ int main(void)
 				bunix_handle_close(message.cap);
 			}
 			break;
+		case BUNIX_LINUX_MKDIR:
+		case BUNIX_LINUX_MKDIRAT:
+			reply.words[0] = (u64)linux_mkdirat(process,
+							    message.words[0],
+							    message.words[1],
+							    message.words[2],
+							    message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_CHMOD:
+		case BUNIX_LINUX_FCHMODAT:
+			reply.words[0] = (u64)linux_chmodat(process,
+							    message.words[0],
+							    message.words[1],
+							    message.words[2],
+							    message.words[3],
+							    message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
 		case BUNIX_LINUX_FSTAT:
 			reply.words[0] = (u64)linux_fstat(process,
 							  message.words[0],
@@ -3826,6 +3955,11 @@ int main(void)
 			reply.words[0] = (u64)linux_ftruncate(process,
 							      message.words[0],
 							      message.words[1]);
+			break;
+		case BUNIX_LINUX_FCHMOD:
+			reply.words[0] = (u64)linux_fchmod(process,
+							   message.words[0],
+							   message.words[1]);
 			break;
 		case BUNIX_LINUX_FCNTL:
 			reply.words[0] = (u64)linux_fcntl(process,
