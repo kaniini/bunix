@@ -71,7 +71,7 @@ while ! grep -F "~ $ " "$log" >/dev/null 2>&1; do
 	sleep 1
 done
 
-printf 'uptime\nbusybox uptime\nbusybox uname\nbusybox uname -r\nbusybox stty -a\nbusybox id\nenv\n/usr/bin/env >/dev/null && echo USR_ENV_OK\ncd ~\npwd\ncd /\nbusybox kill -0 $$ && echo KILL_ZERO_OK\nbusybox kill -0 -$$ && echo KILL_PGRP_OK\ntrap "" INT\nbusybox kill -INT $$\necho SIGINT_IGNORE_OK\ntrap - INT\nbusybox sleep 1 && echo BUSYBOX_SLEEP_OK\nsleep 1 && echo DIRECT_SLEEP_OK\nbusybox sleep 5\n\003echo SLEEP_CTRL_C_OK\nbusybox echo PIPE_OK | busybox cat\nbusybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK\nbusybox cat /usr/share/bunix/nested/hello.txt && echo NESTED_CAT_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_OK\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox stat /usr/share\nbusybox stat /tmp\nbusybox stat /run\nbusybox stat /var/tmp\nbusybox stat /usr/bin/env\nbusybox ls /\nbusybox ls /bin\nbusybox readlink /bin/cat && echo SYMLINK_READLINK_OK\nbusybox ls -l /bin/cat && echo SYMLINK_LS_OK\nbusybox ls /usr/share/bunix/nested\nbusybox stat /bin\ncd /tmp\npwd\ncd /usr/share/bunix/nested\npwd\nbusybox ls .\nbusybox cat ../nested/./hello.txt && echo VFS_DOTDOT_OK\ncd /\nbusybox cat //usr///share/bunix/nested/hello.txt && echo VFS_SLASH_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_STILL_OK\nbusybox cat /proc/self/status && echo PROC_STATUS_OK\nbusybox ls /proc/self/fd && echo PROC_FD_OK\nbusybox cat /proc/stat && echo PROC_STAT_OK\nbusybox cat /proc/ipc && echo PROC_IPC_OK\nbusybox cat /proc/self/cmdline && echo PROC_CMDLINE_OK\n/bin/dyn-hello && echo DYN_HELLO_OK\nbusybox top -b -n 1 >/dev/null && echo PROC_TOP_OK\nbusybox ps && echo PROC_PS_OK\nbusybox free && echo PROC_FREE_OK\nbusybox mount && echo PROC_MOUNT_OK\n' >&3
+printf 'uptime\nbusybox uptime\nbusybox uname\nbusybox uname -r\nbusybox stty -a\nbusybox id\nenv\n/usr/bin/env >/dev/null && echo USR_ENV_OK\nbusybox test -x /bin/sh && echo ACCESS_X_OK\nbusybox test -r /hello.txt && echo ACCESS_R_OK\nbusybox test ! -r /secret.txt && echo ACCESS_DENY_OK\ncd ~\npwd\ncd /\nbusybox kill -0 $$ && echo KILL_ZERO_OK\nbusybox kill -0 -$$ && echo KILL_PGRP_OK\ntrap "" INT\nbusybox kill -INT $$\necho SIGINT_IGNORE_OK\ntrap - INT\nbusybox sleep 1 && echo BUSYBOX_SLEEP_OK\nsleep 1 && echo DIRECT_SLEEP_OK\nbusybox sleep 5\n\003echo SLEEP_CTRL_C_OK\nbusybox echo PIPE_OK | busybox cat\nbusybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK\nbusybox cat /usr/share/bunix/nested/hello.txt && echo NESTED_CAT_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_OK\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox stat /usr/share\nbusybox stat /tmp\nbusybox stat /run\nbusybox stat /var/tmp\nbusybox stat /usr/bin/env\nbusybox ls /\nbusybox ls /bin\nbusybox readlink /bin/cat && echo SYMLINK_READLINK_OK\nbusybox ls -l /bin/cat && echo SYMLINK_LS_OK\nbusybox ls /usr/share/bunix/nested\nbusybox stat /bin\ncd /tmp\npwd\ncd /usr/share/bunix/nested\npwd\nbusybox ls .\nbusybox cat ../nested/./hello.txt && echo VFS_DOTDOT_OK\ncd /\nbusybox cat //usr///share/bunix/nested/hello.txt && echo VFS_SLASH_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_STILL_OK\nbusybox cat /proc/self/status && echo PROC_STATUS_OK\nbusybox ls /proc/self/fd && echo PROC_FD_OK\nbusybox cat /proc/stat && echo PROC_STAT_OK\nbusybox cat /proc/ipc && echo PROC_IPC_OK\nbusybox cat /proc/self/cmdline && echo PROC_CMDLINE_OK\n/bin/dyn-hello && echo DYN_HELLO_OK\nbusybox top -b -n 1 >/dev/null && echo PROC_TOP_OK\nbusybox ps && echo PROC_PS_OK\nbusybox free && echo PROC_FREE_OK\nbusybox mount && echo PROC_MOUNT_OK\n' >&3
 
 i=0
 while ! grep -F "load average" "$log" >/dev/null 2>&1; do
@@ -127,7 +127,7 @@ while ! grep -F "uid=1000" "$log" >/dev/null 2>&1; do
 	fi
 	sleep 1
 done
-if ! grep -F "groups=1(wheel),1000(kaniini)" "$log" >/dev/null 2>&1; then
+if ! awk '{ sub(/\r$/, "") } /groups=1(\(wheel\))?,1000(\(kaniini\))?/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
 	echo "busybox id did not report login supplementary groups" >&2
 	tail -n 120 "$log" >&2 || true
 	exit 1
@@ -154,6 +154,13 @@ if ! awk '{ sub(/\r$/, "") } /^USR_ENV_OK$/ { found = 1 } END { exit found ? 0 :
 	tail -n 160 "$log" >&2 || true
 	exit 1
 fi
+for marker in ACCESS_X_OK ACCESS_R_OK ACCESS_DENY_OK; do
+	if ! awk -v marker="$marker" '{ sub(/\r$/, "") } $0 == marker { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
+		echo "linux access/faccessat regression missing: $marker" >&2
+		tail -n 160 "$log" >&2 || true
+		exit 1
+	fi
+done
 
 i=0
 while ! grep -F "erase = ^?" "$log" >/dev/null 2>&1; do
@@ -211,12 +218,6 @@ while ! grep -F "NESTED_CAT_OK" "$log" >/dev/null 2>&1; do
 	fi
 	sleep 1
 done
-if ! awk '{ sub(/\r$/, "") } /^\/tmp$/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
-	echo "shell did not cd to /tmp" >&2
-	tail -n 180 "$log" >&2 || true
-	exit 1
-fi
-
 i=0
 while [ "$(grep -F -c "nested rootfs file" "$log" 2>/dev/null || true)" -lt 2 ]; do
 	i=$((i + 1))
@@ -227,6 +228,11 @@ while [ "$(grep -F -c "nested rootfs file" "$log" 2>/dev/null || true)" -lt 2 ];
 	fi
 	sleep 1
 done
+if ! awk '{ sub(/\r$/, "") } /^\/tmp$/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
+	echo "shell did not cd to /tmp" >&2
+	tail -n 180 "$log" >&2 || true
+	exit 1
+fi
 
 i=0
 while [ "$(grep -F -c "nested rootfs file" "$log" 2>/dev/null || true)" -lt 3 ]; do

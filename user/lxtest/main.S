@@ -453,6 +453,26 @@ fork_child:
 	cmpq $-1, %rax
 	jne fail
 
+	movq $21, %rax
+	leaq hello_path(%rip), %rdi
+	movq $4, %rsi
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $269, %rax
+	movq $-100, %rdi
+	leaq exec_path(%rip), %rsi
+	movq $1, %rdx
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $21, %rax
+	leaq secret_path(%rip), %rdi
+	movq $4, %rsi
+	syscall
+	cmpq $-13, %rax
+	jne fail
+
 	movq $257, %rax
 	movq $-100, %rdi
 	leaq secret_path(%rip), %rsi

@@ -72,6 +72,7 @@ enum {
 	LINUX_SYSCALL_RT_SIGTIMEDWAIT = 128,
 	LINUX_SYSCALL_IOCTL = 16,
 	LINUX_SYSCALL_WRITEV = 20,
+	LINUX_SYSCALL_ACCESS = 21,
 	LINUX_SYSCALL_PIPE = 22,
 	LINUX_SYSCALL_NANOSLEEP = 35,
 	LINUX_SYSCALL_DUP = 32,
@@ -123,6 +124,7 @@ enum {
 	LINUX_SYSCALL_GETDENTS64 = 217,
 	LINUX_SYSCALL_NEWFSTATAT = 262,
 	LINUX_SYSCALL_READLINKAT = 267,
+	LINUX_SYSCALL_FACCESSAT = 269,
 	LINUX_AT_SYMLINK_NOFOLLOW = 0x100,
 	LINUX_SYSCALL_PPOLL = 271,
 	LINUX_SYSCALL_SET_ROBUST_LIST = 273,
@@ -1930,6 +1932,8 @@ static const char *linux_syscall_name(u64 number)
 		return "ioctl";
 	case LINUX_SYSCALL_WRITEV:
 		return "writev";
+	case LINUX_SYSCALL_ACCESS:
+		return "access";
 	case LINUX_SYSCALL_PIPE:
 		return "pipe";
 	case LINUX_SYSCALL_NANOSLEEP:
@@ -2028,6 +2032,10 @@ static const char *linux_syscall_name(u64 number)
 		return "getdents64";
 	case LINUX_SYSCALL_NEWFSTATAT:
 		return "newfstatat";
+	case LINUX_SYSCALL_READLINKAT:
+		return "readlinkat";
+	case LINUX_SYSCALL_FACCESSAT:
+		return "faccessat";
 	case LINUX_SYSCALL_PPOLL:
 		return "ppoll";
 	case LINUX_SYSCALL_SET_ROBUST_LIST:
@@ -3297,6 +3305,47 @@ poll_again:
 		request.words[0] = dirfd;
 		request.words[1] = len;
 		request.words[2] = flags;
+		request.words[3] = 0;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_RECV;
+		request.cap_object = buffer;
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_ENOSYS;
+		}
+		buffer_release(buffer);
+		return reply.words[0];
+	}
+	case LINUX_SYSCALL_ACCESS:
+	case LINUX_SYSCALL_FACCESSAT: {
+		struct shared_buffer *buffer;
+		const char *path = number == LINUX_SYSCALL_ACCESS ?
+				    (const char *)arg0 : (const char *)arg1;
+		const u64 dirfd = number == LINUX_SYSCALL_ACCESS ?
+				  (u64)-100 : arg0;
+		const u64 mode = number == LINUX_SYSCALL_ACCESS ? arg1 : arg2;
+		u64 len = 0;
+
+		if (path == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (copy_cstr_from_user((char *)syscall_copy_buffer, path,
+					LINUX_MAX_SYSCALL_BUFFER) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		len = str_len((const char *)syscall_copy_buffer) + 1;
+
+		buffer = buffer_create(len);
+		if (buffer == 0 ||
+		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = LINUX_SYSCALL_FACCESSAT;
+		request.words[0] = dirfd;
+		request.words[1] = len;
+		request.words[2] = mode;
 		request.words[3] = 0;
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_RECV;

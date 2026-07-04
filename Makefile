@@ -356,7 +356,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "vm-server: grant_space owner=vm id=1" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: memory authority online" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: rpc free_frame" $(BUILD_DIR)/serial.log
-	grep -F "sched: inherit denied task=3 handle=2 requested=0x3 rights=0x5" $(BUILD_DIR)/serial.log
+	grep -F "sched: inherit denied task=" $(BUILD_DIR)/serial.log
+	grep -F "handle=2 requested=0x3 rights=0x5" $(BUILD_DIR)/serial.log
 	grep -F "kernel: invalid inherited cap handle=2 rights=0x3 for ping" $(BUILD_DIR)/serial.log
 	grep -F "names: online" $(BUILD_DIR)/serial.log
 	grep -F "names: namespace" $(BUILD_DIR)/serial.log

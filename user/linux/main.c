@@ -100,6 +100,9 @@ enum {
 	LINUX_UTMPS_REWIND = 'r',
 	LINUX_UTMPS_GETENT = 'e',
 	LINUX_AT_FDCWD = (u64)-100,
+	LINUX_R_OK = 4,
+	LINUX_W_OK = 2,
+	LINUX_X_OK = 1,
 	LINUX_F_DUPFD = 0,
 	LINUX_F_GETFD = 1,
 	LINUX_F_SETFD = 2,
@@ -2275,6 +2278,44 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	return fd;
 }
 
+static long linux_faccessat(struct linux_process *process, u64 dirfd,
+			    u64 path_len, u64 mode, u64 path_buffer)
+{
+	char path[LINUX_MAX_PATH];
+	char full_path[LINUX_MAX_PATH];
+	struct bunix_msg reply;
+	u64 base_handle;
+	long base_result;
+
+	if ((mode & ~(LINUX_R_OK | LINUX_W_OK | LINUX_X_OK)) != 0 ||
+	    path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
+	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
+	    path[path_len - 1] != '\0' ||
+	    path_normalize(process->cwd, path, full_path) != 0) {
+		return -LINUX_EINVAL;
+	}
+	base_result = linux_dirfd_base_handle(process, dirfd, path,
+					      &base_handle);
+	if (base_result != 0) {
+		return base_result;
+	}
+
+	if (string_equal(full_path, "/dev/tty") ||
+	    string_equal(full_path, "/dev/console") ||
+	    string_equal(full_path, "/dev/null") ||
+	    is_utmp_path(full_path)) {
+		return 0;
+	}
+
+	if (linux_vfs_path_call_flags(process, BUNIX_VFS_ACCESS_BUFFER,
+				      base_handle, path, mode,
+				      &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
+	}
+	return 0;
+}
+
 static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
 			     u64 size)
 {
@@ -3371,6 +3412,17 @@ int main(void)
 			if ((long)reply.words[0] >= 0) {
 				bunix_console_log(open_ok, sizeof(open_ok) - 1);
 			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_ACCESS:
+		case BUNIX_LINUX_FACCESSAT:
+			reply.words[0] = (u64)linux_faccessat(process,
+							      message.words[0],
+							      message.words[1],
+							      message.words[2],
+							      message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
