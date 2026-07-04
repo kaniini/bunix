@@ -164,44 +164,9 @@ enum {
 	USER_VFS_READ_FILE_BUFFER = 6,
 	USER_VFS_CLOSE = 7,
 	USER_VFS_TYPE_REGULAR = 1,
-	USER_LINUX_READ = 0,
-	USER_LINUX_WRITE = 1,
-	USER_LINUX_OPEN = 2,
-	USER_LINUX_CLOSE = 3,
-	USER_LINUX_FSTAT = 5,
-	USER_LINUX_IOCTL = 16,
-	USER_LINUX_DUP = 32,
-	USER_LINUX_DUP2 = 33,
-	USER_LINUX_GETPID = 39,
-	USER_LINUX_GETCWD = 79,
-	USER_LINUX_CHDIR = 80,
-	USER_LINUX_SENDFILE = 40,
-	USER_LINUX_GETUID = 102,
-	USER_LINUX_GETGID = 104,
-	USER_LINUX_SETUID = 105,
-	USER_LINUX_SETGID = 106,
-	USER_LINUX_GETEUID = 107,
-	USER_LINUX_GETEGID = 108,
-	USER_LINUX_SETPGID = 109,
-	USER_LINUX_GETPPID = 110,
-	USER_LINUX_GETPGRP = 111,
-	USER_LINUX_SETSID = 112,
-	USER_LINUX_GETGROUPS = 115,
-	USER_LINUX_SETGROUPS = 116,
-	USER_LINUX_SETRESUID = 117,
-	USER_LINUX_SETRESGID = 119,
-	USER_LINUX_GETPGID = 121,
-	USER_LINUX_FCNTL = 72,
-	USER_LINUX_WAIT4 = 61,
-	USER_LINUX_GETTID = 186,
-	USER_LINUX_GETDENTS64 = 217,
-	USER_LINUX_OPENAT = 257,
-	USER_LINUX_NEWFSTATAT = 262,
-	USER_LINUX_DUP3 = 292,
-	USER_LINUX_EXIT_GROUP = 231,
-	USER_LINUX_REGISTER_PROCESS = 1000,
-	USER_LINUX_FORK_PROCESS = 1001,
-	USER_LINUX_EXEC_PROCESS = 1002,
+	LINUX_RPC_REGISTER_PROCESS = 1000,
+	LINUX_RPC_FORK_PROCESS = 1001,
+	LINUX_RPC_EXEC_PROCESS = 1002,
 };
 
 enum {
@@ -872,7 +837,7 @@ static u64 linux_exit_current(u64 status)
 	struct ipc_port *reply_port = task_reply_port(task_current());
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_LINX,
-		.type = USER_LINUX_EXIT_GROUP,
+		.type = LINUX_SYSCALL_EXIT_GROUP,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply_port = reply_port,
@@ -896,7 +861,7 @@ static u64 linux_write_one(struct ipc_port *linux, struct ipc_port *reply_port,
 {
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_LINX,
-		.type = USER_LINUX_WRITE,
+		.type = LINUX_SYSCALL_WRITE,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply_port = reply_port,
@@ -1246,7 +1211,7 @@ static u64 linux_fork_process(struct task *parent, struct task *child)
 	struct ipc_port *reply_port = task_reply_port(parent);
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_LINX,
-		.type = USER_LINUX_FORK_PROCESS,
+		.type = LINUX_RPC_FORK_PROCESS,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply_port = reply_port,
@@ -1271,7 +1236,7 @@ static u64 linux_exec_process(struct task *task)
 	struct ipc_port *reply_port = task_reply_port(task);
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_LINX,
-		.type = USER_LINUX_EXEC_PROCESS,
+		.type = LINUX_RPC_EXEC_PROCESS,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply_port = reply_port,
@@ -2015,7 +1980,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 
-		request.type = USER_LINUX_READ;
+		request.type = LINUX_SYSCALL_READ;
 		request.words[0] = arg0;
 		request.words[1] = len;
 		request.words[2] = 0;
@@ -2046,7 +2011,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		if (buffer == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
-		request.type = USER_LINUX_GETDENTS64;
+		request.type = LINUX_SYSCALL_GETDENTS64;
 		request.words[0] = arg0;
 		request.words[1] = arg2;
 		request.words[2] = 0;
@@ -2082,7 +2047,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		if (arg0 == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
-		request.type = USER_LINUX_GETCWD;
+		request.type = LINUX_SYSCALL_GETCWD;
 		request.words[0] = arg1;
 		request.words[1] = 0;
 		request.words[2] = 0;
@@ -2112,7 +2077,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 		mem_copy((u8 *)packed, (const u8 *)path, sizeof(packed));
-		request.type = USER_LINUX_CHDIR;
+		request.type = LINUX_SYSCALL_CHDIR;
 		request.words[0] = packed[0];
 		request.words[1] = packed[1];
 		request.words[2] = 0;
@@ -2124,7 +2089,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_GETPID:
-		request.type = USER_LINUX_GETPID;
+		request.type = LINUX_SYSCALL_GETPID;
 		request.words[0] = task_id(task);
 		request.words[1] = thread_id(thread_current());
 		request.words[2] = 0;
@@ -2135,7 +2100,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 		return reply.words[0];
 	case LINUX_SYSCALL_GETTID:
-		request.type = USER_LINUX_GETTID;
+		request.type = LINUX_SYSCALL_GETTID;
 		request.words[0] = task_id(task);
 		request.words[1] = thread_id(thread_current());
 		request.words[2] = 0;
@@ -2149,12 +2114,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_GETGID:
 	case LINUX_SYSCALL_GETEUID:
 	case LINUX_SYSCALL_GETEGID:
-		request.type = number == LINUX_SYSCALL_GETUID ?
-			       USER_LINUX_GETUID :
-			       number == LINUX_SYSCALL_GETGID ?
-			       USER_LINUX_GETGID :
-			       number == LINUX_SYSCALL_GETEUID ?
-			       USER_LINUX_GETEUID : USER_LINUX_GETEGID;
+		request.type = (u32)number;
 		request.words[0] = 0;
 		request.words[1] = 0;
 		request.words[2] = 0;
@@ -2167,10 +2127,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_GETPPID:
 	case LINUX_SYSCALL_GETPGRP:
 	case LINUX_SYSCALL_SETSID:
-		request.type = number == LINUX_SYSCALL_GETPPID ?
-			       USER_LINUX_GETPPID :
-			       number == LINUX_SYSCALL_GETPGRP ?
-			       USER_LINUX_GETPGRP : USER_LINUX_SETSID;
+		request.type = (u32)number;
 		request.words[0] = 0;
 		request.words[1] = 0;
 		request.words[2] = 0;
@@ -2181,7 +2138,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 		return reply.words[0];
 	case LINUX_SYSCALL_GETGROUPS:
-		request.type = USER_LINUX_GETGROUPS;
+		request.type = LINUX_SYSCALL_GETGROUPS;
 		request.words[0] = arg0;
 		request.words[1] = 0;
 		request.words[2] = 0;
@@ -2208,12 +2165,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_SETGID:
 	case LINUX_SYSCALL_SETRESUID:
 	case LINUX_SYSCALL_SETRESGID:
-		request.type = number == LINUX_SYSCALL_SETUID ?
-			       USER_LINUX_SETUID :
-			       number == LINUX_SYSCALL_SETGID ?
-			       USER_LINUX_SETGID :
-			       number == LINUX_SYSCALL_SETRESUID ?
-			       USER_LINUX_SETRESUID : USER_LINUX_SETRESGID;
+		request.type = (u32)number;
 		request.words[0] = arg0;
 		request.words[1] = arg1;
 		request.words[2] = arg2;
@@ -2235,7 +2187,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EFAULT;
 		}
 
-		request.type = USER_LINUX_SETGROUPS;
+		request.type = LINUX_SYSCALL_SETGROUPS;
 		request.words[0] = arg0;
 		request.words[1] = groups[0];
 		request.words[2] = groups[1];
@@ -2248,8 +2200,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	}
 	case LINUX_SYSCALL_GETPGID:
 	case LINUX_SYSCALL_SETPGID:
-		request.type = number == LINUX_SYSCALL_GETPGID ?
-			       USER_LINUX_GETPGID : USER_LINUX_SETPGID;
+		request.type = (u32)number;
 		request.words[0] = arg0;
 		request.words[1] = arg1;
 		request.words[2] = 0;
@@ -2311,7 +2262,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			}
 		}
 
-		request.type = USER_LINUX_IOCTL;
+		request.type = LINUX_SYSCALL_IOCTL;
 		request.words[0] = arg0;
 		request.words[1] = arg1;
 		request.words[2] = value;
@@ -2356,7 +2307,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			request.cap_object = buffer;
 		}
 
-		request.type = USER_LINUX_WAIT4;
+		request.type = LINUX_SYSCALL_WAIT4;
 		request.words[0] = arg0;
 		request.words[1] = arg2;
 		request.words[2] = 0;
@@ -2387,7 +2338,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 
-		request.type = USER_LINUX_FSTAT;
+		request.type = LINUX_SYSCALL_FSTAT;
 		request.words[0] = arg0;
 		request.words[1] = LINUX_STAT_SIZE;
 		request.words[2] = 0;
@@ -2409,7 +2360,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_CLOSE:
-		request.type = USER_LINUX_CLOSE;
+		request.type = LINUX_SYSCALL_CLOSE;
 		request.words[0] = arg0;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
@@ -2419,9 +2370,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_DUP:
 	case LINUX_SYSCALL_DUP2:
 	case LINUX_SYSCALL_DUP3:
-		request.type = number == LINUX_SYSCALL_DUP ? USER_LINUX_DUP :
-			       number == LINUX_SYSCALL_DUP2 ? USER_LINUX_DUP2 :
-			       USER_LINUX_DUP3;
+		request.type = (u32)number;
 		request.words[0] = arg0;
 		request.words[1] = arg1;
 		request.words[2] = arg2;
@@ -2432,7 +2381,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 		return reply.words[0];
 	case LINUX_SYSCALL_FCNTL:
-		request.type = USER_LINUX_FCNTL;
+		request.type = LINUX_SYSCALL_FCNTL;
 		request.words[0] = arg0;
 		request.words[1] = arg1;
 		request.words[2] = arg2;
@@ -2469,7 +2418,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 
-		request.type = USER_LINUX_OPEN;
+		request.type = LINUX_SYSCALL_OPENAT;
 		request.words[0] = dirfd;
 		request.words[1] = len;
 		request.words[2] = flags;
@@ -2517,7 +2466,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 
-		request.type = USER_LINUX_NEWFSTATAT;
+		request.type = LINUX_SYSCALL_NEWFSTATAT;
 		request.words[0] = dirfd;
 		request.words[1] = LINUX_STAT_SIZE;
 		request.words[2] = packed[0];
