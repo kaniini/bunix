@@ -209,9 +209,9 @@ handling are covered by
 
 `/bin/lxtest` contains no Bunix headers or crt0; it issues raw x86_64 Linux
 syscall numbers for the compatibility path and verifies returned byte counts,
-metadata, Linux PID/TID values, page-backed `brk`, anonymous writable mappings,
-Linux session id lookup, forked child creation with cloned mmap contents,
-fd allocation, child waiting,
+metadata, Linux PID/TID values, Linux session id and umask state, page-backed
+`brk`, anonymous writable mappings, forked child creation with cloned mmap
+contents, fd allocation, child waiting,
 `statx`, `access`/`faccessat`/`faccessat2` permission checks, and `-EBADF` for
 invalid fds, then exits successfully. Linux `mmap` is currently an
 anonymous/private compatibility path implemented on top of task memory

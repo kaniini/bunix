@@ -152,6 +152,7 @@ struct linux_process {
 	u64 pending_signals;
 	u64 signal_mask;
 	u64 signal_ignored;
+	u64 umask;
 	u64 session_id;
 	u64 cwd_handle;
 	char cwd[LINUX_MAX_PATH];
@@ -1198,6 +1199,7 @@ static long linux_register_process(u64 bunix_task, u64 ppid, u64 session_id,
 	process->ppid = ppid;
 	process->pgid = pid;
 	process->sid = pid;
+	process->umask = 022;
 	linux_process_init_links(process);
 	process->bunix_task = bunix_task;
 	process->session_id = session_id;
@@ -1248,6 +1250,7 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 	process->sid = parent->sid;
 	process->signal_mask = parent->signal_mask;
 	process->signal_ignored = parent->signal_ignored;
+	process->umask = parent->umask;
 	linux_process_init_links(process);
 	linux_child_link(parent, process);
 	process->bunix_task = child_task;
@@ -1796,6 +1799,14 @@ static long linux_getsid(struct linux_process *process, u64 pid)
 		return -LINUX_ESRCH;
 	}
 	return (long)target->sid;
+}
+
+static long linux_umask(struct linux_process *process, u64 mask)
+{
+	const u64 old = process->umask;
+
+	process->umask = mask & 0777;
+	return (long)old;
 }
 
 static long linux_setpgid(struct linux_process *process, u64 pid, u64 pgid)
@@ -3303,6 +3314,7 @@ static void linux_process_reset(struct linux_process *process)
 	process->pending_signals = 0;
 	process->signal_mask = 0;
 	process->signal_ignored = 0;
+	process->umask = 0;
 	process->session_id = 0;
 	(void)linux_close_vfs_handle(process->cwd_handle);
 	process->cwd_handle = 0;
@@ -3476,6 +3488,10 @@ int main(void)
 			break;
 		case BUNIX_LINUX_GETPGRP:
 			reply.words[0] = process->pgid;
+			break;
+		case BUNIX_LINUX_UMASK:
+			reply.words[0] = (u64)linux_umask(process,
+							  message.words[0]);
 			break;
 		case BUNIX_LINUX_GETPGID:
 			reply.words[0] = (u64)linux_getpgid(process,

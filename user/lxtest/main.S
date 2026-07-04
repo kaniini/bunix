@@ -53,6 +53,17 @@ _start:
 	testq %rax, %rax
 	jle fail
 
+	movq $95, %rax
+	movq $077, %rdi
+	syscall
+	cmpq $022, %rax
+	jne fail
+	movq $95, %rax
+	movq $022, %rdi
+	syscall
+	cmpq $077, %rax
+	jne fail
+
 	movq $102, %rax
 	syscall
 	testq %rax, %rax

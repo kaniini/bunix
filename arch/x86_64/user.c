@@ -88,6 +88,7 @@ enum {
 	LINUX_SYSCALL_CHDIR = 80,
 	LINUX_SYSCALL_READLINK = 89,
 	LINUX_SYSCALL_GETTIMEOFDAY = 96,
+	LINUX_SYSCALL_UMASK = 95,
 	LINUX_SYSCALL_SYSINFO = 99,
 	LINUX_SYSCALL_GETUID = 102,
 	LINUX_SYSCALL_SYSLOG = 103,
@@ -1206,6 +1207,7 @@ static int linux_syscall_forwards_scalar(u64 number)
 	case LINUX_SYSCALL_GETEGID:
 	case LINUX_SYSCALL_GETPPID:
 	case LINUX_SYSCALL_GETPGRP:
+	case LINUX_SYSCALL_UMASK:
 	case LINUX_SYSCALL_SETSID:
 	case LINUX_SYSCALL_SETUID:
 	case LINUX_SYSCALL_SETGID:
@@ -1968,6 +1970,8 @@ static const char *linux_syscall_name(u64 number)
 		return "chdir";
 	case LINUX_SYSCALL_GETTIMEOFDAY:
 		return "gettimeofday";
+	case LINUX_SYSCALL_UMASK:
+		return "umask";
 	case LINUX_SYSCALL_SYSINFO:
 		return "sysinfo";
 	case LINUX_SYSCALL_GETUID:
