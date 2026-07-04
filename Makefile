@@ -70,6 +70,7 @@ ROOTFS_BUSYBOX_LINKS := \
 	--symlink /bin/id /bin/busybox \
 	--symlink /bin/kill /bin/busybox \
 	--symlink /bin/echo /bin/busybox \
+	--symlink /bin/env /bin/busybox \
 	--symlink /bin/stty /bin/busybox \
 	--symlink /bin/pwd /bin/busybox
 

@@ -5,7 +5,7 @@ An experimental microkernel-oriented operating system in C.
 The current slice boots a freestanding x86_64 kernel through Multiboot2,
 initializes serial and VGA text consoles, parses Multiboot2 modules, starts the
 kernel-hosted VM server, and enters a user-space init server which launches
-other user servers. It can boot into a login prompt and run a static BusyBox
+other user servers. It can boot into a login prompt and run a dynamic BusyBox
 shell over the serial console, with VFS-backed reads, pipes, procfs, dmesg,
 basic multiuser login/session accounting, and a user-space Linux personality
 server:
@@ -183,6 +183,10 @@ VFS-backed file/dir fds are implemented enough for the current BusyBox shell.
 `exit_group` marks the Linux process exited and records its status before the
 kernel tears down the backing task thread; `wait4` can block on a child and
 returns the child PID with a Linux wait status.
+Linux `execve` copies argv and envp onto the replacement image stack. The login
+program now execs the shell with `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, and
+`TERM`, so command lookup and login environment inheritance are exercised by the
+shell regression.
 
 The current rootfs can run a statically linked musl hello program, a dynamic
 musl hello program, and a dynamically linked BusyBox shell through `/bin/login`.

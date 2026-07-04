@@ -134,6 +134,37 @@ static void strip_line(char *text, u64 len)
 	}
 }
 
+static void copy_text(char *out, u64 out_size, const char *text)
+{
+	u64 i = 0;
+
+	if (out_size == 0) {
+		return;
+	}
+	while (i + 1 < out_size && text[i] != '\0') {
+		out[i] = text[i];
+		i++;
+	}
+	out[i] = '\0';
+}
+
+static void append_text(char *out, u64 out_size, const char *text)
+{
+	u64 pos = 0;
+	u64 in = 0;
+
+	if (out_size == 0) {
+		return;
+	}
+	while (pos + 1 < out_size && out[pos] != '\0') {
+		pos++;
+	}
+	while (pos + 1 < out_size && text[in] != '\0') {
+		out[pos++] = text[in++];
+	}
+	out[pos] = '\0';
+}
+
 static void load_auxv(char **envp, struct startup_aux *aux)
 {
 	u64 *entry;
@@ -268,13 +299,43 @@ static long apply_login(u64 uid, u64 gid, u64 group_count,
 	       0 : -1;
 }
 
-static long exec_shell(char **envp)
+static void make_login_env(const char *name, char *home, u64 home_size,
+			   char *user, u64 user_size,
+			   char *logname, u64 logname_size,
+			   char **envp)
+{
+	static char shell[] = "SHELL=/bin/sh";
+	static char path[] = "PATH=/bin:/sbin:/usr/bin:/usr/sbin";
+	static char term[] = "TERM=bunix";
+
+	copy_text(home, home_size, "HOME=/home/");
+	append_text(home, home_size, name);
+	copy_text(user, user_size, "USER=");
+	append_text(user, user_size, name);
+	copy_text(logname, logname_size, "LOGNAME=");
+	append_text(logname, logname_size, name);
+	envp[0] = home;
+	envp[1] = user;
+	envp[2] = logname;
+	envp[3] = shell;
+	envp[4] = path;
+	envp[5] = term;
+	envp[6] = 0;
+}
+
+static long exec_shell(const char *name)
 {
 	char path[] = "/bin/sh";
 	char *argv[] = { path, 0 };
+	char home[48];
+	char user[32];
+	char logname[40];
+	char *shell_env[7];
 
+	make_login_env(name, home, sizeof(home), user, sizeof(user),
+		       logname, sizeof(logname), shell_env);
 	return linux_syscall4(LINUX_SYSCALL_EXECVE, (u64)path,
-			      (u64)argv, (u64)envp, 0);
+			      (u64)argv, (u64)shell_env, 0);
 }
 
 static long session_begin(u64 user, u64 uid, u64 gid, u64 *session_id)
@@ -379,7 +440,7 @@ int main(int argc, char **argv, char **envp)
 			(void)session_end(user, session_id);
 		} else {
 			write_text("login: shell exec\n");
-			if (exec_shell(envp) != 0) {
+			if (exec_shell(name) != 0) {
 				(void)session_end(user, session_id);
 			}
 		}

@@ -162,6 +162,7 @@ enum {
 	LINUX_EXEC_MAX_IMAGE = 2 * 1024 * 1024,
 	LINUX_EXEC_MAX_PATH = 128,
 	LINUX_EXEC_MAX_ARGS = 8,
+	LINUX_EXEC_MAX_ENVS = 16,
 	LINUX_EXEC_MAX_ARG = 64,
 	LINUX_EXEC_MAX_PHDRS = 16,
 	LINUX_EXEC_DYN_LOAD_BIAS = 0x400000,
@@ -285,7 +286,9 @@ struct elf64_dyn {
 
 struct linux_exec_args {
 	u64 argc;
+	u64 envc;
 	char values[LINUX_EXEC_MAX_ARGS][LINUX_EXEC_MAX_ARG];
+	char env_values[LINUX_EXEC_MAX_ENVS][LINUX_EXEC_MAX_ARG];
 };
 
 struct linux_vfork_wait {
@@ -1403,8 +1406,12 @@ static int linux_exec_collect_args(const char *path, u64 user_argv,
 	}
 
 	args->argc = 0;
+	args->envc = 0;
 	for (u64 i = 0; i < LINUX_EXEC_MAX_ARGS; i++) {
 		args->values[i][0] = '\0';
+	}
+	for (u64 i = 0; i < LINUX_EXEC_MAX_ENVS; i++) {
+		args->env_values[i][0] = '\0';
 	}
 
 	if (user_argv == 0) {
@@ -1457,6 +1464,47 @@ static int linux_exec_collect_args(const char *path, u64 user_argv,
 	return 0;
 }
 
+static int linux_exec_collect_env(u64 user_envp, struct linux_exec_args *args)
+{
+	if (args == 0) {
+		return -1;
+	}
+	args->envc = 0;
+	for (u64 i = 0; i < LINUX_EXEC_MAX_ENVS; i++) {
+		args->env_values[i][0] = '\0';
+	}
+	if (user_envp == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < LINUX_EXEC_MAX_ENVS; i++) {
+		u64 env_ptr = 0;
+
+		if (read_current_user(user_envp + i * sizeof(env_ptr),
+				      &env_ptr, sizeof(env_ptr)) != 0) {
+			return -1;
+		}
+		if (env_ptr == 0) {
+			return 0;
+		}
+		if (copy_cstr_from_user(args->env_values[i],
+					(const char *)env_ptr,
+					LINUX_EXEC_MAX_ARG) != 0) {
+			return -1;
+		}
+		args->envc++;
+	}
+	{
+		u64 next_env = 0;
+
+		if (read_current_user(user_envp + args->envc * sizeof(next_env),
+				      &next_env, sizeof(next_env)) != 0 ||
+		    next_env != 0) {
+			return -1;
+		}
+	}
+	return 0;
+}
+
 static int linux_exec_build_stack(const char *path,
 				  const struct linux_exec_args *args,
 				  const struct elf64_ehdr *ehdr,
@@ -1465,6 +1513,7 @@ static int linux_exec_build_stack(const char *path,
 				  u8 *stack_page, u64 *new_sp)
 {
 	u64 argv_addrs[LINUX_EXEC_MAX_ARGS];
+	u64 env_addrs[LINUX_EXEC_MAX_ENVS];
 	struct elf64_phdr aux_phdrs[LINUX_EXEC_MAX_PHDRS];
 	const u64 aux_pairs = interpreter_base == 0 ? 15 : 16;
 	u64 sp = VM_PAGE_SIZE;
@@ -1472,6 +1521,7 @@ static int linux_exec_build_stack(const char *path,
 	mem_zero(stack_page, VM_PAGE_SIZE);
 	if (path == 0 || args == 0 || ehdr == 0 || args->argc == 0 ||
 	    args->argc > LINUX_EXEC_MAX_ARGS ||
+	    args->envc > LINUX_EXEC_MAX_ENVS ||
 	    ehdr->phnum > LINUX_EXEC_MAX_PHDRS) {
 		return -1;
 	}
@@ -1487,6 +1537,18 @@ static int linux_exec_build_stack(const char *path,
 		mem_copy(stack_page + sp, (const u8 *)args->values[index],
 			 len);
 		argv_addrs[index] = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
+	}
+	for (u64 i = args->envc; i > 0; i--) {
+		const u64 index = i - 1;
+		const u64 len = str_len(args->env_values[index]) + 1;
+
+		if (len > LINUX_EXEC_MAX_ARG || sp < len) {
+			return -1;
+		}
+		sp -= len;
+		mem_copy(stack_page + sp,
+			 (const u8 *)args->env_values[index], len);
+		env_addrs[index] = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
 	}
 
 	const u64 execfn = argv_addrs[0];
@@ -1524,7 +1586,8 @@ static int linux_exec_build_stack(const char *path,
 			       load_bias + ehdr->phoff : copied_phdr_addr;
 
 	sp = align_down(sp, 16);
-	const u64 words = 1 + args->argc + 1 + 1 + aux_pairs * 2;
+	const u64 words = 1 + args->argc + 1 + args->envc + 1 +
+			  aux_pairs * 2;
 	if (sp < words * sizeof(u64)) {
 		return -1;
 	}
@@ -1537,6 +1600,9 @@ static int linux_exec_build_stack(const char *path,
 		stack_words[word++] = argv_addrs[i];
 	}
 	stack_words[word++] = 0;
+	for (u64 i = 0; i < args->envc; i++) {
+		stack_words[word++] = env_addrs[i];
+	}
 	stack_words[word++] = 0;
 	stack_words[word++] = LINUX_AT_PAGESZ;
 	stack_words[word++] = VM_PAGE_SIZE;
@@ -1604,7 +1670,8 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 
 	if (copy_cstr_from_user(path, user_path, sizeof(path)) != 0 ||
 	    str_len(path) >= sizeof(path) ||
-	    linux_exec_collect_args(path, frame->arg1, &args) != 0) {
+	    linux_exec_collect_args(path, frame->arg1, &args) != 0 ||
+	    linux_exec_collect_env(frame->arg2, &args) != 0) {
 		return (u64)-LINUX_EINVAL;
 	}
 
