@@ -580,8 +580,26 @@ static u64 build_meminfo(void)
 	append_str(&len, "MemAvailable:    65536 kB\n");
 	append_str(&len, "Buffers:             0 kB\n");
 	append_str(&len, "Cached:              0 kB\n");
+	append_str(&len, "SwapCached:          0 kB\n");
+	append_str(&len, "Active:              0 kB\n");
+	append_str(&len, "Inactive:            0 kB\n");
+	append_str(&len, "Active(anon):        0 kB\n");
+	append_str(&len, "Inactive(anon):      0 kB\n");
+	append_str(&len, "Active(file):        0 kB\n");
+	append_str(&len, "Inactive(file):      0 kB\n");
+	append_str(&len, "Unevictable:         0 kB\n");
+	append_str(&len, "Mlocked:             0 kB\n");
 	append_str(&len, "SwapTotal:           0 kB\n");
 	append_str(&len, "SwapFree:            0 kB\n");
+	append_str(&len, "Dirty:               0 kB\n");
+	append_str(&len, "Writeback:           0 kB\n");
+	append_str(&len, "AnonPages:       65536 kB\n");
+	append_str(&len, "Mapped:              0 kB\n");
+	append_str(&len, "Shmem:               0 kB\n");
+	append_str(&len, "KReclaimable:        0 kB\n");
+	append_str(&len, "Slab:                0 kB\n");
+	append_str(&len, "SReclaimable:        0 kB\n");
+	append_str(&len, "SUnreclaim:          0 kB\n");
 	return len;
 }
 

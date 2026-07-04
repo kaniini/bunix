@@ -184,13 +184,13 @@ VFS-backed file/dir fds are implemented enough for the current BusyBox shell.
 kernel tears down the backing task thread; `wait4` can block on a child and
 returns the child PID with a Linux wait status.
 
-The current rootfs can run a statically linked musl hello program and a static
-BusyBox shell through `/bin/login`. BusyBox applets currently exercised by the
-test loop include `cat`, `echo`, `stat`, `ls`, `uptime`, `id`, `stty`, `kill`,
-`sleep`, `dmesg`, `pwd`, and `cd` through the shell. Backspace, canonical tty
-input, Ctrl-C delivery to foreground jobs, login prompt respawn after shell
-exit, `/secret.txt` permission denial for the login user, and applet argv
-handling are covered by `make test-shell`.
+The current rootfs can run a statically linked musl hello program, a dynamic
+musl hello program, and a dynamically linked BusyBox shell through `/bin/login`.
+BusyBox applets currently exercised by the test loop include `cat`, `echo`,
+`stat`, `ls`, `uptime`, `id`, `stty`, `kill`, `sleep`, `dmesg`, `pwd`, and `cd`
+through the shell. Backspace, canonical tty input, Ctrl-C delivery to foreground
+jobs, login prompt respawn after shell exit, `/secret.txt` permission denial for
+the login user, and applet argv handling are covered by `make test-shell`.
 
 `/bin/lxtest` contains no Bunix headers or crt0; it issues raw x86_64 Linux
 syscall numbers for the compatibility path and verifies returned byte counts,
@@ -297,11 +297,18 @@ For the interactive BusyBox shell regression:
 make test-shell
 ```
 
-`make test-shell` drives the serial console, logs in, runs BusyBox applets,
+`make test-shell` builds the default dynamic-BusyBox rootfs, drives the serial
+console, logs in, runs BusyBox applets,
 checks pipes and file reads, verifies login/session-visible `uptime`, checks
 `id`, `stat`, `ls`, `cat`, shell `cd`/`pwd`, backspace, Ctrl-C, permission
 denial for `/secret.txt`, and confirms that exiting the shell returns to the
 login prompt.
+
+The static PIE BusyBox path remains available as a compatibility regression:
+
+```sh
+make test-shell-static
+```
 
 For an interactive serial console:
 
