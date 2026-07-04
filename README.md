@@ -183,6 +183,8 @@ process owns a dynamically growing fd table initialized with stdin/stdout/stderr
 on the console. Pipes are in-memory Linux-server objects with blocking read
 semantics; `pipe`, `pipe2`, `dup`, `dup2`, `dup3`, `fcntl`, `sendfile`, and
 VFS-backed file/dir fds are implemented enough for the current BusyBox shell.
+The Linux server also synthesizes `/dev/tty`, `/dev/console`, `/dev/null`,
+`/dev/zero`, `/dev/random`, and `/dev/urandom` for common libc and tool probes.
 `exit_group` marks the Linux process exited and records its status before the
 kernel tears down the backing task thread; `wait4` can block on a child and
 returns the child PID with a Linux wait status.

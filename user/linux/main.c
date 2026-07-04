@@ -92,6 +92,8 @@ enum {
 	LINUX_FD_PIPE_READ = 6,
 	LINUX_FD_PIPE_WRITE = 7,
 	LINUX_FD_NULL = 8,
+	LINUX_FD_ZERO = 9,
+	LINUX_FD_RANDOM = 10,
 	LINUX_AF_UNIX = 1,
 	LINUX_SOCK_STREAM = 1,
 	LINUX_SOCK_NONBLOCK = 00004000,
@@ -181,6 +183,7 @@ static u64 tty_line_len;
 static struct bunix_map file_refs;
 static u64 next_pid = 1;
 static u64 foreground_pgid = 1;
+static u64 random_state = 0x62756e69786f7321ull;
 static u64 user_service;
 
 static u64 resolve_service(u64 service, unsigned int rights);
@@ -1046,6 +1049,30 @@ static long linux_pipe_read_available(struct linux_pipe *pipe, u64 len,
 		return -LINUX_EINVAL;
 	}
 	return (long)nread;
+}
+
+static long linux_pseudo_read(u64 kind, u64 len, u64 buffer)
+{
+	if (buffer == 0) {
+		return -LINUX_EBADF;
+	}
+	if (len > sizeof(write_buffer)) {
+		len = sizeof(write_buffer);
+	}
+	if (kind == LINUX_FD_ZERO) {
+		zero_bytes(write_buffer, len);
+	} else if (kind == LINUX_FD_RANDOM) {
+		for (u64 i = 0; i < len; i++) {
+			random_state = random_state * 6364136223846793005ull + 1;
+			write_buffer[i] = (char)(random_state >> 56);
+		}
+	} else {
+		return -LINUX_EBADF;
+	}
+	if (bunix_buffer_write(buffer, 0, write_buffer, len) != 0) {
+		return -LINUX_EINVAL;
+	}
+	return (long)len;
 }
 
 static void linux_pipe_wake_reader(struct linux_pipe *pipe)
@@ -2078,6 +2105,9 @@ static long linux_vfs_error(u64 status)
 
 static u64 linux_mode_for_type(u64 type, u64 mode)
 {
+	if ((mode & 0170000) != 0) {
+		return mode;
+	}
 	if (type == BUNIX_VFS_TYPE_DIRECTORY) {
 		return LINUX_S_IFDIR | mode;
 	}
@@ -2227,6 +2257,13 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	if (string_equal(full_path, "/dev/null")) {
 		return alloc_fd(process, LINUX_FD_NULL, 0, 0);
 	}
+	if (string_equal(full_path, "/dev/zero")) {
+		return alloc_fd(process, LINUX_FD_ZERO, 0, 0);
+	}
+	if (string_equal(full_path, "/dev/random") ||
+	    string_equal(full_path, "/dev/urandom")) {
+		return alloc_fd(process, LINUX_FD_RANDOM, 0, 0);
+	}
 	if (is_utmp_path(full_path)) {
 		return alloc_fd(process, LINUX_FD_UTMP, 0,
 				linux_user_session_count() *
@@ -2311,6 +2348,9 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 	if (string_equal(full_path, "/dev/tty") ||
 	    string_equal(full_path, "/dev/console") ||
 	    string_equal(full_path, "/dev/null") ||
+	    string_equal(full_path, "/dev/zero") ||
+	    string_equal(full_path, "/dev/random") ||
+	    string_equal(full_path, "/dev/urandom") ||
 	    is_utmp_path(full_path)) {
 		return 0;
 	}
@@ -2410,6 +2450,11 @@ static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 		return linux_stat_write(stat_buffer, LINUX_S_IFCHR | 0666,
 					0, 0, 0);
 	}
+	if (process->fds[fd].kind == LINUX_FD_ZERO ||
+	    process->fds[fd].kind == LINUX_FD_RANDOM) {
+		return linux_stat_write(stat_buffer, LINUX_S_IFCHR | 0666,
+					0, 0, 0);
+	}
 	if (process->fds[fd].kind == LINUX_FD_UTMP) {
 		return linux_stat_write(stat_buffer, LINUX_S_IFREG | 0444,
 					0, 0,
@@ -2472,15 +2517,21 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 	if (string_equal(full_path, "/dev/tty") ||
 	    string_equal(full_path, "/dev/console")) {
 		out->words[1] = 0;
-		out->words[2] = ((u64)BUNIX_VFS_TYPE_REGULAR << 32) |
-				0600;
+		out->words[2] = LINUX_S_IFCHR | 0600;
 		out->words[3] = 0;
 		return 0;
 	}
 	if (string_equal(full_path, "/dev/null")) {
 		out->words[1] = 0;
-		out->words[2] = ((u64)BUNIX_VFS_TYPE_REGULAR << 32) |
-				0666;
+		out->words[2] = LINUX_S_IFCHR | 0666;
+		out->words[3] = 0;
+		return 0;
+	}
+	if (string_equal(full_path, "/dev/zero") ||
+	    string_equal(full_path, "/dev/random") ||
+	    string_equal(full_path, "/dev/urandom")) {
+		out->words[1] = 0;
+		out->words[2] = LINUX_S_IFCHR | 0666;
 		out->words[3] = 0;
 		return 0;
 	}
@@ -2882,6 +2933,10 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	if (process->fds[fd].kind == LINUX_FD_NULL) {
 		return 0;
 	}
+	if (process->fds[fd].kind == LINUX_FD_ZERO ||
+	    process->fds[fd].kind == LINUX_FD_RANDOM) {
+		return linux_pseudo_read(process->fds[fd].kind, len, buffer);
+	}
 	if (process->fds[fd].kind == LINUX_FD_PIPE_READ) {
 		struct linux_pipe *pipe = linux_pipe_find(process->fds[fd].handle);
 
@@ -2996,7 +3051,9 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 		linux_pipe_wake_reader(pipe);
 		return (long)nwritten;
 	}
-	if (process->fds[fd].kind == LINUX_FD_NULL) {
+	if (process->fds[fd].kind == LINUX_FD_NULL ||
+	    process->fds[fd].kind == LINUX_FD_ZERO ||
+	    process->fds[fd].kind == LINUX_FD_RANDOM) {
 		return (long)len;
 	}
 	if (process->fds[fd].kind != LINUX_FD_CONSOLE) {
