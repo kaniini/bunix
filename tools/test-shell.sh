@@ -54,7 +54,7 @@ done
 
 sleep 3
 exec 3>"$pipe.in"
-printf 'uptime\nbusybox uptime\nbusybox id\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\nbusybox cat /secret.txt\necho POSTCAT\nbusybox stat /bin\nbusybox ecxx\177\177ho BACKSPACE_OK\ncd /bin\npwd\nexit\n' >&3
+printf 'uptime\nbusybox uptime\nbusybox stty -a\nbusybox id\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\nbusybox cat /secret.txt\necho POSTCAT\nbusybox stat /bin\nbusybox ecxx\177\177ho BACKSPACE_OK\ncd /bin\npwd\nexit\n' >&3
 
 i=0
 while ! grep -F "load average" "$log" >/dev/null 2>&1; do
@@ -73,6 +73,17 @@ while ! grep -F "uid=0" "$log" >/dev/null 2>&1; do
 	if [ "$i" -gt 45 ]; then
 		echo "busybox id did not report root identity" >&2
 		tail -n 120 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+i=0
+while ! grep -F "erase = ^?" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox stty did not report tty erase character" >&2
+		tail -n 160 "$log" >&2 || true
 		exit 1
 	fi
 	sleep 1

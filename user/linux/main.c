@@ -30,9 +30,33 @@ enum {
 	LINUX_WCONTINUED = 8,
 	LINUX_TCGETS = 0x5401,
 	LINUX_TCSETS = 0x5402,
+	LINUX_TCSETSW = 0x5403,
+	LINUX_TCSETSF = 0x5404,
 	LINUX_TIOCGPGRP = 0x540f,
 	LINUX_TIOCSPGRP = 0x5410,
 	LINUX_TIOCGWINSZ = 0x5413,
+	LINUX_TERM_SIZE = 64,
+	LINUX_TERM_IFLAG = 0,
+	LINUX_TERM_OFLAG = 4,
+	LINUX_TERM_CFLAG = 8,
+	LINUX_TERM_LFLAG = 12,
+	LINUX_TERM_LINE = 16,
+	LINUX_TERM_CC = 17,
+	LINUX_VINTR = 0,
+	LINUX_VERASE = 2,
+	LINUX_VEOF = 4,
+	LINUX_VTIME = 5,
+	LINUX_VMIN = 6,
+	LINUX_ICRNL = 0000400,
+	LINUX_OPOST = 0000001,
+	LINUX_ONLCR = 0000004,
+	LINUX_CS8 = 0000060,
+	LINUX_CREAD = 0000200,
+	LINUX_ISIG = 0000001,
+	LINUX_ICANON = 0000002,
+	LINUX_ECHO = 0000010,
+	LINUX_ECHOE = 0000020,
+	LINUX_ECHOK = 0000040,
 	LINUX_MAX_WRITE = 4096,
 	LINUX_MAX_PATH = 32,
 	LINUX_STAT_SIZE = 144,
@@ -92,6 +116,10 @@ struct linux_process {
 
 static struct linux_process processes[LINUX_MAX_PROCESSES];
 static char write_buffer[LINUX_MAX_WRITE];
+static char tty_termios[LINUX_TERM_SIZE];
+static char tty_line[256];
+static u64 tty_line_offset;
+static u64 tty_line_len;
 static u64 file_ref_handles[LINUX_MAX_FILE_REFS];
 static u64 file_ref_counts[LINUX_MAX_FILE_REFS];
 static u64 next_pid = 1;
@@ -335,6 +363,18 @@ static void store_u16(char *buffer, u64 offset, unsigned int value)
 	for (u64 i = 0; i < 2; i++) {
 		buffer[offset + i] = (char)((value >> (i * 8)) & 0xff);
 	}
+}
+
+static unsigned int load_u32(const char *buffer, u64 offset)
+{
+	unsigned int value = 0;
+
+	for (u64 i = 0; i < 4; i++) {
+		value |= ((unsigned int)(unsigned char)buffer[offset + i]) <<
+			 (i * 8);
+	}
+
+	return value;
 }
 
 static void store_u64(char *buffer, u64 offset, u64 value)
@@ -999,6 +1039,190 @@ static long linux_setsid(struct linux_process *process)
 	return (long)process->sid;
 }
 
+static void tty_init(void)
+{
+	if (tty_termios[LINUX_TERM_CC + LINUX_VMIN] != 0) {
+		return;
+	}
+
+	zero_bytes(tty_termios, sizeof(tty_termios));
+	store_u32(tty_termios, LINUX_TERM_IFLAG, LINUX_ICRNL);
+	store_u32(tty_termios, LINUX_TERM_OFLAG, LINUX_OPOST | LINUX_ONLCR);
+	store_u32(tty_termios, LINUX_TERM_CFLAG, LINUX_CS8 | LINUX_CREAD);
+	store_u32(tty_termios, LINUX_TERM_LFLAG,
+		  LINUX_ISIG | LINUX_ICANON | LINUX_ECHO |
+		  LINUX_ECHOE | LINUX_ECHOK);
+	tty_termios[LINUX_TERM_LINE] = 0;
+	tty_termios[LINUX_TERM_CC + LINUX_VINTR] = 3;
+	tty_termios[LINUX_TERM_CC + LINUX_VERASE] = 0x7f;
+	tty_termios[LINUX_TERM_CC + LINUX_VEOF] = 4;
+	tty_termios[LINUX_TERM_CC + LINUX_VMIN] = 1;
+	tty_termios[LINUX_TERM_CC + LINUX_VTIME] = 0;
+}
+
+static unsigned int tty_lflag(void)
+{
+	tty_init();
+	return load_u32(tty_termios, LINUX_TERM_LFLAG);
+}
+
+static unsigned int tty_iflag(void)
+{
+	tty_init();
+	return load_u32(tty_termios, LINUX_TERM_IFLAG);
+}
+
+static void tty_echo(const char *text, u64 len)
+{
+	const struct bunix_msg console_message = {
+		.protocol = BUNIX_PROTO_CONSOLE,
+		.type = BUNIX_CONSOLE_WRITE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { (u64)text, len, 0, 0 },
+	};
+
+	bunix_ipc_send(BUNIX_HANDLE_CONSOLE, &console_message);
+}
+
+static long tty_termios_get(u64 buffer)
+{
+	tty_init();
+	return bunix_buffer_write(buffer, 0, tty_termios,
+				  sizeof(tty_termios)) == 0 ?
+	       0 : -LINUX_EINVAL;
+}
+
+static long tty_termios_set(u64 buffer)
+{
+	if (buffer == 0 ||
+	    bunix_buffer_read(buffer, 0, tty_termios,
+			      sizeof(tty_termios)) != 0) {
+		return -LINUX_EINVAL;
+	}
+	tty_line_offset = 0;
+	tty_line_len = 0;
+	if (tty_termios[LINUX_TERM_CC + LINUX_VMIN] == 0) {
+		tty_termios[LINUX_TERM_CC + LINUX_VMIN] = 1;
+	}
+	return 0;
+}
+
+static long tty_read_raw(u64 len, u64 buffer)
+{
+	u64 done = 0;
+	const unsigned int lflag = tty_lflag();
+
+	while (done < len) {
+		char c;
+		const long nread = bunix_console_read(&c, 1);
+
+		if (nread != 1) {
+			if (done != 0) {
+				return (long)done;
+			}
+			return -LINUX_EINVAL;
+		}
+		write_buffer[done++] = c;
+		if ((lflag & LINUX_ECHO) != 0) {
+			tty_echo(&c, 1);
+		}
+		if (done >= (u64)(unsigned char)tty_termios[LINUX_TERM_CC + LINUX_VMIN]) {
+			break;
+		}
+	}
+
+	if (bunix_buffer_write(buffer, 0, write_buffer, done) != 0) {
+		return -LINUX_EINVAL;
+	}
+	return (long)done;
+}
+
+static long tty_fill_canonical_line(void)
+{
+	const unsigned int lflag = tty_lflag();
+	const unsigned int iflag = tty_iflag();
+	const char erase = tty_termios[LINUX_TERM_CC + LINUX_VERASE];
+	u64 used = 0;
+
+	for (;;) {
+		char c;
+		const long nread = bunix_console_read(&c, 1);
+
+		if (nread != 1) {
+			return -LINUX_EINVAL;
+		}
+		if (c == '\r' && (iflag & LINUX_ICRNL) != 0) {
+			c = '\n';
+		}
+		if ((c == erase || c == '\b') && used != 0) {
+			used--;
+			if ((lflag & LINUX_ECHO) != 0) {
+				tty_echo("\b \b", 3);
+			}
+			continue;
+		}
+		if ((unsigned char)c < 0x20 && c != '\n' &&
+		    c != tty_termios[LINUX_TERM_CC + LINUX_VEOF]) {
+			continue;
+		}
+		if (c == tty_termios[LINUX_TERM_CC + LINUX_VEOF]) {
+			break;
+		}
+		if (used < sizeof(tty_line)) {
+			tty_line[used++] = c;
+		}
+		if ((lflag & LINUX_ECHO) != 0) {
+			tty_echo(&c, 1);
+		}
+		if (c == '\n' || used == sizeof(tty_line)) {
+			break;
+		}
+	}
+
+	tty_line_offset = 0;
+	tty_line_len = used;
+	return 0;
+}
+
+static long tty_read_canonical(u64 len, u64 buffer)
+{
+	if (tty_line_offset >= tty_line_len &&
+	    tty_fill_canonical_line() != 0) {
+		return -LINUX_EINVAL;
+	}
+
+	const u64 remaining = tty_line_len - tty_line_offset;
+	const u64 nread = len < remaining ? len : remaining;
+
+	for (u64 i = 0; i < nread; i++) {
+		write_buffer[i] = tty_line[tty_line_offset + i];
+	}
+	tty_line_offset += nread;
+	if (tty_line_offset >= tty_line_len) {
+		tty_line_offset = 0;
+		tty_line_len = 0;
+	}
+
+	if (bunix_buffer_write(buffer, 0, write_buffer, nread) != 0) {
+		return -LINUX_EINVAL;
+	}
+	return (long)nread;
+}
+
+static long tty_read(u64 len, u64 buffer)
+{
+	if (len == 0) {
+		return 0;
+	}
+	if ((tty_lflag() & LINUX_ICANON) != 0) {
+		return tty_read_canonical(len, buffer);
+	}
+	return tty_read_raw(len, buffer);
+}
+
 static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
 			u64 value, u64 buffer)
 {
@@ -1012,19 +1236,11 @@ static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
 
 	switch (request) {
 	case LINUX_TCGETS:
-		if (buffer == 0) {
-			return -LINUX_EINVAL;
-		}
-		zero_bytes(data, sizeof(data));
-		for (u64 offset = 0; offset < 64; offset += sizeof(data)) {
-			if (bunix_buffer_write(buffer, offset, data,
-					       sizeof(data)) != 0) {
-				return -LINUX_EINVAL;
-			}
-		}
-		return 0;
+		return tty_termios_get(buffer);
 	case LINUX_TCSETS:
-		return 0;
+	case LINUX_TCSETSW:
+	case LINUX_TCSETSF:
+		return tty_termios_set(buffer);
 	case LINUX_TIOCGPGRP:
 		if (buffer == 0) {
 			return -LINUX_EINVAL;
@@ -1430,16 +1646,7 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	}
 
 	if (process->fds[fd].kind == LINUX_FD_CONSOLE) {
-		const long nread = bunix_console_read(write_buffer, len);
-
-		if (nread < 0) {
-			return -LINUX_EINVAL;
-		}
-		if (bunix_buffer_write(buffer, 0, write_buffer,
-				       (u64)nread) != 0) {
-			return -LINUX_EINVAL;
-		}
-		return nread;
+		return tty_read(len, buffer);
 	}
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
 		return -LINUX_EISDIR;

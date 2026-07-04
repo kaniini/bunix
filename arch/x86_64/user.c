@@ -123,6 +123,8 @@ enum {
 	LINUX_FUTEX_WAKE = 1,
 	LINUX_TCGETS = 0x5401,
 	LINUX_TCSETS = 0x5402,
+	LINUX_TCSETSW = 0x5403,
+	LINUX_TCSETSF = 0x5404,
 	LINUX_TIOCGPGRP = 0x540f,
 	LINUX_TIOCSPGRP = 0x5410,
 	LINUX_TIOCGWINSZ = 0x5413,
@@ -2262,11 +2264,12 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		u32 value = 0;
 
 		if (arg1 != LINUX_TCGETS && arg1 != LINUX_TCSETS &&
+		    arg1 != LINUX_TCSETSW && arg1 != LINUX_TCSETSF &&
 		    arg1 != LINUX_TIOCGPGRP && arg1 != LINUX_TIOCSPGRP &&
 		    arg1 != LINUX_TIOCGWINSZ) {
 			return (u64)-LINUX_ENOTTY;
 		}
-		if (arg2 == 0 && arg1 != LINUX_TCSETS) {
+		if (arg2 == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
 		if (arg1 == LINUX_TIOCSPGRP &&
@@ -2274,6 +2277,10 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 		if (arg1 == LINUX_TCGETS) {
+			output_size = 64;
+		} else if (arg1 == LINUX_TCSETS ||
+			   arg1 == LINUX_TCSETSW ||
+			   arg1 == LINUX_TCSETSF) {
 			output_size = 64;
 		} else if (arg1 == LINUX_TIOCGPGRP) {
 			output_size = sizeof(value);
@@ -2285,6 +2292,22 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			if (buffer == 0) {
 				return (u64)-LINUX_EINVAL;
 			}
+			if ((arg1 == LINUX_TCSETS ||
+			     arg1 == LINUX_TCSETSW ||
+			     arg1 == LINUX_TCSETSF) &&
+			    read_current_user(arg2, syscall_copy_buffer,
+					      output_size) != 0) {
+				buffer_release(buffer);
+				return (u64)-LINUX_EINVAL;
+			}
+			if ((arg1 == LINUX_TCSETS ||
+			     arg1 == LINUX_TCSETSW ||
+			     arg1 == LINUX_TCSETSF) &&
+			    buffer_write(buffer, 0, syscall_copy_buffer,
+					 output_size) != 0) {
+				buffer_release(buffer);
+				return (u64)-LINUX_EINVAL;
+			}
 		}
 
 		request.type = USER_LINUX_IOCTL;
@@ -2293,7 +2316,11 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		request.words[2] = value;
 		request.words[3] = 0;
 		request.cap_type = buffer != 0 ? IPC_CAP_BUFFER : IPC_CAP_NONE;
-		request.cap_rights = buffer != 0 ? TASK_RIGHT_SEND : 0;
+		request.cap_rights = buffer != 0 ?
+				     ((arg1 == LINUX_TCSETS ||
+				       arg1 == LINUX_TCSETSW ||
+				       arg1 == LINUX_TCSETSF) ?
+				      TASK_RIGHT_RECV : TASK_RIGHT_SEND) : 0;
 		request.cap_object = buffer;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
@@ -2303,6 +2330,9 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_ENOSYS;
 		}
 		if (reply.words[0] == 0 && buffer != 0 &&
+		    arg1 != LINUX_TCSETS &&
+		    arg1 != LINUX_TCSETSW &&
+		    arg1 != LINUX_TCSETSF &&
 		    buffer_read(buffer, 0, (void *)arg2, output_size) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_EINVAL;
