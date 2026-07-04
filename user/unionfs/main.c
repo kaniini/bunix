@@ -47,6 +47,12 @@ struct unionfs_open {
 	char upper_path[UNIONFS_MAX_PATH];
 };
 
+struct unionfs_whiteout {
+	struct bunix_tree_node node;
+	char *path;
+};
+
+static struct bunix_tree whiteouts;
 static struct bunix_u64_tree open_files;
 static struct rootfs_entry *root_entries;
 static u64 root_entry_count;
@@ -175,6 +181,69 @@ static int compose_lower_path(const char *relative, char *path)
 		}
 	}
 	return -1;
+}
+
+static char *str_dup(const char *text)
+{
+	const u64 len = str_len(text);
+	char *copy;
+
+	if (text == 0 || len == UNIONFS_MAX_PATH) {
+		return 0;
+	}
+	copy = (char *)bunix_alloc(len + 1);
+	if (copy == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i <= len; i++) {
+		copy[i] = text[i];
+	}
+	return copy;
+}
+
+static int whiteout_exists(const char *relative)
+{
+	return bunix_tree_get(&whiteouts, relative) != 0;
+}
+
+static void whiteout_remove(const char *relative)
+{
+	struct bunix_tree_node *node = bunix_tree_find_node(&whiteouts,
+							    relative);
+	struct unionfs_whiteout *whiteout;
+
+	if (node == 0) {
+		return;
+	}
+	whiteout = (struct unionfs_whiteout *)node->value;
+	bunix_tree_remove_node(&whiteouts, &whiteout->node);
+	bunix_free(whiteout->path);
+	bunix_free(whiteout);
+}
+
+static int whiteout_add(const char *relative)
+{
+	struct unionfs_whiteout *whiteout;
+
+	if (whiteout_exists(relative)) {
+		return 0;
+	}
+	whiteout = (struct unionfs_whiteout *)
+		bunix_calloc(1, sizeof(*whiteout));
+	if (whiteout == 0) {
+		return -1;
+	}
+	whiteout->path = str_dup(relative);
+	if (whiteout->path == 0 ||
+	    bunix_tree_insert_node(&whiteouts, &whiteout->node,
+				   whiteout->path, (u64)whiteout) != 0) {
+		if (whiteout->path != 0) {
+			bunix_free(whiteout->path);
+		}
+		bunix_free(whiteout);
+		return -1;
+	}
+	return 0;
 }
 
 static u64 resolve_service(u64 service, unsigned int rights)
@@ -522,6 +591,10 @@ static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 	    reply->words[0] == 0) {
 		return;
 	}
+	if (whiteout_exists(relative)) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
 	const struct rootfs_entry *entry = rootfs_find(lower);
 	if (entry == 0) {
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
@@ -551,6 +624,10 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 	if (service_path_call(tmpfs_service, BUNIX_VFS_OPEN_BUFFER, upper,
 			      message->words[3], &layer_reply) != 0 ||
 	    layer_reply.words[0] != 0) {
+		if (whiteout_exists(relative)) {
+			reply->words[0] = BUNIX_VFS_ERR_NOENT;
+			return;
+		}
 		entry = rootfs_find(lower);
 		if (entry == 0) {
 			reply->words[0] = BUNIX_VFS_ERR_NOENT;
@@ -590,12 +667,39 @@ static void reply_mutate(struct bunix_msg *message, struct bunix_msg *reply,
 {
 	char relative[UNIONFS_MAX_PATH];
 	char upper[UNIONFS_MAX_PATH];
+	char lower[UNIONFS_MAX_PATH];
 
 	if (mounted_relative_path(path, relative) != 0 ||
 	    compose_upper_path(relative, upper) != 0 ||
+	    compose_lower_path(relative, lower) != 0 ||
 	    service_path_call(tmpfs_service, message->type, upper,
 			      message->words[3], reply) != 0) {
 		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (message->type == BUNIX_VFS_CREATE_BUFFER ||
+	    message->type == BUNIX_VFS_MKDIR_BUFFER) {
+		if (reply->words[0] == 0) {
+			whiteout_remove(relative);
+		}
+		return;
+	}
+	if (message->type != BUNIX_VFS_UNLINK_BUFFER &&
+	    message->type != BUNIX_VFS_RMDIR_BUFFER) {
+		return;
+	}
+	if (reply->words[0] == 0) {
+		(void)whiteout_add(relative);
+		return;
+	}
+	const struct rootfs_entry *entry = rootfs_find(lower);
+	const u64 want_type = message->type == BUNIX_VFS_RMDIR_BUFFER ?
+			      BUNIX_VFS_TYPE_DIRECTORY :
+			      BUNIX_VFS_TYPE_REGULAR;
+
+	if (entry != 0 && entry->type == want_type &&
+	    whiteout_add(relative) == 0) {
+		reply->words[0] = 0;
 	}
 }
 
@@ -669,6 +773,7 @@ int main(void)
 	struct bunix_msg mkdir_reply;
 
 	bunix_console_log(online, sizeof(online) - 1);
+	bunix_tree_init(&whiteouts);
 	bunix_u64_tree_init(&open_files);
 	vfs_service = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
 	tmpfs_service = resolve_service(BUNIX_SERVICE_TMPFS, BUNIX_RIGHT_SEND);
