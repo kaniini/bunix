@@ -132,6 +132,9 @@ int main(void)
 			break;
 		}
 
+		if (message.cap != 0) {
+			bunix_handle_close(message.cap);
+		}
 		if (message.reply != 0) {
 			bunix_ipc_send(message.reply, &reply);
 		}

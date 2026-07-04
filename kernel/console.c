@@ -427,6 +427,7 @@ u64 console_read_line(char *buffer, u64 len)
 		if (c == '\b' || c == 0x7f) {
 			if (used != 0) {
 				used--;
+				console_putc('\b');
 			}
 			continue;
 		}

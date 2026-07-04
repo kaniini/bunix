@@ -708,6 +708,12 @@ int main(void)
 				len = entry->size - offset;
 			}
 
+			if (len == 0) {
+				reply.words[0] = 0;
+				reply.words[1] = 0;
+				break;
+			}
+
 			read_len = block_read_buffer(block, entry->offset + offset,
 						     message.cap, len);
 			if (read_len < 0) {
@@ -759,6 +765,9 @@ int main(void)
 			break;
 		}
 
+		if (message.cap != 0) {
+			bunix_handle_close(message.cap);
+		}
 		if (message.reply != 0) {
 			bunix_ipc_send(message.reply, &reply);
 		}

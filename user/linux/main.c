@@ -45,6 +45,8 @@ enum {
 	LINUX_O_ACCMODE = 3,
 	LINUX_O_DIRECTORY = 00200000,
 	LINUX_O_CLOEXEC = 02000000,
+	LINUX_DUP_CLOEXEC = 02000000,
+	LINUX_FD_CLOEXEC = 1,
 	LINUX_FD_CONSOLE = 1,
 	LINUX_FD_FILE = 2,
 	LINUX_FD_DIR = 3,
@@ -1135,7 +1137,7 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	}
 	linux_file_ref_add(reply.words[1]);
 	if ((flags & LINUX_O_CLOEXEC) != 0) {
-		process->fds[fd].flags |= LINUX_O_CLOEXEC;
+		process->fds[fd].flags |= LINUX_FD_CLOEXEC;
 	}
 	return fd;
 }
@@ -1418,10 +1420,12 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	};
 	struct bunix_msg reply;
 
+	if (len > LINUX_MAX_WRITE) {
+		len = LINUX_MAX_WRITE;
+	}
 	if (fd >= LINUX_MAX_FDS ||
 	    process->fds[fd].kind == 0 ||
-	    buffer == 0 ||
-	    len > LINUX_MAX_WRITE) {
+	    buffer == 0) {
 		return -LINUX_EBADF;
 	}
 
@@ -1439,6 +1443,10 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	}
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
 		return -LINUX_EISDIR;
+	}
+	if (process->fds[fd].kind == LINUX_FD_FILE &&
+	    process->fds[fd].offset >= process->fds[fd].size) {
+		return 0;
 	}
 
 	request.words[0] = process->fds[fd].handle;
@@ -1543,16 +1551,73 @@ static long linux_close(struct linux_process *process, u64 fd)
 	return 0;
 }
 
+static void linux_fd_ref_add(const struct linux_fd *fd)
+{
+	if (fd->kind == LINUX_FD_FILE || fd->kind == LINUX_FD_DIR) {
+		linux_file_ref_add(fd->handle);
+	}
+}
+
+static long linux_dup_to(struct linux_process *process, u64 old_fd,
+			 u64 new_fd, u64 flags, int fixed, int allow_same)
+{
+	if ((flags & ~LINUX_DUP_CLOEXEC) != 0) {
+		return -LINUX_EINVAL;
+	}
+	if (old_fd >= LINUX_MAX_FDS || process->fds[old_fd].kind == 0) {
+		return -LINUX_EBADF;
+	}
+
+	if (!fixed) {
+		for (new_fd = 0; new_fd < LINUX_MAX_FDS; new_fd++) {
+			if (process->fds[new_fd].kind == 0) {
+				break;
+			}
+		}
+	}
+	if (new_fd >= LINUX_MAX_FDS) {
+		return -LINUX_EMFILE;
+	}
+	if (old_fd == new_fd) {
+		if (fixed && allow_same) {
+			return (long)new_fd;
+		}
+		return -LINUX_EINVAL;
+	}
+	if (process->fds[new_fd].kind != 0) {
+		const long closed = linux_close(process, new_fd);
+
+		if (closed != 0) {
+			return closed;
+		}
+	}
+
+	process->fds[new_fd] = process->fds[old_fd];
+	process->fds[new_fd].flags = (flags & LINUX_DUP_CLOEXEC) != 0 ?
+				     LINUX_FD_CLOEXEC : 0;
+	linux_fd_ref_add(&process->fds[new_fd]);
+	return (long)new_fd;
+}
+
 static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 {
 	if (fd >= LINUX_MAX_FDS || process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
 
-	if (cmd == LINUX_F_GETFD || cmd == LINUX_F_GETFL) {
+	if (cmd == LINUX_F_GETFD) {
+		return (process->fds[fd].flags & LINUX_FD_CLOEXEC) != 0 ?
+		       LINUX_FD_CLOEXEC : 0;
+	}
+	if (cmd == LINUX_F_SETFD) {
+		if ((arg & LINUX_FD_CLOEXEC) != 0) {
+			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
+		} else {
+			process->fds[fd].flags &= ~LINUX_FD_CLOEXEC;
+		}
 		return 0;
 	}
-	if (cmd == LINUX_F_SETFD || cmd == LINUX_F_SETFL) {
+	if (cmd == LINUX_F_GETFL || cmd == LINUX_F_SETFL) {
 		return 0;
 	}
 	if (cmd == LINUX_F_DUPFD || cmd == LINUX_F_DUPFD_CLOEXEC) {
@@ -1562,10 +1627,14 @@ static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 		for (u64 new_fd = arg; new_fd < LINUX_MAX_FDS; new_fd++) {
 			if (process->fds[new_fd].kind == 0) {
 				process->fds[new_fd] = process->fds[fd];
-				if (process->fds[new_fd].kind == LINUX_FD_FILE ||
-				    process->fds[new_fd].kind == LINUX_FD_DIR) {
-					linux_file_ref_add(process->fds[new_fd].handle);
+				if (cmd == LINUX_F_DUPFD_CLOEXEC) {
+					process->fds[new_fd].flags |=
+						LINUX_FD_CLOEXEC;
+				} else {
+					process->fds[new_fd].flags &=
+						~LINUX_FD_CLOEXEC;
 				}
+				linux_fd_ref_add(&process->fds[new_fd]);
 				return (long)new_fd;
 			}
 		}
@@ -1573,6 +1642,26 @@ static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 	}
 
 	return -LINUX_EINVAL;
+}
+
+static long linux_exec_process(struct linux_process *process)
+{
+	if (process == 0) {
+		return -LINUX_ESRCH;
+	}
+
+	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
+		if (process->fds[fd].kind != 0 &&
+		    (process->fds[fd].flags & LINUX_FD_CLOEXEC) != 0) {
+			const long closed = linux_close(process, fd);
+
+			if (closed != 0) {
+				return closed;
+			}
+		}
+	}
+
+	return 0;
 }
 
 static void linux_close_process_fds(struct linux_process *process)
@@ -1838,6 +1927,27 @@ int main(void)
 							  message.words[0],
 							  message.words[1],
 							  message.words[2]);
+			break;
+		case BUNIX_LINUX_DUP:
+			reply.words[0] = (u64)linux_dup_to(process,
+							   message.words[0],
+							   0, 0, 0, 0);
+			break;
+		case BUNIX_LINUX_DUP2:
+			reply.words[0] = (u64)linux_dup_to(process,
+							   message.words[0],
+							   message.words[1],
+							   0, 1, 1);
+			break;
+		case BUNIX_LINUX_DUP3:
+			reply.words[0] = (u64)linux_dup_to(process,
+							   message.words[0],
+							   message.words[1],
+							   message.words[2],
+							   1, 0);
+			break;
+		case BUNIX_LINUX_EXEC_PROCESS:
+			reply.words[0] = (u64)linux_exec_process(process);
 			break;
 		case BUNIX_LINUX_NEWFSTATAT:
 			reply.words[0] = (u64)linux_newfstatat(process,

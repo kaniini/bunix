@@ -323,6 +323,14 @@ fork_child:
 	cmpq $15, %rax
 	jne fail
 
+	xorq %rax, %rax
+	movq %r12, %rdi
+	leaq read_buffer(%rip), %rsi
+	movq $15, %rdx
+	syscall
+	testq %rax, %rax
+	jne fail
+
 	movq $3, %rax
 	movq %r12, %rdi
 	syscall

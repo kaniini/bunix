@@ -64,6 +64,8 @@ enum {
 	LINUX_SYSCALL_RT_SIGPROCMASK = 14,
 	LINUX_SYSCALL_IOCTL = 16,
 	LINUX_SYSCALL_WRITEV = 20,
+	LINUX_SYSCALL_DUP = 32,
+	LINUX_SYSCALL_DUP2 = 33,
 	LINUX_SYSCALL_SENDFILE = 40,
 	LINUX_SYSCALL_FCNTL = 72,
 	LINUX_SYSCALL_GETCWD = 79,
@@ -102,6 +104,7 @@ enum {
 	LINUX_SYSCALL_GETDENTS64 = 217,
 	LINUX_SYSCALL_NEWFSTATAT = 262,
 	LINUX_SYSCALL_SET_ROBUST_LIST = 273,
+	LINUX_SYSCALL_DUP3 = 292,
 	LINUX_SYSCALL_OPENAT = 257,
 	LINUX_SYSCALL_PRLIMIT64 = 302,
 	LINUX_SYSCALL_GETRANDOM = 318,
@@ -129,6 +132,8 @@ enum {
 	LINUX_EXEC_MAX_PATH = 32,
 	LINUX_EXEC_MAX_ARGS = 8,
 	LINUX_EXEC_MAX_ARG = 64,
+	LINUX_EXEC_MAX_PHDRS = 16,
+	LINUX_EXEC_DYN_LOAD_BIAS = 0x400000,
 	LINUX_EXEC_STACK_TOP = 0x800000,
 	LINUX_EXEC_STACK_PAGES = 16,
 	LINUX_STAT_SIZE = 144,
@@ -162,6 +167,8 @@ enum {
 	USER_LINUX_CLOSE = 3,
 	USER_LINUX_FSTAT = 5,
 	USER_LINUX_IOCTL = 16,
+	USER_LINUX_DUP = 32,
+	USER_LINUX_DUP2 = 33,
 	USER_LINUX_GETPID = 39,
 	USER_LINUX_GETCWD = 79,
 	USER_LINUX_CHDIR = 80,
@@ -187,9 +194,11 @@ enum {
 	USER_LINUX_GETDENTS64 = 217,
 	USER_LINUX_OPENAT = 257,
 	USER_LINUX_NEWFSTATAT = 262,
+	USER_LINUX_DUP3 = 292,
 	USER_LINUX_EXIT_GROUP = 231,
 	USER_LINUX_REGISTER_PROCESS = 1000,
 	USER_LINUX_FORK_PROCESS = 1001,
+	USER_LINUX_EXEC_PROCESS = 1002,
 };
 
 enum {
@@ -203,11 +212,24 @@ enum {
 	ELF_TYPE_DYN = 3,
 	ELF_MACHINE_X86_64 = 62,
 	ELF_PH_LOAD = 1,
+	ELF_PH_DYNAMIC = 2,
 	ELF_PF_X = 1,
 	ELF_PF_W = 2,
 	ELF_EHDR_SIZE = 64,
 	ELF_PHDR_SIZE = 56,
-	ELF_STACK_WORDS = 8,
+	ELF_DT_NULL = 0,
+	ELF_DT_RELR = 0x24,
+	ELF_DT_RELRSZ = 0x23,
+	ELF_DT_RELRENT = 0x25,
+	LINUX_AT_NULL = 0,
+	LINUX_AT_PHDR = 3,
+	LINUX_AT_PHENT = 4,
+	LINUX_AT_PHNUM = 5,
+	LINUX_AT_PAGESZ = 6,
+	LINUX_AT_ENTRY = 9,
+	LINUX_AT_CLKTCK = 17,
+	LINUX_AT_RANDOM = 25,
+	LINUX_AT_EXECFN = 31,
 };
 
 struct elf64_ehdr {
@@ -236,6 +258,11 @@ struct elf64_phdr {
 	u64 filesz;
 	u64 memsz;
 	u64 align;
+} __attribute__((packed));
+
+struct elf64_dyn {
+	i64 tag;
+	u64 value;
 } __attribute__((packed));
 
 struct linux_exec_args {
@@ -379,6 +406,24 @@ static u64 min_u64(u64 left, u64 right)
 static u64 max_u64(u64 left, u64 right)
 {
 	return left > right ? left : right;
+}
+
+static u64 read_u64_le(const u8 *data)
+{
+	u64 value = 0;
+
+	for (u64 i = 0; i < sizeof(value); i++) {
+		value |= ((u64)data[i]) << (i * 8);
+	}
+
+	return value;
+}
+
+static void write_u64_le(u8 *data, u64 value)
+{
+	for (u64 i = 0; i < sizeof(value); i++) {
+		data[i] = (u8)((value >> (i * 8)) & 0xff);
+	}
 }
 
 static void mem_copy(u8 *dst, const u8 *src, u64 len)
@@ -633,6 +678,7 @@ static int linux_exec_validate(const u8 *image, u64 image_size,
 	    ehdr->ehsize != ELF_EHDR_SIZE ||
 	    ehdr->phentsize != ELF_PHDR_SIZE ||
 	    ehdr->phnum == 0 ||
+	    ehdr->phnum > LINUX_EXEC_MAX_PHDRS ||
 	    phdr_bytes > image_size) {
 		return -1;
 	}
@@ -655,6 +701,133 @@ static int linux_exec_validate(const u8 *image, u64 image_size,
 	}
 
 	*ehdr_out = ehdr;
+	return 0;
+}
+
+static int linux_exec_vaddr_to_offset(const struct elf64_ehdr *ehdr,
+				      u64 vaddr, u64 len, u64 *offset)
+{
+	if (ehdr == 0 || offset == 0 || vaddr + len < vaddr) {
+		return -1;
+	}
+
+	for (u64 i = 0; i < ehdr->phnum; i++) {
+		const struct elf64_phdr *phdr =
+			(const struct elf64_phdr *)((const u8 *)ehdr +
+						    ehdr->phoff +
+						    i * ehdr->phentsize);
+
+		if (phdr->type == ELF_PH_LOAD &&
+		    vaddr >= phdr->vaddr &&
+		    vaddr + len <= phdr->vaddr + phdr->filesz) {
+			*offset = phdr->offset + (vaddr - phdr->vaddr);
+			return 0;
+		}
+	}
+
+	return -1;
+}
+
+static int linux_exec_apply_relr_one(u8 *image,
+				     const struct elf64_ehdr *ehdr,
+				     u64 load_bias, u64 reloc_vaddr)
+{
+	u64 offset = 0;
+
+	if (linux_exec_vaddr_to_offset(ehdr, reloc_vaddr, sizeof(u64),
+				       &offset) != 0) {
+		return -1;
+	}
+
+	write_u64_le(image + offset, read_u64_le(image + offset) + load_bias);
+	return 0;
+}
+
+static int linux_exec_apply_relative_relocations(u8 *image,
+						 const struct elf64_ehdr *ehdr,
+						 u64 image_size, u64 load_bias)
+{
+	u64 relr = 0;
+	u64 relrsz = 0;
+	u64 relrent = 8;
+
+	if (load_bias == 0) {
+		return 0;
+	}
+
+	for (u64 i = 0; i < ehdr->phnum; i++) {
+		const struct elf64_phdr *phdr =
+			(const struct elf64_phdr *)(image + ehdr->phoff +
+						    i * ehdr->phentsize);
+
+		if (phdr->type != ELF_PH_DYNAMIC) {
+			continue;
+		}
+		if (phdr->filesz % sizeof(struct elf64_dyn) != 0 ||
+		    phdr->offset + phdr->filesz < phdr->offset ||
+		    phdr->offset + phdr->filesz > image_size) {
+			return -1;
+		}
+
+		const u64 entries = phdr->filesz / sizeof(struct elf64_dyn);
+		const struct elf64_dyn *dyn =
+			(const struct elf64_dyn *)(image + phdr->offset);
+
+		for (u64 entry = 0; entry < entries; entry++) {
+			if (dyn[entry].tag == ELF_DT_NULL) {
+				break;
+			}
+			if (dyn[entry].tag == ELF_DT_RELR) {
+				relr = dyn[entry].value;
+			} else if (dyn[entry].tag == ELF_DT_RELRSZ) {
+				relrsz = dyn[entry].value;
+			} else if (dyn[entry].tag == ELF_DT_RELRENT) {
+				relrent = dyn[entry].value;
+			}
+		}
+		break;
+	}
+
+	if (relr == 0 || relrsz == 0) {
+		return 0;
+	}
+	if (relrent != sizeof(u64) || relrsz % relrent != 0) {
+		return -1;
+	}
+
+	u64 relr_offset = 0;
+	if (linux_exec_vaddr_to_offset(ehdr, relr, relrsz, &relr_offset) != 0 ||
+	    relr_offset + relrsz < relr_offset ||
+	    relr_offset + relrsz > image_size) {
+		return -1;
+	}
+
+	u64 reloc_vaddr = 0;
+	const u64 entries = relrsz / relrent;
+
+	for (u64 i = 0; i < entries; i++) {
+		const u64 entry = read_u64_le(image + relr_offset + i * relrent);
+
+		if ((entry & 1) == 0) {
+			reloc_vaddr = entry;
+			if (linux_exec_apply_relr_one(image, ehdr, load_bias,
+						      reloc_vaddr) != 0) {
+				return -1;
+			}
+			reloc_vaddr += sizeof(u64);
+			continue;
+		}
+
+		for (u64 bit = 1; bit < 64; bit++) {
+			if ((entry & (1ull << bit)) != 0 &&
+			    linux_exec_apply_relr_one(image, ehdr, load_bias,
+						      reloc_vaddr) != 0) {
+				return -1;
+			}
+			reloc_vaddr += sizeof(u64);
+		}
+	}
+
 	return 0;
 }
 
@@ -766,20 +939,23 @@ static u64 linux_write_one(struct ipc_port *linux, struct ipc_port *reply_port,
 }
 
 static int linux_exec_map_segment(struct task *task, const u8 *image,
-				  const struct elf64_phdr *phdr)
+				  const struct elf64_phdr *phdr,
+				  u64 load_bias)
 {
 	struct vm_space *space = task_vm_space(task);
 	const u32 writable = (phdr->flags & ELF_PF_W) != 0;
-	const u64 page_start = align_down(phdr->vaddr, VM_PAGE_SIZE);
-	const u64 page_end = align_up(phdr->vaddr + phdr->memsz, VM_PAGE_SIZE);
+	const u64 segment_start = phdr->vaddr + load_bias;
+	const u64 segment_end = segment_start + phdr->memsz;
+	const u64 page_start = align_down(segment_start, VM_PAGE_SIZE);
+	const u64 page_end = align_up(segment_end, VM_PAGE_SIZE);
 
 	for (u64 page = page_start; page < page_end; page += VM_PAGE_SIZE) {
 		struct vm_frame frame = vm_alloc_user_page(space, page,
 							   writable);
 		const u64 page_end_addr = page + VM_PAGE_SIZE;
-		const u64 copy_start = max_u64(page, phdr->vaddr);
+		const u64 copy_start = max_u64(page, segment_start);
 		const u64 copy_end = min_u64(page_end_addr,
-					     phdr->vaddr + phdr->filesz);
+					     segment_start + phdr->filesz);
 
 		if (frame.addr == 0) {
 			return -1;
@@ -787,7 +963,7 @@ static int linux_exec_map_segment(struct task *task, const u8 *image,
 		mem_zero((u8 *)frame.addr, VM_PAGE_SIZE);
 		if (copy_start < copy_end) {
 			const u64 dst_offset = copy_start - page;
-			const u64 src_offset = copy_start - phdr->vaddr;
+			const u64 src_offset = copy_start - segment_start;
 
 			mem_copy((u8 *)(frame.addr + dst_offset),
 				 image + phdr->offset + src_offset,
@@ -806,17 +982,6 @@ static int linux_exec_map_segment(struct task *task, const u8 *image,
 		return -1;
 	}
 
-	return 0;
-}
-
-static int linux_exec_push_word(u8 *stack, u64 *sp, u64 word)
-{
-	if (*sp < sizeof(word)) {
-		return -1;
-	}
-
-	*sp -= sizeof(word);
-	mem_copy(stack + *sp, (const u8 *)&word, sizeof(word));
 	return 0;
 }
 
@@ -882,15 +1047,21 @@ static int linux_exec_collect_args(const char *path, u64 user_argv,
 	return 0;
 }
 
-static int linux_exec_build_stack(const struct linux_exec_args *args,
+static int linux_exec_build_stack(const char *path,
+				  const struct linux_exec_args *args,
+				  const struct elf64_ehdr *ehdr,
+				  u64 load_bias, u64 entry,
 				  u8 *stack_page, u64 *new_sp)
 {
 	u64 argv_addrs[LINUX_EXEC_MAX_ARGS];
+	struct elf64_phdr aux_phdrs[LINUX_EXEC_MAX_PHDRS];
+	const u64 aux_pairs = 10;
 	u64 sp = VM_PAGE_SIZE;
 
 	mem_zero(stack_page, VM_PAGE_SIZE);
-	if (args == 0 || args->argc == 0 ||
-	    args->argc > LINUX_EXEC_MAX_ARGS) {
+	if (path == 0 || args == 0 || ehdr == 0 || args->argc == 0 ||
+	    args->argc > LINUX_EXEC_MAX_ARGS ||
+	    ehdr->phnum > LINUX_EXEC_MAX_PHDRS) {
 		return -1;
 	}
 
@@ -907,23 +1078,71 @@ static int linux_exec_build_stack(const struct linux_exec_args *args,
 		argv_addrs[index] = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
 	}
 
-	sp = align_down(sp, 16);
+	const u64 execfn = argv_addrs[0];
+	const u8 random_bytes[16] = {
+		0x62, 0x75, 0x6e, 0x69, 0x78, 0x2d, 0x72, 0x61,
+		0x6e, 0x64, 0x6f, 0x6d, 0x2d, 0x65, 0x78, 0x00,
+	};
 
-	if (linux_exec_push_word(stack_page, &sp, 0) != 0 ||
-	    linux_exec_push_word(stack_page, &sp, 0) != 0 ||
-	    linux_exec_push_word(stack_page, &sp, 0) != 0 ||
-	    linux_exec_push_word(stack_page, &sp, 0) != 0) {
+	sp = align_down(sp, 16);
+	if (sp < sizeof(random_bytes)) {
 		return -1;
 	}
-	for (u64 i = args->argc; i > 0; i--) {
-		if (linux_exec_push_word(stack_page, &sp,
-					 argv_addrs[i - 1]) != 0) {
-			return -1;
-		}
-	}
-	if (linux_exec_push_word(stack_page, &sp, args->argc) != 0) {
+	sp -= sizeof(random_bytes);
+	mem_copy(stack_page + sp, random_bytes, sizeof(random_bytes));
+	const u64 random_addr = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
+
+	const u64 phdr_bytes = ehdr->phnum * sizeof(aux_phdrs[0]);
+	if (sp < phdr_bytes) {
 		return -1;
 	}
+	for (u64 i = 0; i < ehdr->phnum; i++) {
+		const struct elf64_phdr *phdr =
+			(const struct elf64_phdr *)((const u8 *)ehdr +
+						    ehdr->phoff +
+						    i * ehdr->phentsize);
+
+		aux_phdrs[i] = *phdr;
+		aux_phdrs[i].vaddr += load_bias;
+		aux_phdrs[i].paddr += load_bias;
+	}
+	sp = align_down(sp - phdr_bytes, 8);
+	mem_copy(stack_page + sp, (const u8 *)aux_phdrs, phdr_bytes);
+	const u64 phdr_addr = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
+
+	sp = align_down(sp, 16);
+	const u64 words = 1 + args->argc + 1 + 1 + aux_pairs * 2;
+	if (sp < words * sizeof(u64)) {
+		return -1;
+	}
+	sp -= words * sizeof(u64);
+	u64 *stack_words = (u64 *)(stack_page + sp);
+	u64 word = 0;
+
+	stack_words[word++] = args->argc;
+	for (u64 i = 0; i < args->argc; i++) {
+		stack_words[word++] = argv_addrs[i];
+	}
+	stack_words[word++] = 0;
+	stack_words[word++] = 0;
+	stack_words[word++] = LINUX_AT_PAGESZ;
+	stack_words[word++] = VM_PAGE_SIZE;
+	stack_words[word++] = LINUX_AT_ENTRY;
+	stack_words[word++] = entry;
+	stack_words[word++] = LINUX_AT_PHDR;
+	stack_words[word++] = phdr_addr;
+	stack_words[word++] = LINUX_AT_PHENT;
+	stack_words[word++] = ehdr->phentsize;
+	stack_words[word++] = LINUX_AT_PHNUM;
+	stack_words[word++] = ehdr->phnum;
+	stack_words[word++] = LINUX_AT_EXECFN;
+	stack_words[word++] = execfn;
+	stack_words[word++] = LINUX_AT_RANDOM;
+	stack_words[word++] = random_addr;
+	stack_words[word++] = LINUX_AT_CLKTCK;
+	stack_words[word++] = 100;
+	stack_words[word++] = LINUX_AT_NULL;
+	stack_words[word++] = 0;
 
 	*new_sp = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
 	return 0;
@@ -931,6 +1150,7 @@ static int linux_exec_build_stack(const struct linux_exec_args *args,
 
 static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			const char *user_path) __attribute__((noinline));
+static u64 linux_exec_process(struct task *task);
 
 static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			const char *user_path)
@@ -942,6 +1162,8 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	u8 stack_page[VM_PAGE_SIZE];
 	u8 *image;
 	u64 new_sp = 0;
+	u64 load_bias = 0;
+	u64 entry = 0;
 	const u64 stack_base =
 		LINUX_EXEC_STACK_TOP - LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE;
 
@@ -958,8 +1180,17 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 
 	if (linux_vfs_read_file(task, path, image, LINUX_EXEC_MAX_IMAGE,
 				&image_size) != 0 ||
-	    linux_exec_validate(image, image_size, &ehdr) != 0 ||
-	    linux_exec_build_stack(&args, stack_page, &new_sp) != 0) {
+	    linux_exec_validate(image, image_size, &ehdr) != 0) {
+		slab_free(image);
+		return (u64)-LINUX_EINVAL;
+	}
+
+	load_bias = ehdr->type == ELF_TYPE_DYN ? LINUX_EXEC_DYN_LOAD_BIAS : 0;
+	entry = ehdr->entry + load_bias;
+	if (linux_exec_apply_relative_relocations(image, ehdr, image_size,
+						  load_bias) != 0 ||
+	    linux_exec_build_stack(path, &args, ehdr, load_bias, entry,
+				   stack_page, &new_sp) != 0) {
 		slab_free(image);
 		return (u64)-LINUX_EINVAL;
 	}
@@ -976,7 +1207,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 						    i * ehdr->phentsize);
 
 		if (phdr->type == ELF_PH_LOAD &&
-		    linux_exec_map_segment(task, image, phdr) != 0) {
+		    linux_exec_map_segment(task, image, phdr, load_bias) != 0) {
 			slab_free(image);
 			return (u64)-LINUX_ENOMEM;
 		}
@@ -996,10 +1227,11 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		return (u64)-LINUX_ENOMEM;
 	}
 
-	frame->user_rip = ehdr->entry;
+	frame->user_rip = entry;
 	frame->user_rsp = new_sp;
+	(void)linux_exec_process(task);
 	console_printf("linux: execve task=%u path=%s entry=%p stack=%p\n",
-		       task_id(task), path, (const void *)ehdr->entry,
+		       task_id(task), path, (const void *)entry,
 		       (const void *)new_sp);
 	slab_free(image);
 	return 0;
@@ -1018,6 +1250,31 @@ static u64 linux_fork_process(struct task *parent, struct task *child)
 		.cap_type = IPC_CAP_NONE,
 		.cap_object = 0,
 		.words = { task_id(parent), task_id(child), 0, 0 },
+	};
+	struct ipc_message reply;
+
+	if (linux == 0 || reply_port == 0 ||
+	    ipc_send(linux, &request) != 0 ||
+	    ipc_recv(reply_port, &reply) != 0) {
+		return (u64)-LINUX_ENOSYS;
+	}
+
+	return reply.words[0];
+}
+
+static u64 linux_exec_process(struct task *task)
+{
+	struct ipc_port *linux = ipc_port_find("linux");
+	struct ipc_port *reply_port = task_reply_port(task);
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = USER_LINUX_EXEC_PROCESS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { 0, 0, 0, 0 },
 	};
 	struct ipc_message reply;
 
@@ -1065,6 +1322,10 @@ static const char *linux_syscall_name(u64 number)
 		return "ioctl";
 	case LINUX_SYSCALL_WRITEV:
 		return "writev";
+	case LINUX_SYSCALL_DUP:
+		return "dup";
+	case LINUX_SYSCALL_DUP2:
+		return "dup2";
 	case LINUX_SYSCALL_SENDFILE:
 		return "sendfile";
 	case LINUX_SYSCALL_GETCWD:
@@ -1141,6 +1402,8 @@ static const char *linux_syscall_name(u64 number)
 		return "newfstatat";
 	case LINUX_SYSCALL_SET_ROBUST_LIST:
 		return "set_robust_list";
+	case LINUX_SYSCALL_DUP3:
+		return "dup3";
 	case LINUX_SYSCALL_OPENAT:
 		return "openat";
 	case LINUX_SYSCALL_PRLIMIT64:
@@ -1807,46 +2070,8 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 		return linux_write_one(linux, reply_port, arg0, arg1, arg2);
 	}
-	case LINUX_SYSCALL_SENDFILE: {
-		struct shared_buffer *buffer;
-		const u64 len = arg3 > LINUX_MAX_SYSCALL_BUFFER ?
-				LINUX_MAX_SYSCALL_BUFFER : arg3;
-		u64 offset = (u64)-1;
-
-		if (arg2 != 0 &&
-		    read_current_user(arg2, &offset, sizeof(offset)) != 0) {
-			return (u64)-LINUX_EFAULT;
-		}
-		if (len == 0) {
-			return 0;
-		}
-		buffer = buffer_create(len);
-		if (buffer == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		request.type = USER_LINUX_SENDFILE;
-		request.words[0] = arg0;
-		request.words[1] = arg1;
-		request.words[2] = len;
-		request.words[3] = offset;
-		request.cap_type = IPC_CAP_BUFFER;
-		request.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_RECV |
-				     TASK_RIGHT_DUP;
-		request.cap_object = buffer;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_ENOSYS;
-		}
-		if (arg2 != 0 && (i64)reply.words[0] > 0 &&
-		    write_current_user(arg2, &reply.words[1],
-				       sizeof(reply.words[1])) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_EFAULT;
-		}
-		buffer_release(buffer);
-		return reply.words[0];
-	}
+	case LINUX_SYSCALL_SENDFILE:
+		return (u64)-LINUX_EINVAL;
 	case LINUX_SYSCALL_GETCWD: {
 		char cwd[16];
 		u64 len;
@@ -2155,6 +2380,21 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_CLOSE:
 		request.type = USER_LINUX_CLOSE;
 		request.words[0] = arg0;
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
+	case LINUX_SYSCALL_DUP:
+	case LINUX_SYSCALL_DUP2:
+	case LINUX_SYSCALL_DUP3:
+		request.type = number == LINUX_SYSCALL_DUP ? USER_LINUX_DUP :
+			       number == LINUX_SYSCALL_DUP2 ? USER_LINUX_DUP2 :
+			       USER_LINUX_DUP3;
+		request.words[0] = arg0;
+		request.words[1] = arg1;
+		request.words[2] = arg2;
+		request.words[3] = 0;
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0) {
 			return (u64)-LINUX_ENOSYS;

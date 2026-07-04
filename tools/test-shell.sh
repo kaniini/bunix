@@ -54,7 +54,7 @@ done
 
 sleep 3
 exec 3>"$pipe.in"
-printf 'busybox uptime\nbusybox id\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\n/bin/cat /secret.txt\ncd /bin\npwd\nexit\n' >&3
+printf 'busybox uptime\nbusybox id\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox ls /\nbusybox ls /bin\nbusybox stat /bin\nbusybox cat /secret.txt\necho POSTCAT\nbusybox stat /bin\nbusybox ecxx\177\177ho BACKSPACE_OK\ncd /bin\npwd\nexit\n' >&3
 
 i=0
 while ! grep -F "load average" "$log" >/dev/null 2>&1; do
@@ -118,6 +118,17 @@ while ! grep -F "BUSYBOX_ARGV_OK" "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
 		echo "busybox argv regression command did not complete" >&2
+		tail -n 160 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+i=0
+while ! grep -F "BACKSPACE_OK" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "busybox backspace-edited command did not complete" >&2
 		tail -n 160 "$log" >&2 || true
 		exit 1
 	fi
