@@ -44,6 +44,7 @@ struct unionfs_open {
 	u64 service;
 	u64 remote_handle;
 	struct rootfs_entry lower;
+	char upper_path[UNIONFS_MAX_PATH];
 };
 
 static struct bunix_u64_tree open_files;
@@ -419,12 +420,74 @@ static u64 remember_lower_open(const struct rootfs_entry *entry)
 	open->id = id;
 	open->kind = UNIONFS_OPEN_LOWER;
 	open->lower = *entry;
+	(void)compose_upper_path(entry->path, open->upper_path);
 	if (bunix_u64_tree_insert_node(&open_files, &open->node, id,
 				       (u64)open) != 0) {
 		bunix_free(open);
 		return 0;
 	}
 	return id;
+}
+
+static int copy_lower_to_upper(struct unionfs_open *open, u64 task)
+{
+	enum {
+		COPY_CHUNK = 4096,
+	};
+	struct bunix_msg reply;
+	u64 remote_handle;
+	u64 done = 0;
+
+	if (open == 0 || open->kind != UNIONFS_OPEN_LOWER ||
+	    service_path_call(tmpfs_service, BUNIX_VFS_CREATE_BUFFER,
+			      open->upper_path,
+			      (task & 0xffffffff) |
+			      ((u64)(open->lower.mode & 0777) << 32),
+			      &reply) != 0) {
+		return -1;
+	}
+	if (service_path_call(tmpfs_service, BUNIX_VFS_OPEN_BUFFER,
+			      open->upper_path, 0, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+	remote_handle = reply.words[1];
+	while (done < open->lower.size) {
+		u64 len = open->lower.size - done;
+		const long buffer = bunix_buffer_create(COPY_CHUNK);
+		struct bunix_msg write = {
+			.protocol = BUNIX_PROTO_VFS,
+			.type = BUNIX_VFS_WRITE_FILE_BUFFER,
+			.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
+			.words = { remote_handle, done, 0, 0 },
+		};
+
+		if (len > COPY_CHUNK) {
+			len = COPY_CHUNK;
+		}
+		if (buffer < 0 ||
+		    block_read_buffer(open->lower.offset + done,
+				      (u64)buffer, len) < 0) {
+			if (buffer >= 0) {
+				bunix_handle_close((u64)buffer);
+			}
+			return -1;
+		}
+		write.cap = (u64)buffer;
+		write.words[2] = len;
+		if (bunix_ipc_call(tmpfs_service, &write, &reply) != 0 ||
+		    reply.words[0] != 0 ||
+		    reply.words[1] != len) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		bunix_handle_close((u64)buffer);
+		done += len;
+	}
+	open->kind = UNIONFS_OPEN_UPPER;
+	open->service = tmpfs_service;
+	open->remote_handle = remote_handle;
+	return 0;
 }
 
 static struct unionfs_open *open_from_handle(u64 handle)
@@ -576,7 +639,15 @@ static void forward_open_handle(struct bunix_msg *message,
 			reply->words[0] = nread < 0 ? (u64)-1 : 0;
 			reply->words[1] = nread < 0 ? 0 : (u64)nread;
 		} else {
-			reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+			if ((message->type == BUNIX_VFS_WRITE_FILE_BUFFER ||
+			     message->type == BUNIX_VFS_TRUNCATE ||
+			     message->type == BUNIX_VFS_CHMOD ||
+			     message->type == BUNIX_VFS_CHOWN) &&
+			    copy_lower_to_upper(open, message->words[3]) == 0) {
+				forward_open_handle(message, reply);
+			} else {
+				reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+			}
 		}
 		return;
 	}

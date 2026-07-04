@@ -643,7 +643,8 @@ static int is_scratch_path(const char *path)
 {
 	return path_has_prefix(path, "/tmp") ||
 	       path_has_prefix(path, "/run") ||
-	       path_has_prefix(path, "/var/tmp");
+	       path_has_prefix(path, "/var/tmp") ||
+	       path_has_prefix(path, "/mnt/union");
 }
 
 static void copy_literal(char *dst, u64 dst_len, const char *src)
