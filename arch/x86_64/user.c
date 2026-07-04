@@ -65,6 +65,7 @@ enum {
 	LINUX_SYSCALL_RT_SIGPROCMASK = 14,
 	LINUX_SYSCALL_IOCTL = 16,
 	LINUX_SYSCALL_WRITEV = 20,
+	LINUX_SYSCALL_NANOSLEEP = 35,
 	LINUX_SYSCALL_DUP = 32,
 	LINUX_SYSCALL_DUP2 = 33,
 	LINUX_SYSCALL_SENDFILE = 40,
@@ -102,6 +103,7 @@ enum {
 	LINUX_SYSCALL_FUTEX = 202,
 	LINUX_SYSCALL_SET_TID_ADDRESS = 218,
 	LINUX_SYSCALL_CLOCK_GETTIME = 228,
+	LINUX_SYSCALL_CLOCK_NANOSLEEP = 230,
 	LINUX_SYSCALL_EXECVE = 59,
 	LINUX_SYSCALL_GETPID = 39,
 	LINUX_SYSCALL_WAIT4 = 61,
@@ -122,6 +124,9 @@ enum {
 	LINUX_EINVAL = 22,
 	LINUX_ENOSYS = 38,
 	LINUX_ENOTTY = 25,
+	LINUX_CLOCK_REALTIME = 0,
+	LINUX_CLOCK_MONOTONIC = 1,
+	LINUX_TIMER_ABSTIME = 1,
 	LINUX_POLLIN = 0x0001,
 	LINUX_POLLOUT = 0x0004,
 	LINUX_ARCH_SET_FS = 0x1002,
@@ -465,6 +470,54 @@ static int read_current_user(u64 vaddr, void *dst, u64 len)
 static int write_current_user(u64 vaddr, const void *src, u64 len)
 {
 	return vm_write_user(task_vm_space(task_current()), vaddr, src, len);
+}
+
+static int linux_timespec_to_ns(u64 vaddr, u64 *ns)
+{
+	u64 timespec[2];
+	const u64 nsec_per_sec = 1000000000ull;
+
+	if (vaddr == 0 || ns == 0 ||
+	    read_current_user(vaddr, timespec, sizeof(timespec)) != 0 ||
+	    timespec[1] >= nsec_per_sec ||
+	    timespec[0] > (~0ull - timespec[1]) / nsec_per_sec) {
+		return -1;
+	}
+
+	*ns = timespec[0] * nsec_per_sec + timespec[1];
+	return 0;
+}
+
+static u64 linux_sleep_relative(u64 request, u64 remainder)
+{
+	u64 ns;
+
+	if (linux_timespec_to_ns(request, &ns) != 0) {
+		return (u64)-LINUX_EINVAL;
+	}
+	if (remainder != 0) {
+		u64 zero[2] = { 0, 0 };
+
+		if (write_current_user(remainder, zero, sizeof(zero)) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+	}
+	thread_sleep_ns(ns);
+	return 0;
+}
+
+static u64 linux_sleep_absolute(u64 request)
+{
+	u64 target;
+	const u64 now = timer_monotonic_ns();
+
+	if (linux_timespec_to_ns(request, &target) != 0) {
+		return (u64)-LINUX_EINVAL;
+	}
+	if (target > now) {
+		thread_sleep_ns(target - now);
+	}
+	return 0;
 }
 
 static int console_write_user(u64 vaddr, u64 len)
@@ -1352,6 +1405,8 @@ static const char *linux_syscall_name(u64 number)
 		return "ioctl";
 	case LINUX_SYSCALL_WRITEV:
 		return "writev";
+	case LINUX_SYSCALL_NANOSLEEP:
+		return "nanosleep";
 	case LINUX_SYSCALL_DUP:
 		return "dup";
 	case LINUX_SYSCALL_DUP2:
@@ -1426,6 +1481,8 @@ static const char *linux_syscall_name(u64 number)
 		return "set_tid_address";
 	case LINUX_SYSCALL_CLOCK_GETTIME:
 		return "clock_gettime";
+	case LINUX_SYSCALL_CLOCK_NANOSLEEP:
+		return "clock_nanosleep";
 	case LINUX_SYSCALL_EXECVE:
 		return "execve";
 	case LINUX_SYSCALL_GETPID:
@@ -1882,6 +1939,20 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return write_current_user(arg1, timespec, sizeof(timespec)) == 0 ?
 		       0 : (u64)-LINUX_EINVAL;
 	}
+	case LINUX_SYSCALL_NANOSLEEP:
+		return linux_sleep_relative(arg0, arg1);
+	case LINUX_SYSCALL_CLOCK_NANOSLEEP:
+		if (arg0 != LINUX_CLOCK_REALTIME &&
+		    arg0 != LINUX_CLOCK_MONOTONIC) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if ((arg1 & ~LINUX_TIMER_ABSTIME) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if ((arg1 & LINUX_TIMER_ABSTIME) != 0) {
+			return linux_sleep_absolute(arg2);
+		}
+		return linux_sleep_relative(arg2, arg3);
 	case LINUX_SYSCALL_GETRANDOM: {
 		u64 done = 0;
 
