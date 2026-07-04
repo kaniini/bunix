@@ -299,6 +299,22 @@ fork_child:
 	cmpq $15, statat_buffer + 48(%rip)
 	jne fail
 
+	movq $332, %rax
+	movq $-100, %rdi
+	leaq hello_path(%rip), %rsi
+	xorq %rdx, %rdx
+	movq $0x7ff, %r10
+	leaq statx_buffer(%rip), %r8
+	syscall
+	testq %rax, %rax
+	jne fail
+	cmpl $0x7ff, statx_buffer(%rip)
+	jne fail
+	cmpw $0100444, statx_buffer + 28(%rip)
+	jne fail
+	cmpq $15, statx_buffer + 40(%rip)
+	jne fail
+
 	movq $1, %rax
 	movq $1, %rdi
 	leaq stat_message(%rip), %rsi
@@ -576,6 +592,8 @@ stat_buffer:
 	.skip 144
 statat_buffer:
 	.skip 144
+statx_buffer:
+	.skip 256
 wait_status:
 	.skip 4
 group_buffer:

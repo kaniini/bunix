@@ -133,6 +133,7 @@ enum {
 	LINUX_SYSCALL_OPENAT = 257,
 	LINUX_SYSCALL_PRLIMIT64 = 302,
 	LINUX_SYSCALL_GETRANDOM = 318,
+	LINUX_SYSCALL_STATX = 332,
 	LINUX_SYSCALL_EXIT_GROUP = 231,
 	LINUX_SYSCALL_FACCESSAT2 = 439,
 	LINUX_CLONE_VFORK = 0x00004000,
@@ -173,6 +174,7 @@ enum {
 	LINUX_EXEC_STACK_TOP = 0x800000,
 	LINUX_EXEC_STACK_PAGES = 16,
 	LINUX_STAT_SIZE = 144,
+	LINUX_STATX_SIZE = 256,
 	LINUX_WAIT_STATUS_SIZE = 4,
 	LINUX_S_IFDIR = 0040000,
 	LINUX_S_IFLNK = 0120000,
@@ -2053,6 +2055,8 @@ static const char *linux_syscall_name(u64 number)
 		return "prlimit64";
 	case LINUX_SYSCALL_GETRANDOM:
 		return "getrandom";
+	case LINUX_SYSCALL_STATX:
+		return "statx";
 	case LINUX_SYSCALL_EXIT_GROUP:
 		return "exit_group";
 	default:
@@ -3499,6 +3503,51 @@ poll_again:
 		    linux_write_stat_user(stat_addr, reply.words[1],
 					  reply.words[2],
 					  reply.words[3]) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+		buffer_release(buffer);
+		return reply.words[0];
+	}
+	case LINUX_SYSCALL_STATX: {
+		struct shared_buffer *buffer;
+		const char *path = (const char *)arg1;
+		const u64 statx_addr = frame->r8;
+		u64 len = 0;
+		u64 buffer_size;
+
+		if (path == 0 || statx_addr == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (copy_cstr_from_user((char *)syscall_copy_buffer, path,
+					LINUX_MAX_SYSCALL_BUFFER) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		len = str_len((const char *)syscall_copy_buffer) + 1;
+		buffer_size = len > LINUX_STATX_SIZE ? len : LINUX_STATX_SIZE;
+
+		buffer = buffer_create(buffer_size);
+		if (buffer == 0 ||
+		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = LINUX_SYSCALL_STATX;
+		request.words[0] = arg0;
+		request.words[1] = len;
+		request.words[2] = arg2;
+		request.words[3] = arg3;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_RECV | TASK_RIGHT_SEND;
+		request.cap_object = buffer;
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_ENOSYS;
+		}
+		if (reply.words[0] == 0 &&
+		    buffer_read(buffer, 0, (void *)statx_addr,
+				LINUX_STATX_SIZE) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_EINVAL;
 		}

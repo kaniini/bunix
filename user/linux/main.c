@@ -69,6 +69,8 @@ enum {
 	LINUX_MAX_WRITE = 4096,
 	LINUX_MAX_PATH = 256,
 	LINUX_STAT_SIZE = 144,
+	LINUX_STATX_SIZE = 256,
+	LINUX_STATX_BASIC_STATS = 0x7ff,
 	LINUX_INITIAL_FDS = 16,
 	LINUX_PIPE_CAPACITY = 4096,
 	LINUX_S_IFCHR = 0020000,
@@ -102,6 +104,8 @@ enum {
 	LINUX_AT_FDCWD = (u64)-100,
 	LINUX_AT_SYMLINK_NOFOLLOW = 0x100,
 	LINUX_AT_EACCESS = 0x200,
+	LINUX_AT_NO_AUTOMOUNT = 0x800,
+	LINUX_AT_STATX_SYNC_TYPE = 0x6000,
 	LINUX_R_OK = 4,
 	LINUX_W_OK = 2,
 	LINUX_X_OK = 1,
@@ -2356,6 +2360,42 @@ static long linux_stat_from_vfs_meta(u64 stat_buffer,
 				reply->words[1]);
 }
 
+static long linux_statx_write(u64 statx_buffer, u64 mode, u64 uid, u64 gid,
+			      u64 size)
+{
+	char statx[LINUX_STATX_SIZE];
+
+	if (statx_buffer == 0) {
+		return -LINUX_EINVAL;
+	}
+
+	zero_bytes(statx, sizeof(statx));
+	store_u32(statx, 0, LINUX_STATX_BASIC_STATS);
+	store_u32(statx, 4, 4096);
+	store_u32(statx, 16, 1);
+	store_u32(statx, 20, (unsigned int)uid);
+	store_u32(statx, 24, (unsigned int)gid);
+	store_u16(statx, 28, (unsigned int)mode);
+	store_u64(statx, 32, 1);
+	store_u64(statx, 40, size);
+	store_u64(statx, 48, (size + 511) / 512);
+
+	return bunix_buffer_write(statx_buffer, 0, statx, sizeof(statx)) == 0 ?
+		0 : -LINUX_EINVAL;
+}
+
+static long linux_statx_from_vfs_meta(u64 statx_buffer,
+				      const struct bunix_msg *reply)
+{
+	const u64 mode = reply->words[2] & 0xffffffff;
+	const u64 type = reply->words[2] >> 32;
+
+	return linux_statx_write(statx_buffer, linux_mode_for_type(type, mode),
+				 reply->words[3] & 0xffffffff,
+				 reply->words[3] >> 32,
+				 reply->words[1]);
+}
+
 static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 {
 	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
@@ -2463,6 +2503,34 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 	out->words[2] = reply.words[2];
 	out->words[3] = reply.words[3];
 	return 0;
+}
+
+static long linux_statx(struct linux_process *process, u64 dirfd,
+			u64 path_len, u64 flags, u64 mask, u64 path_buffer)
+{
+	struct bunix_msg meta = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = 0,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	const u64 allowed_flags = LINUX_AT_SYMLINK_NOFOLLOW |
+				  LINUX_AT_NO_AUTOMOUNT |
+				  LINUX_AT_STATX_SYNC_TYPE;
+	(void)mask;
+
+	if ((flags & ~allowed_flags) != 0) {
+		return -LINUX_EINVAL;
+	}
+	if (linux_newfstatat(process, dirfd, path_len, path_buffer,
+			     flags & LINUX_AT_SYMLINK_NOFOLLOW ? 1 : 0,
+			     &meta) != 0) {
+		return -LINUX_ENOENT;
+	}
+	return linux_statx_from_vfs_meta(path_buffer, &meta);
 }
 
 static long linux_readlinkat(struct linux_process *process, u64 dirfd,
@@ -3523,6 +3591,17 @@ int main(void)
 				bunix_console_log(newfstatat_ok,
 						    sizeof(newfstatat_ok) - 1);
 			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_STATX:
+			reply.words[0] = (u64)linux_statx(process,
+							  message.words[0],
+							  message.words[1],
+							  message.words[2],
+							  message.words[3],
+							  message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
