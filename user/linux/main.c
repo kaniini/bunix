@@ -331,7 +331,7 @@ static u64 resolve_service(u64 service, unsigned int rights)
 	return reply.cap;
 }
 
-static void notify_proc_exit(u64 linux_pid, u64 status)
+static void notify_proc_exit(u64 linux_pid, u64 status, u64 kill_task)
 {
 	const u64 proc = resolve_service(BUNIX_SERVICE_PROC, BUNIX_RIGHT_SEND);
 	struct bunix_msg request = {
@@ -341,7 +341,7 @@ static void notify_proc_exit(u64 linux_pid, u64 status)
 		.cap_rights = 0,
 		.reply = 0,
 		.cap = 0,
-		.words = { linux_pid, status, 1, 0 },
+		.words = { linux_pid, status, 1, kill_task },
 	};
 
 	if (proc != 0) {
@@ -881,7 +881,8 @@ static void linux_wake_parent(struct linux_process *child)
 	parent->wait_pid = 0;
 }
 
-static void linux_process_exit_status(struct linux_process *process, u64 status)
+static void linux_process_exit_status(struct linux_process *process, u64 status,
+				      u64 kill_task)
 {
 	if (process == 0 || process->exited) {
 		return;
@@ -891,7 +892,7 @@ static void linux_process_exit_status(struct linux_process *process, u64 status)
 	linux_reparent_children(process);
 	process->exited = 1;
 	process->exit_status = status;
-	notify_proc_exit(process->pid, process->exit_status);
+	notify_proc_exit(process->pid, process->exit_status, kill_task);
 	linux_wake_parent(process);
 }
 
@@ -903,7 +904,7 @@ static int linux_signal_process(struct linux_process *process, u64 signal)
 
 	process->pending_signals |= 1ull << signal;
 	if (signal == LINUX_SIGINT) {
-		linux_process_exit_status(process, 128 + signal);
+		linux_process_exit_status(process, 128 + signal, 1);
 		return 1;
 	}
 
@@ -2285,7 +2286,7 @@ int main(void)
 			break;
 		case BUNIX_LINUX_EXIT_GROUP:
 			bunix_console_write(exit_group, sizeof(exit_group) - 1);
-			linux_process_exit_status(process, message.words[0]);
+			linux_process_exit_status(process, message.words[0], 0);
 			bunix_console_write(exited_ok, sizeof(exited_ok) - 1);
 			reply.words[0] = 0;
 			break;

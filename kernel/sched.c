@@ -37,7 +37,9 @@ struct task {
 	struct task *next;
 	u32 ref_count;
 	u32 dead;
+	u32 killing;
 	u32 thread_count;
+	struct thread *threads;
 	struct vm_space *vm_space;
 	u64 linux_brk;
 	u64 linux_mmap_next;
@@ -59,6 +61,7 @@ struct thread {
 	u32 cpu_id;
 	struct thread *run_next;
 	struct thread *sleep_next;
+	struct thread *task_next;
 	u64 wake_tick;
 	struct arch_thread_context context;
 	u8 kernel_stack[KERNEL_STACK_SIZE] __attribute__((aligned(16)));
@@ -179,6 +182,15 @@ static void sched_reap_thread(struct thread *thread)
 
 	struct task *task = thread->task;
 	const u64 task_flags = spin_lock_irqsave(&task->lock);
+	struct thread **task_link = &task->threads;
+
+	while (*task_link != 0) {
+		if (*task_link == thread) {
+			*task_link = thread->task_next;
+			break;
+		}
+		task_link = &(*task_link)->task_next;
+	}
 
 	if (task->thread_count > 0) {
 		task->thread_count--;
@@ -205,6 +217,7 @@ static void sched_reap_thread(struct thread *thread)
 	thread->cpu_id = 0;
 	thread->run_next = 0;
 	thread->sleep_next = 0;
+	thread->task_next = 0;
 	thread->wake_tick = 0;
 	thread->state = THREAD_EMPTY;
 	spin_unlock_irqrestore(&thread_table_lock, thread_flags);
@@ -215,6 +228,11 @@ static void sched_reap_thread(struct thread *thread)
 	if (teardown) {
 		task_release(task);
 	}
+}
+
+static int thread_task_is_killing(const struct thread *thread)
+{
+	return thread != 0 && thread->task != 0 && thread->task->killing;
 }
 
 static u32 sched_select_auto_cpu(void)
@@ -276,7 +294,9 @@ void sched_init(void)
 	kernel_task.next = 0;
 	kernel_task.ref_count = 1;
 	kernel_task.dead = 0;
+	kernel_task.killing = 0;
 	kernel_task.thread_count = 1;
+	kernel_task.threads = 0;
 	kernel_task.vm_space = vm_kernel_space();
 	kernel_task.linux_brk = 0;
 	kernel_task.linux_mmap_next = 0;
@@ -360,7 +380,9 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	task->next = tasks;
 	task->ref_count = 1;
 	task->dead = 0;
+	task->killing = 0;
 	task->thread_count = 0;
+	task->threads = 0;
 	task->vm_space = vm_space;
 	task->linux_brk = 0x900000;
 	task->linux_mmap_next = 0x10000000;
@@ -395,6 +417,11 @@ static struct thread *thread_create_placed(struct task *task, const char *name,
 	}
 
 	const u64 task_flags = spin_lock_irqsave(&task->lock);
+	if (task->dead || task->killing) {
+		spin_unlock_irqrestore(&task->lock, task_flags);
+		return 0;
+	}
+
 	const u64 thread_flags = spin_lock_irqsave(&thread_table_lock);
 	struct thread *thread = slab_zalloc(sizeof(*thread));
 
@@ -411,9 +438,12 @@ static struct thread *thread_create_placed(struct task *task, const char *name,
 	thread->entry = entry;
 	thread->arg = arg;
 	thread->run_next = 0;
+	thread->sleep_next = 0;
+	thread->task_next = task->threads;
 	arch_thread_context_init(&thread->context,
 				 thread->kernel_stack + KERNEL_STACK_SIZE,
 				 sched_thread_bootstrap);
+	task->threads = thread;
 	task->thread_count++;
 	console_printf("sched: thread tid=%u task=%u name=%s\n",
 		       thread->tid, task->pid, name);
@@ -892,6 +922,12 @@ void sched_run(void)
 		spin_unlock_irqrestore(&cpu->runq.lock, flags);
 
 		struct thread *prev = cpu->current;
+		if (thread_task_is_killing(next)) {
+			next->state = THREAD_DEAD;
+			sched_reap_thread(next);
+			continue;
+		}
+
 		next->state = THREAD_RUNNING;
 		cpu->current = next;
 		console_printf("sched: switch cpu=%u prev=%u next=%u\n",
@@ -939,6 +975,9 @@ void thread_yield(void)
 	if (prev == &cpu->scheduler_thread) {
 		sched_run();
 		return;
+	}
+	if (thread_task_is_killing(prev)) {
+		thread_exit();
 	}
 
 	console_printf("sched: yield tid=%u cpu=%u\n", prev->tid, cpu->id);
@@ -994,6 +1033,9 @@ void thread_prepare_block(void)
 	if (prev == &cpu->scheduler_thread) {
 		return;
 	}
+	if (thread_task_is_killing(prev)) {
+		thread_exit();
+	}
 
 	console_printf("sched: block tid=%u cpu=%u\n", prev->tid, cpu->id);
 	prev->state = THREAD_BLOCKED;
@@ -1031,6 +1073,9 @@ void thread_sleep_ticks(u64 ticks)
 
 	if (prev == &cpu->scheduler_thread) {
 		return;
+	}
+	if (thread_task_is_killing(prev)) {
+		thread_exit();
 	}
 
 	const u64 flags = spin_lock_irqsave(&sleep_lock);
@@ -1095,6 +1140,73 @@ void thread_unblock(struct thread *thread)
 	}
 
 	sched_enqueue_on(&cpus[thread->cpu_id], thread);
+}
+
+static void sched_cancel_sleep(struct thread *thread)
+{
+	if (thread == 0) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&sleep_lock);
+	struct thread **link = &sleep_list;
+
+	while (*link != 0) {
+		if (*link == thread) {
+			*link = thread->sleep_next;
+			thread->sleep_next = 0;
+			thread->wake_tick = 0;
+			break;
+		}
+		link = &(*link)->sleep_next;
+	}
+
+	spin_unlock_irqrestore(&sleep_lock, flags);
+}
+
+int task_kill(struct task *task)
+{
+	if (task == 0 || task == &kernel_task) {
+		return -1;
+	}
+
+	u64 flags = spin_lock_irqsave(&task->lock);
+	if (task->dead) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		return -1;
+	}
+	task->killing = 1;
+	spin_unlock_irqrestore(&task->lock, flags);
+
+	for (;;) {
+		struct thread *blocked = 0;
+
+		flags = spin_lock_irqsave(&task->lock);
+		for (struct thread *thread = task->threads; thread != 0;
+		     thread = thread->task_next) {
+			if (thread->state == THREAD_BLOCKED) {
+				blocked = thread;
+				break;
+			}
+		}
+		spin_unlock_irqrestore(&task->lock, flags);
+
+		if (blocked == 0) {
+			break;
+		}
+
+		ipc_cancel_thread(blocked);
+		sched_cancel_sleep(blocked);
+		thread_unblock(blocked);
+	}
+
+	console_printf("sched: kill task=%u name=%s\n", task->pid, task->name);
+	return 0;
+}
+
+int task_is_killing(const struct task *task)
+{
+	return task != 0 && task->killing;
 }
 
 void thread_exit(void)

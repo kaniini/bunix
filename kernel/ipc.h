@@ -9,6 +9,7 @@ enum {
 
 struct ipc_port;
 struct shared_buffer;
+struct thread;
 
 enum ipc_cap_type {
 	IPC_CAP_NONE = 0,
@@ -40,5 +41,6 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message);
 int ipc_recv(struct ipc_port *port, struct ipc_message *message);
 int ipc_call_kernel(struct ipc_port *port, const struct ipc_message *request,
 		    struct ipc_message *reply);
+void ipc_cancel_thread(struct thread *thread);
 
 #endif

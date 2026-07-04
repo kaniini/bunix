@@ -48,6 +48,7 @@ enum {
 	SYSCALL_TASK_ALLOC = -44,
 	SYSCALL_TASK_CLONE_RANGE = -46,
 	SYSCALL_CONSOLE_READ = -48,
+	SYSCALL_TASK_KILL = -50,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -2724,15 +2725,20 @@ void arch_user_enter(u64 entry, u64 stack)
 
 u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 {
+	struct task *current = task_current();
 	const u64 number = frame->number;
 	const u64 arg0 = frame->arg0;
 	const u64 arg1 = frame->arg1;
 	const u64 arg2 = frame->arg2;
 
+	if (task_is_killing(current) && (i64)number != SYSCALL_EXIT) {
+		__asm__ volatile ("sti");
+		thread_exit();
+	}
 	if ((i64)number >= 0) {
 		return linux_syscall_dispatch(frame);
 	}
-	if (task_uses_linux_personality(task_current())) {
+	if (task_uses_linux_personality(current)) {
 		linux_negative_syscall_dump(frame);
 	}
 
@@ -2860,6 +2866,8 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 	case SYSCALL_TASK_START_AT:
 		return (u64)server_task_start_at(task_current(), arg0, arg1,
 						 arg2);
+	case SYSCALL_TASK_KILL:
+		return (u64)server_task_kill(task_current(), arg0);
 	case SYSCALL_BUFFER_CREATE: {
 		struct shared_buffer *buffer = buffer_create(arg0);
 		if (buffer == 0) {

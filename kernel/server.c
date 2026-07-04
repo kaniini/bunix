@@ -613,6 +613,17 @@ int server_task_start_at(struct task *parent, u64 task_handle, u64 entry,
 	       0 : -1;
 }
 
+int server_task_kill(struct task *parent, u64 task_handle)
+{
+	struct task *task = task_from_handle(parent, task_handle,
+					    TASK_RIGHT_SEND);
+	if (task == 0) {
+		return -1;
+	}
+
+	return task_kill(task);
+}
+
 struct task *server_task_fork_current(const struct arch_syscall_frame *frame)
 {
 	struct task *parent = task_current();

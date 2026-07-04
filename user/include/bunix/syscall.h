@@ -30,6 +30,7 @@ enum {
 	BUNIX_SYSCALL_TASK_ALLOC = -44,
 	BUNIX_SYSCALL_TASK_CLONE_RANGE = -46,
 	BUNIX_SYSCALL_CONSOLE_READ = -48,
+	BUNIX_SYSCALL_TASK_KILL = -50,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
 	BUNIX_RIGHT_SEND = 1 << 0,
@@ -324,6 +325,11 @@ static inline long bunix_task_clone_range(u64 dst_task, u64 src_task,
 static inline long bunix_task_start_at(u64 task, u64 entry, u64 stack)
 {
 	return bunix_syscall3(BUNIX_SYSCALL_TASK_START_AT, task, entry, stack);
+}
+
+static inline long bunix_task_kill(u64 task)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_TASK_KILL, task);
 }
 
 static inline long bunix_buffer_create(u64 size)

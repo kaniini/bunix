@@ -302,6 +302,23 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 	return 0;
 }
 
+void ipc_cancel_thread(struct thread *thread)
+{
+	if (thread == 0) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&ipc_lock);
+
+	for (struct ipc_port *port = ports; port != 0; port = port->next) {
+		if (port->receiver == thread) {
+			port->receiver = 0;
+		}
+	}
+
+	spin_unlock_irqrestore(&ipc_lock, flags);
+}
+
 int ipc_call_kernel(struct ipc_port *port, const struct ipc_message *request,
 		    struct ipc_message *reply)
 {

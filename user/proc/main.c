@@ -47,6 +47,7 @@ enum {
 struct process {
 	u64 pid;
 	u64 linux_pid;
+	u64 task_handle;
 	u64 status;
 	u64 exited;
 	u64 waiter;
@@ -654,7 +655,8 @@ static long register_linux_process(u64 task, u64 ppid, u64 *linux_pid)
 }
 
 static long exec_path(u64 vfs, const char *path, const char *task_name,
-		      u64 linux_parent_pid, u64 *linux_pid)
+		      u64 linux_parent_pid, u64 *linux_pid,
+		      u64 *task_handle)
 {
 	const struct bunix_launch_cap caps[] = {
 		{ PROC_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
@@ -809,7 +811,11 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 	}
 	const long started = bunix_task_start_at((u64)task, exec.entry, stack);
 
-	bunix_handle_close((u64)task);
+	if (started != 0 || task_handle == 0) {
+		bunix_handle_close((u64)task);
+	} else {
+		*task_handle = (u64)task;
+	}
 	return started;
 }
 
@@ -834,8 +840,12 @@ static void process_reset(struct process *process)
 		return;
 	}
 
+	if (process->task_handle != 0) {
+		bunix_handle_close(process->task_handle);
+	}
 	process->pid = 0;
 	process->linux_pid = 0;
+	process->task_handle = 0;
 	process->status = 0;
 	process->exited = 0;
 	process->waiter = 0;
@@ -882,6 +892,7 @@ static long spawn_process(const char *path, u64 *pid)
 {
 	u64 vfs;
 	u64 linux_pid = 0;
+	u64 task_handle = 0;
 	u64 linux_parent_pid = 0;
 	struct process *process = process_alloc();
 
@@ -896,6 +907,7 @@ static long spawn_process(const char *path, u64 *pid)
 
 	process->pid = next_pid++;
 	process->linux_pid = 0;
+	process->task_handle = 0;
 	process->status = 0;
 	process->exited = 0;
 	process->waiter = 0;
@@ -906,13 +918,14 @@ static long spawn_process(const char *path, u64 *pid)
 	}
 
 	if (exec_path(vfs, path, task_name_for_path(path),
-		      linux_parent_pid, &linux_pid) != 0) {
-		process->pid = 0;
+		      linux_parent_pid, &linux_pid, &task_handle) != 0) {
+		process_reset(process);
 		*pid = 0;
 		return -1;
 	}
 
 	process->linux_pid = linux_pid;
+	process->task_handle = task_handle;
 	if (linux_pid != 0 && first_linux_pid == 0) {
 		first_linux_pid = linux_pid;
 	}
@@ -1016,6 +1029,10 @@ int main(void)
 						  process_find(message.words[0]);
 
 			if (process != 0) {
+				if (message.words[3] != 0 &&
+				    process->task_handle != 0) {
+					(void)bunix_task_kill(process->task_handle);
+				}
 				process->status = message.words[1];
 				process->exited = 1;
 				reply.words[0] = 0;
