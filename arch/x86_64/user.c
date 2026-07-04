@@ -2092,18 +2092,71 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_KILL:
 		return 0;
 	case LINUX_SYSCALL_SET_ROBUST_LIST:
-	case LINUX_SYSCALL_RT_SIGPROCMASK:
 		return 0;
-	case LINUX_SYSCALL_RT_SIGACTION:
+	case LINUX_SYSCALL_RT_SIGACTION: {
+		u64 handler = ~0ull;
+
+		if (arg3 != 8) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (arg1 != 0 &&
+		    read_current_user(arg1, &handler, sizeof(handler)) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		request.type = LINUX_SYSCALL_RT_SIGACTION;
+		request.words[0] = arg0;
+		request.words[1] = handler;
+		request.words[2] = 0;
+		request.reply_port = reply_port;
+		if (linux_forward_message(linux, reply_port, &request,
+					  &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		if ((i64)reply.words[0] < 0) {
+			return reply.words[0];
+		}
 		if (arg2 != 0) {
 			u8 action[32];
 
 			mem_zero(action, sizeof(action));
+			mem_copy(action, (const u8 *)&reply.words[1],
+				 sizeof(reply.words[1]));
 			if (write_current_user(arg2, action, sizeof(action)) != 0) {
 				return (u64)-LINUX_EINVAL;
 			}
 		}
 		return 0;
+	}
+	case LINUX_SYSCALL_RT_SIGPROCMASK: {
+		u64 set = 0;
+		u64 how = arg1 == 0 ? ~0ull : arg0;
+
+		if (arg3 != 8) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (arg1 != 0 &&
+		    read_current_user(arg1, &set, sizeof(set)) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		request.type = LINUX_SYSCALL_RT_SIGPROCMASK;
+		request.words[0] = how;
+		request.words[1] = set;
+		request.words[2] = 0;
+		request.reply_port = reply_port;
+		if (linux_forward_message(linux, reply_port, &request,
+					  &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		if ((i64)reply.words[0] < 0) {
+			return reply.words[0];
+		}
+		if (arg2 != 0 &&
+		    write_current_user(arg2, &reply.words[1],
+				       sizeof(reply.words[1])) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		return 0;
+	}
 	case LINUX_SYSCALL_MPROTECT:
 		if (arg0 == 0 || (arg0 & (VM_PAGE_SIZE - 1)) != 0 ||
 		    arg1 == 0 || arg1 + VM_PAGE_SIZE - 1 < arg1) {

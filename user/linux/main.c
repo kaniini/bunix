@@ -138,6 +138,8 @@ struct linux_process {
 	u64 wait_buffer;
 	u64 wait_pid;
 	u64 pending_signals;
+	u64 signal_mask;
+	u64 signal_ignored;
 	u64 session_id;
 	u64 cwd_handle;
 	char cwd[LINUX_MAX_PATH];
@@ -1159,6 +1161,8 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 	process->ppid = parent->pid;
 	process->pgid = parent->pgid;
 	process->sid = parent->sid;
+	process->signal_mask = parent->signal_mask;
+	process->signal_ignored = parent->signal_ignored;
 	linux_process_init_links(process);
 	linux_child_link(parent, process);
 	process->bunix_task = child_task;
@@ -1386,8 +1390,15 @@ static void linux_process_exit_code(struct linux_process *process, u64 status,
 	linux_process_exit_status(process, (status & 0xff) << 8, kill_task);
 }
 
+static u64 linux_signal_bit(u64 signal)
+{
+	return signal > 0 && signal < 64 ? 1ull << (signal - 1) : 0;
+}
+
 static int linux_signal_process(struct linux_process *process, u64 signal)
 {
+	const u64 bit = linux_signal_bit(signal);
+
 	if (process == 0 || process->exited || signal >= 64) {
 		return 0;
 	}
@@ -1395,12 +1406,66 @@ static int linux_signal_process(struct linux_process *process, u64 signal)
 		return 1;
 	}
 
-	process->pending_signals |= 1ull << signal;
+	if (bit == 0) {
+		return 0;
+	}
+	if ((process->signal_ignored & bit) != 0) {
+		return 1;
+	}
+	process->pending_signals |= bit;
+	if ((process->signal_mask & bit) != 0) {
+		return 1;
+	}
 	if (signal == LINUX_SIGINT || signal == LINUX_SIGTERM) {
 		linux_process_exit_status(process, signal, 1);
 		return 1;
 	}
 
+	return 0;
+}
+
+static long linux_rt_sigaction(struct linux_process *process, u64 signal,
+			       u64 handler, u64 *old_handler)
+{
+	const u64 bit = linux_signal_bit(signal);
+
+	if (process == 0 || bit == 0 || signal == 9 || signal == 19) {
+		return -LINUX_EINVAL;
+	}
+	if (old_handler != 0) {
+		*old_handler = (process->signal_ignored & bit) != 0 ? 1 : 0;
+	}
+	if (handler != ~0ull) {
+		if (handler == 1) {
+			process->signal_ignored |= bit;
+		} else {
+			process->signal_ignored &= ~bit;
+		}
+	}
+	return 0;
+}
+
+static long linux_rt_sigprocmask(struct linux_process *process, u64 how,
+				 u64 set, u64 *old_set)
+{
+	if (process == 0) {
+		return -LINUX_EINVAL;
+	}
+	if (old_set != 0) {
+		*old_set = process->signal_mask;
+	}
+
+	if (how == ~0ull) {
+		return 0;
+	} else if (how == 0) {
+		process->signal_mask |= set;
+	} else if (how == 1) {
+		process->signal_mask &= ~set;
+	} else if (how == 2) {
+		process->signal_mask = set;
+	} else {
+		return -LINUX_EINVAL;
+	}
 	return 0;
 }
 
@@ -2938,6 +3003,8 @@ static void linux_process_reset(struct linux_process *process)
 	process->wait_buffer = 0;
 	process->wait_pid = 0;
 	process->pending_signals = 0;
+	process->signal_mask = 0;
+	process->signal_ignored = 0;
 	process->session_id = 0;
 	(void)linux_close_vfs_handle(process->cwd_handle);
 	process->cwd_handle = 0;
@@ -3115,6 +3182,18 @@ int main(void)
 			reply.words[0] = (u64)linux_kill(process,
 							 (long)message.words[0],
 							 message.words[1]);
+			break;
+		case BUNIX_LINUX_RT_SIGACTION:
+			reply.words[0] = (u64)linux_rt_sigaction(process,
+								 message.words[0],
+								 message.words[1],
+								 &reply.words[1]);
+			break;
+		case BUNIX_LINUX_RT_SIGPROCMASK:
+			reply.words[0] = (u64)linux_rt_sigprocmask(process,
+								   message.words[0],
+								   message.words[1],
+								   &reply.words[1]);
 			break;
 		case BUNIX_LINUX_IOCTL:
 			reply.words[0] = (u64)linux_ioctl(process,
