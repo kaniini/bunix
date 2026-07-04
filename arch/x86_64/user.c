@@ -2723,365 +2723,483 @@ void arch_user_enter(u64 entry, u64 stack)
 	}
 }
 
+struct native_syscall_args {
+	struct arch_syscall_frame *frame;
+	u64 arg0;
+	u64 arg1;
+	u64 arg2;
+	u64 arg3;
+};
+
+typedef u64 (*native_syscall_fn)(const struct native_syscall_args *args);
+
+struct native_syscall_entry {
+	i64 number;
+	const char *name;
+	native_syscall_fn handler;
+};
+
+static u64 native_sys_exit(const struct native_syscall_args *args)
+{
+	console_printf("syscall: exit status=%u\n", (u32)args->arg0);
+	__asm__ volatile ("sti");
+	thread_exit();
+}
+
+static u64 native_sys_timer_ticks(const struct native_syscall_args *args)
+{
+	(void)args;
+	return timer_ticks();
+}
+
+static u64 native_sys_clock_monotonic_ns(const struct native_syscall_args *args)
+{
+	(void)args;
+	return timer_monotonic_ns();
+}
+
+static u64 native_sys_sleep_ns(const struct native_syscall_args *args)
+{
+	thread_sleep_ns(args->arg0);
+	return 0;
+}
+
+static u64 native_sys_launch_module(const struct native_syscall_args *args)
+{
+	char name[LINUX_EXEC_MAX_PATH];
+	struct task_launch_cap caps[8];
+
+	if (copy_cstr_from_user(name, (const char *)args->arg0,
+				sizeof(name)) != 0 ||
+	    args->arg2 > sizeof(caps) / sizeof(caps[0])) {
+		return (u64)-1;
+	}
+	if (args->arg2 != 0 &&
+	    (args->arg1 == 0 ||
+	     read_current_user(args->arg1, caps,
+			       args->arg2 * sizeof(caps[0])) != 0)) {
+		return (u64)-1;
+	}
+	return server_launch_module_with_caps(name, task_current(),
+					      args->arg2 != 0 ? caps : 0,
+					      args->arg2);
+}
+
+static u64 native_sys_task_create(const struct native_syscall_args *args)
+{
+	char name[LINUX_EXEC_MAX_PATH];
+
+	if (copy_cstr_from_user(name, (const char *)args->arg0,
+				sizeof(name)) != 0) {
+		return (u64)-1;
+	}
+	return server_task_create(task_current(), name);
+}
+
+static u64 native_sys_task_id(const struct native_syscall_args *args)
+{
+	struct task *task =
+		task_from_handle(task_current(), args->arg0, TASK_RIGHT_SEND);
+
+	return task != 0 ? task_id(task) : (u64)-1;
+}
+
+static u64 native_sys_task_map(const struct native_syscall_args *sys_args)
+{
+	u64 args[6];
+	u64 flags;
+	u64 result;
+
+	if (sys_args->arg0 == 0 ||
+	    read_current_user(sys_args->arg0, args, sizeof(args)) != 0 ||
+	    args[3] > LINUX_MAX_SYSCALL_BUFFER) {
+		return (u64)-1;
+	}
+
+	flags = spin_lock_irqsave(&syscall_copy_lock);
+	if (read_current_user(args[2], syscall_copy_buffer, args[3]) != 0) {
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
+		return (u64)-1;
+	}
+	result = (u64)server_task_map(task_current(), args[0], args[1],
+				      syscall_copy_buffer, args[3],
+				      args[4], (u32)args[5]);
+	spin_unlock_irqrestore(&syscall_copy_lock, flags);
+	return result;
+}
+
+static u64 native_sys_task_grant(const struct native_syscall_args *args)
+{
+	return (u64)server_task_grant(task_current(), args->arg0, args->arg1,
+				      (u32)args->arg2);
+}
+
+static u64 native_sys_task_start(const struct native_syscall_args *args)
+{
+	return (u64)server_task_start(task_current(), args->arg0, args->arg1);
+}
+
+static u64 native_sys_task_write(const struct native_syscall_args *sys_args)
+{
+	u64 args[4];
+	u64 flags;
+	u64 result;
+
+	if (sys_args->arg0 == 0 ||
+	    read_current_user(sys_args->arg0, args, sizeof(args)) != 0 ||
+	    args[3] > LINUX_MAX_SYSCALL_BUFFER) {
+		return (u64)-1;
+	}
+
+	flags = spin_lock_irqsave(&syscall_copy_lock);
+	if (read_current_user(args[2], syscall_copy_buffer, args[3]) != 0) {
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
+		return (u64)-1;
+	}
+	result = (u64)server_task_write(task_current(), args[0], args[1],
+					syscall_copy_buffer, args[3]);
+	spin_unlock_irqrestore(&syscall_copy_lock, flags);
+	return result;
+}
+
+static u64 native_sys_task_alloc(const struct native_syscall_args *sys_args)
+{
+	u64 args[4];
+
+	if (sys_args->arg0 == 0 ||
+	    read_current_user(sys_args->arg0, args, sizeof(args)) != 0) {
+		return (u64)-1;
+	}
+
+	return (u64)server_task_alloc(task_current(), args[0], args[1],
+				      args[2], (u32)args[3]);
+}
+
+static u64 native_sys_task_clone_range(const struct native_syscall_args *sys_args)
+{
+	u64 args[5];
+
+	if (sys_args->arg0 == 0 ||
+	    read_current_user(sys_args->arg0, args, sizeof(args)) != 0) {
+		return (u64)-1;
+	}
+
+	return (u64)server_task_clone_range(task_current(), args[0],
+					    args[1], args[2], args[3],
+					    (u32)args[4]);
+}
+
+static u64 native_sys_task_start_at(const struct native_syscall_args *args)
+{
+	return (u64)server_task_start_at(task_current(), args->arg0, args->arg1,
+					 args->arg2);
+}
+
+static u64 native_sys_task_kill(const struct native_syscall_args *args)
+{
+	return (u64)server_task_kill(task_current(), args->arg0);
+}
+
+static u64 native_sys_buffer_create(const struct native_syscall_args *args)
+{
+	struct shared_buffer *buffer = buffer_create(args->arg0);
+	if (buffer == 0) {
+		return (u64)-1;
+	}
+	const u64 handle =
+		task_grant_buffer(task_current(), buffer,
+				  TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+				  TASK_RIGHT_DUP);
+
+	buffer_release(buffer);
+	return handle != 0 ? handle : (u64)-1;
+}
+
+static u64 native_sys_buffer_read(const struct native_syscall_args *sys_args)
+{
+	u64 args[4];
+	u64 flags;
+
+	if (sys_args->arg0 == 0 ||
+	    read_current_user(sys_args->arg0, args, sizeof(args)) != 0 ||
+	    args[3] > LINUX_MAX_SYSCALL_BUFFER) {
+		return (u64)-1;
+	}
+
+	struct shared_buffer *buffer =
+		task_buffer_from_handle(task_current(), args[0],
+					TASK_RIGHT_RECV);
+	if (buffer == 0) {
+		return (u64)-1;
+	}
+	flags = spin_lock_irqsave(&syscall_copy_lock);
+	if (buffer_read(buffer, args[1], syscall_copy_buffer,
+			args[3]) != 0 ||
+	    write_current_user(args[2], syscall_copy_buffer, args[3]) != 0) {
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
+		return (u64)-1;
+	}
+	spin_unlock_irqrestore(&syscall_copy_lock, flags);
+	return 0;
+}
+
+static u64 native_sys_buffer_write(const struct native_syscall_args *sys_args)
+{
+	u64 args[4];
+	u64 flags;
+	u64 result;
+
+	if (sys_args->arg0 == 0 ||
+	    read_current_user(sys_args->arg0, args, sizeof(args)) != 0 ||
+	    args[3] > LINUX_MAX_SYSCALL_BUFFER) {
+		return (u64)-1;
+	}
+	flags = spin_lock_irqsave(&syscall_copy_lock);
+	if (read_current_user(args[2], syscall_copy_buffer, args[3]) != 0) {
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
+		return (u64)-1;
+	}
+
+	struct shared_buffer *buffer =
+		task_buffer_from_handle(task_current(), args[0],
+					TASK_RIGHT_SEND);
+	if (buffer == 0) {
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
+		return (u64)-1;
+	}
+	result = (u64)buffer_write(buffer, args[1],
+				   syscall_copy_buffer, args[3]);
+	spin_unlock_irqrestore(&syscall_copy_lock, flags);
+	return result;
+}
+
+static u64 native_sys_port_create(const struct native_syscall_args *args)
+{
+	char name[LINUX_EXEC_MAX_PATH];
+
+	if (copy_cstr_from_user(name, (const char *)args->arg0,
+				sizeof(name)) != 0) {
+		return (u64)-1;
+	}
+	return task_grant_port(task_current(), ipc_port_create_private(name),
+			       TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+			       TASK_RIGHT_DUP);
+}
+
+static u64 native_sys_handle_close(const struct native_syscall_args *args)
+{
+	return (u64)task_close_handle(task_current(), args->arg0);
+}
+
+static u64 native_sys_boot_module_read(const struct native_syscall_args *args)
+{
+	u64 flags;
+
+	if (args->arg1 == 0) {
+		return server_boot_module_size();
+	}
+	if (args->arg2 > LINUX_MAX_SYSCALL_BUFFER) {
+		return (u64)-1;
+	}
+	flags = spin_lock_irqsave(&syscall_copy_lock);
+	if (server_boot_module_read(args->arg0, syscall_copy_buffer,
+				    args->arg2) != 0 ||
+	    write_current_user(args->arg1, syscall_copy_buffer,
+			       args->arg2) != 0) {
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
+		return (u64)-1;
+	}
+	spin_unlock_irqrestore(&syscall_copy_lock, flags);
+	return 0;
+}
+
+static u64 native_sys_console_read(const struct native_syscall_args *args)
+{
+	u64 nread;
+	u64 flags;
+
+	if (args->arg0 == 0 || args->arg1 > LINUX_MAX_SYSCALL_BUFFER) {
+		return (u64)-1;
+	}
+
+	nread = console_read((char *)console_input_buffer, args->arg1);
+	flags = spin_lock_irqsave(&syscall_copy_lock);
+	if (write_current_user(args->arg0, console_input_buffer, nread) != 0) {
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
+		return (u64)-1;
+	}
+	spin_unlock_irqrestore(&syscall_copy_lock, flags);
+	return nread;
+}
+
+static u64 native_sys_ipc_send(const struct native_syscall_args *args)
+{
+	struct user_ipc_message user_message;
+	struct ipc_port *port =
+		task_port_from_handle(task_current(), args->arg0,
+				      TASK_RIGHT_SEND);
+
+	if (args->arg1 == 0 ||
+	    read_current_user(args->arg1, &user_message,
+			      sizeof(user_message)) != 0) {
+		return (u64)-1;
+	}
+
+	if (port != 0 &&
+	    user_message.protocol == USER_FOURCC_CONS &&
+	    str_eq(ipc_port_name(port), "console")) {
+		if (user_message.type == USER_CONSOLE_WRITE) {
+			return (u64)console_write_user(user_message.words[0],
+						      user_message.words[1]);
+		}
+		if (user_message.type == USER_CONSOLE_LOG) {
+			return (u64)console_log_user(user_message.words[0],
+						    user_message.words[1]);
+		}
+		if (user_message.type == USER_CONSOLE_LOGS_TO_RING) {
+			console_logs_to_ring();
+			return 0;
+		}
+	}
+
+	struct ipc_message message = { .protocol = 0, .type = 0 };
+
+	if (user_message_to_ipc(&user_message, &message) != 0) {
+		return (u64)-1;
+	}
+
+	return (u64)ipc_send(port, &message);
+}
+
+static u64 native_sys_ipc_recv(const struct native_syscall_args *args)
+{
+	struct user_ipc_message user_message;
+	struct ipc_port *port =
+		task_port_from_handle(task_current(), args->arg0,
+				      TASK_RIGHT_RECV);
+	struct ipc_message message;
+
+	if (args->arg1 == 0 || ipc_recv(port, &message) != 0) {
+		return (u64)-1;
+	}
+
+	ipc_message_to_user(&message, &user_message);
+	if (write_current_user(args->arg1, &user_message,
+			       sizeof(user_message)) != 0) {
+		return (u64)-1;
+	}
+	return 0;
+}
+
+static u64 native_sys_ipc_call(const struct native_syscall_args *args)
+{
+	struct user_ipc_message user_request;
+	struct user_ipc_message user_reply;
+	struct ipc_port *port =
+		task_port_from_handle(task_current(), args->arg0,
+				      TASK_RIGHT_SEND);
+	struct ipc_port *reply_port = task_reply_port(task_current());
+	struct ipc_message message = { .protocol = 0, .type = 0 };
+	struct ipc_message reply;
+
+	if (args->arg1 == 0 || args->arg2 == 0 || port == 0 ||
+	    reply_port == 0 ||
+	    read_current_user(args->arg1, &user_request,
+			      sizeof(user_request)) != 0) {
+		return (u64)-1;
+	}
+
+	if (user_message_to_ipc(&user_request, &message) != 0) {
+		return (u64)-1;
+	}
+
+	message.reply_port = reply_port;
+	if (ipc_send(port, &message) != 0 ||
+	    ipc_recv(reply_port, &reply) != 0) {
+		return (u64)-1;
+	}
+
+	ipc_message_to_user(&reply, &user_reply);
+	if (write_current_user(args->arg2, &user_reply,
+			       sizeof(user_reply)) != 0) {
+		return (u64)-1;
+	}
+	return 0;
+}
+
+static const struct native_syscall_entry native_syscalls[] = {
+	{ SYSCALL_EXIT, "exit", native_sys_exit },
+	{ SYSCALL_TIMER_TICKS, "timer_ticks", native_sys_timer_ticks },
+	{ SYSCALL_LAUNCH_MODULE, "launch_module", native_sys_launch_module },
+	{ SYSCALL_PORT_CREATE, "port_create", native_sys_port_create },
+	{ SYSCALL_IPC_SEND, "ipc_send", native_sys_ipc_send },
+	{ SYSCALL_IPC_RECV, "ipc_recv", native_sys_ipc_recv },
+	{ SYSCALL_IPC_CALL, "ipc_call", native_sys_ipc_call },
+	{ SYSCALL_HANDLE_CLOSE, "handle_close", native_sys_handle_close },
+	{ SYSCALL_BOOT_MODULE_READ, "boot_module_read",
+	  native_sys_boot_module_read },
+	{ SYSCALL_CLOCK_MONOTONIC_NS, "clock_monotonic_ns",
+	  native_sys_clock_monotonic_ns },
+	{ SYSCALL_SLEEP_NS, "sleep_ns", native_sys_sleep_ns },
+	{ SYSCALL_TASK_CREATE, "task_create", native_sys_task_create },
+	{ SYSCALL_TASK_MAP, "task_map", native_sys_task_map },
+	{ SYSCALL_TASK_GRANT, "task_grant", native_sys_task_grant },
+	{ SYSCALL_TASK_START, "task_start", native_sys_task_start },
+	{ SYSCALL_BUFFER_CREATE, "buffer_create", native_sys_buffer_create },
+	{ SYSCALL_BUFFER_READ, "buffer_read", native_sys_buffer_read },
+	{ SYSCALL_BUFFER_WRITE, "buffer_write", native_sys_buffer_write },
+	{ SYSCALL_TASK_WRITE, "task_write", native_sys_task_write },
+	{ SYSCALL_TASK_START_AT, "task_start_at", native_sys_task_start_at },
+	{ SYSCALL_TASK_ID, "task_id", native_sys_task_id },
+	{ SYSCALL_TASK_ALLOC, "task_alloc", native_sys_task_alloc },
+	{ SYSCALL_TASK_CLONE_RANGE, "task_clone_range",
+	  native_sys_task_clone_range },
+	{ SYSCALL_CONSOLE_READ, "console_read", native_sys_console_read },
+	{ SYSCALL_TASK_KILL, "task_kill", native_sys_task_kill },
+};
+
+static const struct native_syscall_entry *native_syscall_lookup(i64 number)
+{
+	for (u64 i = 0; i < sizeof(native_syscalls) / sizeof(native_syscalls[0]);
+	     i++) {
+		if (native_syscalls[i].number == number) {
+			return &native_syscalls[i];
+		}
+	}
+
+	return 0;
+}
+
 u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 {
 	struct task *current = task_current();
-	const u64 number = frame->number;
-	const u64 arg0 = frame->arg0;
-	const u64 arg1 = frame->arg1;
-	const u64 arg2 = frame->arg2;
+	const i64 number = (i64)frame->number;
 
-	if (task_is_killing(current) && (i64)number != SYSCALL_EXIT) {
+	if (task_is_killing(current) && number != SYSCALL_EXIT) {
 		__asm__ volatile ("sti");
 		thread_exit();
 	}
-	if ((i64)number >= 0) {
+	if (number >= 0) {
 		return linux_syscall_dispatch(frame);
 	}
 	if (task_uses_linux_personality(current)) {
 		linux_negative_syscall_dump(frame);
 	}
 
-	switch ((i64)number) {
-	case SYSCALL_EXIT:
-		console_printf("syscall: exit status=%u\n", (u32)arg0);
-		__asm__ volatile ("sti");
-		thread_exit();
-	case SYSCALL_TIMER_TICKS:
-		return timer_ticks();
-	case SYSCALL_CLOCK_MONOTONIC_NS:
-		return timer_monotonic_ns();
-	case SYSCALL_SLEEP_NS:
-		thread_sleep_ns(arg0);
-		return 0;
-	case SYSCALL_LAUNCH_MODULE: {
-		char name[LINUX_EXEC_MAX_PATH];
-		struct task_launch_cap caps[8];
-
-		if (copy_cstr_from_user(name, (const char *)arg0,
-					sizeof(name)) != 0 ||
-		    arg2 > sizeof(caps) / sizeof(caps[0])) {
-			return (u64)-1;
-		}
-		if (arg2 != 0 &&
-		    (arg1 == 0 ||
-		     read_current_user(arg1, caps,
-				       arg2 * sizeof(caps[0])) != 0)) {
-			return (u64)-1;
-		}
-		return server_launch_module_with_caps(name, task_current(),
-						      arg2 != 0 ? caps : 0,
-						      arg2);
-	}
-	case SYSCALL_TASK_CREATE: {
-		char name[LINUX_EXEC_MAX_PATH];
-		u64 handle;
-
-		if (copy_cstr_from_user(name, (const char *)arg0,
-					sizeof(name)) != 0) {
-			return (u64)-1;
-		}
-		handle = server_task_create(task_current(), name);
-		return handle;
-	}
-	case SYSCALL_TASK_ID: {
-		struct task *task =
-			task_from_handle(task_current(), arg0, TASK_RIGHT_SEND);
-
-		return task != 0 ? task_id(task) : (u64)-1;
-	}
-	case SYSCALL_TASK_MAP: {
-		u64 args[6];
-		u64 flags;
-		u64 result;
-
-		if (arg0 == 0 ||
-		    read_current_user(arg0, args, sizeof(args)) != 0 ||
-		    args[3] > LINUX_MAX_SYSCALL_BUFFER) {
-			return (u64)-1;
-		}
-
-		flags = spin_lock_irqsave(&syscall_copy_lock);
-		if (read_current_user(args[2], syscall_copy_buffer,
-				      args[3]) != 0) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			return (u64)-1;
-		}
-		result = (u64)server_task_map(task_current(), args[0], args[1],
-					      syscall_copy_buffer, args[3],
-					      args[4], (u32)args[5]);
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
-		return result;
-	}
-	case SYSCALL_TASK_GRANT:
-		return (u64)server_task_grant(task_current(), arg0, arg1,
-					      (u32)arg2);
-	case SYSCALL_TASK_START:
-		return (u64)server_task_start(task_current(), arg0, arg1);
-	case SYSCALL_TASK_WRITE: {
-		u64 args[4];
-		u64 flags;
-		u64 result;
-
-		if (arg0 == 0 ||
-		    read_current_user(arg0, args, sizeof(args)) != 0 ||
-		    args[3] > LINUX_MAX_SYSCALL_BUFFER) {
-			return (u64)-1;
-		}
-
-		flags = spin_lock_irqsave(&syscall_copy_lock);
-		if (read_current_user(args[2], syscall_copy_buffer,
-				      args[3]) != 0) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			return (u64)-1;
-		}
-		result = (u64)server_task_write(task_current(), args[0], args[1],
-						syscall_copy_buffer, args[3]);
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
-		return result;
-	}
-	case SYSCALL_TASK_ALLOC: {
-		u64 args[4];
-
-		if (arg0 == 0 ||
-		    read_current_user(arg0, args, sizeof(args)) != 0) {
-			return (u64)-1;
-		}
-
-		return (u64)server_task_alloc(task_current(), args[0], args[1],
-					      args[2], (u32)args[3]);
-	}
-	case SYSCALL_TASK_CLONE_RANGE: {
-		u64 args[5];
-
-		if (arg0 == 0 ||
-		    read_current_user(arg0, args, sizeof(args)) != 0) {
-			return (u64)-1;
-		}
-
-		return (u64)server_task_clone_range(task_current(), args[0],
-						    args[1], args[2], args[3],
-						    (u32)args[4]);
-	}
-	case SYSCALL_TASK_START_AT:
-		return (u64)server_task_start_at(task_current(), arg0, arg1,
-						 arg2);
-	case SYSCALL_TASK_KILL:
-		return (u64)server_task_kill(task_current(), arg0);
-	case SYSCALL_BUFFER_CREATE: {
-		struct shared_buffer *buffer = buffer_create(arg0);
-		if (buffer == 0) {
-			return (u64)-1;
-		}
-		const u64 handle =
-			task_grant_buffer(task_current(), buffer,
-					  TASK_RIGHT_SEND | TASK_RIGHT_RECV |
-					  TASK_RIGHT_DUP);
-
-		buffer_release(buffer);
-		return handle != 0 ? handle : (u64)-1;
-	}
-	case SYSCALL_BUFFER_READ: {
-		u64 args[4];
-		u64 flags;
-
-		if (arg0 == 0 ||
-		    read_current_user(arg0, args, sizeof(args)) != 0 ||
-		    args[3] > LINUX_MAX_SYSCALL_BUFFER) {
-			return (u64)-1;
-		}
-
-		struct shared_buffer *buffer =
-			task_buffer_from_handle(task_current(), args[0],
-						TASK_RIGHT_RECV);
-		if (buffer == 0) {
-			return (u64)-1;
-		}
-		flags = spin_lock_irqsave(&syscall_copy_lock);
-		if (buffer_read(buffer, args[1], syscall_copy_buffer,
-				args[3]) != 0 ||
-		    write_current_user(args[2], syscall_copy_buffer,
-				       args[3]) != 0) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			return (u64)-1;
-		}
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
-		return 0;
-	}
-	case SYSCALL_BUFFER_WRITE: {
-		u64 args[4];
-		u64 flags;
-		u64 result;
-
-		if (arg0 == 0 ||
-		    read_current_user(arg0, args, sizeof(args)) != 0 ||
-		    args[3] > LINUX_MAX_SYSCALL_BUFFER) {
-			return (u64)-1;
-		}
-		flags = spin_lock_irqsave(&syscall_copy_lock);
-		if (read_current_user(args[2], syscall_copy_buffer,
-				      args[3]) != 0) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			return (u64)-1;
-		}
-
-		struct shared_buffer *buffer =
-			task_buffer_from_handle(task_current(), args[0],
-						TASK_RIGHT_SEND);
-		if (buffer == 0) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			return (u64)-1;
-		}
-		result = (u64)buffer_write(buffer, args[1],
-					   syscall_copy_buffer, args[3]);
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
-		return result;
-	}
-	case SYSCALL_PORT_CREATE: {
-		char name[LINUX_EXEC_MAX_PATH];
-
-		if (copy_cstr_from_user(name, (const char *)arg0,
-					sizeof(name)) != 0) {
-			return (u64)-1;
-		}
-		return task_grant_port(task_current(),
-				       ipc_port_create_private(name),
-				       TASK_RIGHT_SEND | TASK_RIGHT_RECV |
-				       TASK_RIGHT_DUP);
-	}
-	case SYSCALL_HANDLE_CLOSE:
-		return (u64)task_close_handle(task_current(), arg0);
-	case SYSCALL_BOOT_MODULE_READ: {
-		u64 flags;
-
-		if (arg1 == 0) {
-			return server_boot_module_size();
-		}
-		if (arg2 > LINUX_MAX_SYSCALL_BUFFER) {
-			return (u64)-1;
-		}
-		flags = spin_lock_irqsave(&syscall_copy_lock);
-		if (server_boot_module_read(arg0, syscall_copy_buffer, arg2) != 0 ||
-		    write_current_user(arg1, syscall_copy_buffer, arg2) != 0) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			return (u64)-1;
-		}
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
-		return 0;
-	}
-	case SYSCALL_CONSOLE_READ: {
-		u64 nread;
-		u64 flags;
-
-		if (arg0 == 0 || arg1 > LINUX_MAX_SYSCALL_BUFFER) {
-			return (u64)-1;
-		}
-
-		nread = console_read((char *)console_input_buffer, arg1);
-		flags = spin_lock_irqsave(&syscall_copy_lock);
-		if (write_current_user(arg0, console_input_buffer, nread) != 0) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			return (u64)-1;
-		}
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
-		return nread;
-	}
-	case SYSCALL_IPC_SEND: {
-		struct user_ipc_message user_message;
-		struct ipc_port *port =
-			task_port_from_handle(task_current(), arg0,
-					      TASK_RIGHT_SEND);
-
-		if (arg1 == 0 ||
-		    read_current_user(arg1, &user_message,
-				      sizeof(user_message)) != 0) {
-			return (u64)-1;
-		}
-
-		if (port != 0 &&
-		    user_message.protocol == USER_FOURCC_CONS &&
-		    str_eq(ipc_port_name(port), "console")) {
-			if (user_message.type == USER_CONSOLE_WRITE) {
-				return (u64)console_write_user(
-					user_message.words[0],
-					user_message.words[1]);
-			}
-			if (user_message.type == USER_CONSOLE_LOG) {
-				return (u64)console_log_user(
-					user_message.words[0],
-					user_message.words[1]);
-			}
-			if (user_message.type == USER_CONSOLE_LOGS_TO_RING) {
-				console_logs_to_ring();
-				return 0;
-			}
-		}
-
-		struct ipc_message message = {
-			.protocol = 0,
-			.type = 0,
-		};
-
-		if (user_message_to_ipc(&user_message, &message) != 0) {
-			return (u64)-1;
-		}
-
-		return (u64)ipc_send(port, &message);
-	}
-	case SYSCALL_IPC_RECV: {
-		struct user_ipc_message user_message;
-		struct ipc_port *port =
-			task_port_from_handle(task_current(), arg0,
-					      TASK_RIGHT_RECV);
-		struct ipc_message message;
-
-		if (arg1 == 0 ||
-		    ipc_recv(port, &message) != 0) {
-			return (u64)-1;
-		}
-
-		ipc_message_to_user(&message, &user_message);
-		if (write_current_user(arg1, &user_message,
-				       sizeof(user_message)) != 0) {
-			return (u64)-1;
-		}
-		return 0;
-	}
-	case SYSCALL_IPC_CALL: {
-		struct user_ipc_message user_request;
-		struct user_ipc_message user_reply;
-		struct ipc_port *port =
-			task_port_from_handle(task_current(), arg0,
-					      TASK_RIGHT_SEND);
-		struct ipc_port *reply_port = task_reply_port(task_current());
-		struct ipc_message message = { .protocol = 0, .type = 0 };
-		struct ipc_message reply;
-
-		if (arg1 == 0 || arg2 == 0 || port == 0 || reply_port == 0 ||
-		    read_current_user(arg1, &user_request,
-				      sizeof(user_request)) != 0) {
-			return (u64)-1;
-		}
-
-		if (user_message_to_ipc(&user_request, &message) != 0) {
-			return (u64)-1;
-		}
-
-		message.reply_port = reply_port;
-		if (ipc_send(port, &message) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			return (u64)-1;
-		}
-
-		ipc_message_to_user(&reply, &user_reply);
-		if (write_current_user(arg2, &user_reply,
-				       sizeof(user_reply)) != 0) {
-			return (u64)-1;
-		}
-		return 0;
-	}
-	default:
-		console_printf("syscall: unknown number=%u\n", (u32)number);
+	const struct native_syscall_entry *entry = native_syscall_lookup(number);
+	if (entry == 0) {
+		console_printf("syscall: unknown native number=%d\n",
+			       (i32)number);
 		return (u64)-1;
 	}
+
+	const struct native_syscall_args args = {
+		.frame = frame,
+		.arg0 = frame->arg0,
+		.arg1 = frame->arg1,
+		.arg2 = frame->arg2,
+		.arg3 = frame->arg3,
+	};
+
+	return entry->handler(&args);
 }
