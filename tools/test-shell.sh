@@ -67,7 +67,7 @@ while ! grep -F "/ $ " "$log" >/dev/null 2>&1; do
 	sleep 1
 done
 
-printf 'uptime\nbusybox uptime\nbusybox uname\nbusybox uname -r\nbusybox stty -a\nbusybox id\nbusybox kill -0 $$ && echo KILL_ZERO_OK\nbusybox kill -0 -$$ && echo KILL_PGRP_OK\nbusybox sleep 1 && echo BUSYBOX_SLEEP_OK\nsleep 1 && echo DIRECT_SLEEP_OK\nbusybox sleep 5\n\003echo SLEEP_CTRL_C_OK\nbusybox echo PIPE_OK | busybox cat\nbusybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK\nbusybox cat /usr/share/bunix/nested/hello.txt && echo NESTED_CAT_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_OK\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox stat /usr/share\nbusybox ls /\nbusybox ls /bin\nbusybox ls /usr/share/bunix/nested\nbusybox stat /bin\ncd /usr/share && pwd && busybox ls ./bunix && busybox cat ./bunix/nested/../nested/./hello.txt && echo VFS_DOTDOT_OK && cd /\nbusybox cat //usr///share/bunix/nested/hello.txt && echo VFS_SLASH_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_STILL_OK\n' >&3
+printf 'uptime\nbusybox uptime\nbusybox uname\nbusybox uname -r\nbusybox stty -a\nbusybox id\nbusybox kill -0 $$ && echo KILL_ZERO_OK\nbusybox kill -0 -$$ && echo KILL_PGRP_OK\nbusybox sleep 1 && echo BUSYBOX_SLEEP_OK\nsleep 1 && echo DIRECT_SLEEP_OK\nbusybox sleep 5\n\003echo SLEEP_CTRL_C_OK\nbusybox echo PIPE_OK | busybox cat\nbusybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK\nbusybox cat /usr/share/bunix/nested/hello.txt && echo NESTED_CAT_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_OK\nbusybox echo BUSYBOX_ARGV_OK\nbusybox stat /hello.txt\nbusybox stat /usr/share\nbusybox ls /\nbusybox ls /bin\nbusybox ls /usr/share/bunix/nested\nbusybox stat /bin\ncd /usr/share/bunix/nested\npwd\nbusybox ls .\nbusybox cat ../nested/./hello.txt && echo VFS_DOTDOT_OK\ncd /\nbusybox cat //usr///share/bunix/nested/hello.txt && echo VFS_SLASH_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_STILL_OK\n' >&3
 
 i=0
 while ! grep -F "load average" "$log" >/dev/null 2>&1; do
@@ -182,7 +182,7 @@ while ! grep -F "NESTED_CAT_OK" "$log" >/dev/null 2>&1; do
 done
 
 i=0
-while ! grep -F "VFS_DOTDOT_OK" "$log" >/dev/null 2>&1; do
+while [ "$(grep -F -c "nested rootfs file" "$log" 2>/dev/null || true)" -lt 2 ]; do
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
 		echo "VFS did not resolve relative dot/dotdot path" >&2
@@ -193,7 +193,7 @@ while ! grep -F "VFS_DOTDOT_OK" "$log" >/dev/null 2>&1; do
 done
 
 i=0
-while ! grep -F "VFS_SLASH_OK" "$log" >/dev/null 2>&1; do
+while [ "$(grep -F -c "nested rootfs file" "$log" 2>/dev/null || true)" -lt 3 ]; do
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
 		echo "VFS did not resolve repeated slash path" >&2

@@ -160,6 +160,13 @@ static u64 str_len(const char *text)
 	return len;
 }
 
+static void pack_path(u64 *words, const char *path)
+{
+	words[0] = 0;
+	words[1] = 0;
+	pack_bytes(words, (const unsigned char *)path, str_len(path) + 1);
+}
+
 static char *str_dup(const char *text)
 {
 	const u64 len = str_len(text);
@@ -206,6 +213,8 @@ static int path_component_eq(const char *component, const char *literal)
 	return component[i] == literal[i];
 }
 
+static const struct rootfs_entry *root_file_from_handle(u64 handle);
+
 static int vfs_resolve_path(const char *cwd, const char *input, char *out)
 {
 	char temp[VFS_MAX_PATH];
@@ -225,9 +234,6 @@ static int vfs_resolve_path(const char *cwd, const char *input, char *out)
 			temp[pos++] = cwd[i];
 		}
 		if (pos == 0) {
-			temp[pos++] = '/';
-		}
-		if (pos > 1 && pos < sizeof(temp) - 1) {
 			temp[pos++] = '/';
 		}
 	}
@@ -257,6 +263,9 @@ static int vfs_resolve_path(const char *cwd, const char *input, char *out)
 				while (pos > 1 && temp[pos - 1] != '/') {
 					pos--;
 				}
+				if (pos > 1 && temp[pos - 1] == '/') {
+					pos--;
+				}
 			}
 			temp[pos] = '\0';
 			continue;
@@ -284,6 +293,28 @@ static int vfs_resolve_path(const char *cwd, const char *input, char *out)
 		out[i] = temp[i];
 	}
 	return 0;
+}
+
+static int vfs_resolve_with_base(u64 base_handle, const char *cwd,
+				 const char *input, char *out, u64 *error)
+{
+	const struct rootfs_entry *base;
+
+	if (input != 0 && input[0] == '/') {
+		return vfs_resolve_path(cwd, input, out);
+	}
+	if (base_handle == 0) {
+		return vfs_resolve_path(cwd, input, out);
+	}
+
+	base = root_file_from_handle(base_handle);
+	if (base == 0 || base->type != BUNIX_VFS_TYPE_DIRECTORY) {
+		if (error != 0) {
+			*error = BUNIX_VFS_ERR_NOTDIR;
+		}
+		return -1;
+	}
+	return vfs_resolve_path(base->path, input, out);
 }
 
 static int path_is_at_or_under(const char *path, const char *prefix)
@@ -753,7 +784,16 @@ static void vfs_open_path(struct bunix_msg *message, struct bunix_msg *reply,
 	u64 file;
 
 	if (mount != 0) {
-		(void)forward_mount_path(mount, message, reply);
+		struct bunix_msg forwarded = *message;
+
+		if (message->type == BUNIX_VFS_OPEN_BUFFER) {
+			forwarded.type = BUNIX_VFS_OPEN;
+			forwarded.cap = 0;
+			forwarded.cap_rights = 0;
+			pack_path(&forwarded.words[0], path);
+			forwarded.words[3] = message->words[3];
+		}
+		(void)forward_mount_path(mount, &forwarded, reply);
 		return;
 	}
 
@@ -792,7 +832,16 @@ static void vfs_stat_path(struct bunix_msg *message, struct bunix_msg *reply,
 	const struct rootfs_entry *entry;
 
 	if (mount != 0) {
-		(void)forward_mount_path(mount, message, reply);
+		struct bunix_msg forwarded = *message;
+
+		if (message->type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
+			forwarded.type = BUNIX_VFS_STAT_PATH_META;
+			forwarded.cap = 0;
+			forwarded.cap_rights = 0;
+			pack_path(&forwarded.words[0], path);
+			forwarded.words[3] = message->words[3];
+		}
+		(void)forward_mount_path(mount, &forwarded, reply);
 		return;
 	}
 
@@ -945,14 +994,16 @@ int main(void)
 			char path[VFS_MAX_PATH];
 			const u64 cwd_len = message.words[0];
 			const u64 path_len = message.words[1];
+			u64 error = (u64)-1;
 
 			if ((message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
 			    read_path_buffer_at(message.cap, 0, cwd_len,
 						cwd) != 0 ||
 			    read_path_buffer_at(message.cap, cwd_len, path_len,
 						input) != 0 ||
-			    vfs_resolve_path(cwd, input, path) != 0) {
-				reply.words[0] = (u64)-1;
+			    vfs_resolve_with_base(message.words[2], cwd,
+						  input, path, &error) != 0) {
+				reply.words[0] = error;
 				break;
 			}
 			vfs_open_path(&message, &reply, path);
@@ -971,14 +1022,16 @@ int main(void)
 			char path[VFS_MAX_PATH];
 			const u64 cwd_len = message.words[0];
 			const u64 path_len = message.words[1];
+			u64 error = (u64)-1;
 
 			if ((message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
 			    read_path_buffer_at(message.cap, 0, cwd_len,
 						cwd) != 0 ||
 			    read_path_buffer_at(message.cap, cwd_len, path_len,
 						input) != 0 ||
-			    vfs_resolve_path(cwd, input, path) != 0) {
-				reply.words[0] = (u64)-1;
+			    vfs_resolve_with_base(message.words[2], cwd,
+						  input, path, &error) != 0) {
+				reply.words[0] = error;
 				break;
 			}
 			vfs_stat_path(&message, &reply, path);

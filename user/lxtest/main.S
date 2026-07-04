@@ -345,6 +345,52 @@ fork_child:
 	cmpq $-9, %rax
 	jne fail
 
+	movq $257, %rax
+	movq $-100, %rdi
+	leaq nested_dir_path(%rip), %rsi
+	movq $00200000, %rdx
+	syscall
+	testq %rax, %rax
+	js fail
+	movq %rax, %r12
+
+	movq $257, %rax
+	movq %r12, %rdi
+	leaq nested_leaf_path(%rip), %rsi
+	xorq %rdx, %rdx
+	syscall
+	testq %rax, %rax
+	js fail
+	movq %rax, %r13
+
+	xorq %rax, %rax
+	movq %r13, %rdi
+	leaq read_buffer(%rip), %rsi
+	movq $19, %rdx
+	syscall
+	cmpq $19, %rax
+	jne fail
+
+	movq $3, %rax
+	movq %r13, %rdi
+	syscall
+	testq %rax, %rax
+	jne fail
+
+	movq $3, %rax
+	movq %r12, %rdi
+	syscall
+	testq %rax, %rax
+	jne fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq openat_message(%rip), %rsi
+	movq $openat_message_end - openat_message, %rdx
+	syscall
+	cmpq $openat_message_end - openat_message, %rax
+	jne fail
+
 	movl $2, group_buffer(%rip)
 	movl $3, group_buffer + 4(%rip)
 	movq $116, %rax
@@ -478,11 +524,18 @@ fork_credential_message_end:
 munmap_message:
 	.ascii "linux munmap checks ok\n"
 munmap_message_end:
+openat_message:
+	.ascii "linux openat dirfd checks ok\n"
+openat_message_end:
 fail_message:
 	.ascii "linux return checks failed\n"
 fail_message_end:
 hello_path:
 	.asciz "/hello.txt"
+nested_dir_path:
+	.asciz "/usr/share/bunix/nested"
+nested_leaf_path:
+	.asciz "hello.txt"
 secret_path:
 	.asciz "/secret.txt"
 exec_path:

@@ -359,6 +359,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "linux mmap checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux fork child ok" $(BUILD_DIR)/serial.log
 	grep -F "linux munmap checks ok" $(BUILD_DIR)/serial.log
+	grep -F "linux openat dirfd checks ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: wait4" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: exit_group" $(BUILD_DIR)/serial.log
 	grep -F "block: online" $(BUILD_DIR)/serial.log
