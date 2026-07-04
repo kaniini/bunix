@@ -843,6 +843,12 @@ static void scratch_ref_drop(struct linux_scratch_file *file)
 	if (file != 0 && file->refs != 0) {
 		file->refs--;
 	}
+	if (file != 0 && file->refs == 0 && file->path[0] == '\0') {
+		if (file->data != 0) {
+			bunix_free(file->data);
+		}
+		bunix_free(file);
+	}
 }
 
 static int scratch_resize(struct linux_scratch_file *file, u64 size)
@@ -877,6 +883,45 @@ static void scratch_truncate(struct linux_scratch_file *file)
 	if (file != 0) {
 		file->size = 0;
 	}
+}
+
+static int scratch_set_size(struct linux_scratch_file *file, u64 size)
+{
+	const u64 old_size = file != 0 ? file->size : 0;
+
+	if (file == 0 || scratch_resize(file, size) != 0) {
+		return -1;
+	}
+	if (size > old_size) {
+		for (u64 i = old_size; i < size; i++) {
+			file->data[i] = 0;
+		}
+	}
+	file->size = size;
+	return 0;
+}
+
+static long scratch_unlink_path(const char *path)
+{
+	struct linux_scratch_file *prev = 0;
+	struct linux_scratch_file *file = scratch_files;
+
+	while (file != 0) {
+		if (string_equal(file->path, path)) {
+			if (prev == 0) {
+				scratch_files = file->next;
+			} else {
+				prev->next = file->next;
+			}
+			file->next = 0;
+			file->path[0] = '\0';
+			scratch_ref_drop(file);
+			return 0;
+		}
+		prev = file;
+		file = file->next;
+	}
+	return -LINUX_ENOENT;
 }
 
 static int path_normalize(const char *cwd, const char *input, char *out)
@@ -2542,6 +2587,65 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 	return 0;
 }
 
+static long linux_unlinkat(struct linux_process *process, u64 dirfd,
+			   u64 path_len, u64 flags, u64 path_buffer)
+{
+	char path[LINUX_MAX_PATH];
+	char full_path[LINUX_MAX_PATH];
+	u64 base_handle;
+	long base_result;
+
+	if (flags != 0 ||
+	    path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
+	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
+	    path[path_len - 1] != '\0' ||
+	    path_normalize(process->cwd, path, full_path) != 0) {
+		return -LINUX_EINVAL;
+	}
+	base_result = linux_dirfd_base_handle(process, dirfd, path,
+					      &base_handle);
+	if (base_result != 0) {
+		return base_result;
+	}
+	(void)base_handle;
+	if (!is_scratch_path(full_path)) {
+		return -LINUX_EINVAL;
+	}
+	return scratch_unlink_path(full_path);
+}
+
+static long linux_truncate(struct linux_process *process, u64 dirfd,
+			   u64 path_len, u64 length, u64 path_buffer)
+{
+	char path[LINUX_MAX_PATH];
+	char full_path[LINUX_MAX_PATH];
+	struct linux_scratch_file *file;
+	u64 base_handle;
+	long base_result;
+
+	if ((length >> 63) != 0 ||
+	    path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
+	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
+	    path[path_len - 1] != '\0' ||
+	    path_normalize(process->cwd, path, full_path) != 0) {
+		return -LINUX_EINVAL;
+	}
+	base_result = linux_dirfd_base_handle(process, dirfd, path,
+					      &base_handle);
+	if (base_result != 0) {
+		return base_result;
+	}
+	(void)base_handle;
+	if (!is_scratch_path(full_path)) {
+		return -LINUX_EINVAL;
+	}
+	file = scratch_find(full_path);
+	if (file == 0) {
+		return -LINUX_ENOENT;
+	}
+	return scratch_set_size(file, length) == 0 ? 0 : -LINUX_EINVAL;
+}
+
 static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
 			     u64 size)
 {
@@ -2676,6 +2780,30 @@ static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 	}
 
 	return linux_stat_from_vfs_meta(stat_buffer, &reply);
+}
+
+static long linux_ftruncate(struct linux_process *process, u64 fd, u64 length)
+{
+	struct linux_scratch_file *file;
+
+	if ((length >> 63) != 0) {
+		return -LINUX_EINVAL;
+	}
+	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
+		return -LINUX_EBADF;
+	}
+	if (process->fds[fd].kind != LINUX_FD_SCRATCH) {
+		return -LINUX_EINVAL;
+	}
+	file = (struct linux_scratch_file *)process->fds[fd].handle;
+	if (scratch_set_size(file, length) != 0) {
+		return -LINUX_EINVAL;
+	}
+	process->fds[fd].size = file->size;
+	if (process->fds[fd].offset > file->size) {
+		process->fds[fd].offset = file->size;
+	}
+	return 0;
 }
 
 static long linux_newfstatat(struct linux_process *process, u64 dirfd,
@@ -3818,6 +3946,27 @@ int main(void)
 				bunix_handle_close(message.cap);
 			}
 			break;
+		case BUNIX_LINUX_UNLINK:
+		case BUNIX_LINUX_UNLINKAT:
+			reply.words[0] = (u64)linux_unlinkat(process,
+							     message.words[0],
+							     message.words[1],
+							     message.words[2],
+							     message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_TRUNCATE:
+			reply.words[0] = (u64)linux_truncate(process,
+							     message.words[0],
+							     message.words[1],
+							     message.words[2],
+							     message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
 		case BUNIX_LINUX_FSTAT:
 			reply.words[0] = (u64)linux_fstat(process,
 							  message.words[0],
@@ -3829,6 +3978,11 @@ int main(void)
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
+			break;
+		case BUNIX_LINUX_FTRUNCATE:
+			reply.words[0] = (u64)linux_ftruncate(process,
+							      message.words[0],
+							      message.words[1]);
 			break;
 		case BUNIX_LINUX_FCNTL:
 			reply.words[0] = (u64)linux_fcntl(process,

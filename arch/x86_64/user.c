@@ -78,6 +78,9 @@ enum {
 	LINUX_SYSCALL_NANOSLEEP = 35,
 	LINUX_SYSCALL_DUP = 32,
 	LINUX_SYSCALL_DUP2 = 33,
+	LINUX_SYSCALL_TRUNCATE = 76,
+	LINUX_SYSCALL_FTRUNCATE = 77,
+	LINUX_SYSCALL_UNLINK = 87,
 	LINUX_SYSCALL_SENDFILE = 40,
 	LINUX_SYSCALL_SOCKET = 41,
 	LINUX_SYSCALL_CONNECT = 42,
@@ -134,6 +137,7 @@ enum {
 	LINUX_SYSCALL_DUP3 = 292,
 	LINUX_SYSCALL_PIPE2 = 293,
 	LINUX_SYSCALL_OPENAT = 257,
+	LINUX_SYSCALL_UNLINKAT = 263,
 	LINUX_SYSCALL_PRLIMIT64 = 302,
 	LINUX_SYSCALL_GETRANDOM = 318,
 	LINUX_SYSCALL_STATX = 332,
@@ -1219,6 +1223,7 @@ static int linux_syscall_forwards_scalar(u64 number)
 	case LINUX_SYSCALL_SOCKET:
 	case LINUX_SYSCALL_KILL:
 	case LINUX_SYSCALL_REBOOT:
+	case LINUX_SYSCALL_FTRUNCATE:
 		return 1;
 	default:
 		return 0;
@@ -1948,6 +1953,12 @@ static const char *linux_syscall_name(u64 number)
 		return "access";
 	case LINUX_SYSCALL_PIPE:
 		return "pipe";
+	case LINUX_SYSCALL_TRUNCATE:
+		return "truncate";
+	case LINUX_SYSCALL_FTRUNCATE:
+		return "ftruncate";
+	case LINUX_SYSCALL_UNLINK:
+		return "unlink";
 	case LINUX_SYSCALL_NANOSLEEP:
 		return "nanosleep";
 	case LINUX_SYSCALL_DUP:
@@ -2064,6 +2075,8 @@ static const char *linux_syscall_name(u64 number)
 		return "pipe2";
 	case LINUX_SYSCALL_OPENAT:
 		return "openat";
+	case LINUX_SYSCALL_UNLINKAT:
+		return "unlinkat";
 	case LINUX_SYSCALL_PRLIMIT64:
 		return "prlimit64";
 	case LINUX_SYSCALL_GETRANDOM:
@@ -3327,6 +3340,51 @@ poll_again:
 		request.words[1] = len;
 		request.words[2] = flags;
 		request.words[3] = mode;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_RECV;
+		request.cap_object = buffer;
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_ENOSYS;
+		}
+		buffer_release(buffer);
+		return reply.words[0];
+	}
+	case LINUX_SYSCALL_UNLINK:
+	case LINUX_SYSCALL_UNLINKAT:
+	case LINUX_SYSCALL_TRUNCATE: {
+		struct shared_buffer *buffer;
+		const char *path = number == LINUX_SYSCALL_UNLINKAT ?
+				    (const char *)arg1 : (const char *)arg0;
+		const u64 dirfd = number == LINUX_SYSCALL_UNLINKAT ?
+				  arg0 : (u64)-100;
+		const u64 flags = number == LINUX_SYSCALL_UNLINKAT ? arg2 : 0;
+		const u64 length = number == LINUX_SYSCALL_TRUNCATE ? arg1 : 0;
+		u64 len = 0;
+
+		if (path == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (copy_cstr_from_user((char *)syscall_copy_buffer, path,
+					LINUX_MAX_SYSCALL_BUFFER) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		len = str_len((const char *)syscall_copy_buffer) + 1;
+
+		buffer = buffer_create(len);
+		if (buffer == 0 ||
+		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = number == LINUX_SYSCALL_TRUNCATE ?
+			       LINUX_SYSCALL_TRUNCATE : LINUX_SYSCALL_UNLINKAT;
+		request.words[0] = dirfd;
+		request.words[1] = len;
+		request.words[2] = number == LINUX_SYSCALL_TRUNCATE ?
+				   length : flags;
+		request.words[3] = 0;
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_RECV;
 		request.cap_object = buffer;
