@@ -14,7 +14,7 @@
 static const struct server boot_servers[] = {
 	{ "names", 0 },
 	{ "consoled", 0 },
-	{ "init", 0 },
+	{ "bootstrap", 0 },
 	{ "time", 0 },
 	{ "user", 0 },
 	{ "linux", 0 },
@@ -354,7 +354,7 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 		return;
 	}
 
-	if (!str_eq(server_name, "init")) {
+	if (!str_eq(server_name, "bootstrap")) {
 		return;
 	}
 
@@ -659,6 +659,10 @@ struct task *server_task_fork_current_stopped(
 	if (child == 0) {
 		return 0;
 	}
+	if (task_clone_handles(child, parent) != 0) {
+		(void)task_kill(child);
+		return 0;
+	}
 
 	const u64 region_count = task_vm_region_count(parent);
 	for (u64 i = 0; i < region_count; i++) {
@@ -828,7 +832,7 @@ void server_start_boot_modules(u64 multiboot_info)
 	server_launch_module("names");
 	server_launch_module("consoled");
 	sched_run();
-	server_launch_module("init");
+	server_launch_module("bootstrap");
 }
 
 static void console_input_thread(void *arg)

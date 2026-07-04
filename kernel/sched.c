@@ -105,6 +105,7 @@ static struct spinlock thread_table_lock = SPINLOCK_INIT("thread-table");
 static struct spinlock placement_lock = SPINLOCK_INIT("sched-placement");
 static struct spinlock sleep_lock = SPINLOCK_INIT("sched-sleep");
 
+static int task_handle_retain(enum task_handle_type type, void *object);
 static void task_handle_release(enum task_handle_type type, void *object);
 static void task_release(struct task *task);
 
@@ -767,6 +768,42 @@ u64 task_grant_task(struct task *owner, struct task *target, u32 rights)
 	return 0;
 }
 
+int task_clone_handles(struct task *dst, struct task *src)
+{
+	if (dst == 0 || src == 0) {
+		return -1;
+	}
+
+	const u64 src_flags = spin_lock_irqsave(&src->lock);
+	const u64 dst_flags = spin_lock_irqsave(&dst->lock);
+
+	if (task_grow_handles_locked(dst, src->handle_capacity) != 0) {
+		spin_unlock_irqrestore(&dst->lock, dst_flags);
+		spin_unlock_irqrestore(&src->lock, src_flags);
+		return -1;
+	}
+
+	for (u32 i = 0; i < src->handle_capacity; i++) {
+		struct task_handle handle = src->handles[i];
+
+		if (handle.type == TASK_HANDLE_EMPTY) {
+			continue;
+		}
+		if (handle.type == TASK_HANDLE_TASK &&
+		    handle.object == src) {
+			handle.object = dst;
+			dst->ref_count++;
+		} else if (task_handle_retain(handle.type, handle.object) != 0) {
+			continue;
+		}
+		dst->handles[i] = handle;
+	}
+
+	spin_unlock_irqrestore(&dst->lock, dst_flags);
+	spin_unlock_irqrestore(&src->lock, src_flags);
+	return 0;
+}
+
 struct task *task_from_handle(struct task *owner, u64 handle, u32 rights)
 {
 	if (owner == 0 || handle == 0 || handle > owner->handle_capacity) {
@@ -954,6 +991,31 @@ int task_close_handle(struct task *task, u64 handle)
 		       type == TASK_HANDLE_BUFFER ? "buffer" : "unknown",
 		       rights);
 	return 0;
+}
+
+static int task_handle_retain(enum task_handle_type type, void *object)
+{
+	if (type == TASK_HANDLE_PORT) {
+		ipc_port_retain((struct ipc_port *)object);
+		return 0;
+	}
+	if (type == TASK_HANDLE_BUFFER) {
+		buffer_retain((struct shared_buffer *)object);
+		return 0;
+	}
+	if (type == TASK_HANDLE_TASK) {
+		struct task *task = (struct task *)object;
+		const u64 flags = spin_lock_irqsave(&task->lock);
+
+		if (task->dead) {
+			spin_unlock_irqrestore(&task->lock, flags);
+			return -1;
+		}
+		task->ref_count++;
+		spin_unlock_irqrestore(&task->lock, flags);
+		return 0;
+	}
+	return -1;
 }
 
 static void task_handle_release(enum task_handle_type type, void *object)

@@ -465,6 +465,7 @@ while ! awk '{ sub(/\r$/, "") } /^WATCH_DONE$/ { found = 1 } END { exit found ? 
 	sleep 1
 done
 
+login_prompts_before_exit=$(grep -F -c "login: " "$log" 2>/dev/null || true)
 printf 'cd /bin\npwd\nexit\n' >&3
 
 i=0
@@ -478,9 +479,14 @@ while ! awk '{ sub(/\r$/, "") } /\/bin \$ pwd/ { prompt = NR } /^\/bin$/ && prom
 	sleep 1
 done
 
-if ! awk '{ sub(/\r$/, "") } /login: session ended/ { ended = NR } /login: $/ && ended && NR > ended { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
-	echo "login prompt did not return after shell exit" >&2
-	tail -n 180 "$log" >&2 || true
-	exit 1
-fi
+i=0
+while [ "$(grep -F -c "login: " "$log" 2>/dev/null || true)" -le "$login_prompts_before_exit" ]; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "login prompt did not return after shell exit" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
 echo "shell regression ok"

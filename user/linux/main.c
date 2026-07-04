@@ -41,7 +41,7 @@ enum {
 	LINUX_TIOCGPGRP = 0x540f,
 	LINUX_TIOCSPGRP = 0x5410,
 	LINUX_TIOCGWINSZ = 0x5413,
-	LINUX_TERM_SIZE = 64,
+	LINUX_TERM_SIZE = 60,
 	LINUX_TERM_IFLAG = 0,
 	LINUX_TERM_OFLAG = 4,
 	LINUX_TERM_CFLAG = 8,
@@ -178,6 +178,7 @@ static void linux_process_reset(struct linux_process *process);
 static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
+static void pack_path(u64 *words, const char *path);
 
 static u64 linux_user_service(void)
 {
@@ -474,6 +475,45 @@ static void notify_proc_exit(u64 linux_pid, u64 status, u64 kill_task)
 	if (proc != 0) {
 		(void)bunix_ipc_send(proc, &request);
 	}
+}
+
+static void notify_proc_register_linux(u64 linux_pid, u64 bunix_task,
+				       u64 parent_linux_pid)
+{
+	const u64 proc = resolve_service(BUNIX_SERVICE_PROC, BUNIX_RIGHT_SEND);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = BUNIX_PROC_REGISTER_LINUX,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { linux_pid, bunix_task, parent_linux_pid, 0 },
+	};
+
+	if (proc != 0) {
+		(void)bunix_ipc_send(proc, &request);
+	}
+}
+
+static long linux_exec_init(void)
+{
+	const u64 proc = resolve_service(BUNIX_SERVICE_PROC, BUNIX_RIGHT_SEND);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = BUNIX_PROC_SPAWN,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+
+	if (proc == 0) {
+		return -LINUX_ESRCH;
+	}
+	pack_path(&request.words[0], "/sbin/init");
+	return bunix_ipc_send(proc, &request) == 0 ? 0 : -LINUX_ESRCH;
 }
 
 static void zero_bytes(char *buffer, u64 len)
@@ -1094,9 +1134,13 @@ static struct linux_process *linux_process_for(const struct bunix_msg *message)
 	return 0;
 }
 
-static long linux_register_process(u64 bunix_task, u64 ppid, u64 session_id)
+static long linux_register_process(u64 bunix_task, u64 ppid, u64 session_id,
+				   u64 requested_pid)
 {
 	if (bunix_task == 0 || linux_process_find(bunix_task) != 0) {
+		return -LINUX_EINVAL;
+	}
+	if (requested_pid != 0 && linux_process_find_pid(requested_pid) != 0) {
 		return -LINUX_EINVAL;
 	}
 
@@ -1106,7 +1150,11 @@ static long linux_register_process(u64 bunix_task, u64 ppid, u64 session_id)
 		return -LINUX_ESRCH;
 	}
 
-	const u64 pid = next_pid++;
+	const u64 pid = requested_pid != 0 ? requested_pid : next_pid++;
+
+	if (pid >= next_pid) {
+		next_pid = pid + 1;
+	}
 
 	process->pid = pid;
 	process->tid = pid;
@@ -1199,6 +1247,7 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 		linux_process_reset(process);
 		return -LINUX_ESRCH;
 	}
+	notify_proc_register_linux(pid, child_task, parent->pid);
 	return (long)pid;
 }
 
@@ -1822,9 +1871,7 @@ static long tty_read_raw(struct linux_process *process, u64 len, u64 buffer)
 			if ((lflag & LINUX_ECHO) != 0) {
 				tty_echo("^C\n", 3);
 			}
-			(void)linux_signal_pgrp(process,
-						linux_foreground_pgid(process),
-						LINUX_SIGINT);
+			(void)linux_signal_process(process, LINUX_SIGINT);
 			return done != 0 ? (long)done : 0;
 		}
 		write_buffer[done++] = c;
@@ -1866,9 +1913,7 @@ static long tty_fill_canonical_line(struct linux_process *process)
 			}
 			tty_line_offset = 0;
 			tty_line_len = 0;
-			(void)linux_signal_pgrp(process,
-						linux_foreground_pgid(process),
-						LINUX_SIGINT);
+			(void)linux_signal_process(process, LINUX_SIGINT);
 			return 0;
 		}
 		if ((c == erase || c == '\b') && used != 0) {
@@ -2141,7 +2186,8 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		return base_result;
 	}
 
-	if (string_equal(full_path, "/dev/tty")) {
+	if (string_equal(full_path, "/dev/tty") ||
+	    string_equal(full_path, "/dev/console")) {
 		return alloc_fd(process, LINUX_FD_CONSOLE,
 				BUNIX_HANDLE_CONSOLE, 0);
 	}
@@ -2313,6 +2359,21 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 
 	if (path_normalize(process->cwd, path, full_path) != 0) {
 		return -LINUX_EINVAL;
+	}
+	if (string_equal(full_path, "/dev/tty") ||
+	    string_equal(full_path, "/dev/console")) {
+		out->words[1] = 0;
+		out->words[2] = ((u64)BUNIX_VFS_TYPE_REGULAR << 32) |
+				0600;
+		out->words[3] = 0;
+		return 0;
+	}
+	if (string_equal(full_path, "/dev/null")) {
+		out->words[1] = 0;
+		out->words[2] = ((u64)BUNIX_VFS_TYPE_REGULAR << 32) |
+				0666;
+		out->words[3] = 0;
+		return 0;
 	}
 	if (is_utmp_path(full_path)) {
 		out->words[1] = linux_user_session_count() *
@@ -2956,7 +3017,7 @@ static long linux_exec_process(struct linux_process *process)
 		}
 	}
 
-	return 0;
+	return (long)process->pid;
 }
 
 static void linux_close_process_fds(struct linux_process *process)
@@ -3017,7 +3078,6 @@ int main(void)
 	const char open_ok[] = "linux-server: openat\n";
 	const char fstat_ok[] = "linux-server: fstat\n";
 	const char newfstatat_ok[] = "linux-server: newfstatat\n";
-	const char process_ok[] = "linux-server: process\n";
 	const char registered_ok[] = "linux-server: registered\n";
 	const char wait4_ok[] = "linux-server: wait4\n";
 	const char exited_ok[] = "linux-server: exited\n";
@@ -3058,7 +3118,8 @@ int main(void)
 		if (message.type == BUNIX_LINUX_REGISTER_PROCESS) {
 			reply.words[0] = (u64)linux_register_process(message.words[0],
 								     message.words[1],
-								     message.words[2]);
+								     message.words[2],
+								     message.words[3]);
 			if ((long)reply.words[0] > 0) {
 				bunix_console_log(registered_ok,
 						    sizeof(registered_ok) - 1);
@@ -3080,6 +3141,13 @@ int main(void)
 			}
 			continue;
 		}
+		if (message.type == BUNIX_LINUX_EXEC_INIT) {
+			reply.words[0] = (u64)linux_exec_init();
+			if (message.reply != 0) {
+				bunix_ipc_send(message.reply, &reply);
+			}
+			continue;
+		}
 
 		struct linux_process *process = linux_process_for(&message);
 		if (process == 0) {
@@ -3093,7 +3161,6 @@ int main(void)
 		switch (message.type) {
 		case BUNIX_LINUX_GETPID:
 			reply.words[0] = process->pid;
-			bunix_console_log(process_ok, sizeof(process_ok) - 1);
 			break;
 		case BUNIX_LINUX_GETTID:
 			reply.words[0] = process->tid;
@@ -3158,6 +3225,9 @@ int main(void)
 								   message.words[0],
 								   message.words[1],
 								   message.words[2]);
+			break;
+		case BUNIX_LINUX_REBOOT:
+			reply.words[0] = 0;
 			break;
 		case BUNIX_LINUX_GETPPID:
 			reply.words[0] = process->ppid;

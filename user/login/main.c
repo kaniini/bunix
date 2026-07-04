@@ -1,10 +1,18 @@
 #include <bunix/libbunix.h>
 
 enum {
-	LOGIN_PID = 4,
 	AT_NULL = 0,
-	BUNIX_PROC_SPAWN_SET_LOGIN = 1,
-	BUNIX_PROC_SPAWN_SESSION_SHIFT = 32,
+	LINUX_SYSCALL_READ = 0,
+	LINUX_SYSCALL_WRITE = 1,
+	LINUX_SYSCALL_IOCTL = 16,
+	LINUX_SYSCALL_EXECVE = 59,
+	LINUX_SYSCALL_SETUID = 105,
+	LINUX_SYSCALL_SETGID = 106,
+	LINUX_SYSCALL_EXIT_GROUP = 231,
+	LINUX_TCGETS = 0x5401,
+	LINUX_TCSETS = 0x5402,
+	LINUX_ECHO = 0000010,
+	LINUX_TERM_LFLAG = 12,
 };
 
 struct startup_aux {
@@ -13,15 +21,90 @@ struct startup_aux {
 	u64 names_handle;
 };
 
-static void write_text(u64 handle, const char *text)
+static long linux_syscall4(u64 number, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
+{
+	long result;
+	register u64 r10 __asm__("r10") = arg3;
+
+	__asm__ volatile("syscall"
+			 : "=a"(result)
+			 : "a"(number), "D"(arg0), "S"(arg1), "d"(arg2),
+			   "r"(r10)
+			 : "rcx", "r11", "memory");
+	return result;
+}
+
+static void write_text(const char *text)
 {
 	u64 len = 0;
 
 	while (text[len] != '\0') {
 		len++;
 	}
-	if (handle != 0) {
-		bunix_console_write(text, len);
+	(void)linux_syscall4(LINUX_SYSCALL_WRITE, 1, (u64)text, len, 0);
+}
+
+static long read_text(char *text, u64 len)
+{
+	return linux_syscall4(LINUX_SYSCALL_READ, 0, (u64)text, len, 0);
+}
+
+static unsigned int load_u32(const char *buffer, u64 offset)
+{
+	unsigned int value = 0;
+
+	for (u64 i = 0; i < 4; i++) {
+		value |= ((unsigned int)(unsigned char)buffer[offset + i]) <<
+			 (i * 8);
+	}
+
+	return value;
+}
+
+static void store_u32(char *buffer, u64 offset, unsigned int value)
+{
+	for (u64 i = 0; i < 4; i++) {
+		buffer[offset + i] = (char)((value >> (i * 8)) & 0xff);
+	}
+}
+
+static long tty_set_echo(int enabled, char *saved)
+{
+	char termios[60];
+	unsigned int lflag;
+
+	if (linux_syscall4(LINUX_SYSCALL_IOCTL, 0, LINUX_TCGETS,
+			   (u64)termios, 0) != 0) {
+		return -1;
+	}
+	if (saved != 0) {
+		for (u64 i = 0; i < sizeof(termios); i++) {
+			saved[i] = termios[i];
+		}
+	}
+	lflag = load_u32(termios, LINUX_TERM_LFLAG);
+	if (enabled) {
+		lflag |= LINUX_ECHO;
+	} else {
+		lflag &= ~LINUX_ECHO;
+	}
+	store_u32(termios, LINUX_TERM_LFLAG, lflag);
+	return linux_syscall4(LINUX_SYSCALL_IOCTL, 0, LINUX_TCSETS,
+			      (u64)termios, 0);
+}
+
+static void tty_restore(const char *saved)
+{
+	if (saved != 0) {
+		(void)linux_syscall4(LINUX_SYSCALL_IOCTL, 0, LINUX_TCSETS,
+				     (u64)saved, 0);
+	}
+}
+
+static void exit_group(u64 status)
+{
+	(void)linux_syscall4(LINUX_SYSCALL_EXIT_GROUP, status, 0, 0, 0);
+	for (;;) {
 	}
 }
 
@@ -130,32 +213,22 @@ static long authenticate(u64 user, const char *name, const char *password,
 	return 0;
 }
 
-static long spawn_shell(u64 proc, u64 uid, u64 session_id, u64 *pid)
+static long apply_login(u64 uid, u64 gid)
 {
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_PROC,
-		.type = BUNIX_PROC_SPAWN,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { 0, 0, uid,
-			   BUNIX_PROC_SPAWN_SET_LOGIN |
-			   (session_id << BUNIX_PROC_SPAWN_SESSION_SHIFT) },
-	};
-	struct bunix_msg reply;
-
-	pack_text(&request.words[0], "/bin/sh");
-	if (proc == 0 ||
-	    bunix_ipc_call(proc, &request, &reply) != 0 ||
-	    reply.words[0] != 0 ||
-	    reply.words[1] == 0 ||
-	    pid == 0) {
+	if (linux_syscall4(LINUX_SYSCALL_SETGID, gid, 0, 0, 0) != 0) {
 		return -1;
 	}
+	return linux_syscall4(LINUX_SYSCALL_SETUID, uid, 0, 0, 0) == 0 ?
+	       0 : -1;
+}
 
-	*pid = reply.words[1];
-	return 0;
+static long exec_shell(char **envp)
+{
+	char path[] = "/bin/sh";
+	char *argv[] = { path, 0 };
+
+	return linux_syscall4(LINUX_SYSCALL_EXECVE, (u64)path,
+			      (u64)argv, (u64)envp, 0);
 }
 
 static long session_begin(u64 user, u64 uid, u64 gid, u64 *session_id)
@@ -205,28 +278,6 @@ static long session_end(u64 user, u64 session_id)
 	return 0;
 }
 
-static long wait_process(u64 proc, u64 pid)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_PROC,
-		.type = BUNIX_PROC_WAIT,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { pid, 0, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	if (proc == 0 ||
-	    bunix_ipc_call(proc, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		return -1;
-	}
-
-	return 0;
-}
-
 int main(int argc, char **argv, char **envp)
 {
 	struct startup_aux aux;
@@ -235,9 +286,10 @@ int main(int argc, char **argv, char **envp)
 	u64 uid = 0;
 	u64 gid = 0;
 	u64 user;
-	u64 shell_pid;
 	u64 session_id;
 	long nread;
+	char saved_termios[60];
+	int restore_termios;
 
 	(void)argc;
 	(void)argv;
@@ -245,33 +297,41 @@ int main(int argc, char **argv, char **envp)
 	user = resolve_service(aux.names_handle, BUNIX_SERVICE_USER,
 			       BUNIX_RIGHT_SEND);
 	for (;;) {
-		write_text(aux.stdout_handle, "login: ");
-		nread = bunix_console_read(name, sizeof(name));
+		write_text("login: ");
+		nread = read_text(name, sizeof(name));
 		if (nread <= 0) {
 			continue;
 		}
 		strip_line(name, (u64)nread);
-		write_text(aux.stdout_handle, "password: ");
-		nread = bunix_console_read(password, sizeof(password));
+		write_text("password: ");
+		restore_termios = tty_set_echo(0, saved_termios) == 0;
+		nread = read_text(password, sizeof(password));
+		if (restore_termios) {
+			tty_restore(saved_termios);
+		}
+		write_text("\n");
 		if (nread <= 0) {
 			continue;
 		}
 		strip_line(password, (u64)nread);
 
-		if (authenticate(user, name, password, &uid, &gid) == 0 &&
-		    session_begin(user, uid, gid, &session_id) == 0) {
-			if (spawn_shell(aux.proc_handle, uid, session_id,
-					&shell_pid) == 0) {
-				write_text(aux.stdout_handle,
-					   "login: shell spawned\n");
-				(void)wait_process(aux.proc_handle, shell_pid);
-				(void)session_end(user, session_id);
-				write_text(aux.stdout_handle,
-					   "login: session ended\n");
-				continue;
-			}
+		if (user == 0) {
+			write_text("login: user service missing\n");
+		} else if (authenticate(user, name, password, &uid, &gid) != 0) {
+			write_text("login: auth failed\n");
+		} else if (session_begin(user, uid, gid, &session_id) != 0) {
+			write_text("login: session failed\n");
+		} else if (apply_login(uid, gid) != 0) {
+			write_text("login: apply failed\n");
 			(void)session_end(user, session_id);
+		} else {
+			write_text("login: shell exec\n");
+			if (exec_shell(envp) != 0) {
+				(void)session_end(user, session_id);
+			}
 		}
-		write_text(aux.stdout_handle, "login: authentication failed\n");
+		write_text("login: authentication failed\n");
 	}
+	exit_group(1);
+	return 1;
 }

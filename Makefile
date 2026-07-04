@@ -5,9 +5,9 @@ ESP_DIR := $(BUILD_DIR)/esp
 EFI_BOOT_IMG := $(BUILD_DIR)/bunixos-efi.iso
 EFI_BOOT_APP := $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 KERNEL := $(BUILD_DIR)/bunixos.kernel
-INIT_MODULE := $(BUILD_DIR)/modules/init.server
+BOOTSTRAP_MODULE := $(BUILD_DIR)/modules/bootstrap.server
 USER_CRT0_OBJ := $(BUILD_DIR)/user/crt0.S.o
-INIT_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/init/main.c.o
+BOOTSTRAP_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o
 CONSOLE_MODULE := $(BUILD_DIR)/modules/console.server
 CONSOLE_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/console/main.c.o
 NAMES_MODULE := $(BUILD_DIR)/modules/names.server
@@ -48,7 +48,9 @@ ROOTFS_SECRET := modules/secret.txt
 ROOTFS_NESTED := modules/nested.txt
 ROOTFS_PASSWD := modules/passwd
 ROOTFS_SHADOW := modules/shadow
+ROOTFS_INITTAB := modules/inittab
 ROOTFS_BUSYBOX_LINKS := \
+	--symlink /sbin/init /bin/busybox \
 	--symlink /bin/sh /bin/busybox \
 	--symlink /bin/dmesg /bin/busybox \
 	--symlink /bin/cat /bin/busybox \
@@ -118,7 +120,7 @@ KERNEL_SRCS := \
 	servers/vm/vm.c
 
 KERNEL_OBJS := $(KERNEL_SRCS:%=$(BUILD_DIR)/%.o)
-USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/init/main.c.o \
+USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/console/main.c.o \
 	$(BUILD_DIR)/user/names/main.c.o \
 	$(BUILD_DIR)/user/time/main.c.o \
@@ -164,9 +166,9 @@ $(BUILD_DIR)/user/%.S.o: user/%.S
 	mkdir -p $(dir $@)
 	$(CC) $(USER_ASFLAGS) -c $< -o $@
 
-$(INIT_MODULE): $(INIT_MODULE_OBJS) user/user.ld Makefile
+$(BOOTSTRAP_MODULE): $(BOOTSTRAP_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(INIT_MODULE_OBJS)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(BOOTSTRAP_MODULE_OBJS)
 
 $(CONSOLE_MODULE): $(CONSOLE_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
@@ -240,11 +242,11 @@ $(ROOTFS_TOOL): tools/mkrootfs.c
 	mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror $< -o $@
 
-$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(FIRST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(EXECOK_MODULE) $(MUSL_HELLO_MODULE) $(FPUTEST_MODULE) $(BUSYBOX_STATIC)
+$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_INITTAB) $(FIRST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(EXECOK_MODULE) $(MUSL_HELLO_MODULE) $(FPUTEST_MODULE) $(BUSYBOX_STATIC)
 	mkdir -p $(dir $@)
-	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /bin/first $(FIRST_MODULE) /bin/ipcstress $(IPCSTRESS_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/fputest $(FPUTEST_MODULE) /bin/busybox $(BUSYBOX_STATIC) $(ROOTFS_BUSYBOX_LINKS)
+	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /etc/inittab $(ROOTFS_INITTAB) /bin/first $(FIRST_MODULE) /bin/ipcstress $(IPCSTRESS_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/fputest $(FPUTEST_MODULE) /bin/busybox $(BUSYBOX_STATIC) $(ROOTFS_BUSYBOX_LINKS)
 
-$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -255,7 +257,7 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(CONSOLE_MOD
 		"boot/bunixos.kernel=$(KERNEL)" \
 		"modules/console.server=$(CONSOLE_MODULE)" \
 		"modules/names.server=$(NAMES_MODULE)" \
-		"modules/init.server=$(INIT_MODULE)" \
+		"modules/bootstrap.server=$(BOOTSTRAP_MODULE)" \
 		"modules/time.server=$(TIME_MODULE)" \
 		"modules/user.server=$(USER_MODULE)" \
 		"modules/linux.server=$(LINUX_SERVER_MODULE)" \
@@ -267,7 +269,7 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(CONSOLE_MOD
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -280,7 +282,7 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(INIT_MODULE) $(CONSOLE_MODULE) $(NAME
 	cp boot/grub.cfg $(ISO_ROOT)/boot/grub/grub.cfg
 	cp $(CONSOLE_MODULE) $(ISO_ROOT)/modules/console.server
 	cp $(NAMES_MODULE) $(ISO_ROOT)/modules/names.server
-	cp $(INIT_MODULE) $(ISO_ROOT)/modules/init.server
+	cp $(BOOTSTRAP_MODULE) $(ISO_ROOT)/modules/bootstrap.server
 	cp $(TIME_MODULE) $(ISO_ROOT)/modules/time.server
 	cp $(USER_MODULE) $(ISO_ROOT)/modules/user.server
 	cp $(LINUX_SERVER_MODULE) $(ISO_ROOT)/modules/linux.server
@@ -360,13 +362,14 @@ test: $(EFI_BOOT_APP)
 	grep -F "proc: ready" $(BUILD_DIR)/serial.log
 	grep -F "vfs: open" $(BUILD_DIR)/serial.log
 	grep -F "vfs: close" $(BUILD_DIR)/serial.log
+	grep -F "proc: exec /sbin/init" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/first" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/lxtest" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=1" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=2" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=3" $(BUILD_DIR)/serial.log
-	grep -F "proc: exited pid=1 status=0" $(BUILD_DIR)/serial.log
-	grep -F "proc: wait pid=1 status=0" $(BUILD_DIR)/serial.log
+	grep -F "proc: exited pid=2 status=0" $(BUILD_DIR)/serial.log
+	grep -F "proc: wait pid=2 status=0" $(BUILD_DIR)/serial.log
 	grep -F "first: stdout ready" $(BUILD_DIR)/serial.log
 	grep -F "first: argc=1" $(BUILD_DIR)/serial.log
 	grep -F "first: argv0=/bin/first" $(BUILD_DIR)/serial.log
@@ -405,23 +408,22 @@ test: $(EFI_BOOT_APP)
 	grep -F "procfs: online" $(BUILD_DIR)/serial.log
 	grep -F "vfs: mounted block" $(BUILD_DIR)/serial.log
 	grep -F "vfs: mounted translator" $(BUILD_DIR)/serial.log
-	grep -F "init: launching servers" $(BUILD_DIR)/serial.log
-	grep -F "init: names ready" $(BUILD_DIR)/serial.log
-	grep -F "init: fs namespace" $(BUILD_DIR)/serial.log
-	grep -F "init: fs ready" $(BUILD_DIR)/serial.log
-	grep -F "init: first process exited" $(BUILD_DIR)/serial.log
-	grep -F "init: linux process spawned" $(BUILD_DIR)/serial.log
-	grep -F "init: linux process exited" $(BUILD_DIR)/serial.log
+	grep -F "bootstrap: launching servers" $(BUILD_DIR)/serial.log
+	grep -F "bootstrap: names ready" $(BUILD_DIR)/serial.log
+	grep -F "bootstrap: fs namespace" $(BUILD_DIR)/serial.log
+	grep -F "bootstrap: fs ready" $(BUILD_DIR)/serial.log
+	grep -F "bootstrap: linux /sbin/init exec" $(BUILD_DIR)/serial.log
+	grep -F "bootstrap: first process exited" $(BUILD_DIR)/serial.log
+	grep -F "bootstrap: linux process spawned" $(BUILD_DIR)/serial.log
+	grep -F "bootstrap: linux process exited" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/musl-hello" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=3" $(BUILD_DIR)/serial.log
-	grep -F "init: musl process spawned" $(BUILD_DIR)/serial.log
+	grep -F "bootstrap: musl process spawned" $(BUILD_DIR)/serial.log
 	grep -F "musl hello argc=1 argv0=/bin/musl-hello" $(BUILD_DIR)/serial.log
-	grep -F "init: musl process exited" $(BUILD_DIR)/serial.log
-	grep -F "proc: exec /bin/login" $(BUILD_DIR)/serial.log
-	grep -F "proc: spawned pid=4" $(BUILD_DIR)/serial.log
-	grep -F "init: login spawned" $(BUILD_DIR)/serial.log
+	grep -F "bootstrap: musl process exited" $(BUILD_DIR)/serial.log
+	grep -F "login: shell exec" $(BUILD_DIR)/serial.log
 	grep -F "rootfs: module" $(BUILD_DIR)/serial.log
-	grep -F "init: bad cap denied" $(BUILD_DIR)/serial.log
+	grep -F "bootstrap: bad cap denied" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server time" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server user" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server linux" $(BUILD_DIR)/serial.log

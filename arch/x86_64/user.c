@@ -109,6 +109,7 @@ enum {
 	LINUX_SYSCALL_SETRESGID = 119,
 	LINUX_SYSCALL_GETPGID = 121,
 	LINUX_SYSCALL_ARCH_PRCTL = 158,
+	LINUX_SYSCALL_REBOOT = 169,
 	LINUX_SYSCALL_TIME = 201,
 	LINUX_SYSCALL_FUTEX = 202,
 	LINUX_SYSCALL_SET_TID_ADDRESS = 218,
@@ -153,6 +154,7 @@ enum {
 	LINUX_TIOCGPGRP = 0x540f,
 	LINUX_TIOCSPGRP = 0x5410,
 	LINUX_TIOCGWINSZ = 0x5413,
+	LINUX_TERMIOS_SIZE = 60,
 	ARCH_USER_MAX_CPUS = 8,
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
 	LINUX_MAX_SOCKADDR = 128,
@@ -183,6 +185,7 @@ enum {
 	USER_IPC_WORDS = 4,
 	USER_FOURCC_CONS = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	USER_FOURCC_LINX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
+	USER_FOURCC_PROC = ('P') | ('R' << 8) | ('O' << 16) | ('C' << 24),
 	USER_FOURCC_VFS = ('V') | ('F' << 8) | ('S' << 16) | ('0' << 24),
 	USER_CONSOLE_WRITE = 1,
 	USER_CONSOLE_LOG = 2,
@@ -197,6 +200,7 @@ enum {
 	LINUX_RPC_REGISTER_PROCESS = 1000,
 	LINUX_RPC_FORK_PROCESS = 1001,
 	LINUX_RPC_EXEC_PROCESS = 1002,
+	USER_PROC_SET_CMDLINE = 8,
 };
 
 enum {
@@ -228,6 +232,16 @@ enum {
 	LINUX_AT_CLKTCK = 17,
 	LINUX_AT_RANDOM = 25,
 	LINUX_AT_EXECFN = 31,
+	BUNIX_AT_STDOUT = 0x62780101,
+	BUNIX_AT_STDERR = 0x62780102,
+	BUNIX_AT_TIME = 0x62780103,
+	BUNIX_AT_PROC = 0x62780104,
+	BUNIX_AT_NAMES = 0x62780106,
+	LINUX_EXEC_HANDLE_STDOUT = 2,
+	LINUX_EXEC_HANDLE_STDERR = LINUX_EXEC_HANDLE_STDOUT,
+	LINUX_EXEC_HANDLE_TIME = 3,
+	LINUX_EXEC_HANDLE_PROC = 4,
+	LINUX_EXEC_HANDLE_NAMES = 5,
 };
 
 struct elf64_ehdr {
@@ -1063,6 +1077,7 @@ static int linux_syscall_forwards_scalar(u64 number)
 	case LINUX_SYSCALL_SETPGID:
 	case LINUX_SYSCALL_SOCKET:
 	case LINUX_SYSCALL_KILL:
+	case LINUX_SYSCALL_REBOOT:
 		return 1;
 	default:
 		return 0;
@@ -1322,7 +1337,7 @@ static int linux_exec_build_stack(const char *path,
 {
 	u64 argv_addrs[LINUX_EXEC_MAX_ARGS];
 	struct elf64_phdr aux_phdrs[LINUX_EXEC_MAX_PHDRS];
-	const u64 aux_pairs = 10;
+	const u64 aux_pairs = 15;
 	u64 sp = VM_PAGE_SIZE;
 
 	mem_zero(stack_page, VM_PAGE_SIZE);
@@ -1408,6 +1423,16 @@ static int linux_exec_build_stack(const char *path,
 	stack_words[word++] = random_addr;
 	stack_words[word++] = LINUX_AT_CLKTCK;
 	stack_words[word++] = 100;
+	stack_words[word++] = BUNIX_AT_STDOUT;
+	stack_words[word++] = LINUX_EXEC_HANDLE_STDOUT;
+	stack_words[word++] = BUNIX_AT_STDERR;
+	stack_words[word++] = LINUX_EXEC_HANDLE_STDERR;
+	stack_words[word++] = BUNIX_AT_TIME;
+	stack_words[word++] = LINUX_EXEC_HANDLE_TIME;
+	stack_words[word++] = BUNIX_AT_PROC;
+	stack_words[word++] = LINUX_EXEC_HANDLE_PROC;
+	stack_words[word++] = BUNIX_AT_NAMES;
+	stack_words[word++] = LINUX_EXEC_HANDLE_NAMES;
 	stack_words[word++] = LINUX_AT_NULL;
 	stack_words[word++] = 0;
 
@@ -1418,6 +1443,8 @@ static int linux_exec_build_stack(const char *path,
 static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			const char *user_path) __attribute__((noinline));
 static u64 linux_exec_process(struct task *task);
+static void linux_proc_set_cmdline(struct task *task, u64 linux_pid,
+				   const char *path);
 
 static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			const char *user_path)
@@ -1501,6 +1528,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		slab_free(image);
 		return exec_result;
 	}
+	linux_proc_set_cmdline(task, exec_result, path);
 	linux_vfork_complete_task(task_id(task));
 	console_printf("linux: execve task=%u path=%s entry=%p stack=%p\n",
 		       task_id(task), path, (const void *)entry,
@@ -1553,6 +1581,45 @@ static u64 linux_exec_process(struct task *task)
 	}
 
 	return reply.words[0];
+}
+
+static void linux_pack_path_words(u64 *words, const char *path)
+{
+	words[0] = 0;
+	words[1] = 0;
+	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
+		const u64 slot = i / 8;
+		const u64 shift = (i % 8) * 8;
+
+		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
+	}
+}
+
+static void linux_proc_set_cmdline(struct task *task, u64 linux_pid,
+				   const char *path)
+{
+	struct ipc_port *proc = ipc_port_find("proc");
+	struct ipc_port *reply_port = task_reply_port(task);
+	u64 words[2];
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_PROC,
+		.type = USER_PROC_SET_CMDLINE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { linux_pid, task_id(task), 0, 0 },
+	};
+	struct ipc_message reply;
+
+	if (proc == 0 || reply_port == 0 || linux_pid == 0) {
+		return;
+	}
+	linux_pack_path_words(words, path);
+	request.words[2] = words[0];
+	request.words[3] = words[1];
+	(void)(ipc_send(proc, &request) == 0 && ipc_recv(reply_port, &reply) == 0);
 }
 
 static const char *linux_syscall_name(u64 number)
@@ -1664,6 +1731,8 @@ static const char *linux_syscall_name(u64 number)
 		return "fcntl";
 	case LINUX_SYSCALL_ARCH_PRCTL:
 		return "arch_prctl";
+	case LINUX_SYSCALL_REBOOT:
+		return "reboot";
 	case LINUX_SYSCALL_TIME:
 		return "time";
 	case LINUX_SYSCALL_FUTEX:
@@ -1739,6 +1808,7 @@ static int task_uses_linux_personality(const struct task *task)
 	const char *name = task_name(task);
 
 	return str_eq(name, "busybox") ||
+	       str_eq(name, "login") ||
 	       str_eq(name, "musl-hello") ||
 	       str_eq(name, "lxtest") ||
 	       str_eq(name, "execok");
@@ -2756,11 +2826,11 @@ poll_again:
 			return (u64)-LINUX_EINVAL;
 		}
 		if (arg1 == LINUX_TCGETS) {
-			output_size = 64;
+			output_size = LINUX_TERMIOS_SIZE;
 		} else if (arg1 == LINUX_TCSETS ||
 			   arg1 == LINUX_TCSETSW ||
 			   arg1 == LINUX_TCSETSF) {
-			output_size = 64;
+			output_size = LINUX_TERMIOS_SIZE;
 		} else if (arg1 == LINUX_TIOCGPGRP) {
 			output_size = sizeof(value);
 		} else if (arg1 == LINUX_TIOCGWINSZ) {

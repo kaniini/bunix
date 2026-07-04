@@ -109,6 +109,7 @@ struct exec_info {
 static struct bunix_map processes_by_pid;
 static struct bunix_map processes_by_task_id;
 static struct bunix_map processes_by_linux_pid;
+static struct bunix_map pending_linux_exits;
 static u64 next_pid = 1;
 static u64 first_linux_pid;
 static unsigned char segment_buffer[PROC_SEGMENT_MAX];
@@ -120,13 +121,7 @@ static const char proc_exec_linux[] = "proc: exec /bin/lxtest\n";
 static const char proc_exec_musl[] = "proc: exec /bin/musl-hello\n";
 static const char proc_exec_shell[] = "proc: exec /bin/sh\n";
 static const char proc_exec_login[] = "proc: exec /bin/login\n";
-static const char proc_spawned[] = "proc: spawned pid=1\n";
-static const char proc_spawned_linux[] = "proc: spawned pid=2\n";
-static const char proc_spawned_musl[] = "proc: spawned pid=3\n";
-static const char proc_spawned_login[] = "proc: spawned pid=4\n";
-static const char proc_spawned_shell[] = "proc: spawned pid=5\n";
-static const char proc_exited[] = "proc: exited pid=1 status=0\n";
-static const char proc_waited[] = "proc: wait pid=1 status=0\n";
+static const char proc_exec_init[] = "proc: exec /sbin/init\n";
 static const char proc_register_failed[] = "proc: register failed\n";
 
 static long register_service(u64 service, u64 handle)
@@ -218,7 +213,9 @@ static int is_linux_path(const char *path)
 	       str_eq(path, "/bin/musl-hello") ||
 	       str_eq(path, "/bin/fputest") ||
 	       str_eq(path, "/bin/sh") ||
-	       str_eq(path, "/bin/busybox");
+	       str_eq(path, "/bin/busybox") ||
+	       str_eq(path, "/bin/login") ||
+	       str_eq(path, "/sbin/init");
 }
 
 static const char *task_name_for_path(const char *path)
@@ -232,7 +229,8 @@ static const char *task_name_for_path(const char *path)
 	if (str_eq(path, "/bin/fputest")) {
 		return "fputest";
 	}
-	if (str_eq(path, "/bin/sh") || str_eq(path, "/bin/busybox")) {
+	if (str_eq(path, "/bin/sh") || str_eq(path, "/bin/busybox") ||
+	    str_eq(path, "/sbin/init")) {
 		return "busybox";
 	}
 	if (str_eq(path, "/bin/login")) {
@@ -253,6 +251,58 @@ static u64 str_len(const char *text)
 	}
 
 	return len;
+}
+
+static void append_dec(char *line, u64 *cursor, u64 value)
+{
+	char digits[20];
+	u64 count = 0;
+
+	if (value == 0) {
+		line[(*cursor)++] = '0';
+		return;
+	}
+	while (value != 0 && count < sizeof(digits)) {
+		digits[count++] = (char)('0' + (value % 10));
+		value /= 10;
+	}
+	while (count != 0) {
+		line[(*cursor)++] = digits[--count];
+	}
+}
+
+static void log_pid_line(const char *prefix, u64 pid)
+{
+	char line[64];
+	u64 cursor = 0;
+
+	for (u64 i = 0; prefix[i] != '\0' && cursor < sizeof(line); i++) {
+		line[cursor++] = prefix[i];
+	}
+	append_dec(line, &cursor, pid);
+	if (cursor < sizeof(line)) {
+		line[cursor++] = '\n';
+	}
+	bunix_console_log(line, cursor);
+}
+
+static void log_exit_line(const char *prefix, u64 pid, u64 status)
+{
+	char line[96];
+	u64 cursor = 0;
+
+	for (u64 i = 0; prefix[i] != '\0' && cursor < sizeof(line); i++) {
+		line[cursor++] = prefix[i];
+	}
+	append_dec(line, &cursor, pid);
+	for (const char *text = " status="; *text != '\0'; text++) {
+		line[cursor++] = *text;
+	}
+	append_dec(line, &cursor, status);
+	if (cursor < sizeof(line)) {
+		line[cursor++] = '\n';
+	}
+	bunix_console_log(line, cursor);
 }
 
 static u64 align_down(u64 value, u64 align)
@@ -651,8 +701,8 @@ static long build_initial_stack(u64 task, const char *path,
 	return 0;
 }
 
-static long register_linux_process(u64 task, u64 ppid, u64 session_id,
-				   u64 *linux_pid)
+static long register_linux_process(u64 task, u64 requested_pid,
+				   u64 ppid, u64 session_id, u64 *linux_pid)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_LINUX,
@@ -661,7 +711,7 @@ static long register_linux_process(u64 task, u64 ppid, u64 session_id,
 		.cap_rights = 0,
 		.reply = 0,
 		.cap = 0,
-		.words = { task, ppid, session_id, 0 },
+		.words = { task, ppid, session_id, requested_pid },
 	};
 	struct bunix_msg reply;
 	const u64 linux = resolve_service(BUNIX_SERVICE_LINUX, BUNIX_RIGHT_SEND);
@@ -862,8 +912,8 @@ static long exec_path(u64 vfs, struct process *process,
 	vfs_close(vfs, file.handle);
 	bunix_handle_close((u64)io_buffer);
 	if (is_linux_path(path)) {
-		if (register_linux_process((u64)bunix_id, linux_parent_pid,
-					   session_id,
+		if (register_linux_process((u64)bunix_id, process->pid,
+					   linux_parent_pid, session_id,
 					   linux_pid) != 0) {
 			return -1;
 		}
@@ -946,6 +996,26 @@ static struct process *process_find_task_id(u64 task_id)
 
 	return (struct process *)
 		bunix_map_get(&processes_by_task_id, task_id);
+}
+
+static int linux_exit_pending(u64 linux_pid)
+{
+	return linux_pid != 0 &&
+	       bunix_map_get(&pending_linux_exits, linux_pid) != 0;
+}
+
+static void note_pending_linux_exit(u64 linux_pid)
+{
+	if (linux_pid != 0) {
+		(void)bunix_map_set(&pending_linux_exits, linux_pid, 1);
+	}
+}
+
+static void clear_pending_linux_exit(u64 linux_pid)
+{
+	if (linux_pid != 0) {
+		(void)bunix_map_remove(&pending_linux_exits, linux_pid);
+	}
 }
 
 static struct process *process_at(u64 index)
@@ -1044,6 +1114,53 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 	return 0;
 }
 
+static long register_linux_child_process(u64 linux_pid, u64 task_id, u64 ppid,
+					 u64 cmd_left, u64 cmd_right,
+					 u64 cmd_len, u64 *pid)
+{
+	struct process *process;
+
+	if (linux_pid == 0 || task_id == 0 || pid == 0 ||
+	    process_find_linux_pid(linux_pid) != 0) {
+		return -1;
+	}
+	if (linux_exit_pending(linux_pid)) {
+		clear_pending_linux_exit(linux_pid);
+		*pid = 0;
+		return 0;
+	}
+
+	process = process_alloc();
+	if (process == 0) {
+		return -1;
+	}
+	process->pid = next_pid++;
+	process->task_id = task_id;
+	process->linux_pid = linux_pid;
+	process->task_handle = 0;
+	process->status = 0;
+	process->exited = 0;
+	process->waiter = 0;
+	process->cmd_words[0] = cmd_left;
+	process->cmd_words[1] = cmd_right;
+	process->cmd_len = cmd_len;
+	if (ppid != 0 && process_find_linux_pid(ppid) == 0) {
+		process_reset(process);
+		return -1;
+	}
+	if (bunix_map_set(&processes_by_pid, process->pid,
+			  (u64)process) != 0 ||
+	    bunix_map_set(&processes_by_task_id, task_id,
+			  (u64)process) != 0 ||
+	    bunix_map_set(&processes_by_linux_pid, linux_pid,
+			  (u64)process) != 0) {
+		process_reset(process);
+		return -1;
+	}
+	*pid = process->pid;
+	return 0;
+}
+
 int main(void)
 {
 	struct bunix_msg message;
@@ -1051,6 +1168,7 @@ int main(void)
 	bunix_map_init(&processes_by_pid);
 	bunix_map_init(&processes_by_task_id);
 	bunix_map_init(&processes_by_linux_pid);
+	bunix_map_init(&pending_linux_exits);
 	bunix_console_log(proc_online, sizeof(proc_online) - 1);
 	if (register_service(BUNIX_SERVICE_PROC, BUNIX_HANDLE_SELF) != 0) {
 		bunix_console_log(proc_register_failed,
@@ -1100,31 +1218,23 @@ int main(void)
 				if (str_eq(path, "/bin/lxtest")) {
 					bunix_console_log(proc_exec_linux,
 							    sizeof(proc_exec_linux) - 1);
-					if (pid == 2) {
-						bunix_console_log(proc_spawned_linux,
-								    sizeof(proc_spawned_linux) - 1);
-					}
 				} else if (str_eq(path, "/bin/musl-hello")) {
 					bunix_console_log(proc_exec_musl,
 							    sizeof(proc_exec_musl) - 1);
-					bunix_console_log(proc_spawned_musl,
-							    sizeof(proc_spawned_musl) - 1);
 				} else if (str_eq(path, "/bin/sh")) {
 					bunix_console_log(proc_exec_shell,
 							    sizeof(proc_exec_shell) - 1);
-					bunix_console_log(proc_spawned_shell,
-							    sizeof(proc_spawned_shell) - 1);
 				} else if (str_eq(path, "/bin/login")) {
 					bunix_console_log(proc_exec_login,
 							    sizeof(proc_exec_login) - 1);
-					bunix_console_log(proc_spawned_login,
-							    sizeof(proc_spawned_login) - 1);
+				} else if (str_eq(path, "/sbin/init")) {
+					bunix_console_log(proc_exec_init,
+							    sizeof(proc_exec_init) - 1);
 				} else {
 					bunix_console_log(proc_exec,
 							    sizeof(proc_exec) - 1);
-					bunix_console_log(proc_spawned,
-							    sizeof(proc_spawned) - 1);
 				}
+				log_pid_line("proc: spawned pid=", pid);
 			} else {
 				reply.words[0] = (u64)-1;
 			}
@@ -1139,8 +1249,8 @@ int main(void)
 				reply.words[0] = 0;
 				reply.words[1] = process->pid;
 				reply.words[2] = process->status;
-				bunix_console_log(proc_waited,
-						    sizeof(proc_waited) - 1);
+				log_exit_line("proc: wait pid=", process->pid,
+					      process->status);
 				process_reset(process);
 			} else if (message.reply != 0) {
 				process->waiter = message.reply;
@@ -1163,19 +1273,28 @@ int main(void)
 				process->status = message.words[1];
 				process->exited = 1;
 				reply.words[0] = 0;
-				bunix_console_log(proc_exited,
-						    sizeof(proc_exited) - 1);
+				log_exit_line("proc: exited pid=", process->pid,
+					      process->status);
 				if (process->waiter != 0) {
 					reply_status(process->waiter,
 						     process->pid,
 						     process->status);
 					process->waiter = 0;
-					bunix_console_log(proc_waited,
-							    sizeof(proc_waited) - 1);
+					log_exit_line("proc: wait pid=",
+						      process->pid,
+						      process->status);
+					process_reset(process);
+				} else if (message.words[2] != 0 &&
+					   process->linux_pid != first_linux_pid) {
 					process_reset(process);
 				}
 			} else {
-				reply.words[0] = (u64)-1;
+				if (message.words[2] != 0) {
+					note_pending_linux_exit(message.words[0]);
+					reply.words[0] = 0;
+				} else {
+					reply.words[0] = (u64)-1;
+				}
 			}
 			break;
 		}
@@ -1230,6 +1349,48 @@ int main(void)
 				reply.words[2] = process->cmd_words[0];
 				reply.words[3] = process->cmd_words[1];
 			}
+			break;
+		}
+		case BUNIX_PROC_SET_CMDLINE: {
+			struct process *process =
+				process_find_linux_pid(message.words[0]);
+
+			if (process == 0) {
+				if (linux_exit_pending(message.words[0])) {
+					reply.words[0] = 0;
+					reply.words[1] = 0;
+				} else {
+					u64 pid = 0;
+
+					reply.words[0] =
+						(u64)register_linux_child_process(message.words[0],
+										  message.words[1],
+										  0,
+										  message.words[2],
+										  message.words[3],
+										  16,
+										  &pid);
+					reply.words[1] = pid;
+				}
+			} else {
+				process->cmd_words[0] = message.words[2];
+				process->cmd_words[1] = message.words[3];
+				process->cmd_len = 16;
+				reply.words[0] = 0;
+			}
+			break;
+		}
+		case BUNIX_PROC_REGISTER_LINUX: {
+			u64 pid = 0;
+
+			reply.words[0] =
+				(u64)register_linux_child_process(message.words[0],
+								  message.words[1],
+								  message.words[2],
+								  message.words[3],
+								  0, 0,
+								  &pid);
+			reply.words[1] = pid;
 			break;
 		}
 		default:

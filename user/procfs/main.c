@@ -744,13 +744,21 @@ static u64 build_pid_stat(u64 pid)
 static u64 build_pid_status(u64 pid)
 {
 	u64 len = 0;
+	struct proc_info info = { 0, 0, 0 };
 
+	(void)proc_info(pid, &info);
 	append_str(&len, "Name:\t");
 	append_str(&len, pid_name(pid));
 	append_char(&len, '\n');
 	append_str(&len, "State:\tS (sleeping)\n");
 	append_str(&len, "Pid:\t");
 	append_u64(&len, pid);
+	append_char(&len, '\n');
+	append_str(&len, "BunixTask:\t");
+	append_u64(&len, info.task_id);
+	append_char(&len, '\n');
+	append_str(&len, "LinuxPid:\t");
+	append_u64(&len, info.linux_pid);
 	append_char(&len, '\n');
 	append_str(&len, "PPid:\t0\n");
 	append_str(&len, "Uid:\t1000\t1000\t1000\t1000\n");

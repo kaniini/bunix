@@ -129,8 +129,15 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "sched: sleep") ||
 	    str_starts_with(fmt, "sched: wake") ||
 	    str_starts_with(fmt, "sched: reap") ||
+	    str_starts_with(fmt, "sched: close") ||
+	    str_starts_with(fmt, "sched: grant") ||
+	    str_starts_with(fmt, "sched: place") ||
+	    str_starts_with(fmt, "sched: task pid") ||
+	    str_starts_with(fmt, "sched: thread tid") ||
 	    str_starts_with(fmt, "ipc: send") ||
 	    str_starts_with(fmt, "ipc: recv") ||
+	    str_starts_with(fmt, "buffer: create") ||
+	    str_starts_with(fmt, "buffer: destroy") ||
 	    str_starts_with(fmt, "buffer: read") ||
 	    str_starts_with(fmt, "buffer: write") ||
 	    str_starts_with(fmt, "kernel: task map") ||
@@ -145,8 +152,6 @@ static u32 log_level_for_format(const char *fmt)
 	}
 
 	if (str_starts_with(fmt, "arch-vm: create space") ||
-	    str_starts_with(fmt, "buffer: create") ||
-	    str_starts_with(fmt, "buffer: destroy") ||
 	    str_starts_with(fmt, "elf: entry") ||
 	    str_starts_with(fmt, "ipc: port") ||
 	    str_starts_with(fmt, "kernel: recorded") ||
@@ -161,11 +166,6 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "names: lookup") ||
 	    str_starts_with(fmt, "names: register") ||
 	    str_starts_with(fmt, "names: update") ||
-	    str_starts_with(fmt, "sched: close") ||
-	    str_starts_with(fmt, "sched: grant") ||
-	    str_starts_with(fmt, "sched: place") ||
-	    str_starts_with(fmt, "sched: task pid") ||
-	    str_starts_with(fmt, "sched: thread tid") ||
 	    str_starts_with(fmt, "vfs: read file") ||
 	    str_starts_with(fmt, "vm: create space") ||
 	    str_starts_with(fmt, "vm: destroy space") ||

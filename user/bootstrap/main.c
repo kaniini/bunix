@@ -118,13 +118,52 @@ static void pack_path(u64 *words, const char *path)
 	}
 }
 
+static void sleep_ns(u64 time, u64 ns)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_TIME,
+		.type = BUNIX_TIME_SLEEP_NS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { ns, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (time != 0) {
+		(void)bunix_ipc_call(time, &request, &reply);
+	}
+}
+
+static long spawn_linux_init(u64 linux)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_LINUX,
+		.type = BUNIX_LINUX_EXEC_INIT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (linux == 0 ||
+	    bunix_ipc_call(linux, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+	return 0;
+}
+
 int main(void)
 {
-	const char launching[] = "init: launching servers\n";
-	const char attenuated[] = "init: bad cap denied\n";
-	const char names_ready[] = "init: names ready\n";
-	const char fs_namespace_ready[] = "init: fs namespace\n";
-	const char fs_ready[] = "init: fs ready\n";
+	const char launching[] = "bootstrap: launching servers\n";
+	const char attenuated[] = "bootstrap: bad cap denied\n";
+	const char names_ready[] = "bootstrap: names ready\n";
+	const char fs_namespace_ready[] = "bootstrap: fs namespace\n";
+	const char fs_ready[] = "bootstrap: fs ready\n";
 	struct bunix_msg vfs_request = {
 		.protocol = BUNIX_PROTO_VFS,
 		.type = BUNIX_VFS_READ_PATH,
@@ -138,6 +177,7 @@ int main(void)
 	u64 vm;
 	u64 time = 0;
 	u64 proc = 0;
+	u64 linux = 0;
 	u64 vfs = 0;
 	u64 vfs_launch = 0;
 	u64 fs_namespace = 0;
@@ -234,14 +274,48 @@ int main(void)
 		.words = { 0, 0, 0, 0 },
 	};
 	struct bunix_msg proc_reply;
-	const char first_done[] = "init: first process exited\n";
-	const char ipcstress_done[] = "init: ipcstress exited\n";
-	const char linux_spawned[] = "init: linux process spawned\n";
-	const char linux_done[] = "init: linux process exited\n";
-	const char musl_spawned[] = "init: musl process spawned\n";
-	const char musl_done[] = "init: musl process exited\n";
-	const char login_spawned[] = "init: login spawned\n";
+	const char first_done[] = "bootstrap: first process exited\n";
+	const char ipcstress_done[] = "bootstrap: ipcstress exited\n";
+	const char linux_spawned[] = "bootstrap: linux process spawned\n";
+	const char linux_done[] = "bootstrap: linux process exited\n";
+	const char linux_init_exec[] = "bootstrap: linux /sbin/init exec\n";
+	const char musl_spawned[] = "bootstrap: musl process spawned\n";
+	const char musl_done[] = "bootstrap: musl process exited\n";
 
+	if (bunix_launch_module_with_caps("ping", bad_caps,
+					  sizeof(bad_caps) /
+					  sizeof(bad_caps[0])) < 0) {
+		bunix_console_log(attenuated, sizeof(attenuated) - 1);
+	}
+	const struct bunix_launch_cap ping_caps[] = {
+		{ console, BUNIX_RIGHT_SEND, 0 },
+		{ vm, BUNIX_RIGHT_SEND, 0 },
+		{ time, BUNIX_RIGHT_SEND, 0 },
+	};
+	bunix_launch_module_with_caps("ping", ping_caps,
+				      sizeof(ping_caps) / sizeof(ping_caps[0]));
+
+	const struct bunix_launch_cap linux_caps[] = {
+		{ console, BUNIX_RIGHT_SEND, 0 },
+		{ vfs_launch, BUNIX_RIGHT_SEND, 0 },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+	};
+	bunix_launch_module_with_caps("linux", linux_caps,
+				      sizeof(linux_caps) / sizeof(linux_caps[0]));
+	linux = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_LINUX,
+					  BUNIX_RIGHT_SEND);
+	if (linux == 0) {
+		return 1;
+	}
+
+	if (spawn_linux_init(linux) != 0) {
+		return 1;
+	}
+	bunix_console_log(linux_init_exec, sizeof(linux_init_exec) - 1);
+
+	proc_request.type = BUNIX_PROC_SPAWN;
+	proc_request.words[2] = 0;
+	proc_request.words[3] = 0;
 	pack_path(&proc_request.words[0], "/bin/first");
 	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
 	    proc_reply.words[0] != 0) {
@@ -271,28 +345,9 @@ int main(void)
 	}
 	bunix_console_log(ipcstress_done, sizeof(ipcstress_done) - 1);
 
-	if (bunix_launch_module_with_caps("ping", bad_caps,
-					  sizeof(bad_caps) /
-					  sizeof(bad_caps[0])) < 0) {
-		bunix_console_log(attenuated, sizeof(attenuated) - 1);
-	}
-	const struct bunix_launch_cap ping_caps[] = {
-		{ console, BUNIX_RIGHT_SEND, 0 },
-		{ vm, BUNIX_RIGHT_SEND, 0 },
-		{ time, BUNIX_RIGHT_SEND, 0 },
-	};
-	bunix_launch_module_with_caps("ping", ping_caps,
-				      sizeof(ping_caps) / sizeof(ping_caps[0]));
-
-	const struct bunix_launch_cap linux_caps[] = {
-		{ console, BUNIX_RIGHT_SEND, 0 },
-		{ vfs_launch, BUNIX_RIGHT_SEND, 0 },
-		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
-	};
-	bunix_launch_module_with_caps("linux", linux_caps,
-				      sizeof(linux_caps) / sizeof(linux_caps[0]));
-
 	proc_request.type = BUNIX_PROC_SPAWN;
+	proc_request.words[2] = 0;
+	proc_request.words[3] = 0;
 	pack_path(&proc_request.words[0], "/bin/lxtest");
 	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
 	    proc_reply.words[0] != 0) {
@@ -322,16 +377,9 @@ int main(void)
 	}
 	bunix_console_log(musl_done, sizeof(musl_done) - 1);
 
-	proc_request.type = BUNIX_PROC_SPAWN;
-	proc_request.words[2] = 0;
-	proc_request.words[3] = 0;
-	pack_path(&proc_request.words[0], "/bin/login");
-	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
-	    proc_reply.words[0] != 0) {
-		return 1;
-	}
-	bunix_console_log(login_spawned, sizeof(login_spawned) - 1);
 	bunix_console_logs_to_ring();
 
-	return 0;
+	for (;;) {
+		sleep_ns(time, 1000000000ull);
+	}
 }

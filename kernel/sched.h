@@ -95,6 +95,7 @@ u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights);
 u64 task_grant_buffer(struct task *task, struct shared_buffer *buffer,
 		      u32 rights);
 u64 task_grant_task(struct task *owner, struct task *target, u32 rights);
+int task_clone_handles(struct task *dst, struct task *src);
 struct task *task_from_handle(struct task *owner, u64 handle, u32 rights);
 int task_can_inherit_handle(struct task *src, u64 handle, u32 rights);
 u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
