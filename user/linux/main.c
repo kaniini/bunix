@@ -1787,6 +1787,17 @@ static long linux_getpgid(struct linux_process *process, u64 pid)
 	return (long)target->pgid;
 }
 
+static long linux_getsid(struct linux_process *process, u64 pid)
+{
+	struct linux_process *target = pid == 0 ? process :
+				       linux_process_find_pid(pid);
+
+	if (target == 0) {
+		return -LINUX_ESRCH;
+	}
+	return (long)target->sid;
+}
+
 static long linux_setpgid(struct linux_process *process, u64 pid, u64 pgid)
 {
 	struct linux_process *target = pid == 0 ? process :
@@ -3469,6 +3480,10 @@ int main(void)
 		case BUNIX_LINUX_GETPGID:
 			reply.words[0] = (u64)linux_getpgid(process,
 							    message.words[0]);
+			break;
+		case BUNIX_LINUX_GETSID:
+			reply.words[0] = (u64)linux_getsid(process,
+							   message.words[0]);
 			break;
 		case BUNIX_LINUX_SETPGID:
 			reply.words[0] = (u64)linux_setpgid(process,

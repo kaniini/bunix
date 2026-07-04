@@ -106,6 +106,7 @@ enum {
 	LINUX_SYSCALL_UNAME = 63,
 	LINUX_SYSCALL_SETPGID = 109,
 	LINUX_SYSCALL_SETSID = 112,
+	LINUX_SYSCALL_GETSID = 124,
 	LINUX_SYSCALL_GETGROUPS = 115,
 	LINUX_SYSCALL_SETGROUPS = 116,
 	LINUX_SYSCALL_SETRESUID = 117,
@@ -1211,6 +1212,7 @@ static int linux_syscall_forwards_scalar(u64 number)
 	case LINUX_SYSCALL_SETRESUID:
 	case LINUX_SYSCALL_SETRESGID:
 	case LINUX_SYSCALL_GETPGID:
+	case LINUX_SYSCALL_GETSID:
 	case LINUX_SYSCALL_SETPGID:
 	case LINUX_SYSCALL_SOCKET:
 	case LINUX_SYSCALL_KILL:
@@ -1996,6 +1998,8 @@ static const char *linux_syscall_name(u64 number)
 		return "setresgid";
 	case LINUX_SYSCALL_GETPGID:
 		return "getpgid";
+	case LINUX_SYSCALL_GETSID:
+		return "getsid";
 	case LINUX_SYSCALL_SETPGID:
 		return "setpgid";
 	case LINUX_SYSCALL_SETSID:

@@ -47,6 +47,12 @@ _start:
 	cmpq %r15, %rax
 	jne fail
 
+	movq $124, %rax
+	xorq %rdi, %rdi
+	syscall
+	testq %rax, %rax
+	jle fail
+
 	movq $102, %rax
 	syscall
 	testq %rax, %rax
