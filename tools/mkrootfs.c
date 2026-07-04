@@ -6,8 +6,8 @@
 
 enum {
 	ROOTFS_MAGIC = 0x30534652,
-	ROOTFS_MAX_PATH = 32,
-	ROOTFS_MAX_ENTRIES = 32,
+	ROOTFS_MAX_PATH = 128,
+	ROOTFS_MAX_ENTRIES = 128,
 	ROOTFS_TYPE_REGULAR = 1,
 	ROOTFS_TYPE_DIRECTORY = 2,
 };
@@ -56,6 +56,35 @@ static int add_directory(struct rootfs_entry *entries, size_t *count,
 	entries[*count].mode = 0555;
 	entries[*count].type = ROOTFS_TYPE_DIRECTORY;
 	(*count)++;
+	return 0;
+}
+
+static int add_parent_directories(struct rootfs_entry *entries, size_t *count,
+				  const char *path)
+{
+	char current[ROOTFS_MAX_PATH];
+	size_t len = 0;
+
+	current[len++] = '/';
+	current[len] = '\0';
+	for (size_t i = 1; path[i] != '\0'; i++) {
+		if (path[i] != '/') {
+			if (len + 1 >= sizeof(current)) {
+				return -1;
+			}
+			current[len++] = path[i];
+			current[len] = '\0';
+			continue;
+		}
+		if (len > 1 && add_directory(entries, count, current) != 0) {
+			return -1;
+		}
+		if (len + 1 >= sizeof(current)) {
+			return -1;
+		}
+		current[len++] = '/';
+		current[len] = '\0';
+	}
 	return 0;
 }
 
@@ -133,7 +162,6 @@ int main(int argc, char **argv)
 
 	memset(entries, 0, sizeof(entries));
 	if (add_directory(entries, &entry_count, "/") != 0 ||
-	    add_directory(entries, &entry_count, "/bin") != 0 ||
 	    add_directory(entries, &entry_count, "/dev") != 0) {
 		return 1;
 	}
@@ -154,6 +182,14 @@ int main(int argc, char **argv)
 		if (path[0] != '/' || path_exists(entries, entry_count, path)) {
 			fprintf(stderr, "mkrootfs: invalid duplicate path: %s\n",
 				path);
+			return 1;
+		}
+		if (add_parent_directories(entries, &entry_count, path) != 0) {
+			fprintf(stderr, "mkrootfs: add parents for %s\n", path);
+			return 1;
+		}
+		if (entry_count >= ROOTFS_MAX_ENTRIES) {
+			fprintf(stderr, "mkrootfs: too many entries\n");
 			return 1;
 		}
 

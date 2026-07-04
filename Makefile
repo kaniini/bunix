@@ -40,6 +40,7 @@ BLOCK_IMAGE := $(BUILD_DIR)/modules/disk0.img
 ROOTFS_TOOL := $(BUILD_DIR)/tools/mkrootfs
 ROOTFS_HELLO := modules/hello.txt
 ROOTFS_SECRET := modules/secret.txt
+ROOTFS_NESTED := modules/nested.txt
 ROOTFS_PASSWD := modules/passwd
 ROOTFS_SHADOW := modules/shadow
 
@@ -203,9 +204,9 @@ $(ROOTFS_TOOL): tools/mkrootfs.c
 	mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror $< -o $@
 
-$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(FIRST_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(EXECOK_MODULE) $(MUSL_HELLO_MODULE) $(BUSYBOX_STATIC)
+$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(FIRST_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(EXECOK_MODULE) $(MUSL_HELLO_MODULE) $(BUSYBOX_STATIC)
 	mkdir -p $(dir $@)
-	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /bin/first $(FIRST_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/busybox $(BUSYBOX_STATIC) /bin/sh $(BUSYBOX_STATIC) /bin/dmesg $(BUSYBOX_STATIC) /bin/cat $(BUSYBOX_STATIC) /bin/stat $(BUSYBOX_STATIC) /bin/uptime $(BUSYBOX_STATIC) /bin/sleep $(BUSYBOX_STATIC)
+	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /bin/first $(FIRST_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/busybox $(BUSYBOX_STATIC) /bin/sh $(BUSYBOX_STATIC) /bin/dmesg $(BUSYBOX_STATIC) /bin/cat $(BUSYBOX_STATIC) /bin/stat $(BUSYBOX_STATIC) /bin/uptime $(BUSYBOX_STATIC) /bin/sleep $(BUSYBOX_STATIC)
 
 $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
