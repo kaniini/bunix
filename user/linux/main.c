@@ -15,6 +15,7 @@ enum {
 	LINUX_ECHILD = 10,
 	LINUX_WAIT_BLOCK = 0x7fffffff,
 	LINUX_NO_PROCESS = 0xffffffff,
+	LINUX_EINTR = 4,
 	LINUX_GETUID = 102,
 	LINUX_GETGID = 104,
 	LINUX_SETUID = 105,
@@ -47,6 +48,7 @@ enum {
 	LINUX_VEOF = 4,
 	LINUX_VTIME = 5,
 	LINUX_VMIN = 6,
+	LINUX_SIGINT = 2,
 	LINUX_ICRNL = 0000400,
 	LINUX_OPOST = 0000001,
 	LINUX_ONLCR = 0000004,
@@ -110,6 +112,7 @@ struct linux_process {
 	u64 waiter;
 	u64 wait_buffer;
 	u64 wait_pid;
+	u64 pending_signals;
 	char cwd[LINUX_MAX_PATH];
 	struct linux_fd fds[LINUX_MAX_FDS];
 };
@@ -128,7 +131,9 @@ static u64 user_service;
 
 static u64 resolve_service(u64 service, unsigned int rights);
 static void linux_process_reset(struct linux_process *process);
+static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
+static void linux_wake_parent(struct linux_process *child);
 
 static u64 linux_user_service(void)
 {
@@ -653,6 +658,7 @@ static long linux_register_process(u64 bunix_task, u64 ppid)
 			processes[i].waiter = 0;
 			processes[i].wait_buffer = 0;
 			processes[i].wait_pid = 0;
+			processes[i].pending_signals = 0;
 			linux_process_init_fds(&processes[i]);
 			if (foreground_pgid == 0 || pid == 1) {
 				foreground_pgid = pid;
@@ -696,6 +702,7 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 			processes[i].waiter = 0;
 			processes[i].wait_buffer = 0;
 			processes[i].wait_pid = 0;
+			processes[i].pending_signals = 0;
 			for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
 				processes[i].fds[fd] = parent->fds[fd];
 				if (processes[i].fds[fd].kind == LINUX_FD_FILE) {
@@ -872,6 +879,49 @@ static void linux_wake_parent(struct linux_process *child)
 	parent->waiter = 0;
 	parent->wait_buffer = 0;
 	parent->wait_pid = 0;
+}
+
+static void linux_process_exit_status(struct linux_process *process, u64 status)
+{
+	if (process == 0 || process->exited) {
+		return;
+	}
+
+	linux_close_process_fds(process);
+	linux_reparent_children(process);
+	process->exited = 1;
+	process->exit_status = status;
+	notify_proc_exit(process->pid, process->exit_status);
+	linux_wake_parent(process);
+}
+
+static int linux_signal_process(struct linux_process *process, u64 signal)
+{
+	if (process == 0 || process->exited || signal >= 64) {
+		return 0;
+	}
+
+	process->pending_signals |= 1ull << signal;
+	if (signal == LINUX_SIGINT) {
+		linux_process_exit_status(process, 128 + signal);
+		return 1;
+	}
+
+	return 0;
+}
+
+static int linux_signal_foreground(u64 signal)
+{
+	int delivered = 0;
+
+	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
+		if (processes[i].pid != 0 &&
+		    processes[i].pgid == foreground_pgid) {
+			delivered |= linux_signal_process(&processes[i], signal);
+		}
+	}
+
+	return delivered;
 }
 
 static long linux_user_credential(struct linux_process *process, u64 type)
@@ -1145,6 +1195,7 @@ static long tty_fill_canonical_line(void)
 	const unsigned int lflag = tty_lflag();
 	const unsigned int iflag = tty_iflag();
 	const char erase = tty_termios[LINUX_TERM_CC + LINUX_VERASE];
+	const char intr = tty_termios[LINUX_TERM_CC + LINUX_VINTR];
 	u64 used = 0;
 
 	for (;;) {
@@ -1156,6 +1207,15 @@ static long tty_fill_canonical_line(void)
 		}
 		if (c == '\r' && (iflag & LINUX_ICRNL) != 0) {
 			c = '\n';
+		}
+		if ((lflag & LINUX_ISIG) != 0 && c == intr) {
+			if ((lflag & LINUX_ECHO) != 0) {
+				tty_echo("^C\n", 3);
+			}
+			tty_line_offset = 0;
+			tty_line_len = 0;
+			(void)linux_signal_foreground(LINUX_SIGINT);
+			return -LINUX_EINTR;
 		}
 		if ((c == erase || c == '\b') && used != 0) {
 			used--;
@@ -1907,6 +1967,7 @@ static void linux_process_reset(struct linux_process *process)
 	process->waiter = 0;
 	process->wait_buffer = 0;
 	process->wait_pid = 0;
+	process->pending_signals = 0;
 	process->cwd[0] = '\0';
 	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
 		process->fds[fd].handle = 0;
@@ -2223,14 +2284,9 @@ int main(void)
 			}
 			break;
 		case BUNIX_LINUX_EXIT_GROUP:
-			linux_close_process_fds(process);
-			linux_reparent_children(process);
-			process->exited = 1;
-			process->exit_status = message.words[0];
 			bunix_console_write(exit_group, sizeof(exit_group) - 1);
+			linux_process_exit_status(process, message.words[0]);
 			bunix_console_write(exited_ok, sizeof(exited_ok) - 1);
-			notify_proc_exit(process->pid, process->exit_status);
-			linux_wake_parent(process);
 			reply.words[0] = 0;
 			break;
 		default:
