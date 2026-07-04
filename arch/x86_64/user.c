@@ -78,6 +78,7 @@ enum {
 	LINUX_SYSCALL_FCNTL = 72,
 	LINUX_SYSCALL_GETCWD = 79,
 	LINUX_SYSCALL_CHDIR = 80,
+	LINUX_SYSCALL_READLINK = 89,
 	LINUX_SYSCALL_SYSINFO = 99,
 	LINUX_SYSCALL_GETUID = 102,
 	LINUX_SYSCALL_SYSLOG = 103,
@@ -112,6 +113,8 @@ enum {
 	LINUX_SYSCALL_GETTID = 186,
 	LINUX_SYSCALL_GETDENTS64 = 217,
 	LINUX_SYSCALL_NEWFSTATAT = 262,
+	LINUX_SYSCALL_READLINKAT = 267,
+	LINUX_AT_SYMLINK_NOFOLLOW = 0x100,
 	LINUX_SYSCALL_PPOLL = 271,
 	LINUX_SYSCALL_SET_ROBUST_LIST = 273,
 	LINUX_SYSCALL_DUP3 = 292,
@@ -156,6 +159,7 @@ enum {
 	LINUX_STAT_SIZE = 144,
 	LINUX_WAIT_STATUS_SIZE = 4,
 	LINUX_S_IFDIR = 0040000,
+	LINUX_S_IFLNK = 0120000,
 	LINUX_S_IFREG = 0100000,
 	LINUX_INITIAL_BRK = 0x900000,
 	LINUX_MAX_BRK = 0x10000000,
@@ -181,6 +185,7 @@ enum {
 	USER_VFS_CLOSE = 7,
 	USER_VFS_TYPE_REGULAR = 1,
 	USER_VFS_TYPE_DIRECTORY = 2,
+	USER_VFS_TYPE_SYMLINK = 3,
 	LINUX_RPC_REGISTER_PROCESS = 1000,
 	LINUX_RPC_FORK_PROCESS = 1001,
 	LINUX_RPC_EXEC_PROCESS = 1002,
@@ -492,7 +497,9 @@ static int linux_write_stat_user(u64 addr, u64 size, u64 type_mode,
 	const u64 mode = type_mode & 0xffffffff;
 	const u64 type = type_mode >> 32;
 	const u64 linux_type = type == USER_VFS_TYPE_DIRECTORY ?
-			       LINUX_S_IFDIR : LINUX_S_IFREG;
+			       LINUX_S_IFDIR :
+			       (type == USER_VFS_TYPE_SYMLINK ?
+				LINUX_S_IFLNK : LINUX_S_IFREG);
 
 	mem_zero(stat, sizeof(stat));
 	write_u64_le(stat + 0, 1);
@@ -2652,6 +2659,58 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		buffer_release(buffer);
 		return reply.words[0];
 	}
+	case LINUX_SYSCALL_READLINK:
+	case LINUX_SYSCALL_READLINKAT: {
+		struct shared_buffer *buffer;
+		const char *path = number == LINUX_SYSCALL_READLINK ?
+				    (const char *)arg0 : (const char *)arg1;
+		void *out = number == LINUX_SYSCALL_READLINK ?
+			    (void *)arg1 : (void *)arg2;
+		const u64 out_size = number == LINUX_SYSCALL_READLINK ?
+				     arg2 : arg3;
+		const u64 dirfd = number == LINUX_SYSCALL_READLINK ?
+				  (u64)-100 : arg0;
+		u64 len = 0;
+		u64 buffer_size;
+
+		if (path == 0 || out == 0 || out_size == 0 ||
+		    out_size > LINUX_MAX_SYSCALL_BUFFER) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (copy_cstr_from_user((char *)syscall_copy_buffer, path,
+					LINUX_MAX_SYSCALL_BUFFER) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		len = str_len((const char *)syscall_copy_buffer) + 1;
+		buffer_size = out_size > len ? out_size : len;
+
+		buffer = buffer_create(buffer_size);
+		if (buffer == 0 ||
+		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+
+		request.type = LINUX_SYSCALL_READLINKAT;
+		request.words[0] = dirfd;
+		request.words[1] = len;
+		request.words[2] = out_size;
+		request.words[3] = 0;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_RECV | TASK_RIGHT_SEND;
+		request.cap_object = buffer;
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_ENOSYS;
+		}
+		if ((long)reply.words[0] >= 0 &&
+		    buffer_read(buffer, 0, out, reply.words[0]) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+		buffer_release(buffer);
+		return reply.words[0];
+	}
 	case LINUX_SYSCALL_STAT:
 	case LINUX_SYSCALL_LSTAT:
 	case LINUX_SYSCALL_NEWFSTATAT: {
@@ -2662,6 +2721,10 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 				  arg0 : (u64)-100;
 		const u64 stat_addr = number == LINUX_SYSCALL_NEWFSTATAT ?
 				      arg2 : arg1;
+		const u64 flags = number == LINUX_SYSCALL_LSTAT ?
+				  LINUX_AT_SYMLINK_NOFOLLOW :
+				  (number == LINUX_SYSCALL_NEWFSTATAT ?
+				   arg3 : 0);
 		u64 len = 0;
 
 		if (path == 0 || stat_addr == 0) {
@@ -2683,7 +2746,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		request.type = LINUX_SYSCALL_NEWFSTATAT;
 		request.words[0] = dirfd;
 		request.words[1] = len;
-		request.words[2] = 0;
+		request.words[2] = flags & LINUX_AT_SYMLINK_NOFOLLOW ? 1 : 0;
 		request.words[3] = 0;
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_RECV;

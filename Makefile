@@ -43,6 +43,23 @@ ROOTFS_SECRET := modules/secret.txt
 ROOTFS_NESTED := modules/nested.txt
 ROOTFS_PASSWD := modules/passwd
 ROOTFS_SHADOW := modules/shadow
+ROOTFS_BUSYBOX_LINKS := \
+	--symlink /bin/sh /bin/busybox \
+	--symlink /bin/dmesg /bin/busybox \
+	--symlink /bin/cat /bin/busybox \
+	--symlink /bin/stat /bin/busybox \
+	--symlink /bin/uptime /bin/busybox \
+	--symlink /bin/sleep /bin/busybox \
+	--symlink /bin/ls /bin/busybox \
+	--symlink /bin/mount /bin/busybox \
+	--symlink /bin/free /bin/busybox \
+	--symlink /bin/ps /bin/busybox \
+	--symlink /bin/top /bin/busybox \
+	--symlink /bin/id /bin/busybox \
+	--symlink /bin/kill /bin/busybox \
+	--symlink /bin/echo /bin/busybox \
+	--symlink /bin/stty /bin/busybox \
+	--symlink /bin/pwd /bin/busybox
 
 CC ?= gcc
 MUSL_CC ?= x86_64-alpine-linux-musl-gcc
@@ -206,7 +223,7 @@ $(ROOTFS_TOOL): tools/mkrootfs.c
 
 $(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(FIRST_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(EXECOK_MODULE) $(MUSL_HELLO_MODULE) $(BUSYBOX_STATIC)
 	mkdir -p $(dir $@)
-	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /bin/first $(FIRST_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/busybox $(BUSYBOX_STATIC) /bin/sh $(BUSYBOX_STATIC) /bin/dmesg $(BUSYBOX_STATIC) /bin/cat $(BUSYBOX_STATIC) /bin/stat $(BUSYBOX_STATIC) /bin/uptime $(BUSYBOX_STATIC) /bin/sleep $(BUSYBOX_STATIC)
+	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /bin/first $(FIRST_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/busybox $(BUSYBOX_STATIC) $(ROOTFS_BUSYBOX_LINKS)
 
 $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(INIT_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \

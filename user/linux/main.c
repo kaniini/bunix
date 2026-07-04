@@ -72,6 +72,7 @@ enum {
 	LINUX_PIPE_CAPACITY = 4096,
 	LINUX_S_IFCHR = 0020000,
 	LINUX_S_IFDIR = 0040000,
+	LINUX_S_IFLNK = 0120000,
 	LINUX_S_IFREG = 0100000,
 	LINUX_S_IFSOCK = 0140000,
 	LINUX_S_IFIFO = 0010000,
@@ -105,6 +106,7 @@ enum {
 	LINUX_F_SETFL = 4,
 	LINUX_F_DUPFD_CLOEXEC = 1030,
 	LINUX_DT_DIR = 4,
+	LINUX_DT_LNK = 10,
 	LINUX_DT_REG = 8,
 	LINUX_UTMP_RECORD_SIZE = 400,
 	LINUX_UTMP_USER_PROCESS = 7,
@@ -1932,12 +1934,15 @@ static u64 linux_mode_for_type(u64 type, u64 mode)
 	if (type == BUNIX_VFS_TYPE_DIRECTORY) {
 		return LINUX_S_IFDIR | mode;
 	}
+	if (type == BUNIX_VFS_TYPE_SYMLINK) {
+		return LINUX_S_IFLNK | mode;
+	}
 	return LINUX_S_IFREG | mode;
 }
 
-static long linux_vfs_path_call(struct linux_process *process, u64 type,
-				u64 base_handle, const char *path,
-				struct bunix_msg *reply)
+static long linux_vfs_path_call_flags(struct linux_process *process, u64 type,
+				      u64 base_handle, const char *path,
+				      u64 flags, struct bunix_msg *reply)
 {
 	const u64 cwd_len = string_len(process->cwd) + 1;
 	const u64 path_len = string_len(path) + 1;
@@ -1951,7 +1956,7 @@ static long linux_vfs_path_call(struct linux_process *process, u64 type,
 		.reply = 0,
 		.cap = (u64)path_buffer,
 		.words = { cwd_len, path_len, base_handle,
-			   process->bunix_task },
+			   process->bunix_task | (flags << 32) },
 	};
 	long result;
 
@@ -1971,6 +1976,14 @@ static long linux_vfs_path_call(struct linux_process *process, u64 type,
 	result = bunix_ipc_call(LINUX_HANDLE_VFS, &request, reply);
 	bunix_handle_close((u64)path_buffer);
 	return result;
+}
+
+static long linux_vfs_path_call(struct linux_process *process, u64 type,
+				u64 base_handle, const char *path,
+				struct bunix_msg *reply)
+{
+	return linux_vfs_path_call_flags(process, type, base_handle, path, 0,
+					 reply);
 }
 
 static long linux_close_vfs_handle(u64 handle)
@@ -2210,7 +2223,7 @@ static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 
 static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 			     u64 path_len, u64 path_buffer,
-			     struct bunix_msg *out)
+			     u64 flags, struct bunix_msg *out)
 {
 	char path[LINUX_MAX_PATH];
 	char full_path[LINUX_MAX_PATH];
@@ -2240,8 +2253,9 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 		return 0;
 	}
 
-	if (linux_vfs_path_call(process, BUNIX_VFS_STAT_PATH_META_BUFFER,
-				base_handle, path, &reply) != 0 ||
+	if (linux_vfs_path_call_flags(process, BUNIX_VFS_STAT_PATH_META_BUFFER,
+				      base_handle, path, flags != 0 ? 1 : 0,
+				      &reply) != 0 ||
 	    reply.words[0] != 0) {
 		return -LINUX_ENOENT;
 	}
@@ -2250,6 +2264,44 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 	out->words[2] = reply.words[2];
 	out->words[3] = reply.words[3];
 	return 0;
+}
+
+static long linux_readlinkat(struct linux_process *process, u64 dirfd,
+			     u64 path_len, u64 out_size, u64 path_buffer)
+{
+	char path[LINUX_MAX_PATH];
+	char target[16];
+	struct bunix_msg reply;
+	u64 base_handle;
+	u64 copy_len;
+	long base_result;
+
+	if (path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
+	    out_size == 0 ||
+	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
+	    path[path_len - 1] != '\0') {
+		return -LINUX_EINVAL;
+	}
+	base_result = linux_dirfd_base_handle(process, dirfd, path,
+					      &base_handle);
+	if (base_result != 0) {
+		return base_result;
+	}
+	if (linux_vfs_path_call(process, BUNIX_VFS_READLINK_BUFFER,
+				base_handle, path, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_ENOENT;
+	}
+	unpack_path(target, reply.words[2], reply.words[3]);
+	copy_len = reply.words[1];
+	if (copy_len > out_size) {
+		copy_len = out_size;
+	}
+	if (copy_len > sizeof(target) ||
+	    bunix_buffer_write(path_buffer, 0, target, copy_len) != 0) {
+		return -LINUX_EINVAL;
+	}
+	return (long)copy_len;
 }
 
 static void linux_store_dirent(char *buffer, u64 offset, u64 ino, u64 next,
@@ -2345,7 +2397,9 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 		linux_store_dirent(out, written, process->fds[fd].offset + 1,
 				   next_offset, reclen,
 				   type == BUNIX_VFS_TYPE_DIRECTORY ?
-				   LINUX_DT_DIR : LINUX_DT_REG, name);
+				   LINUX_DT_DIR :
+				   (type == BUNIX_VFS_TYPE_SYMLINK ?
+				    LINUX_DT_LNK : LINUX_DT_REG), name);
 		written += reclen;
 		process->fds[fd].offset = next_offset;
 	}
@@ -3191,11 +3245,23 @@ int main(void)
 							       message.words[0],
 							       message.words[1],
 							       message.cap,
+							       message.words[2],
 							       &reply);
 			if (reply.words[0] == 0) {
 				bunix_console_write(newfstatat_ok,
 						    sizeof(newfstatat_ok) - 1);
 			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_READLINK:
+		case BUNIX_LINUX_READLINKAT:
+			reply.words[0] = (u64)linux_readlinkat(process,
+							       message.words[0],
+							       message.words[1],
+							       message.words[2],
+							       message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

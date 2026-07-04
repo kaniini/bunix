@@ -10,6 +10,7 @@ enum {
 	ROOTFS_MAX_ENTRIES = 128,
 	ROOTFS_TYPE_REGULAR = 1,
 	ROOTFS_TYPE_DIRECTORY = 2,
+	ROOTFS_TYPE_SYMLINK = 3,
 };
 
 struct rootfs_header {
@@ -102,6 +103,17 @@ static long file_size(FILE *file)
 	return size;
 }
 
+static int copy_bytes(FILE *out, const char *path, const unsigned char *data,
+		      size_t len)
+{
+	if (len != 0 && fwrite(data, 1, len, out) != len) {
+		fprintf(stderr, "mkrootfs: write %s: %s\n", path,
+			strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
 static int copy_file(FILE *out, const char *path)
 {
 	FILE *in = fopen(path, "rb");
@@ -139,16 +151,9 @@ static int copy_file(FILE *out, const char *path)
 
 int main(int argc, char **argv)
 {
-	if (argc < 4 || (argc % 2) != 0) {
+	if (argc < 4) {
 		fprintf(stderr,
-			"usage: mkrootfs OUT PATH0 FILE0 [PATH1 FILE1 ...]\n");
-		return 1;
-	}
-
-	const size_t file_count = (size_t)(argc - 2) / 2;
-	if (file_count + 3 > ROOTFS_MAX_ENTRIES) {
-		fprintf(stderr, "mkrootfs: too many entries: %zu\n",
-			file_count + 3);
+			"usage: mkrootfs OUT PATH FILE [--symlink PATH TARGET] ...\n");
 		return 1;
 	}
 
@@ -165,11 +170,31 @@ int main(int argc, char **argv)
 	    add_directory(entries, &entry_count, "/dev") != 0) {
 		return 1;
 	}
-	for (size_t i = 0; i < file_count; i++) {
-		const char *path = argv[2 + i * 2];
-		const char *file = argv[3 + i * 2];
+	for (int arg = 2; arg < argc;) {
+		const int is_symlink = strcmp(argv[arg], "--symlink") == 0;
+		const char *path;
+		const char *file;
 		FILE *in;
 		long size;
+
+		if (is_symlink) {
+			if (arg + 2 >= argc) {
+				fprintf(stderr, "mkrootfs: incomplete symlink\n");
+				return 1;
+			}
+			path = argv[arg + 1];
+			file = argv[arg + 2];
+			arg += 3;
+		} else {
+			if (arg + 1 >= argc) {
+				fprintf(stderr, "mkrootfs: missing file for %s\n",
+					argv[arg]);
+				return 1;
+			}
+			path = argv[arg];
+			file = argv[arg + 1];
+			arg += 2;
+		}
 
 		if (entry_count >= ROOTFS_MAX_ENTRIES) {
 			fprintf(stderr, "mkrootfs: too many entries\n");
@@ -193,40 +218,54 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-		in = fopen(file, "rb");
-		if (in == NULL) {
-			fprintf(stderr, "mkrootfs: open %s: %s\n", file,
-				strerror(errno));
-			return 1;
-		}
-		size = file_size(in);
-		fclose(in);
-		if (size < 0) {
-			fprintf(stderr, "mkrootfs: size %s: %s\n", file,
-				strerror(errno));
-			return 1;
+		if (is_symlink) {
+			if (strlen(file) >= ROOTFS_MAX_PATH) {
+				fprintf(stderr,
+					"mkrootfs: symlink target too long: %s\n",
+					file);
+				return 1;
+			}
+			size = (long)strlen(file);
+		} else {
+			in = fopen(file, "rb");
+			if (in == NULL) {
+				fprintf(stderr, "mkrootfs: open %s: %s\n",
+					file, strerror(errno));
+				return 1;
+			}
+			size = file_size(in);
+			fclose(in);
+			if (size < 0) {
+				fprintf(stderr, "mkrootfs: size %s: %s\n",
+					file, strerror(errno));
+				return 1;
+			}
 		}
 
 		strcpy(entries[entry_count].path, path);
 		entries[entry_count].size = (uint64_t)size;
 		entries[entry_count].uid = 0;
 		entries[entry_count].gid = 0;
-		entries[entry_count].mode = strncmp(path, "/bin/", 5) == 0 ?
-				  0555 : 0444;
+		entries[entry_count].mode = is_symlink ? 0777 :
+				  (strncmp(path, "/bin/", 5) == 0 ?
+				   0555 : 0444);
 		if (strcmp(path, "/secret.txt") == 0) {
 			entries[entry_count].mode = 0400;
 		}
 		if (strcmp(path, "/etc/shadow") == 0) {
 			entries[entry_count].mode = 0400;
 		}
-		entries[entry_count].type = ROOTFS_TYPE_REGULAR;
+		entries[entry_count].type = is_symlink ?
+					     ROOTFS_TYPE_SYMLINK :
+					     ROOTFS_TYPE_REGULAR;
 		entry_count++;
 	}
 
 	header.entries = (uint32_t)entry_count;
 	uint64_t offset = sizeof(header) + entry_count * sizeof(entries[0]);
 	for (size_t i = 0; i < entry_count; i++) {
-		if (entries[i].type == ROOTFS_TYPE_REGULAR) {
+		if (entries[i].type == ROOTFS_TYPE_REGULAR ||
+		    entries[i].type == ROOTFS_TYPE_SYMLINK) {
 			entries[i].offset = offset;
 			offset += entries[i].size;
 		}
@@ -246,10 +285,24 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	for (size_t i = 0; i < file_count; i++) {
-		if (copy_file(out, argv[3 + i * 2]) != 0) {
-			fclose(out);
-			return 1;
+	for (int arg = 2; arg < argc;) {
+		if (strcmp(argv[arg], "--symlink") == 0) {
+			const char *path = argv[arg + 1];
+			const char *target = argv[arg + 2];
+
+			if (copy_bytes(out, path,
+				       (const unsigned char *)target,
+				       strlen(target)) != 0) {
+				fclose(out);
+				return 1;
+			}
+			arg += 3;
+		} else {
+			if (copy_file(out, argv[arg + 1]) != 0) {
+				fclose(out);
+				return 1;
+			}
+			arg += 2;
 		}
 	}
 

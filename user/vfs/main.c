@@ -5,6 +5,7 @@ enum {
 	VFS_HANDLE_NAMES = 3,
 	ROOTFS_MAGIC = 0x30534652,
 	ROOTFS_MAX_PATH = 128,
+	ROOTFS_MAX_SYMLINKS = 8,
 	VFS_MAX_PATH = 256,
 	VFS_OPEN_ROOT = 1,
 	VFS_OPEN_REMOTE = 2,
@@ -54,6 +55,7 @@ static unsigned int root_entry_count;
 static struct bunix_id_table mounts;
 static struct bunix_id_table open_files;
 static u64 user_service;
+static u64 root_block;
 
 static long register_service(u64 service, u64 handle)
 {
@@ -516,10 +518,12 @@ static int rootfs_mount(u64 block)
 		root_entries[i].type = disk_entries[i].type;
 		if (root_entries[i].path == 0 ||
 		    (root_entries[i].type != BUNIX_VFS_TYPE_REGULAR &&
-		     root_entries[i].type != BUNIX_VFS_TYPE_DIRECTORY)) {
+		     root_entries[i].type != BUNIX_VFS_TYPE_DIRECTORY &&
+		     root_entries[i].type != BUNIX_VFS_TYPE_SYMLINK)) {
 			return -1;
 		}
-		if (root_entries[i].type == BUNIX_VFS_TYPE_REGULAR &&
+		if ((root_entries[i].type == BUNIX_VFS_TYPE_REGULAR ||
+		     root_entries[i].type == BUNIX_VFS_TYPE_SYMLINK) &&
 		    (root_entries[i].offset > reply.words[1] ||
 		     root_entries[i].size > reply.words[1] - root_entries[i].offset)) {
 			return -1;
@@ -528,6 +532,7 @@ static int rootfs_mount(u64 block)
 
 	bunix_free(disk_entries);
 	root_entry_count = header.entries;
+	root_block = block;
 	return 0;
 }
 
@@ -551,6 +556,75 @@ static const struct rootfs_entry *rootfs_find_ref(const char *path)
 		}
 	}
 
+	return 0;
+}
+
+static int rootfs_read_entry_text(u64 block, const struct rootfs_entry *entry,
+				  char *out, u64 max)
+{
+	if (entry == 0 || out == 0 || max == 0 ||
+	    entry->size + 1 > max ||
+	    block_read_bytes(block, entry->offset,
+			     (unsigned char *)out, entry->size) != 0) {
+		return -1;
+	}
+	out[entry->size] = '\0';
+	return str_len(out) == entry->size ? 0 : -1;
+}
+
+static int path_dirname(const char *path, char *out)
+{
+	u64 len;
+
+	if (path == 0 || out == 0 || path[0] != '/') {
+		return -1;
+	}
+	len = str_len(path);
+	while (len > 1 && path[len - 1] != '/') {
+		len--;
+	}
+	if (len <= 1) {
+		out[0] = '/';
+		out[1] = '\0';
+		return 0;
+	}
+	len--;
+	for (u64 i = 0; i < len; i++) {
+		out[i] = path[i];
+	}
+	out[len] = '\0';
+	return 0;
+}
+
+static const struct rootfs_entry *rootfs_resolve_ref(u64 block,
+						     const char *path,
+						     char *resolved)
+{
+	char current[VFS_MAX_PATH];
+
+	if (vfs_resolve_path("/", path, current) != 0) {
+		return 0;
+	}
+	for (u64 depth = 0; depth < ROOTFS_MAX_SYMLINKS; depth++) {
+		const struct rootfs_entry *entry = rootfs_find_ref(current);
+		char target[VFS_MAX_PATH];
+		char base[VFS_MAX_PATH];
+
+		if (entry == 0 || entry->type != BUNIX_VFS_TYPE_SYMLINK) {
+			if (resolved != 0) {
+				for (u64 i = 0; i <= str_len(current); i++) {
+					resolved[i] = current[i];
+				}
+			}
+			return entry;
+		}
+		if (rootfs_read_entry_text(block, entry, target,
+					   sizeof(target)) != 0 ||
+		    path_dirname(current, base) != 0 ||
+		    vfs_resolve_path(base, target, current) != 0) {
+			return 0;
+		}
+	}
 	return 0;
 }
 
@@ -851,18 +925,20 @@ static void vfs_open_path(struct bunix_msg *message, struct bunix_msg *reply,
 		return;
 	}
 
-	entry = rootfs_find_ref(path);
+	entry = rootfs_resolve_ref(root_block, path, 0);
 	if (entry == 0) {
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
 		return;
 	}
 	if (entry->type == BUNIX_VFS_TYPE_DIRECTORY) {
-		if (!can_search_entry(entry, message->words[3]) ||
-		    !can_read_entry(entry, message->words[3])) {
+		const u64 task = message->words[3] & 0xffffffff;
+
+		if (!can_search_entry(entry, task) ||
+		    !can_read_entry(entry, task)) {
 			reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 			return;
 		}
-	} else if (!can_read_entry(entry, message->words[3])) {
+	} else if (!can_read_entry(entry, message->words[3] & 0xffffffff)) {
 		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 		return;
 	}
@@ -884,6 +960,7 @@ static void vfs_stat_path(struct bunix_msg *message, struct bunix_msg *reply,
 {
 	struct vfs_mount *mount = mount_for_path(path);
 	const struct rootfs_entry *entry;
+	const int nofollow = ((message->words[3] >> 32) & 1) != 0;
 
 	if (mount != 0) {
 		struct bunix_msg forwarded = *message;
@@ -897,12 +974,46 @@ static void vfs_stat_path(struct bunix_msg *message, struct bunix_msg *reply,
 		return;
 	}
 
-	entry = rootfs_find_ref(path);
+	entry = nofollow ? rootfs_find_ref(path) :
+			   rootfs_resolve_ref(root_block, path, 0);
 	if (entry == 0) {
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
 	} else {
 		stat_meta_reply(reply, entry);
 	}
+}
+
+static void vfs_readlink_path(struct bunix_msg *message,
+			      struct bunix_msg *reply, const char *path)
+{
+	struct vfs_mount *mount = mount_for_path(path);
+	const struct rootfs_entry *entry;
+	char target[VFS_MAX_PATH];
+
+	if (mount != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+
+	entry = rootfs_find_ref(path);
+	if (entry == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	if (entry->type != BUNIX_VFS_TYPE_SYMLINK) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (!can_read_entry(entry, message->words[3] & 0xffffffff) ||
+	    rootfs_read_entry_text(root_block, entry, target,
+				   sizeof(target)) != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = str_len(target);
+	pack_bytes(&reply->words[2], (const unsigned char *)target,
+		   str_len(target) + 1);
 }
 
 int main(void)
@@ -1087,6 +1198,27 @@ int main(void)
 				break;
 			}
 			vfs_stat_path(&message, &reply, path);
+			break;
+		}
+		case BUNIX_VFS_READLINK_BUFFER: {
+			char cwd[VFS_MAX_PATH];
+			char input[VFS_MAX_PATH];
+			char path[VFS_MAX_PATH];
+			const u64 cwd_len = message.words[0];
+			const u64 path_len = message.words[1];
+			u64 error = (u64)-1;
+
+			if ((message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+			    read_path_buffer_at(message.cap, 0, cwd_len,
+						cwd) != 0 ||
+			    read_path_buffer_at(message.cap, cwd_len, path_len,
+						input) != 0 ||
+			    vfs_resolve_with_base(message.words[2], cwd,
+						  input, path, &error) != 0) {
+				reply.words[0] = error;
+				break;
+			}
+			vfs_readlink_path(&message, &reply, path);
 			break;
 		}
 		case BUNIX_VFS_STAT: {
