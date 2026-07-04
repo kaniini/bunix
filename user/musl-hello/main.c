@@ -12,5 +12,5 @@ int main(int argc, char **argv)
 		write(1, line, (size_t)len < sizeof(line) ?
 		      (size_t)len : sizeof(line) - 1);
 	}
-	return 0;
+	_exit(0);
 }

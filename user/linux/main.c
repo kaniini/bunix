@@ -2787,6 +2787,43 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	return (long)reply.words[1];
 }
 
+static long linux_mmap_read(struct linux_process *process, u64 fd, u64 offset,
+			    u64 len, u64 buffer)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_READ_FILE_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = buffer,
+		.words = { 0, offset, len, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (buffer == 0 || len > LINUX_MAX_WRITE) {
+		return -LINUX_EINVAL;
+	}
+	if (fd >= process->fd_capacity ||
+	    process->fds[fd].kind != LINUX_FD_FILE) {
+		return -LINUX_EBADF;
+	}
+	if (offset >= process->fds[fd].size) {
+		return 0;
+	}
+	if (len > process->fds[fd].size - offset) {
+		len = process->fds[fd].size - offset;
+	}
+
+	request.words[0] = process->fds[fd].handle;
+	request.words[2] = len;
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_EINVAL;
+	}
+	return (long)reply.words[1];
+}
+
 static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 			       u64 buffer)
 {
@@ -3431,6 +3468,16 @@ int main(void)
 			}
 			break;
 		}
+		case BUNIX_LINUX_MMAP:
+			reply.words[0] = (u64)linux_mmap_read(process,
+							      message.words[0],
+							      message.words[1],
+							      message.words[2],
+							      message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
 		case BUNIX_LINUX_SENDFILE:
 			reply.words[1] = message.words[3];
 			reply.words[0] = (u64)linux_sendfile(process,

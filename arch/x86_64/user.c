@@ -159,11 +159,12 @@ enum {
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
 	LINUX_MAX_SOCKADDR = 128,
 	LINUX_EXEC_MAX_IMAGE = 2 * 1024 * 1024,
-	LINUX_EXEC_MAX_PATH = 32,
+	LINUX_EXEC_MAX_PATH = 128,
 	LINUX_EXEC_MAX_ARGS = 8,
 	LINUX_EXEC_MAX_ARG = 64,
 	LINUX_EXEC_MAX_PHDRS = 16,
 	LINUX_EXEC_DYN_LOAD_BIAS = 0x400000,
+	LINUX_EXEC_INTERP_LOAD_BIAS = 0x600000,
 	LINUX_EXEC_STACK_TOP = 0x800000,
 	LINUX_EXEC_STACK_PAGES = 16,
 	LINUX_STAT_SIZE = 144,
@@ -173,6 +174,7 @@ enum {
 	LINUX_S_IFREG = 0100000,
 	LINUX_INITIAL_BRK = 0x900000,
 	LINUX_MAX_BRK = 0x10000000,
+	LINUX_MAP_FIXED_MIN = 0x10000,
 	LINUX_MMAP_BASE = 0x10000000,
 	LINUX_MMAP_LIMIT = 0x20000000,
 	LINUX_MAX_MMAP_SIZE = 0x1000000,
@@ -215,6 +217,7 @@ enum {
 	ELF_MACHINE_X86_64 = 62,
 	ELF_PH_LOAD = 1,
 	ELF_PH_DYNAMIC = 2,
+	ELF_PH_INTERP = 3,
 	ELF_PF_X = 1,
 	ELF_PF_W = 2,
 	ELF_EHDR_SIZE = 64,
@@ -228,6 +231,7 @@ enum {
 	LINUX_AT_PHENT = 4,
 	LINUX_AT_PHNUM = 5,
 	LINUX_AT_PAGESZ = 6,
+	LINUX_AT_BASE = 7,
 	LINUX_AT_ENTRY = 9,
 	LINUX_AT_CLKTCK = 17,
 	LINUX_AT_RANDOM = 25,
@@ -810,6 +814,65 @@ static int linux_vfs_read_file(struct task *task, const char *path,
 	return 0;
 }
 
+static int linux_mmap_file_into_task(struct task *task, struct ipc_port *linux,
+				     struct ipc_port *reply_port, u64 base,
+				     u64 len, u64 fd, u64 offset)
+{
+	struct shared_buffer *buffer;
+	u64 flags;
+
+	if (linux == 0 || reply_port == 0 || len == 0 ||
+	    (offset & (VM_PAGE_SIZE - 1)) != 0) {
+		return -1;
+	}
+
+	buffer = buffer_create(LINUX_MAX_SYSCALL_BUFFER);
+	if (buffer == 0) {
+		return -1;
+	}
+
+	flags = spin_lock_irqsave(&syscall_copy_lock);
+	for (u64 done = 0; done < len;) {
+		const u64 chunk = min_u64(len - done, LINUX_MAX_SYSCALL_BUFFER);
+		struct ipc_message request = {
+			.protocol = USER_FOURCC_LINX,
+			.type = LINUX_SYSCALL_MMAP,
+			.sender = 0,
+			.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+			.reply_port = reply_port,
+			.cap_type = IPC_CAP_BUFFER,
+			.cap_object = buffer,
+			.words = { fd, offset + done, chunk, 0 },
+		};
+		struct ipc_message reply;
+
+		if (ipc_send(linux, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0 ||
+		    (i64)reply.words[0] < 0 ||
+		    reply.words[0] > chunk) {
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			buffer_release(buffer);
+			return -1;
+		}
+		if (reply.words[0] == 0) {
+			break;
+		}
+		if (buffer_read(buffer, 0, syscall_copy_buffer,
+				reply.words[0]) != 0 ||
+		    vm_write_user(task_vm_space(task), base + done,
+				  syscall_copy_buffer, reply.words[0]) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			buffer_release(buffer);
+			return -1;
+		}
+		done += reply.words[0];
+	}
+	spin_unlock_irqrestore(&syscall_copy_lock, flags);
+
+	buffer_release(buffer);
+	return 0;
+}
+
 static int linux_exec_validate(const u8 *image, u64 image_size,
 			       const struct elf64_ehdr **ehdr_out)
 {
@@ -984,6 +1047,34 @@ static int linux_exec_apply_relative_relocations(u8 *image,
 		}
 	}
 
+	return 0;
+}
+
+static int linux_exec_interp_path(const u8 *image,
+				  const struct elf64_ehdr *ehdr,
+				  u64 image_size, char *path, u64 path_size)
+{
+	if (image == 0 || ehdr == 0 || path == 0 || path_size == 0) {
+		return -1;
+	}
+	path[0] = '\0';
+	for (u64 i = 0; i < ehdr->phnum; i++) {
+		const struct elf64_phdr *phdr =
+			(const struct elf64_phdr *)(image + ehdr->phoff +
+						    i * ehdr->phentsize);
+
+		if (phdr->type != ELF_PH_INTERP) {
+			continue;
+		}
+		if (phdr->filesz == 0 || phdr->filesz >= path_size ||
+		    phdr->offset + phdr->filesz < phdr->offset ||
+		    phdr->offset + phdr->filesz > image_size) {
+			return -1;
+		}
+		mem_copy((u8 *)path, image + phdr->offset, phdr->filesz);
+		path[phdr->filesz] = '\0';
+		return 1;
+	}
 	return 0;
 }
 
@@ -1332,12 +1423,13 @@ static int linux_exec_collect_args(const char *path, u64 user_argv,
 static int linux_exec_build_stack(const char *path,
 				  const struct linux_exec_args *args,
 				  const struct elf64_ehdr *ehdr,
-				  u64 load_bias, u64 entry,
+				  u64 load_bias, u64 program_entry,
+				  u64 interpreter_base,
 				  u8 *stack_page, u64 *new_sp)
 {
 	u64 argv_addrs[LINUX_EXEC_MAX_ARGS];
 	struct elf64_phdr aux_phdrs[LINUX_EXEC_MAX_PHDRS];
-	const u64 aux_pairs = 15;
+	const u64 aux_pairs = interpreter_base == 0 ? 15 : 16;
 	u64 sp = VM_PAGE_SIZE;
 
 	mem_zero(stack_page, VM_PAGE_SIZE);
@@ -1390,7 +1482,9 @@ static int linux_exec_build_stack(const char *path,
 	}
 	sp = align_down(sp - phdr_bytes, 8);
 	mem_copy(stack_page + sp, (const u8 *)aux_phdrs, phdr_bytes);
-	const u64 phdr_addr = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
+	const u64 copied_phdr_addr = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
+	const u64 phdr_addr = interpreter_base != 0 ?
+			       load_bias + ehdr->phoff : copied_phdr_addr;
 
 	sp = align_down(sp, 16);
 	const u64 words = 1 + args->argc + 1 + 1 + aux_pairs * 2;
@@ -1410,7 +1504,11 @@ static int linux_exec_build_stack(const char *path,
 	stack_words[word++] = LINUX_AT_PAGESZ;
 	stack_words[word++] = VM_PAGE_SIZE;
 	stack_words[word++] = LINUX_AT_ENTRY;
-	stack_words[word++] = entry;
+	stack_words[word++] = program_entry;
+	if (interpreter_base != 0) {
+		stack_words[word++] = LINUX_AT_BASE;
+		stack_words[word++] = interpreter_base;
+	}
 	stack_words[word++] = LINUX_AT_PHDR;
 	stack_words[word++] = phdr_addr;
 	stack_words[word++] = LINUX_AT_PHENT;
@@ -1452,12 +1550,18 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	char path[LINUX_EXEC_MAX_PATH];
 	struct linux_exec_args args;
 	u64 image_size = 0;
+	u64 interp_size = 0;
 	const struct elf64_ehdr *ehdr;
+	const struct elf64_ehdr *interp_ehdr = 0;
 	u8 stack_page[VM_PAGE_SIZE];
 	u8 *image;
+	u8 *interp_image = 0;
+	char interp_path[LINUX_EXEC_MAX_PATH];
 	u64 new_sp = 0;
 	u64 load_bias = 0;
+	u64 interp_bias = 0;
 	u64 entry = 0;
+	u64 program_entry = 0;
 	const u64 stack_base =
 		LINUX_EXEC_STACK_TOP - LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE;
 
@@ -1480,16 +1584,54 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	}
 
 	load_bias = ehdr->type == ELF_TYPE_DYN ? LINUX_EXEC_DYN_LOAD_BIAS : 0;
-	entry = ehdr->entry + load_bias;
+	program_entry = ehdr->entry + load_bias;
+	entry = program_entry;
+
+	const int interp = linux_exec_interp_path(image, ehdr, image_size,
+						 interp_path,
+						 sizeof(interp_path));
+	if (interp < 0) {
+		slab_free(image);
+		return (u64)-LINUX_EINVAL;
+	}
+	if (interp > 0) {
+		interp_image = slab_alloc(LINUX_EXEC_MAX_IMAGE);
+		if (interp_image == 0) {
+			slab_free(image);
+			return (u64)-LINUX_ENOMEM;
+		}
+		if (linux_vfs_read_file(task, interp_path, interp_image,
+					LINUX_EXEC_MAX_IMAGE, &interp_size) != 0 ||
+		    linux_exec_validate(interp_image, interp_size,
+					&interp_ehdr) != 0) {
+			slab_free(interp_image);
+			slab_free(image);
+			return (u64)-LINUX_EINVAL;
+		}
+		interp_bias = interp_ehdr->type == ELF_TYPE_DYN ?
+			      LINUX_EXEC_INTERP_LOAD_BIAS : 0;
+		entry = interp_ehdr->entry + interp_bias;
+	}
 	if (linux_exec_apply_relative_relocations(image, ehdr, image_size,
 						  load_bias) != 0 ||
-	    linux_exec_build_stack(path, &args, ehdr, load_bias, entry,
+	    (interp_image != 0 &&
+	     linux_exec_apply_relative_relocations(interp_image, interp_ehdr,
+						   interp_size,
+						   interp_bias) != 0) ||
+	    linux_exec_build_stack(path, &args, ehdr, load_bias, program_entry,
+				   interp_bias,
 				   stack_page, &new_sp) != 0) {
+		if (interp_image != 0) {
+			slab_free(interp_image);
+		}
 		slab_free(image);
 		return (u64)-LINUX_EINVAL;
 	}
 
 	if (linux_exec_unmap_current(task) != 0) {
+		if (interp_image != 0) {
+			slab_free(interp_image);
+		}
 		slab_free(image);
 		return (u64)-LINUX_EINVAL;
 	}
@@ -1502,8 +1644,27 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 
 		if (phdr->type == ELF_PH_LOAD &&
 		    linux_exec_map_segment(task, image, phdr, load_bias) != 0) {
+			if (interp_image != 0) {
+				slab_free(interp_image);
+			}
 			slab_free(image);
 			return (u64)-LINUX_ENOMEM;
+		}
+	}
+	if (interp_image != 0) {
+		for (u64 i = 0; i < interp_ehdr->phnum; i++) {
+			const struct elf64_phdr *phdr =
+				(const struct elf64_phdr *)(interp_image +
+							    interp_ehdr->phoff +
+							    i * interp_ehdr->phentsize);
+
+			if (phdr->type == ELF_PH_LOAD &&
+			    linux_exec_map_segment(task, interp_image, phdr,
+						   interp_bias) != 0) {
+				slab_free(interp_image);
+				slab_free(image);
+				return (u64)-LINUX_ENOMEM;
+			}
 		}
 	}
 
@@ -1517,6 +1678,9 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 				0, 0) != 0 ||
 		    vm_write_user(task_vm_space(task), LINUX_EXEC_STACK_TOP -
 				  VM_PAGE_SIZE, stack_page, VM_PAGE_SIZE) != 0) {
+		if (interp_image != 0) {
+			slab_free(interp_image);
+		}
 		slab_free(image);
 		return (u64)-LINUX_ENOMEM;
 	}
@@ -1525,6 +1689,9 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	frame->user_rsp = new_sp;
 	const u64 exec_result = linux_exec_process(task);
 	if ((i64)exec_result < 0) {
+		if (interp_image != 0) {
+			slab_free(interp_image);
+		}
 		slab_free(image);
 		return exec_result;
 	}
@@ -1533,6 +1700,9 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	console_printf("linux: execve task=%u path=%s entry=%p stack=%p\n",
 		       task_id(task), path, (const void *)entry,
 		       (const void *)new_sp);
+	if (interp_image != 0) {
+		slab_free(interp_image);
+	}
 	slab_free(image);
 	return 0;
 }
@@ -1928,16 +2098,20 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_MMAP: {
 		const u64 prot = arg2;
 		const u64 flags = arg3;
+		const u64 fd = frame->r8;
+		const u64 offset = frame->r9;
+		const int anonymous = (flags & LINUX_MAP_ANONYMOUS) != 0;
 		const u32 task_prot = linux_prot_to_task(prot);
 		const u32 task_flags = linux_map_flags_to_task(flags);
 		const u32 writable = (task_prot & TASK_VM_PROT_WRITE) != 0;
+		const u32 alloc_writable = writable || !anonymous;
 		u64 base = arg0;
 		u64 len = arg1;
 
 		if (len == 0 || len > LINUX_MAX_MMAP_SIZE ||
-		    (flags & LINUX_MAP_ANONYMOUS) == 0 ||
 		    (flags & LINUX_MAP_PRIVATE) == 0 ||
-		    len + VM_PAGE_SIZE - 1 < len) {
+		    len + VM_PAGE_SIZE - 1 < len ||
+		    (!anonymous && (offset & (VM_PAGE_SIZE - 1)) != 0)) {
 			return (u64)-LINUX_EINVAL;
 		}
 
@@ -1950,7 +2124,9 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 
-		if (base < LINUX_MMAP_BASE || base + len < base ||
+		const u64 min_base = (flags & LINUX_MAP_FIXED) != 0 ?
+				     LINUX_MAP_FIXED_MIN : LINUX_MMAP_BASE;
+		if (base < min_base || base + len < base ||
 		    base + len > LINUX_MMAP_LIMIT) {
 			return (u64)-LINUX_ENOMEM;
 		}
@@ -1966,7 +2142,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 
 		if (vm_alloc_user_range(task_vm_space(task), base, len,
-					writable) != 0) {
+					alloc_writable) != 0) {
 			return (u64)-LINUX_ENOMEM;
 		}
 		if (task_add_vm_mapping(task, base, len, task_prot,
@@ -1974,6 +2150,17 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 					TASK_VM_OBJECT_ANON, 0, 0) != 0) {
 			(void)vm_unmap_user_range(task_vm_space(task), base, len);
 			return (u64)-LINUX_ENOMEM;
+		}
+		if (!anonymous &&
+		    linux_mmap_file_into_task(task, linux, reply_port, base, len,
+					     fd, offset) != 0) {
+			(void)linux_unmap_task_range(task, base, len);
+			return (u64)-LINUX_EINVAL;
+		}
+		if (!anonymous && !writable &&
+		    vm_protect_user_range(task_vm_space(task), base, len, 0) != 0) {
+			(void)linux_unmap_task_range(task, base, len);
+			return (u64)-LINUX_EINVAL;
 		}
 
 		if (base + len > task_linux_mmap_next(task)) {
@@ -2246,11 +2433,15 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			const u32 writable =
 				(prot & TASK_VM_PROT_WRITE) != 0;
 
-			if (arg0 + len < arg0 ||
-			    vm_protect_user_range(task_vm_space(task), arg0,
-						  len, writable) != 0 ||
-			    task_protect_vm_region(task, arg0, len,
-						   prot) != 0) {
+			const int vm_rc = arg0 + len < arg0 ? -1 :
+					  vm_protect_user_range(task_vm_space(task),
+								arg0, len,
+								writable);
+			const int task_rc = vm_rc != 0 ? -1 :
+					    task_protect_vm_region(task, arg0,
+								   len, prot);
+
+			if (vm_rc != 0 || task_rc != 0) {
 				return (u64)-LINUX_EINVAL;
 			}
 			console_printf("linux: mprotect task=%u addr=%p len=%u prot=0x%x\n",
