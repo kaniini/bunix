@@ -56,6 +56,14 @@ enum task_vm_object_type {
 	TASK_VM_OBJECT_FILE,
 };
 
+enum thread_handoff_result {
+	THREAD_HANDOFF_INVALID = -1,
+	THREAD_HANDOFF_DIRECT = 1,
+	THREAD_HANDOFF_SCHEDULER = 2,
+	THREAD_HANDOFF_CROSS_CPU = 3,
+	THREAD_HANDOFF_NESTED = 4,
+};
+
 struct task_vm_region {
 	u64 base;
 	u64 len;

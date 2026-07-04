@@ -235,6 +235,7 @@ int main(void)
 	};
 	struct bunix_msg proc_reply;
 	const char first_done[] = "init: first process exited\n";
+	const char ipcstress_done[] = "init: ipcstress exited\n";
 	const char linux_spawned[] = "init: linux process spawned\n";
 	const char linux_done[] = "init: linux process exited\n";
 	const char musl_spawned[] = "init: musl process spawned\n";
@@ -253,6 +254,22 @@ int main(void)
 		return 1;
 	}
 	bunix_console_log(first_done, sizeof(first_done) - 1);
+
+	proc_request.type = BUNIX_PROC_SPAWN;
+	proc_request.words[2] = 0;
+	proc_request.words[3] = 0;
+	pack_path(&proc_request.words[0], "/bin/ipcstress");
+	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
+	    proc_reply.words[0] != 0) {
+		return 1;
+	}
+	proc_request.type = BUNIX_PROC_WAIT;
+	proc_request.words[0] = proc_reply.words[1];
+	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
+	    proc_reply.words[0] != 0) {
+		return 1;
+	}
+	bunix_console_log(ipcstress_done, sizeof(ipcstress_done) - 1);
 
 	if (bunix_launch_module_with_caps("ping", bad_caps,
 					  sizeof(bad_caps) /

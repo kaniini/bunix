@@ -234,6 +234,9 @@ static const char *task_name_for_path(const char *path)
 	if (str_eq(path, "/bin/login")) {
 		return "login";
 	}
+	if (str_eq(path, "/bin/ipcstress")) {
+		return "ipcstress";
+	}
 	return "first";
 }
 

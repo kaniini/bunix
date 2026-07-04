@@ -1259,12 +1259,19 @@ int thread_handoff(struct thread *thread)
 	struct thread *prev = cpu->current;
 
 	if (thread == 0 || thread->state != THREAD_BLOCKED) {
-		return -1;
+		return THREAD_HANDOFF_INVALID;
 	}
-	if (prev == &cpu->scheduler_thread || thread->cpu_id != cpu->id ||
-	    cpu->handoff_depth != 0) {
+	if (prev == &cpu->scheduler_thread) {
 		thread_unblock(thread);
-		return 0;
+		return THREAD_HANDOFF_SCHEDULER;
+	}
+	if (thread->cpu_id != cpu->id) {
+		thread_unblock(thread);
+		return THREAD_HANDOFF_CROSS_CPU;
+	}
+	if (cpu->handoff_depth != 0) {
+		thread_unblock(thread);
+		return THREAD_HANDOFF_NESTED;
 	}
 	if (thread_task_is_killing(prev)) {
 		thread_unblock(thread);
@@ -1283,7 +1290,7 @@ int thread_handoff(struct thread *thread)
 	struct thread *dead = cpu->reap;
 	cpu->reap = 0;
 	sched_reap_thread(dead);
-	return 0;
+	return THREAD_HANDOFF_DIRECT;
 }
 
 static void sched_cancel_sleep(struct thread *thread)

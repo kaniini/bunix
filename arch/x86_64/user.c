@@ -54,6 +54,7 @@ enum {
 	SYSCALL_EARLY_CONSOLE_WRITE = -54,
 	SYSCALL_EARLY_CONSOLE_LOG = -56,
 	SYSCALL_EARLY_CONSOLE_LOGS_TO_RING = -58,
+	SYSCALL_IPC_STATS = -60,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -3600,6 +3601,18 @@ static u64 native_sys_early_console_logs_to_ring(
 	return 0;
 }
 
+static u64 native_sys_ipc_stats(const struct native_syscall_args *args)
+{
+	struct ipc_stats stats;
+
+	if (args->arg0 == 0) {
+		return (u64)-1;
+	}
+	ipc_stats_snapshot(&stats);
+	return write_current_user(args->arg0, &stats, sizeof(stats)) == 0 ?
+	       0 : (u64)-1;
+}
+
 static u64 native_sys_ipc_send(const struct native_syscall_args *args)
 {
 	struct user_ipc_message user_message;
@@ -3728,6 +3741,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	  native_sys_early_console_log },
 	{ SYSCALL_EARLY_CONSOLE_LOGS_TO_RING, "early_console_logs_to_ring",
 	  native_sys_early_console_logs_to_ring },
+	{ SYSCALL_IPC_STATS, "ipc_stats", native_sys_ipc_stats },
 };
 
 static const struct native_syscall_entry *native_syscall_lookup(i64 number)

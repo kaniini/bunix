@@ -35,6 +35,7 @@ enum {
 	BUNIX_SYSCALL_EARLY_CONSOLE_WRITE = -54,
 	BUNIX_SYSCALL_EARLY_CONSOLE_LOG = -56,
 	BUNIX_SYSCALL_EARLY_CONSOLE_LOGS_TO_RING = -58,
+	BUNIX_SYSCALL_IPC_STATS = -60,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
 	BUNIX_RIGHT_SEND = 1 << 0,
@@ -194,6 +195,17 @@ struct bunix_launch_cap {
 	u64 handle;
 	unsigned int rights;
 	unsigned int reserved;
+};
+
+struct bunix_ipc_stats {
+	u64 sends;
+	u64 queued;
+	u64 direct_delivered;
+	u64 direct_handoff;
+	u64 fallback_cross_cpu;
+	u64 fallback_nested;
+	u64 fallback_scheduler;
+	u64 fallback_invalid;
 };
 
 static inline long bunix_syscall0(long number)
@@ -482,6 +494,11 @@ static inline long bunix_early_console_logs_to_ring(void)
 static inline long bunix_console_read(char *buffer, usize len)
 {
 	return bunix_syscall2(BUNIX_SYSCALL_CONSOLE_READ, (u64)buffer, len);
+}
+
+static inline long bunix_ipc_stats(struct bunix_ipc_stats *stats)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_IPC_STATS, (u64)stats);
 }
 
 #endif

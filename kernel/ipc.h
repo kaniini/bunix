@@ -28,6 +28,17 @@ struct ipc_message {
 	u64 words[IPC_WORDS];
 };
 
+struct ipc_stats {
+	u64 sends;
+	u64 queued;
+	u64 direct_delivered;
+	u64 direct_handoff;
+	u64 fallback_cross_cpu;
+	u64 fallback_nested;
+	u64 fallback_scheduler;
+	u64 fallback_invalid;
+};
+
 void ipc_init(void);
 struct ipc_port *ipc_port_create(const char *name);
 struct ipc_port *ipc_port_create_private(const char *name);
@@ -40,6 +51,7 @@ struct ipc_port *ipc_port_from_id(u64 id);
 int ipc_send(struct ipc_port *port, const struct ipc_message *message);
 int ipc_recv(struct ipc_port *port, struct ipc_message *message);
 void ipc_message_release(struct ipc_message *message);
+void ipc_stats_snapshot(struct ipc_stats *stats);
 int ipc_call_kernel(struct ipc_port *port, const struct ipc_message *request,
 		    struct ipc_message *reply);
 void ipc_cancel_thread(struct thread *thread);

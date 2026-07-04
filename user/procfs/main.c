@@ -20,6 +20,7 @@ enum {
 	PROCFS_KIND_STAT = 13,
 	PROCFS_KIND_LOADAVG = 14,
 	PROCFS_KIND_PID_STATM = 15,
+	PROCFS_KIND_IPC = 16,
 };
 
 static struct bunix_id_table open_files;
@@ -212,6 +213,9 @@ static u64 file_for_path(const char *path)
 	}
 	if (str_eq(path, "/proc/stat")) {
 		return make_file(PROCFS_KIND_STAT, 0);
+	}
+	if (str_eq(path, "/proc/ipc")) {
+		return make_file(PROCFS_KIND_IPC, 0);
 	}
 	if (str_eq(path, "/proc/loadavg")) {
 		return make_file(PROCFS_KIND_LOADAVG, 0);
@@ -451,6 +455,42 @@ static u64 build_proc_stat(void)
 	return len;
 }
 
+static u64 build_ipc(void)
+{
+	u64 len = 0;
+	struct bunix_ipc_stats stats;
+
+	if (bunix_ipc_stats(&stats) != 0) {
+		return 0;
+	}
+
+	append_str(&len, "sends ");
+	append_u64(&len, stats.sends);
+	append_char(&len, '\n');
+	append_str(&len, "queued ");
+	append_u64(&len, stats.queued);
+	append_char(&len, '\n');
+	append_str(&len, "direct_delivered ");
+	append_u64(&len, stats.direct_delivered);
+	append_char(&len, '\n');
+	append_str(&len, "direct_handoff ");
+	append_u64(&len, stats.direct_handoff);
+	append_char(&len, '\n');
+	append_str(&len, "fallback_cross_cpu ");
+	append_u64(&len, stats.fallback_cross_cpu);
+	append_char(&len, '\n');
+	append_str(&len, "fallback_nested ");
+	append_u64(&len, stats.fallback_nested);
+	append_char(&len, '\n');
+	append_str(&len, "fallback_scheduler ");
+	append_u64(&len, stats.fallback_scheduler);
+	append_char(&len, '\n');
+	append_str(&len, "fallback_invalid ");
+	append_u64(&len, stats.fallback_invalid);
+	append_char(&len, '\n');
+	return len;
+}
+
 static const char *pid_name(u64 pid)
 {
 	switch (pid) {
@@ -556,6 +596,8 @@ static u64 build_file_text(u64 file)
 		return build_uptime();
 	case PROCFS_KIND_STAT:
 		return build_proc_stat();
+	case PROCFS_KIND_IPC:
+		return build_ipc();
 	case PROCFS_KIND_LOADAVG:
 		return build_loadavg();
 	case PROCFS_KIND_MEMINFO:
@@ -617,14 +659,15 @@ static void stat_reply(struct bunix_msg *reply, u64 file)
 static const char *proc_dir_entry(u64 index, u64 *type)
 {
 	static const char *names[] = {
-		"kthreads", "uptime", "stat", "loadavg", "meminfo", "mounts", "self",
+		"kthreads", "uptime", "stat", "ipc", "loadavg", "meminfo",
+		"mounts", "self",
 		"1", "2", "3", "4"
 	};
 
 	if (index >= sizeof(names) / sizeof(names[0])) {
 		return 0;
 	}
-	*type = index >= 6 ? BUNIX_VFS_TYPE_DIRECTORY :
+	*type = index >= 8 ? BUNIX_VFS_TYPE_DIRECTORY :
 			     BUNIX_VFS_TYPE_REGULAR;
 	return names[index];
 }
