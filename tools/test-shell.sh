@@ -192,4 +192,10 @@ if ! awk '{ sub(/\r$/, "") } /\/bin \$ pwd/ { prompt = NR } /^\/bin$/ && prompt 
 	exit 1
 fi
 
+if ! awk '{ sub(/\r$/, "") } /login: session ended/ { ended = NR } /login: $/ && ended && NR > ended { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
+	echo "login prompt did not return after shell exit" >&2
+	tail -n 180 "$log" >&2 || true
+	exit 1
+fi
+
 echo "shell regression ok"

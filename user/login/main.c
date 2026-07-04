@@ -136,7 +136,7 @@ static long authenticate(u64 user, const char *name, const char *password,
 	return 0;
 }
 
-static long spawn_shell(u64 proc, u64 uid)
+static long spawn_shell(u64 proc, u64 uid, u64 *pid)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_PROC,
@@ -152,29 +152,36 @@ static long spawn_shell(u64 proc, u64 uid)
 	pack_text(&request.words[0], "/bin/sh");
 	if (proc == 0 ||
 	    bunix_ipc_call(proc, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[1] == 0 ||
+	    pid == 0) {
+		return -1;
+	}
+
+	*pid = reply.words[1];
+	return 0;
+}
+
+static long wait_process(u64 proc, u64 pid)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = BUNIX_PROC_WAIT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { pid, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (proc == 0 ||
+	    bunix_ipc_call(proc, &request, &reply) != 0 ||
 	    reply.words[0] != 0) {
 		return -1;
 	}
 
 	return 0;
-}
-
-static void proc_exit(u64 proc, u64 status)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_PROC,
-		.type = BUNIX_PROC_EXIT,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { LOGIN_PID, status, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	if (proc != 0) {
-		bunix_ipc_call(proc, &request, &reply);
-	}
 }
 
 int main(int argc, char **argv, char **envp)
@@ -184,6 +191,7 @@ int main(int argc, char **argv, char **envp)
 	char password[16];
 	u64 uid = 0;
 	u64 user;
+	u64 shell_pid;
 	long nread;
 
 	(void)argc;
@@ -206,10 +214,11 @@ int main(int argc, char **argv, char **envp)
 		strip_line(password, (u64)nread);
 
 		if (authenticate(user, name, password, &uid) == 0 &&
-		    spawn_shell(aux.proc_handle, uid) == 0) {
+		    spawn_shell(aux.proc_handle, uid, &shell_pid) == 0) {
 			write_text(aux.stdout_handle, "login: shell spawned\n");
-			proc_exit(aux.proc_handle, 0);
-			return 0;
+			(void)wait_process(aux.proc_handle, shell_pid);
+			write_text(aux.stdout_handle, "login: session ended\n");
+			continue;
 		}
 		write_text(aux.stdout_handle, "login: authentication failed\n");
 	}
