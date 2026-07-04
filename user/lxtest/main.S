@@ -466,6 +466,14 @@ fork_child:
 	syscall
 	testq %rax, %rax
 	jne fail
+	movq $439, %rax
+	movq $-100, %rdi
+	leaq exec_path(%rip), %rsi
+	movq $1, %rdx
+	xorq %r10, %r10
+	syscall
+	testq %rax, %rax
+	jne fail
 	movq $21, %rax
 	leaq secret_path(%rip), %rdi
 	movq $4, %rsi

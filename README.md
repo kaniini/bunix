@@ -206,11 +206,11 @@ handling are covered by
 syscall numbers for the compatibility path and verifies returned byte counts,
 metadata, Linux PID/TID values, page-backed `brk`, anonymous writable mappings,
 forked child creation with cloned mmap contents, fd allocation, child waiting,
-`access`/`faccessat` permission checks, and `-EBADF` for invalid fds, then exits
-successfully. Linux `mmap` is currently an anonymous/private compatibility path
-implemented on top of task memory allocation, and `munmap` removes, trims, or
-splits VM region records. Linux `fork` is built on a saved syscall frame plus
-task VM region cloning.
+`access`/`faccessat`/`faccessat2` permission checks, and `-EBADF` for invalid
+fds, then exits successfully. Linux `mmap` is currently an anonymous/private
+compatibility path implemented on top of task memory allocation, and `munmap`
+removes, trims, or splits VM region records. Linux `fork` is built on a saved
+syscall frame plus task VM region cloning.
 Page-table teardown now clears unmapped pages and returns their frames to the
 PMM; copy-on-write is still future work.
 

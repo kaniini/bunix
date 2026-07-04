@@ -100,6 +100,8 @@ enum {
 	LINUX_UTMPS_REWIND = 'r',
 	LINUX_UTMPS_GETENT = 'e',
 	LINUX_AT_FDCWD = (u64)-100,
+	LINUX_AT_SYMLINK_NOFOLLOW = 0x100,
+	LINUX_AT_EACCESS = 0x200,
 	LINUX_R_OK = 4,
 	LINUX_W_OK = 2,
 	LINUX_X_OK = 1,
@@ -2279,7 +2281,8 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 }
 
 static long linux_faccessat(struct linux_process *process, u64 dirfd,
-			    u64 path_len, u64 mode, u64 path_buffer)
+			    u64 path_len, u64 mode, u64 flags,
+			    u64 path_buffer)
 {
 	char path[LINUX_MAX_PATH];
 	char full_path[LINUX_MAX_PATH];
@@ -2288,6 +2291,7 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 	long base_result;
 
 	if ((mode & ~(LINUX_R_OK | LINUX_W_OK | LINUX_X_OK)) != 0 ||
+	    (flags & ~(LINUX_AT_EACCESS | LINUX_AT_SYMLINK_NOFOLLOW)) != 0 ||
 	    path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
 	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
 	    path[path_len - 1] != '\0' ||
@@ -3418,10 +3422,12 @@ int main(void)
 			break;
 		case BUNIX_LINUX_ACCESS:
 		case BUNIX_LINUX_FACCESSAT:
+		case BUNIX_LINUX_FACCESSAT2:
 			reply.words[0] = (u64)linux_faccessat(process,
 							      message.words[0],
 							      message.words[1],
 							      message.words[2],
+							      message.words[3],
 							      message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
