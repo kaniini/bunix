@@ -14,6 +14,7 @@ enum {
 	LINUX_EINVAL = 22,
 	LINUX_EMFILE = 24,
 	LINUX_EPIPE = 32,
+	LINUX_ENOSYS = 38,
 	LINUX_EAFNOSUPPORT = 97,
 	LINUX_EPROTONOSUPPORT = 93,
 	LINUX_ENOTSOCK = 88,
@@ -1516,6 +1517,29 @@ static long linux_rt_sigprocmask(struct linux_process *process, u64 how,
 		return -LINUX_EINVAL;
 	}
 	return 0;
+}
+
+static long linux_rt_sigtimedwait(struct linux_process *process, u64 set,
+				  u64 has_timeout)
+{
+	u64 pending;
+
+	if (process == 0) {
+		return -LINUX_EINVAL;
+	}
+	pending = process->pending_signals & set;
+	if (pending == 0) {
+		return has_timeout ? -LINUX_EAGAIN : -LINUX_ENOSYS;
+	}
+	for (u64 signal = 1; signal < 64; signal++) {
+		const u64 bit = linux_signal_bit(signal);
+
+		if ((pending & bit) != 0) {
+			process->pending_signals &= ~bit;
+			return (long)signal;
+		}
+	}
+	return -LINUX_EAGAIN;
 }
 
 static u64 linux_foreground_pgid(const struct linux_process *process)
@@ -3300,6 +3324,11 @@ int main(void)
 								   message.words[0],
 								   message.words[1],
 								   &reply.words[1]);
+			break;
+		case BUNIX_LINUX_RT_SIGTIMEDWAIT:
+			reply.words[0] = (u64)linux_rt_sigtimedwait(process,
+								    message.words[0],
+								    message.words[2]);
 			break;
 		case BUNIX_LINUX_IOCTL:
 			reply.words[0] = (u64)linux_ioctl(process,

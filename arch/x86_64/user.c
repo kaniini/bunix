@@ -69,6 +69,7 @@ enum {
 	LINUX_SYSCALL_BRK = 12,
 	LINUX_SYSCALL_RT_SIGACTION = 13,
 	LINUX_SYSCALL_RT_SIGPROCMASK = 14,
+	LINUX_SYSCALL_RT_SIGTIMEDWAIT = 128,
 	LINUX_SYSCALL_IOCTL = 16,
 	LINUX_SYSCALL_WRITEV = 20,
 	LINUX_SYSCALL_PIPE = 22,
@@ -1856,6 +1857,8 @@ static const char *linux_syscall_name(u64 number)
 		return "rt_sigaction";
 	case LINUX_SYSCALL_RT_SIGPROCMASK:
 		return "rt_sigprocmask";
+	case LINUX_SYSCALL_RT_SIGTIMEDWAIT:
+		return "rt_sigtimedwait";
 	case LINUX_SYSCALL_IOCTL:
 		return "ioctl";
 	case LINUX_SYSCALL_WRITEV:
@@ -2454,6 +2457,26 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 		return 0;
+	}
+	case LINUX_SYSCALL_RT_SIGTIMEDWAIT: {
+		u64 set = 0;
+
+		if (arg3 != 8 || arg0 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		if (read_current_user(arg0, &set, sizeof(set)) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		request.type = LINUX_SYSCALL_RT_SIGTIMEDWAIT;
+		request.words[0] = set;
+		request.words[1] = arg1 != 0;
+		request.words[2] = arg2 != 0;
+		request.reply_port = reply_port;
+		if (linux_forward_message(linux, reply_port, &request,
+					  &reply) != 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		return reply.words[0];
 	}
 	case LINUX_SYSCALL_MPROTECT:
 		if (arg0 == 0 || (arg0 & (VM_PAGE_SIZE - 1)) != 0 ||
