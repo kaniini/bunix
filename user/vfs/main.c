@@ -5,8 +5,6 @@ enum {
 	VFS_HANDLE_NAMES = 3,
 	ROOTFS_MAGIC = 0x30534652,
 	ROOTFS_MAX_PATH = 32,
-	ROOTFS_MAX_ENTRIES = 32,
-	VFS_MAX_OPEN_FILES = 16,
 	VFS_REMOTE_PROCFS = 1ull << 63,
 };
 
@@ -25,9 +23,8 @@ struct rootfs_entry {
 	unsigned int type;
 };
 
-static struct rootfs_entry root_entries[ROOTFS_MAX_ENTRIES];
+static struct rootfs_entry *root_entries;
 static unsigned int root_entry_count;
-static struct bunix_id_slot open_file_slots[VFS_MAX_OPEN_FILES];
 static struct bunix_id_table open_files;
 static u64 user_service;
 static u64 procfs_service;
@@ -305,16 +302,15 @@ static int rootfs_mount(u64 block)
 			     sizeof(header)) != 0 ||
 	    header.magic != ROOTFS_MAGIC ||
 	    header.entries == 0 ||
-	    header.entries > ROOTFS_MAX_ENTRIES ||
 	    reply.words[1] < sizeof(header) +
-	    (u64)header.entries * sizeof(root_entries[0])) {
+	    (u64)header.entries * sizeof(struct rootfs_entry)) {
 		return -1;
 	}
 
-	for (u64 i = 0; i < ROOTFS_MAX_ENTRIES; i++) {
-		for (u64 j = 0; j < ROOTFS_MAX_PATH; j++) {
-			root_entries[i].path[j] = '\0';
-		}
+	root_entries = (struct rootfs_entry *)
+		bunix_calloc(header.entries, sizeof(root_entries[0]));
+	if (root_entries == 0) {
+		return -1;
 	}
 
 	if (block_read_bytes(block, sizeof(header),
@@ -468,7 +464,7 @@ int main(void)
 	if (block == 0 || rootfs_mount(block) != 0) {
 		return 1;
 	}
-	bunix_id_table_init(&open_files, open_file_slots, VFS_MAX_OPEN_FILES);
+	bunix_id_table_init(&open_files);
 	bunix_console_write(ready, sizeof(ready) - 1);
 
 	for (;;) {

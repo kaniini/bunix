@@ -1,8 +1,7 @@
+#include <bunix/id_table.h>
 #include <bunix/libbunix.h>
 
 enum {
-	MAX_NAMES = 16,
-	MAX_WAITS = 16,
 	NAMES_ROOT = 1,
 };
 
@@ -20,9 +19,14 @@ struct wait_entry {
 	unsigned int rights;
 };
 
-static struct name_entry names[MAX_NAMES];
-static struct wait_entry waits[MAX_WAITS];
+static struct bunix_map names;
+static struct bunix_id_table waits;
 static u64 next_namespace = NAMES_ROOT + 1;
+
+static u64 name_key(u64 namespace, u64 service)
+{
+	return (namespace << 32) | (service & 0xffffffff);
+}
 
 static void send_resolve_reply(u64 reply_handle, const struct name_entry *entry,
 			       unsigned int rights)
@@ -40,49 +44,44 @@ static void send_resolve_reply(u64 reply_handle, const struct name_entry *entry,
 	bunix_ipc_send(reply_handle, &reply);
 }
 
+static const struct name_entry *resolve_name(u64 namespace, u64 service)
+{
+	return (const struct name_entry *)
+		bunix_map_get(&names, name_key(namespace, service));
+}
+
 static long register_name(const struct bunix_msg *message)
 {
 	const u64 namespace = message->words[0];
 	const u64 service = message->words[1];
+	struct name_entry *entry;
 
 	if (namespace == 0 || service == 0 || message->cap == 0 ||
 	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
 		return -1;
 	}
 
-	for (unsigned int i = 0; i < MAX_NAMES; i++) {
-		if (names[i].namespace == namespace &&
-		    names[i].service == service) {
-			names[i].handle = message->cap;
-			names[i].rights = message->cap_rights;
-			return 0;
-		}
-	}
-
-	for (unsigned int i = 0; i < MAX_NAMES; i++) {
-		if (names[i].namespace != 0) {
-			continue;
-		}
-
-		names[i].namespace = namespace;
-		names[i].service = service;
-		names[i].handle = message->cap;
-		names[i].rights = message->cap_rights;
+	entry = (struct name_entry *)
+		bunix_map_get(&names, name_key(namespace, service));
+	if (entry != 0) {
+		entry->handle = message->cap;
+		entry->rights = message->cap_rights;
 		return 0;
 	}
 
-	return -1;
-}
-
-static const struct name_entry *resolve_name(u64 namespace, u64 service)
-{
-	for (unsigned int i = 0; i < MAX_NAMES; i++) {
-		if (names[i].namespace == namespace &&
-		    names[i].service == service) {
-			return &names[i];
-		}
+	entry = (struct name_entry *)bunix_calloc(1, sizeof(*entry));
+	if (entry == 0) {
+		return -1;
 	}
-
+	entry->namespace = namespace;
+	entry->service = service;
+	entry->handle = message->cap;
+	entry->rights = message->cap_rights;
+	if (bunix_map_set(&names, name_key(namespace, service),
+			  (u64)entry) != 0) {
+		bunix_free(entry);
+		return -1;
+	}
 	return 0;
 }
 
@@ -90,43 +89,46 @@ static void wake_waiters(const struct name_entry *entry)
 {
 	const char resolved[] = "names: resolved\n";
 
-	for (unsigned int i = 0; i < MAX_WAITS; i++) {
-		if (waits[i].reply == 0 ||
-		    waits[i].namespace != entry->namespace ||
-		    waits[i].service != entry->service ||
-		    (waits[i].rights & ~entry->rights) != 0) {
+	for (u64 i = 0; i < waits.capacity; i++) {
+		struct wait_entry *wait =
+			(struct wait_entry *)waits.slots[i].value;
+
+		if (wait == 0 ||
+		    wait->namespace != entry->namespace ||
+		    wait->service != entry->service ||
+		    (wait->rights & ~entry->rights) != 0) {
 			continue;
 		}
 
-		send_resolve_reply(waits[i].reply, entry, waits[i].rights);
-		waits[i].namespace = 0;
-		waits[i].service = 0;
-		waits[i].reply = 0;
-		waits[i].rights = 0;
+		send_resolve_reply(wait->reply, entry, wait->rights);
+		bunix_free(wait);
+		(void)bunix_id_remove(&waits, waits.slots[i].id);
 		bunix_console_write(resolved, sizeof(resolved) - 1);
 	}
 }
 
 static long add_waiter(const struct bunix_msg *message, unsigned int rights)
 {
+	struct wait_entry *wait;
+
 	if (message->words[0] == 0 || message->words[1] == 0 ||
 	    message->reply == 0) {
 		return -1;
 	}
 
-	for (unsigned int i = 0; i < MAX_WAITS; i++) {
-		if (waits[i].reply != 0) {
-			continue;
-		}
-
-		waits[i].namespace = message->words[0];
-		waits[i].service = message->words[1];
-		waits[i].reply = message->reply;
-		waits[i].rights = rights;
-		return 0;
+	wait = (struct wait_entry *)bunix_calloc(1, sizeof(*wait));
+	if (wait == 0) {
+		return -1;
 	}
-
-	return -1;
+	wait->namespace = message->words[0];
+	wait->service = message->words[1];
+	wait->reply = message->reply;
+	wait->rights = rights;
+	if (bunix_id_alloc(&waits, (u64)wait) == 0) {
+		bunix_free(wait);
+		return -1;
+	}
+	return 0;
 }
 
 int main(void)
@@ -138,6 +140,8 @@ int main(void)
 	const char waiting[] = "names: wait\n";
 	struct bunix_msg message;
 
+	bunix_map_init(&names);
+	bunix_id_table_init(&waits);
 	bunix_console_write(online, sizeof(online) - 1);
 
 	for (;;) {
@@ -182,15 +186,14 @@ int main(void)
 			}
 			break;
 		case BUNIX_NAMES_RESOLVE: {
+			const u64 rights = (unsigned int)message.words[2];
 			const struct name_entry *entry =
 				resolve_name(message.words[0], message.words[1]);
-			const unsigned int rights =
-				message.words[2] != 0 ?
-				(unsigned int)message.words[2] : BUNIX_RIGHT_SEND;
+
 			if (entry != 0 && (rights & ~entry->rights) == 0) {
-				reply.cap = entry->handle;
-				reply.cap_rights = rights;
 				reply.words[0] = 0;
+				reply.cap = entry->handle;
+				reply.cap_rights = (unsigned int)rights;
 				bunix_console_write(resolved,
 						    sizeof(resolved) - 1);
 			} else {
@@ -199,19 +202,17 @@ int main(void)
 			break;
 		}
 		case BUNIX_NAMES_WAIT: {
+			const u64 rights = (unsigned int)message.words[2];
 			const struct name_entry *entry =
 				resolve_name(message.words[0], message.words[1]);
-			const unsigned int rights =
-				message.words[2] != 0 ?
-				(unsigned int)message.words[2] : BUNIX_RIGHT_SEND;
 
 			if (entry != 0 && (rights & ~entry->rights) == 0) {
-				reply.cap = entry->handle;
-				reply.cap_rights = rights;
 				reply.words[0] = 0;
+				reply.cap = entry->handle;
+				reply.cap_rights = (unsigned int)rights;
 				bunix_console_write(resolved,
 						    sizeof(resolved) - 1);
-			} else if (add_waiter(&message, rights) == 0) {
+			} else if (add_waiter(&message, (unsigned int)rights) == 0) {
 				should_reply = 0;
 				bunix_console_write(waiting,
 						    sizeof(waiting) - 1);
@@ -225,8 +226,8 @@ int main(void)
 			break;
 		}
 
-		if (should_reply && message.reply != 0) {
-			bunix_ipc_send(message.reply, &reply);
+		if (should_reply) {
+			(void)bunix_ipc_send(message.reply, &reply);
 		}
 	}
 }

@@ -514,8 +514,9 @@ int server_task_alloc(struct task *parent, u64 task_handle, u64 vaddr,
 int server_task_alloc_kind(struct task *parent, u64 task_handle, u64 vaddr,
 			   u64 len, u32 writable, u32 kind)
 {
-	struct task *task = task_from_handle(parent, task_handle,
-					    TASK_RIGHT_SEND);
+	struct task *task = task_handle == 0 ? parent :
+			    task_from_handle(parent, task_handle,
+					     TASK_RIGHT_SEND);
 	if (task == 0 || len == 0 || vaddr + len < vaddr) {
 		return -1;
 	}

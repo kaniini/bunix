@@ -1,3 +1,4 @@
+#include <bunix/id_table.h>
 #include <bunix/libbunix.h>
 
 enum {
@@ -41,7 +42,6 @@ enum {
 	EXEC_HANDLE_TIME = 3,
 	EXEC_HANDLE_PROC = 4,
 	EXEC_HANDLE_NAMES = 5,
-	PROC_MAX_PROCESSES = 16,
 	PROC_DYN_LOAD_BIAS = 0x400000,
 	PROC_SPAWN_SET_LOGIN = 1,
 	PROC_SPAWN_FLAGS_MASK = 0xffffffff,
@@ -103,7 +103,8 @@ struct exec_info {
 	const struct elf64_phdr *phdrs;
 };
 
-static struct process processes[PROC_MAX_PROCESSES];
+static struct bunix_map processes_by_pid;
+static struct bunix_map processes_by_linux_pid;
 static u64 next_pid = 1;
 static u64 first_linux_pid;
 static unsigned char segment_buffer[PROC_SEGMENT_MAX];
@@ -887,23 +888,23 @@ static void process_reset(struct process *process)
 	if (process->task_handle != 0) {
 		bunix_handle_close(process->task_handle);
 	}
+	(void)bunix_map_remove(&processes_by_pid, process->pid);
+	if (process->linux_pid != 0) {
+		(void)bunix_map_remove(&processes_by_linux_pid,
+				       process->linux_pid);
+	}
 	process->pid = 0;
 	process->linux_pid = 0;
 	process->task_handle = 0;
 	process->status = 0;
 	process->exited = 0;
 	process->waiter = 0;
+	bunix_free(process);
 }
 
 static struct process *process_find(u64 pid)
 {
-	for (u64 i = 0; i < PROC_MAX_PROCESSES; i++) {
-		if (processes[i].pid == pid) {
-			return &processes[i];
-		}
-	}
-
-	return 0;
+	return (struct process *)bunix_map_get(&processes_by_pid, pid);
 }
 
 static struct process *process_find_linux_pid(u64 linux_pid)
@@ -912,24 +913,13 @@ static struct process *process_find_linux_pid(u64 linux_pid)
 		return 0;
 	}
 
-	for (u64 i = 0; i < PROC_MAX_PROCESSES; i++) {
-		if (processes[i].linux_pid == linux_pid) {
-			return &processes[i];
-		}
-	}
-
-	return 0;
+	return (struct process *)
+		bunix_map_get(&processes_by_linux_pid, linux_pid);
 }
 
 static struct process *process_alloc(void)
 {
-	for (u64 i = 0; i < PROC_MAX_PROCESSES; i++) {
-		if (processes[i].pid == 0) {
-			return &processes[i];
-		}
-	}
-
-	return 0;
+	return (struct process *)bunix_calloc(1, sizeof(struct process));
 }
 
 static long spawn_process(const char *path, u64 login_uid, int set_login,
@@ -939,14 +929,20 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 	u64 linux_pid = 0;
 	u64 task_handle = 0;
 	u64 linux_parent_pid = 0;
-	struct process *process = process_alloc();
+	struct process *process;
 
-	if (process == 0 || pid == 0) {
+	if (pid == 0) {
+		return -1;
+	}
+
+	process = process_alloc();
+	if (process == 0) {
 		return -1;
 	}
 
 	vfs = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
 	if (vfs == 0) {
+		bunix_free(process);
 		return -1;
 	}
 
@@ -957,6 +953,12 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 	process->exited = 0;
 	process->waiter = 0;
 	*pid = process->pid;
+	if (bunix_map_set(&processes_by_pid, process->pid,
+			  (u64)process) != 0) {
+		process_reset(process);
+		*pid = 0;
+		return -1;
+	}
 
 	if (is_linux_path(path) && first_linux_pid != 0) {
 		linux_parent_pid = first_linux_pid;
@@ -972,6 +974,13 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 
 	process->linux_pid = linux_pid;
 	process->task_handle = task_handle;
+	if (linux_pid != 0 &&
+	    bunix_map_set(&processes_by_linux_pid, linux_pid,
+			  (u64)process) != 0) {
+		process_reset(process);
+		*pid = 0;
+		return -1;
+	}
 	if (linux_pid != 0 && first_linux_pid == 0) {
 		first_linux_pid = linux_pid;
 	}
@@ -982,6 +991,8 @@ int main(void)
 {
 	struct bunix_msg message;
 
+	bunix_map_init(&processes_by_pid);
+	bunix_map_init(&processes_by_linux_pid);
 	bunix_console_write(proc_online, sizeof(proc_online) - 1);
 	if (register_service(BUNIX_SERVICE_PROC, BUNIX_HANDLE_SELF) != 0) {
 		bunix_console_write(proc_register_failed,

@@ -3,13 +3,11 @@
 
 enum {
 	PROCFS_HANDLE_NAMES = 3,
-	PROCFS_MAX_OPEN_FILES = 16,
 	PROCFS_MAX_TEXT = 2048,
 	PROCFS_FILE_PROC = 1,
 	PROCFS_FILE_KTHREADS = 2,
 };
 
-static struct bunix_id_slot open_file_slots[PROCFS_MAX_OPEN_FILES];
 static struct bunix_id_table open_files;
 static char text[PROCFS_MAX_TEXT];
 
@@ -191,7 +189,7 @@ int main(void)
 	struct bunix_msg message;
 
 	bunix_console_write(online, sizeof(online) - 1);
-	bunix_id_table_init(&open_files, open_file_slots, PROCFS_MAX_OPEN_FILES);
+	bunix_id_table_init(&open_files);
 	if (register_service(BUNIX_SERVICE_PROCFS, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
 	}

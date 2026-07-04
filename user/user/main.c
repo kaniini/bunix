@@ -1,14 +1,13 @@
+#include <bunix/id_table.h>
 #include <bunix/libbunix.h>
 
 enum {
 	USER_HANDLE_NAMES = 3,
-	USER_MAX_CREDENTIALS = 32,
 	USER_MAX_GROUPS = 2,
 	USER_ID_KEEP = (u64)-1,
 	USER_ACCOUNT_BUFFER = 512,
 	USER_NAME_MAX = 16,
 	USER_PASSWORD_MAX = 16,
-	USER_MAX_SESSIONS = 8,
 	USER_TTY_CONSOLE = 1,
 };
 
@@ -38,10 +37,9 @@ struct user_session {
 	u64 foreground;
 };
 
-static struct user_credential credentials[USER_MAX_CREDENTIALS];
-static struct user_session sessions[USER_MAX_SESSIONS];
+static struct bunix_map credentials;
+static struct bunix_id_table sessions;
 static char account_buffer[USER_ACCOUNT_BUFFER];
-static u64 next_session_id = 1;
 
 static u64 resolve_service(u64 service, unsigned int rights)
 {
@@ -99,25 +97,28 @@ static long register_service(u64 service)
 
 static struct user_credential *credential_find(u64 task)
 {
-	for (u64 i = 0; i < USER_MAX_CREDENTIALS; i++) {
-		if (credentials[i].task == task) {
-			return &credentials[i];
-		}
-	}
-
-	return 0;
+	return (struct user_credential *)bunix_map_get(&credentials, task);
 }
 
 static struct user_credential *credential_alloc(u64 task)
 {
-	for (u64 i = 0; i < USER_MAX_CREDENTIALS; i++) {
-		if (credentials[i].task == 0) {
-			credentials[i].task = task;
-			return &credentials[i];
-		}
+	struct user_credential *credential;
+
+	if (task == 0) {
+		return 0;
 	}
 
-	return 0;
+	credential = (struct user_credential *)
+		bunix_calloc(1, sizeof(*credential));
+	if (credential == 0) {
+		return 0;
+	}
+	credential->task = task;
+	if (bunix_map_set(&credentials, task, (u64)credential) != 0) {
+		bunix_free(credential);
+		return 0;
+	}
+	return credential;
 }
 
 static void credential_clear(struct user_credential *credential)
@@ -126,6 +127,7 @@ static void credential_clear(struct user_credential *credential)
 		return;
 	}
 
+	(void)bunix_map_remove(&credentials, credential->task);
 	credential->task = 0;
 	credential->uid = 0;
 	credential->gid = 0;
@@ -137,6 +139,7 @@ static void credential_clear(struct user_credential *credential)
 	for (u64 i = 0; i < USER_MAX_GROUPS; i++) {
 		credential->groups[i] = 0;
 	}
+	bunix_free(credential);
 }
 
 static int str_eq_len(const char *left, u64 left_len,
@@ -661,17 +664,14 @@ static struct user_session *session_find(u64 session_id)
 		return 0;
 	}
 
-	for (u64 i = 0; i < USER_MAX_SESSIONS; i++) {
-		if (sessions[i].id == session_id) {
-			return &sessions[i];
-		}
-	}
-
-	return 0;
+	return (struct user_session *)bunix_id_get(&sessions, session_id);
 }
 
 static long session_begin(u64 uid, u64 gid, u64 tty, struct bunix_msg *reply)
 {
+	struct user_session *session;
+	u64 session_id;
+
 	if (reply == 0 || uid == (u64)-1 || gid == (u64)-1) {
 		return -1;
 	}
@@ -679,22 +679,21 @@ static long session_begin(u64 uid, u64 gid, u64 tty, struct bunix_msg *reply)
 		tty = USER_TTY_CONSOLE;
 	}
 
-	for (u64 i = 0; i < USER_MAX_SESSIONS; i++) {
-		if (sessions[i].id == 0) {
-			sessions[i].id = next_session_id++;
-			if (next_session_id == 0) {
-				next_session_id = 1;
-			}
-			sessions[i].uid = uid;
-			sessions[i].gid = gid;
-			sessions[i].tty = tty;
-			sessions[i].foreground = 0;
-			reply->words[1] = sessions[i].id;
-			return 0;
-		}
+	session = (struct user_session *)bunix_calloc(1, sizeof(*session));
+	if (session == 0) {
+		return -1;
 	}
-
-	return -1;
+	session->uid = uid;
+	session->gid = gid;
+	session->tty = tty;
+	session_id = bunix_id_alloc(&sessions, (u64)session);
+	if (session_id == 0) {
+		bunix_free(session);
+		return -1;
+	}
+	session->id = session_id;
+	reply->words[1] = session_id;
+	return 0;
 }
 
 static long session_end(u64 session_id)
@@ -705,11 +704,8 @@ static long session_end(u64 session_id)
 		return -1;
 	}
 
-	session->id = 0;
-	session->uid = 0;
-	session->gid = 0;
-	session->tty = 0;
-	session->foreground = 0;
+	(void)bunix_id_remove(&sessions, session_id);
+	bunix_free(session);
 	return 0;
 }
 
@@ -729,15 +725,7 @@ static long session_get(u64 session_id, struct bunix_msg *reply)
 
 static u64 session_count(void)
 {
-	u64 count = 0;
-
-	for (u64 i = 0; i < USER_MAX_SESSIONS; i++) {
-		if (sessions[i].id != 0) {
-			count++;
-		}
-	}
-
-	return count;
+	return sessions.count;
 }
 
 static long session_at(u64 index, struct bunix_msg *reply)
@@ -748,15 +736,18 @@ static long session_at(u64 index, struct bunix_msg *reply)
 		return -1;
 	}
 
-	for (u64 i = 0; i < USER_MAX_SESSIONS; i++) {
-		if (sessions[i].id == 0) {
+	for (u64 i = 0; i < sessions.capacity; i++) {
+		struct user_session *session =
+			(struct user_session *)sessions.slots[i].value;
+
+		if (session == 0) {
 			continue;
 		}
 		if (count == index) {
-			reply->words[1] = sessions[i].id;
-			reply->words[2] = sessions[i].uid;
-			reply->words[3] = (sessions[i].tty << 32) |
-					  sessions[i].foreground;
+			reply->words[1] = session->id;
+			reply->words[2] = session->uid;
+			reply->words[3] = (session->tty << 32) |
+					  session->foreground;
 			return 0;
 		}
 		count++;
@@ -787,6 +778,8 @@ int main(void)
 	const char session_ended[] = "user: session end\n";
 	struct bunix_msg message;
 
+	bunix_map_init(&credentials);
+	bunix_id_table_init(&sessions);
 	bunix_console_write(online, sizeof(online) - 1);
 	if (register_service(BUNIX_SERVICE_USER) != 0) {
 		return 1;

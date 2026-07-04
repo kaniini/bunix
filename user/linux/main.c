@@ -20,7 +20,6 @@ enum {
 	LINUX_ESRCH = 3,
 	LINUX_ECHILD = 10,
 	LINUX_WAIT_BLOCK = 0x7fffffff,
-	LINUX_NO_PROCESS = 0xffffffff,
 	LINUX_EINTR = 4,
 	LINUX_GETUID = 102,
 	LINUX_GETGID = 104,
@@ -69,10 +68,7 @@ enum {
 	LINUX_MAX_WRITE = 4096,
 	LINUX_MAX_PATH = 32,
 	LINUX_STAT_SIZE = 144,
-	LINUX_MAX_PROCESSES = 64,
-	LINUX_MAX_FDS = 16,
-	LINUX_MAX_FILE_REFS = 32,
-	LINUX_MAX_PIPES = 8,
+	LINUX_INITIAL_FDS = 16,
 	LINUX_PIPE_CAPACITY = 4096,
 	LINUX_S_IFCHR = 0020000,
 	LINUX_S_IFDIR = 0040000,
@@ -127,9 +123,9 @@ struct linux_process {
 	u64 ppid;
 	u64 pgid;
 	u64 sid;
-	u64 parent;
-	u64 first_child;
-	u64 next_sibling;
+	struct linux_process *parent;
+	struct linux_process *first_child;
+	struct linux_process *next_sibling;
 	u64 bunix_task;
 	u64 bunix_thread;
 	u64 exited;
@@ -141,7 +137,8 @@ struct linux_process {
 	u64 pending_signals;
 	u64 session_id;
 	char cwd[LINUX_MAX_PATH];
-	struct linux_fd fds[LINUX_MAX_FDS];
+	struct linux_fd *fds;
+	u64 fd_capacity;
 };
 
 struct linux_pipe {
@@ -156,13 +153,8 @@ struct linux_pipe {
 	char data[LINUX_PIPE_CAPACITY];
 };
 
-static struct linux_process processes[LINUX_MAX_PROCESSES];
-static struct bunix_map_slot process_task_slots[LINUX_MAX_PROCESSES];
-static struct bunix_map_slot process_pid_slots[LINUX_MAX_PROCESSES];
 static struct bunix_map process_by_task;
 static struct bunix_map process_by_pid;
-static struct linux_pipe pipes[LINUX_MAX_PIPES];
-static struct bunix_id_slot pipe_slots[LINUX_MAX_PIPES];
 static struct bunix_id_table pipe_ids;
 static char write_buffer[LINUX_MAX_WRITE];
 static char utmp_buffer[LINUX_MAX_WRITE];
@@ -170,7 +162,6 @@ static char tty_termios[LINUX_TERM_SIZE];
 static char tty_line[256];
 static u64 tty_line_offset;
 static u64 tty_line_len;
-static struct bunix_map_slot file_ref_slots[LINUX_MAX_FILE_REFS];
 static struct bunix_map file_refs;
 static u64 next_pid = 1;
 static u64 foreground_pgid = 1;
@@ -378,31 +369,11 @@ static long linux_user_session_at(u64 index, u64 *session_id, u64 *uid,
 	return 0;
 }
 
-static u64 linux_process_index(const struct linux_process *process)
-{
-	if (process == 0) {
-		return LINUX_NO_PROCESS;
-	}
-
-	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
-		if (&processes[i] == process) {
-			return i;
-		}
-	}
-
-	return LINUX_NO_PROCESS;
-}
-
-static struct linux_process *linux_process_at(u64 index)
-{
-	return index < LINUX_MAX_PROCESSES ? &processes[index] : 0;
-}
-
 static void linux_process_init_links(struct linux_process *process)
 {
-	process->parent = LINUX_NO_PROCESS;
-	process->first_child = LINUX_NO_PROCESS;
-	process->next_sibling = LINUX_NO_PROCESS;
+	process->parent = 0;
+	process->first_child = 0;
+	process->next_sibling = 0;
 }
 
 static void linux_child_link(struct linux_process *parent,
@@ -412,42 +383,31 @@ static void linux_child_link(struct linux_process *parent,
 		return;
 	}
 
-	child->parent = linux_process_index(parent);
+	child->parent = parent;
 	child->next_sibling = parent->first_child;
-	parent->first_child = linux_process_index(child);
+	parent->first_child = child;
 	child->ppid = parent->pid;
 }
 
 static void linux_child_unlink(struct linux_process *child)
 {
 	struct linux_process *parent;
-	u64 *link;
-	const u64 child_index = linux_process_index(child);
+	struct linux_process **link;
 
-	if (child == 0 || child->parent == LINUX_NO_PROCESS ||
-	    child_index == LINUX_NO_PROCESS) {
+	if (child == 0 || child->parent == 0) {
 		return;
 	}
 
-	parent = linux_process_at(child->parent);
-	if (parent == 0) {
-		return;
-	}
-
+	parent = child->parent;
 	link = &parent->first_child;
-	while (*link != LINUX_NO_PROCESS) {
-		struct linux_process *candidate = linux_process_at(*link);
-
-		if (*link == child_index) {
+	while (*link != 0) {
+		if (*link == child) {
 			*link = child->next_sibling;
-			child->parent = LINUX_NO_PROCESS;
-			child->next_sibling = LINUX_NO_PROCESS;
+			child->parent = 0;
+			child->next_sibling = 0;
 			return;
 		}
-		if (candidate == 0) {
-			break;
-		}
-		link = &candidate->next_sibling;
+		link = &(*link)->next_sibling;
 	}
 }
 
@@ -821,9 +781,17 @@ static int path_normalize(const char *cwd, const char *input, char *out)
 	return 0;
 }
 
-static void linux_process_init_fds(struct linux_process *process)
+static int linux_process_init_fds(struct linux_process *process)
 {
-	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
+	process->fd_capacity = LINUX_INITIAL_FDS;
+	process->fds = (struct linux_fd *)
+		bunix_calloc(process->fd_capacity, sizeof(process->fds[0]));
+	if (process->fds == 0) {
+		process->fd_capacity = 0;
+		return -1;
+	}
+
+	for (u64 fd = 0; fd < process->fd_capacity; fd++) {
 		process->fds[fd].handle = 0;
 		process->fds[fd].kind = 0;
 		process->fds[fd].offset = 0;
@@ -839,33 +807,73 @@ static void linux_process_init_fds(struct linux_process *process)
 	process->fds[2].kind = LINUX_FD_CONSOLE;
 	process->cwd[0] = '/';
 	process->cwd[1] = '\0';
+	return 0;
+}
+
+static int linux_process_ensure_fds(struct linux_process *process, u64 count)
+{
+	u64 old_capacity;
+	u64 new_capacity;
+	struct linux_fd *fds;
+
+	if (process == 0 || count == 0) {
+		return -1;
+	}
+	if (process->fd_capacity >= count) {
+		return 0;
+	}
+
+	old_capacity = process->fd_capacity;
+	new_capacity = old_capacity == 0 ? LINUX_INITIAL_FDS : old_capacity;
+	while (new_capacity < count) {
+		new_capacity *= 2;
+	}
+
+	fds = (struct linux_fd *)
+		bunix_realloc(process->fds,
+			      old_capacity * sizeof(process->fds[0]),
+			      new_capacity * sizeof(process->fds[0]));
+	if (fds == 0) {
+		return -1;
+	}
+	for (u64 fd = old_capacity; fd < new_capacity; fd++) {
+		fds[fd].handle = 0;
+		fds[fd].kind = 0;
+		fds[fd].offset = 0;
+		fds[fd].size = 0;
+		fds[fd].flags = 0;
+	}
+	process->fds = fds;
+	process->fd_capacity = new_capacity;
+	return 0;
 }
 
 static long alloc_fd(struct linux_process *process, u64 kind, u64 handle,
 		     u64 size)
 {
-	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
-		if (process->fds[fd].kind == 0) {
-			process->fds[fd].kind = kind;
-			process->fds[fd].handle = handle;
-			process->fds[fd].offset = 0;
-			process->fds[fd].size = size;
-			process->fds[fd].flags = 0;
-			return (long)fd;
+	for (;;) {
+		for (u64 fd = 0; fd < process->fd_capacity; fd++) {
+			if (process->fds[fd].kind == 0) {
+				process->fds[fd].kind = kind;
+				process->fds[fd].handle = handle;
+				process->fds[fd].offset = 0;
+				process->fds[fd].size = size;
+				process->fds[fd].flags = 0;
+				return (long)fd;
+			}
+		}
+		if (linux_process_ensure_fds(process,
+					     process->fd_capacity + 1) != 0) {
+			return -LINUX_EMFILE;
 		}
 	}
-
-	return -LINUX_EMFILE;
 }
 
 static struct linux_pipe *linux_pipe_find(u64 id)
 {
 	const u64 index = bunix_id_get(&pipe_ids, id);
 
-	if (index == 0 || index > LINUX_MAX_PIPES) {
-		return 0;
-	}
-	return &pipes[index - 1];
+	return (struct linux_pipe *)index;
 }
 
 static void linux_pipe_ref_add(const struct linux_fd *fd)
@@ -905,6 +913,7 @@ static void linux_pipe_ref_drop(const struct linux_fd *fd)
 		pipe->reader_reply = 0;
 		pipe->reader_buffer = 0;
 		pipe->reader_len = 0;
+		bunix_free(pipe);
 	}
 }
 
@@ -919,18 +928,14 @@ static long linux_pipe_create(struct linux_process *process, u64 flags,
 	    read_fd == 0 || write_fd == 0) {
 		return -LINUX_EINVAL;
 	}
-	for (u64 i = 0; i < LINUX_MAX_PIPES; i++) {
-		if (pipes[i].id == 0) {
-			pipe = &pipes[i];
-			break;
-		}
-	}
+	pipe = (struct linux_pipe *)bunix_calloc(1, sizeof(*pipe));
 	if (pipe == 0) {
 		return -LINUX_EMFILE;
 	}
 
-	pipe->id = bunix_id_alloc(&pipe_ids, (u64)(pipe - pipes) + 1);
+	pipe->id = bunix_id_alloc(&pipe_ids, (u64)pipe);
 	if (pipe->id == 0) {
+		bunix_free(pipe);
 		return -LINUX_EMFILE;
 	}
 	pipe->read_refs = 1;
@@ -944,14 +949,14 @@ static long linux_pipe_create(struct linux_process *process, u64 flags,
 	left = alloc_fd(process, LINUX_FD_PIPE_READ, pipe->id, 0);
 	if (left < 0) {
 		(void)bunix_id_remove(&pipe_ids, pipe->id);
-		pipe->id = 0;
+		bunix_free(pipe);
 		return left;
 	}
 	right = alloc_fd(process, LINUX_FD_PIPE_WRITE, pipe->id, 0);
 	if (right < 0) {
 		process->fds[left].kind = 0;
 		(void)bunix_id_remove(&pipe_ids, pipe->id);
-		pipe->id = 0;
+		bunix_free(pipe);
 		return right;
 	}
 	if ((flags & LINUX_O_CLOEXEC) != 0) {
@@ -1059,20 +1064,14 @@ static struct linux_process *linux_process_find(u64 bunix_task)
 {
 	const u64 index = bunix_map_get(&process_by_task, bunix_task);
 
-	if (index == 0 || index > LINUX_MAX_PROCESSES) {
-		return 0;
-	}
-	return &processes[index - 1];
+	return (struct linux_process *)index;
 }
 
 static struct linux_process *linux_process_find_pid(u64 pid)
 {
 	const u64 index = bunix_map_get(&process_by_pid, pid);
 
-	if (index == 0 || index > LINUX_MAX_PROCESSES) {
-		return 0;
-	}
-	return &processes[index - 1];
+	return (struct linux_process *)index;
 }
 
 static struct linux_process *linux_process_for(const struct bunix_msg *message)
@@ -1095,48 +1094,43 @@ static long linux_register_process(u64 bunix_task, u64 ppid, u64 session_id)
 		return -LINUX_EINVAL;
 	}
 
-	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
-		if (processes[i].pid == 0) {
-			const u64 pid = next_pid++;
-
-			processes[i].pid = pid;
-			processes[i].tid = pid;
-			processes[i].ppid = ppid;
-			processes[i].pgid = pid;
-			processes[i].sid = pid;
-			linux_process_init_links(&processes[i]);
-			processes[i].bunix_task = bunix_task;
-			processes[i].bunix_thread = 0;
-			processes[i].exited = 0;
-			processes[i].exit_status = 0;
-			processes[i].waited = 0;
-			processes[i].waiter = 0;
-			processes[i].wait_buffer = 0;
-			processes[i].wait_pid = 0;
-			processes[i].pending_signals = 0;
-			processes[i].session_id = session_id;
-			linux_process_init_fds(&processes[i]);
-			if (foreground_pgid == 0 || pid == 1) {
-				foreground_pgid = pid;
-			}
-			if (session_id != 0) {
-				(void)linux_user_session_set_foreground(session_id,
-									processes[i].pgid);
-			}
-			if (linux_user_process_register(bunix_task) != 0) {
-				linux_process_reset(&processes[i]);
-				return -LINUX_ESRCH;
-			}
-			if (bunix_map_set(&process_by_task, bunix_task, i + 1) != 0 ||
-			    bunix_map_set(&process_by_pid, pid, i + 1) != 0) {
-				linux_process_reset(&processes[i]);
-				return -LINUX_ESRCH;
-			}
-			return (long)pid;
-		}
+	struct linux_process *process = (struct linux_process *)
+		bunix_calloc(1, sizeof(*process));
+	if (process == 0) {
+		return -LINUX_ESRCH;
 	}
 
-	return -LINUX_ESRCH;
+	const u64 pid = next_pid++;
+
+	process->pid = pid;
+	process->tid = pid;
+	process->ppid = ppid;
+	process->pgid = pid;
+	process->sid = pid;
+	linux_process_init_links(process);
+	process->bunix_task = bunix_task;
+	process->session_id = session_id;
+	if (linux_process_init_fds(process) != 0) {
+		bunix_free(process);
+		return -LINUX_ESRCH;
+	}
+	if (foreground_pgid == 0 || pid == 1) {
+		foreground_pgid = pid;
+	}
+	if (session_id != 0) {
+		(void)linux_user_session_set_foreground(session_id,
+							process->pgid);
+	}
+	if (linux_user_process_register(bunix_task) != 0) {
+		linux_process_reset(process);
+		return -LINUX_ESRCH;
+	}
+	if (bunix_map_set(&process_by_task, bunix_task, (u64)process) != 0 ||
+	    bunix_map_set(&process_by_pid, pid, (u64)process) != 0) {
+		linux_process_reset(process);
+		return -LINUX_ESRCH;
+	}
+	return (long)pid;
 }
 
 static long linux_fork_process(u64 parent_task, u64 child_task)
@@ -1148,53 +1142,52 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 		return -LINUX_EINVAL;
 	}
 
-	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
-		if (processes[i].pid == 0) {
-			const u64 pid = next_pid++;
-
-			processes[i].pid = pid;
-			processes[i].tid = pid;
-			processes[i].ppid = parent->pid;
-			processes[i].pgid = parent->pgid;
-			processes[i].sid = parent->sid;
-			linux_process_init_links(&processes[i]);
-			linux_child_link(parent, &processes[i]);
-			processes[i].bunix_task = child_task;
-			processes[i].bunix_thread = 0;
-			processes[i].exited = 0;
-			processes[i].exit_status = 0;
-			processes[i].waited = 0;
-			processes[i].waiter = 0;
-			processes[i].wait_buffer = 0;
-			processes[i].wait_pid = 0;
-			processes[i].pending_signals = 0;
-			processes[i].session_id = parent->session_id;
-			for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
-				processes[i].fds[fd] = parent->fds[fd];
-				if (processes[i].fds[fd].kind == LINUX_FD_FILE) {
-					linux_file_ref_add(processes[i].fds[fd].handle);
-				} else if (processes[i].fds[fd].kind == LINUX_FD_DIR) {
-					linux_file_ref_add(processes[i].fds[fd].handle);
-				} else if (processes[i].fds[fd].kind == LINUX_FD_PIPE_READ ||
-					   processes[i].fds[fd].kind == LINUX_FD_PIPE_WRITE) {
-					linux_pipe_ref_add(&processes[i].fds[fd]);
-				}
-			}
-			string_copy(processes[i].cwd, parent->cwd);
-			if (linux_user_process_fork(parent_task, child_task) != 0) {
-				linux_process_reset(&processes[i]);
-				return -LINUX_ESRCH;
-			}
-			if (bunix_map_set(&process_by_task, child_task, i + 1) != 0 ||
-			    bunix_map_set(&process_by_pid, pid, i + 1) != 0) {
-				linux_process_reset(&processes[i]);
-				return -LINUX_ESRCH;
-			}
-			return (long)pid;
-		}
+	struct linux_process *process = (struct linux_process *)
+		bunix_calloc(1, sizeof(*process));
+	if (process == 0) {
+		return -LINUX_ESRCH;
 	}
 
-	return -LINUX_ESRCH;
+	const u64 pid = next_pid++;
+
+	process->pid = pid;
+	process->tid = pid;
+	process->ppid = parent->pid;
+	process->pgid = parent->pgid;
+	process->sid = parent->sid;
+	linux_process_init_links(process);
+	linux_child_link(parent, process);
+	process->bunix_task = child_task;
+	process->session_id = parent->session_id;
+	process->fd_capacity = parent->fd_capacity;
+	process->fds = (struct linux_fd *)
+		bunix_alloc(parent->fd_capacity * sizeof(process->fds[0]));
+	if (process->fds == 0) {
+		linux_process_reset(process);
+		return -LINUX_ESRCH;
+	}
+	for (u64 fd = 0; fd < process->fd_capacity; fd++) {
+		process->fds[fd] = parent->fds[fd];
+		if (process->fds[fd].kind == LINUX_FD_FILE) {
+			linux_file_ref_add(process->fds[fd].handle);
+		} else if (process->fds[fd].kind == LINUX_FD_DIR) {
+			linux_file_ref_add(process->fds[fd].handle);
+		} else if (process->fds[fd].kind == LINUX_FD_PIPE_READ ||
+			   process->fds[fd].kind == LINUX_FD_PIPE_WRITE) {
+			linux_pipe_ref_add(&process->fds[fd]);
+		}
+	}
+	string_copy(process->cwd, parent->cwd);
+	if (linux_user_process_fork(parent_task, child_task) != 0) {
+		linux_process_reset(process);
+		return -LINUX_ESRCH;
+	}
+	if (bunix_map_set(&process_by_task, child_task, (u64)process) != 0 ||
+	    bunix_map_set(&process_by_pid, pid, (u64)process) != 0) {
+		linux_process_reset(process);
+		return -LINUX_ESRCH;
+	}
+	return (long)pid;
 }
 
 static int linux_same_session(const struct linux_process *left,
@@ -1212,10 +1205,12 @@ static int linux_same_session(const struct linux_process *left,
 
 static int linux_pgrp_exists(u64 pgid)
 {
-	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
-		if (processes[i].pid != 0 &&
-		    !processes[i].exited &&
-		    processes[i].pgid == pgid) {
+	for (u64 i = 0; i < process_by_pid.capacity; i++) {
+		struct linux_process *process =
+			(struct linux_process *)process_by_pid.slots[i].value;
+
+		if (process != 0 && !process->exited &&
+		    process->pgid == pgid) {
 			return 1;
 		}
 	}
@@ -1227,7 +1222,7 @@ static int linux_child_matches(const struct linux_process *parent,
 			       const struct linux_process *child, long pid)
 {
 	if (parent == 0 || child == 0 ||
-	    child->parent != linux_process_index(parent) ||
+	    child->parent != parent ||
 	    child->waited) {
 		return 0;
 	}
@@ -1238,31 +1233,26 @@ static int linux_child_matches(const struct linux_process *parent,
 static void linux_reparent_children(struct linux_process *process)
 {
 	struct linux_process *init = linux_process_find_pid(1);
-	u64 child_index;
+	struct linux_process *child;
 
-	if (process == 0 || process->first_child == LINUX_NO_PROCESS) {
+	if (process == 0 || process->first_child == 0) {
 		return;
 	}
 
-	child_index = process->first_child;
-	process->first_child = LINUX_NO_PROCESS;
+	child = process->first_child;
+	process->first_child = 0;
 
-	while (child_index != LINUX_NO_PROCESS) {
-		struct linux_process *child = linux_process_at(child_index);
-		u64 next;
+	while (child != 0) {
+		struct linux_process *next = child->next_sibling;
 
-		if (child == 0) {
-			break;
-		}
-		next = child->next_sibling;
-		child->parent = LINUX_NO_PROCESS;
-		child->next_sibling = LINUX_NO_PROCESS;
+		child->parent = 0;
+		child->next_sibling = 0;
 		if (init != 0 && init != process) {
 			linux_child_link(init, child);
 		} else {
 			child->ppid = 0;
 		}
-		child_index = next;
+		child = next;
 	}
 }
 
@@ -1291,16 +1281,12 @@ static long linux_wait4(struct linux_process *parent, long pid, u64 options,
 		return -LINUX_EINVAL;
 	}
 
-	for (u64 child_index = parent->first_child;
-	     child_index != LINUX_NO_PROCESS;) {
-		struct linux_process *child = linux_process_at(child_index);
-
-		if (child == 0) {
-			break;
-		}
-		child_index = child->next_sibling;
+	for (struct linux_process *child = parent->first_child;
+	     child != 0;) {
+		struct linux_process *next = child->next_sibling;
 
 		if (!linux_child_matches(parent, child, pid)) {
+			child = next;
 			continue;
 		}
 
@@ -1315,6 +1301,7 @@ static long linux_wait4(struct linux_process *parent, long pid, u64 options,
 			linux_process_reset(candidate);
 			return (long)waited_pid;
 		}
+		child = next;
 	}
 
 	if (candidate == 0) {
@@ -1455,12 +1442,14 @@ static long linux_kill(struct linux_process *source, long pid, u64 signal)
 		return linux_signal_process(target, signal) ? 0 : -LINUX_ESRCH;
 	}
 	if (pid == 0) {
-		for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
-			if (processes[i].pid != 0 &&
-			    !processes[i].exited &&
-			    processes[i].pgid == source->pgid &&
-			    linux_same_session(source, &processes[i])) {
-				delivered |= linux_signal_process(&processes[i],
+		for (u64 i = 0; i < process_by_pid.capacity; i++) {
+			struct linux_process *process =
+				(struct linux_process *)process_by_pid.slots[i].value;
+
+			if (process != 0 && !process->exited &&
+			    process->pgid == source->pgid &&
+			    linux_same_session(source, process)) {
+				delivered |= linux_signal_process(process,
 								  signal);
 			}
 		}
@@ -1469,12 +1458,14 @@ static long linux_kill(struct linux_process *source, long pid, u64 signal)
 	if (pid < -1) {
 		const u64 pgid = (u64)(-pid);
 
-		for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
-			if (processes[i].pid != 0 &&
-			    !processes[i].exited &&
-			    processes[i].pgid == pgid &&
-			    linux_same_session(source, &processes[i])) {
-				delivered |= linux_signal_process(&processes[i],
+		for (u64 i = 0; i < process_by_pid.capacity; i++) {
+			struct linux_process *process =
+				(struct linux_process *)process_by_pid.slots[i].value;
+
+			if (process != 0 && !process->exited &&
+			    process->pgid == pgid &&
+			    linux_same_session(source, process)) {
+				delivered |= linux_signal_process(process,
 								  signal);
 			}
 		}
@@ -1631,7 +1622,7 @@ static long linux_setpgid(struct linux_process *process, u64 pid, u64 pgid)
 		return -LINUX_ESRCH;
 	}
 	if (target != process &&
-	    target->parent != linux_process_index(process)) {
+	    target->parent != process) {
 		return -LINUX_ESRCH;
 	}
 	if (!linux_same_session(process, target)) {
@@ -1878,7 +1869,7 @@ static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
 	char data[8];
 	u64 pgid;
 
-	if (fd >= LINUX_MAX_FDS ||
+	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_CONSOLE) {
 		return -LINUX_EBADF;
 	}
@@ -2046,7 +2037,7 @@ static long linux_stat_from_vfs_meta(u64 stat_buffer,
 
 static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 {
-	if (fd >= LINUX_MAX_FDS || process->fds[fd].kind == 0) {
+	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
 
@@ -2157,7 +2148,7 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 	char out[LINUX_MAX_WRITE];
 	u64 written = 0;
 
-	if (fd >= LINUX_MAX_FDS || process->fds[fd].kind == 0) {
+	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
 	if (process->fds[fd].kind != LINUX_FD_DIR) {
@@ -2322,7 +2313,7 @@ static long linux_connect(struct linux_process *process, u64 fd, u64 addr_len,
 	u64 path_len = 0;
 	unsigned int family;
 
-	if (fd >= LINUX_MAX_FDS ||
+	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
 		return -LINUX_ENOTSOCK;
 	}
@@ -2360,7 +2351,7 @@ static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 {
 	char command;
 
-	if (fd >= LINUX_MAX_FDS ||
+	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
 		return -LINUX_ENOTSOCK;
 	}
@@ -2385,7 +2376,7 @@ static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 			   u64 buffer)
 {
-	if (fd >= LINUX_MAX_FDS ||
+	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
 		return -LINUX_ENOTSOCK;
 	}
@@ -2409,7 +2400,7 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	if (len > LINUX_MAX_WRITE) {
 		len = LINUX_MAX_WRITE;
 	}
-	if (fd >= LINUX_MAX_FDS ||
+	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind == 0 ||
 	    buffer == 0) {
 		return -LINUX_EBADF;
@@ -2472,7 +2463,7 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 			       u64 buffer)
 {
-	if (fd >= LINUX_MAX_FDS || process->fds[fd].kind == 0) {
+	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
 	if (buffer == 0 || len > sizeof(write_buffer) ||
@@ -2530,7 +2521,7 @@ static long linux_sendfile(struct linux_process *process, u64 out_fd,
 	const int positioned = offset != (u64)-1;
 	long nread;
 
-	if (in_fd >= LINUX_MAX_FDS || process->fds[in_fd].kind == 0) {
+	if (in_fd >= process->fd_capacity || process->fds[in_fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
 	if (positioned) {
@@ -2564,7 +2555,7 @@ static long linux_close(struct linux_process *process, u64 fd)
 	};
 	struct bunix_msg reply;
 
-	if (fd >= LINUX_MAX_FDS ||
+	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
@@ -2611,18 +2602,28 @@ static long linux_dup_to(struct linux_process *process, u64 old_fd,
 	if ((flags & ~LINUX_DUP_CLOEXEC) != 0) {
 		return -LINUX_EINVAL;
 	}
-	if (old_fd >= LINUX_MAX_FDS || process->fds[old_fd].kind == 0) {
+	if (old_fd >= process->fd_capacity || process->fds[old_fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
 
 	if (!fixed) {
-		for (new_fd = 0; new_fd < LINUX_MAX_FDS; new_fd++) {
-			if (process->fds[new_fd].kind == 0) {
+		for (;;) {
+			for (new_fd = 0; new_fd < process->fd_capacity; new_fd++) {
+				if (process->fds[new_fd].kind == 0) {
+					break;
+				}
+			}
+			if (new_fd < process->fd_capacity) {
 				break;
+			}
+			if (linux_process_ensure_fds(process,
+						     process->fd_capacity + 1) != 0) {
+				return -LINUX_EMFILE;
 			}
 		}
 	}
-	if (new_fd >= LINUX_MAX_FDS) {
+	if (fixed &&
+	    linux_process_ensure_fds(process, new_fd + 1) != 0) {
 		return -LINUX_EMFILE;
 	}
 	if (old_fd == new_fd) {
@@ -2648,7 +2649,7 @@ static long linux_dup_to(struct linux_process *process, u64 old_fd,
 
 static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 {
-	if (fd >= LINUX_MAX_FDS || process->fds[fd].kind == 0) {
+	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
 
@@ -2668,24 +2669,26 @@ static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 		return 0;
 	}
 	if (cmd == LINUX_F_DUPFD || cmd == LINUX_F_DUPFD_CLOEXEC) {
-		if (arg >= LINUX_MAX_FDS) {
-			return -LINUX_EINVAL;
-		}
-		for (u64 new_fd = arg; new_fd < LINUX_MAX_FDS; new_fd++) {
-			if (process->fds[new_fd].kind == 0) {
-				process->fds[new_fd] = process->fds[fd];
-				if (cmd == LINUX_F_DUPFD_CLOEXEC) {
-					process->fds[new_fd].flags |=
-						LINUX_FD_CLOEXEC;
-				} else {
-					process->fds[new_fd].flags &=
-						~LINUX_FD_CLOEXEC;
+		for (;;) {
+			for (u64 new_fd = arg; new_fd < process->fd_capacity; new_fd++) {
+				if (process->fds[new_fd].kind == 0) {
+					process->fds[new_fd] = process->fds[fd];
+					if (cmd == LINUX_F_DUPFD_CLOEXEC) {
+						process->fds[new_fd].flags |=
+							LINUX_FD_CLOEXEC;
+					} else {
+						process->fds[new_fd].flags &=
+							~LINUX_FD_CLOEXEC;
+					}
+					linux_fd_ref_add(&process->fds[new_fd]);
+					return (long)new_fd;
 				}
-				linux_fd_ref_add(&process->fds[new_fd]);
-				return (long)new_fd;
+			}
+			if (linux_process_ensure_fds(process,
+						     process->fd_capacity + 1) != 0) {
+				return -LINUX_EMFILE;
 			}
 		}
-		return -LINUX_EMFILE;
 	}
 
 	return -LINUX_EINVAL;
@@ -2697,7 +2700,7 @@ static long linux_exec_process(struct linux_process *process)
 		return -LINUX_ESRCH;
 	}
 
-	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
+	for (u64 fd = 0; fd < process->fd_capacity; fd++) {
 		if (process->fds[fd].kind != 0 &&
 		    (process->fds[fd].flags & LINUX_FD_CLOEXEC) != 0) {
 			const long closed = linux_close(process, fd);
@@ -2717,7 +2720,7 @@ static void linux_close_process_fds(struct linux_process *process)
 		return;
 	}
 
-	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
+	for (u64 fd = 0; fd < process->fd_capacity; fd++) {
 		if (process->fds[fd].kind != 0) {
 			(void)linux_close(process, fd);
 		}
@@ -2752,13 +2755,10 @@ static void linux_process_reset(struct linux_process *process)
 	process->pending_signals = 0;
 	process->session_id = 0;
 	process->cwd[0] = '\0';
-	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
-		process->fds[fd].handle = 0;
-		process->fds[fd].kind = 0;
-		process->fds[fd].offset = 0;
-		process->fds[fd].size = 0;
-		process->fds[fd].flags = 0;
-	}
+	bunix_free(process->fds);
+	process->fds = 0;
+	process->fd_capacity = 0;
+	bunix_free(process);
 }
 
 int main(void)
@@ -2779,12 +2779,10 @@ int main(void)
 	if (register_service(BUNIX_SERVICE_LINUX) != 0) {
 		return 1;
 	}
-	bunix_map_init(&process_by_task, process_task_slots,
-		       LINUX_MAX_PROCESSES);
-	bunix_map_init(&process_by_pid, process_pid_slots,
-		       LINUX_MAX_PROCESSES);
-	bunix_map_init(&file_refs, file_ref_slots, LINUX_MAX_FILE_REFS);
-	bunix_id_table_init(&pipe_ids, pipe_slots, LINUX_MAX_PIPES);
+	bunix_map_init(&process_by_task);
+	bunix_map_init(&process_by_pid);
+	bunix_map_init(&file_refs);
+	bunix_id_table_init(&pipe_ids);
 	bunix_console_write(online, sizeof(online) - 1);
 	for (;;) {
 		struct bunix_msg reply = {
