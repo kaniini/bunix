@@ -17,6 +17,7 @@ enum {
 	EM_X86_64 = 62,
 	PT_LOAD = 1,
 	PT_DYNAMIC = 2,
+	PT_INTERP = 3,
 	PF_W = 1 << 1,
 	DT_NULL = 0,
 	DT_RELR = 0x24,
@@ -27,6 +28,7 @@ enum {
 	AT_PHENT = 4,
 	AT_PHNUM = 5,
 	AT_PAGESZ = 6,
+	AT_BASE = 7,
 	AT_UID = 11,
 	AT_EUID = 12,
 	AT_GID = 13,
@@ -43,6 +45,8 @@ enum {
 	EXEC_HANDLE_PROC = 4,
 	EXEC_HANDLE_NAMES = 5,
 	PROC_DYN_LOAD_BIAS = 0x400000,
+	PROC_INTERP_LOAD_BIAS = 0x600000,
+	PROC_EXEC_PATH_MAX = 128,
 	PROC_SPAWN_SET_LOGIN = 1,
 	PROC_SPAWN_FLAGS_MASK = 0xffffffff,
 	PROC_SPAWN_SESSION_SHIFT = 32,
@@ -102,6 +106,7 @@ struct vfs_file {
 
 struct exec_info {
 	u64 entry;
+	u64 phoff;
 	u64 phent;
 	u64 phnum;
 	const struct elf64_phdr *phdrs;
@@ -348,6 +353,7 @@ static void mem_copy(unsigned char *dst, const unsigned char *src, u64 len)
 
 static long vfs_open(u64 vfs, const char *path, struct vfs_file *file)
 {
+	const u64 path_len = str_len(path) + 1;
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
 		.type = BUNIX_VFS_OPEN,
@@ -363,7 +369,44 @@ static long vfs_open(u64 vfs, const char *path, struct vfs_file *file)
 		return -1;
 	}
 
-	pack_path(&request.words[0], path);
+	if (path_len <= 16) {
+		pack_path(&request.words[0], path);
+	} else {
+		const char cwd[] = "/";
+		const u64 cwd_len = sizeof(cwd);
+		const long path_buffer = bunix_buffer_create(cwd_len + path_len);
+
+		if (path_buffer < 0 ||
+		    bunix_buffer_write((u64)path_buffer, 0, cwd,
+				       cwd_len) != 0 ||
+		    bunix_buffer_write((u64)path_buffer, cwd_len, path,
+				       path_len) != 0) {
+			if (path_buffer >= 0) {
+				bunix_handle_close((u64)path_buffer);
+			}
+			return -1;
+		}
+		request.type = BUNIX_VFS_OPEN_BUFFER;
+		request.cap_rights = BUNIX_RIGHT_RECV;
+		request.cap = (u64)path_buffer;
+		request.words[0] = cwd_len;
+		request.words[1] = path_len;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
+		    reply.words[0] != 0 ||
+		    reply.words[1] == 0 ||
+		    reply.words[3] != BUNIX_VFS_TYPE_REGULAR) {
+			bunix_handle_close((u64)path_buffer);
+			return -1;
+		}
+		bunix_handle_close((u64)path_buffer);
+		file->handle = reply.words[1];
+		file->size = reply.words[2];
+		file->type = reply.words[3];
+		return 0;
+	}
+
 	if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
 	    reply.words[0] != 0 ||
 	    reply.words[1] == 0 ||
@@ -605,17 +648,97 @@ static long apply_relative_relocations(u64 vfs, const struct vfs_file *file,
 	return 0;
 }
 
-static long build_initial_stack(u64 task, const char *path,
-				const struct exec_info *exec, u64 *stack)
+static long read_interp_path(u64 vfs, const struct vfs_file *file,
+			     const struct elf64_phdr *phdrs, u64 phnum,
+			     char *path, u64 path_size, u64 io_buffer)
 {
-	enum {
-		AUXV_PAIRS = 19,
-		STACK_WORDS = 4 + AUXV_PAIRS * 2,
-	};
+	if (path == 0 || path_size == 0) {
+		return -1;
+	}
+	path[0] = '\0';
 
+	for (u64 i = 0; i < phnum; i++) {
+		const struct elf64_phdr *phdr = &phdrs[i];
+
+		if (phdr->type != PT_INTERP) {
+			continue;
+		}
+		if (phdr->filesz == 0 || phdr->filesz >= path_size ||
+		    vfs_read_file(vfs, file->handle, file->size,
+				  phdr->offset, (unsigned char *)path,
+				  phdr->filesz, io_buffer) != 0) {
+			return -1;
+		}
+		path[phdr->filesz] = '\0';
+		return 1;
+	}
+
+	return 0;
+}
+
+static long map_load_segments(u64 vfs, const struct vfs_file *file,
+			      const struct elf64_phdr *phdrs, u64 phnum,
+			      u64 task, u64 load_bias, u64 io_buffer)
+{
+	for (u64 i = 0; i < phnum; i++) {
+		const struct elf64_phdr *phdr = &phdrs[i];
+
+		if (phdr->type != PT_LOAD) {
+			continue;
+		}
+		if (phdr->filesz > phdr->memsz ||
+		    phdr->vaddr + phdr->memsz < phdr->vaddr) {
+			return -1;
+		}
+
+		const u64 page_start = align_down(phdr->vaddr + load_bias,
+						  4096);
+		const u64 page_end = ((phdr->vaddr + load_bias +
+				       phdr->memsz + 4095) &
+				      ~4095ull);
+
+		for (u64 page = page_start; page < page_end; page += 4096) {
+			const u64 page_end_addr = page + 4096;
+			const u64 copy_start = max_u64(page,
+						       phdr->vaddr + load_bias);
+			const u64 copy_end = min_u64(page_end_addr,
+						     phdr->vaddr + load_bias +
+						     phdr->filesz);
+			const u64 dst_offset = copy_start - page;
+			const u64 src_offset = copy_start - load_bias -
+					       phdr->vaddr;
+			const u64 filesz = copy_start < copy_end ?
+					   copy_end - copy_start : 0;
+
+			mem_zero(segment_buffer, sizeof(segment_buffer));
+			if (filesz != 0 &&
+			    vfs_read_file(vfs, file->handle, file->size,
+					  phdr->offset + src_offset,
+					  segment_buffer + dst_offset,
+					  filesz, io_buffer) != 0) {
+				return -1;
+			}
+			if (bunix_task_map(task, page, segment_buffer,
+					   4096, 4096,
+					   (phdr->flags & PF_W) != 0) != 0) {
+				return -1;
+			}
+		}
+	}
+
+	return 0;
+}
+
+static long build_initial_stack(u64 task, const char *path,
+				const struct exec_info *exec,
+				u64 load_bias, u64 interpreter_base,
+				u64 *stack)
+{
 	const u64 stack_base = USER_STACK_TOP - PROC_INIT_STACK_MAX;
 	const u64 path_len = str_len(path);
 	const u64 phdr_size = exec != 0 ? exec->phnum * exec->phent : 0;
+	const u64 auxv_pairs = interpreter_base != 0 ? 20 : 19;
+	const u64 stack_words = 4 + auxv_pairs * 2;
 	const unsigned char random_bytes[16] = {
 		0x62, 0x75, 0x6e, 0x69, 0x78, 0x2d, 0x6d, 0x75,
 		0x73, 0x6c, 0x2d, 0x72, 0x61, 0x6e, 0x64, 0x00,
@@ -625,7 +748,7 @@ static long build_initial_stack(u64 task, const char *path,
 	if (exec == 0 ||
 	    exec->phdrs == 0 ||
 	    phdr_size == 0 ||
-	    path_len + 1 + phdr_size + STACK_WORDS * sizeof(u64) >
+	    path_len + 1 + phdr_size + stack_words * sizeof(u64) >
 	    PROC_INIT_STACK_MAX) {
 		return -1;
 	}
@@ -642,56 +765,64 @@ static long build_initial_stack(u64 task, const char *path,
 
 	sp = align_down(sp, 8);
 	sp -= phdr_size;
-	const u64 phdr_addr = stack_base + sp;
+	const u64 copied_phdr_addr = stack_base + sp;
 	mem_copy(init_stack + sp, (const unsigned char *)exec->phdrs,
 		 phdr_size);
+	const u64 phdr_addr = interpreter_base != 0 ?
+			       load_bias + exec->phoff :
+			       copied_phdr_addr;
 
 	sp = align_down(sp, 16);
-	sp -= STACK_WORDS * sizeof(u64);
+	sp -= stack_words * sizeof(u64);
 	u64 *words = (u64 *)(init_stack + sp);
+	u64 word = 0;
 
-	words[0] = 1;
-	words[1] = argv0;
-	words[2] = 0;
-	words[3] = 0;
-	words[4] = AT_PAGESZ;
-	words[5] = 4096;
-	words[6] = AT_ENTRY;
-	words[7] = exec->entry;
-	words[8] = AT_PHDR;
-	words[9] = phdr_addr;
-	words[10] = AT_PHENT;
-	words[11] = exec->phent;
-	words[12] = AT_PHNUM;
-	words[13] = exec->phnum;
-	words[14] = AT_EXECFN;
-	words[15] = argv0;
-	words[16] = AT_UID;
-	words[17] = 0;
-	words[18] = AT_EUID;
-	words[19] = 0;
-	words[20] = AT_GID;
-	words[21] = 0;
-	words[22] = AT_EGID;
-	words[23] = 0;
-	words[24] = AT_SECURE;
-	words[25] = 0;
-	words[26] = AT_RANDOM;
-	words[27] = random_addr;
-	words[28] = AT_CLKTCK;
-	words[29] = 100;
-	words[30] = BUNIX_AT_STDOUT;
-	words[31] = EXEC_HANDLE_STDOUT;
-	words[32] = BUNIX_AT_STDERR;
-	words[33] = EXEC_HANDLE_STDERR;
-	words[34] = BUNIX_AT_TIME;
-	words[35] = EXEC_HANDLE_TIME;
-	words[36] = BUNIX_AT_PROC;
-	words[37] = EXEC_HANDLE_PROC;
-	words[38] = BUNIX_AT_NAMES;
-	words[39] = EXEC_HANDLE_NAMES;
-	words[40] = AT_NULL;
-	words[41] = 0;
+	words[word++] = 1;
+	words[word++] = argv0;
+	words[word++] = 0;
+	words[word++] = 0;
+	words[word++] = AT_PAGESZ;
+	words[word++] = 4096;
+	words[word++] = AT_ENTRY;
+	words[word++] = exec->entry;
+	if (interpreter_base != 0) {
+		words[word++] = AT_BASE;
+		words[word++] = interpreter_base;
+	}
+	words[word++] = AT_PHDR;
+	words[word++] = phdr_addr;
+	words[word++] = AT_PHENT;
+	words[word++] = exec->phent;
+	words[word++] = AT_PHNUM;
+	words[word++] = exec->phnum;
+	words[word++] = AT_EXECFN;
+	words[word++] = argv0;
+	words[word++] = AT_UID;
+	words[word++] = 0;
+	words[word++] = AT_EUID;
+	words[word++] = 0;
+	words[word++] = AT_GID;
+	words[word++] = 0;
+	words[word++] = AT_EGID;
+	words[word++] = 0;
+	words[word++] = AT_SECURE;
+	words[word++] = 0;
+	words[word++] = AT_RANDOM;
+	words[word++] = random_addr;
+	words[word++] = AT_CLKTCK;
+	words[word++] = 100;
+	words[word++] = BUNIX_AT_STDOUT;
+	words[word++] = EXEC_HANDLE_STDOUT;
+	words[word++] = BUNIX_AT_STDERR;
+	words[word++] = EXEC_HANDLE_STDERR;
+	words[word++] = BUNIX_AT_TIME;
+	words[word++] = EXEC_HANDLE_TIME;
+	words[word++] = BUNIX_AT_PROC;
+	words[word++] = EXEC_HANDLE_PROC;
+	words[word++] = BUNIX_AT_NAMES;
+	words[word++] = EXEC_HANDLE_NAMES;
+	words[word++] = AT_NULL;
+	words[word++] = 0;
 
 	if (bunix_task_write(task, stack_base + sp, init_stack + sp,
 			     PROC_INIT_STACK_MAX - sp) != 0) {
@@ -765,14 +896,20 @@ static long exec_path(u64 vfs, struct process *process,
 		{ PROC_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
 	};
 	struct elf64_ehdr ehdr;
+	struct elf64_ehdr interp_ehdr;
 	struct elf64_phdr phdrs[PROC_MAX_PHDRS];
+	struct elf64_phdr interp_phdrs[PROC_MAX_PHDRS];
 	struct elf64_phdr aux_phdrs[PROC_MAX_PHDRS];
 	struct exec_info exec;
 	struct vfs_file file = { 0, 0, 0 };
+	struct vfs_file interp_file = { 0, 0, 0 };
+	char interp_path[PROC_EXEC_PATH_MAX];
 	long io_buffer;
 	long task;
 	u64 stack = 0;
 	u64 load_bias = 0;
+	u64 interp_bias = 0;
+	u64 start_entry = 0;
 	long bunix_id = 0;
 
 	io_buffer = bunix_buffer_create(PROC_SEGMENT_MAX);
@@ -808,12 +945,57 @@ static long exec_path(u64 vfs, struct process *process,
 		aux_phdrs[i].paddr += load_bias;
 	}
 	exec.entry = ehdr.entry + load_bias;
+	exec.phoff = ehdr.phoff;
 	exec.phent = ehdr.phentsize;
 	exec.phnum = ehdr.phnum;
 	exec.phdrs = aux_phdrs;
+	start_entry = exec.entry;
+
+	const long interp = read_interp_path(vfs, &file, phdrs, ehdr.phnum,
+					     interp_path, sizeof(interp_path),
+					     (u64)io_buffer);
+	if (interp < 0) {
+		vfs_close(vfs, file.handle);
+		bunix_handle_close((u64)io_buffer);
+		return -1;
+	}
+	if (interp > 0) {
+		if (vfs_open(vfs, interp_path, &interp_file) != 0 ||
+		    vfs_stat(vfs, &interp_file) != 0 ||
+		    vfs_read_file(vfs, interp_file.handle, interp_file.size, 0,
+				  (unsigned char *)&interp_ehdr,
+				  sizeof(interp_ehdr), (u64)io_buffer) != 0 ||
+		    read_magic(interp_ehdr.ident) != ELF_MAGIC ||
+		    interp_ehdr.ident[4] != ELFCLASS64 ||
+		    interp_ehdr.ident[5] != ELFDATA2LSB ||
+		    (interp_ehdr.type != ET_EXEC &&
+		     interp_ehdr.type != ET_DYN) ||
+		    interp_ehdr.machine != EM_X86_64 ||
+		    interp_ehdr.phnum > PROC_MAX_PHDRS ||
+		    interp_ehdr.phentsize != sizeof(interp_phdrs[0]) ||
+		    vfs_read_file(vfs, interp_file.handle, interp_file.size,
+				  interp_ehdr.phoff,
+				  (unsigned char *)interp_phdrs,
+				  (u64)interp_ehdr.phnum *
+				  sizeof(interp_phdrs[0]),
+				  (u64)io_buffer) != 0) {
+			if (interp_file.handle != 0) {
+				vfs_close(vfs, interp_file.handle);
+			}
+			vfs_close(vfs, file.handle);
+			bunix_handle_close((u64)io_buffer);
+			return -1;
+		}
+		interp_bias = interp_ehdr.type == ET_DYN ?
+			      PROC_INTERP_LOAD_BIAS : 0;
+		start_entry = interp_ehdr.entry + interp_bias;
+	}
 
 	task = bunix_task_create(task_name);
 	if (task < 0) {
+		if (interp_file.handle != 0) {
+			vfs_close(vfs, interp_file.handle);
+		}
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
 		return -1;
@@ -822,6 +1004,9 @@ static long exec_path(u64 vfs, struct process *process,
 	if (bunix_id <= 0 ||
 	    bunix_map_set(&processes_by_task_id, (u64)bunix_id,
 			  (u64)process) != 0) {
+		if (interp_file.handle != 0) {
+			vfs_close(vfs, interp_file.handle);
+		}
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
 		bunix_handle_close((u64)task);
@@ -833,82 +1018,55 @@ static long exec_path(u64 vfs, struct process *process,
 	for (u64 i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {
 		if (bunix_task_grant((u64)task, caps[i].handle,
 				     caps[i].rights) != 0) {
+			if (interp_file.handle != 0) {
+				vfs_close(vfs, interp_file.handle);
+			}
 			vfs_close(vfs, file.handle);
 			bunix_handle_close((u64)io_buffer);
 			bunix_handle_close((u64)task);
 			return -1;
 		}
 	}
-	for (u64 i = 0; i < ehdr.phnum; i++) {
-		const struct elf64_phdr *phdr = &phdrs[i];
-
-		if (phdr->type != PT_LOAD) {
-			continue;
+	if (map_load_segments(vfs, &file, phdrs, ehdr.phnum, (u64)task,
+			      load_bias, (u64)io_buffer) != 0 ||
+	    (interp_file.handle != 0 &&
+	     map_load_segments(vfs, &interp_file, interp_phdrs,
+			       interp_ehdr.phnum, (u64)task,
+			       interp_bias, (u64)io_buffer) != 0)) {
+		if (interp_file.handle != 0) {
+			vfs_close(vfs, interp_file.handle);
 		}
-
-		if (phdr->filesz > phdr->memsz ||
-		    phdr->vaddr + phdr->memsz < phdr->vaddr) {
-			vfs_close(vfs, file.handle);
-			bunix_handle_close((u64)io_buffer);
-			bunix_handle_close((u64)task);
-			return -1;
-		}
-
-		const u64 page_start = align_down(phdr->vaddr + load_bias,
-						  4096);
-		const u64 page_end = ((phdr->vaddr + load_bias +
-				       phdr->memsz + 4095) &
-				      ~4095ull);
-
-		for (u64 page = page_start; page < page_end; page += 4096) {
-			const u64 page_end_addr = page + 4096;
-			const u64 copy_start = max_u64(page,
-						       phdr->vaddr + load_bias);
-			const u64 copy_end = min_u64(page_end_addr,
-						     phdr->vaddr + load_bias +
-						     phdr->filesz);
-			const u64 dst_offset = copy_start - page;
-			const u64 src_offset = copy_start - load_bias -
-					       phdr->vaddr;
-			const u64 filesz = copy_start < copy_end ?
-					   copy_end - copy_start : 0;
-
-			mem_zero(segment_buffer, sizeof(segment_buffer));
-			if (filesz != 0 &&
-			    vfs_read_file(vfs, file.handle, file.size,
-					  phdr->offset + src_offset,
-					  segment_buffer + dst_offset,
-					  filesz, (u64)io_buffer) != 0) {
-				vfs_close(vfs, file.handle);
-				bunix_handle_close((u64)io_buffer);
-				bunix_handle_close((u64)task);
-				return -1;
-			}
-			if (bunix_task_map((u64)task, page, segment_buffer,
-					   4096, 4096,
-					   (phdr->flags & PF_W) != 0) != 0) {
-				vfs_close(vfs, file.handle);
-				bunix_handle_close((u64)io_buffer);
-				bunix_handle_close((u64)task);
-				return -1;
-			}
-		}
+		vfs_close(vfs, file.handle);
+		bunix_handle_close((u64)io_buffer);
+		bunix_handle_close((u64)task);
+		return -1;
 	}
 
-	if (apply_relative_relocations(vfs, &file, phdrs, ehdr.phnum,
+	if (interp_file.handle == 0 &&
+	    apply_relative_relocations(vfs, &file, phdrs, ehdr.phnum,
 				       (u64)task, load_bias,
 				       (u64)io_buffer) != 0) {
+		if (interp_file.handle != 0) {
+			vfs_close(vfs, interp_file.handle);
+		}
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
 		bunix_handle_close((u64)task);
 		return -1;
 	}
 
-	if (build_initial_stack((u64)task, path, &exec, &stack) != 0) {
+	if (build_initial_stack((u64)task, path, &exec, load_bias,
+				interp_bias, &stack) != 0) {
+		if (interp_file.handle != 0) {
+			vfs_close(vfs, interp_file.handle);
+		}
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
 		bunix_handle_close((u64)task);
 		return -1;
+	}
+	if (interp_file.handle != 0) {
+		vfs_close(vfs, interp_file.handle);
 	}
 	vfs_close(vfs, file.handle);
 	bunix_handle_close((u64)io_buffer);
@@ -923,7 +1081,7 @@ static long exec_path(u64 vfs, struct process *process,
 			return -1;
 		}
 	}
-	const long started = bunix_task_start_at((u64)task, exec.entry, stack);
+	const long started = bunix_task_start_at((u64)task, start_entry, stack);
 
 	return started;
 }

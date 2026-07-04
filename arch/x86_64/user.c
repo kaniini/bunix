@@ -196,6 +196,7 @@ enum {
 	USER_VFS_STAT = 5,
 	USER_VFS_READ_FILE_BUFFER = 6,
 	USER_VFS_CLOSE = 7,
+	USER_VFS_OPEN_BUFFER = 12,
 	USER_VFS_TYPE_REGULAR = 1,
 	USER_VFS_TYPE_DIRECTORY = 2,
 	USER_VFS_TYPE_SYMLINK = 3,
@@ -742,23 +743,57 @@ static int linux_vfs_read_file(struct task *task, const char *path,
 	u64 file;
 	u64 size;
 	struct shared_buffer *buffer;
+	const u64 path_len = str_len(path) + 1;
 
 	if (vfs == 0 || reply_port == 0 || path == 0 || image == 0 ||
 	    image_size == 0) {
 		return -1;
 	}
 
-	pack_bytes(packed, (const u8 *)path, str_len(path) + 1);
-	request = (struct ipc_message){
-		.protocol = USER_FOURCC_VFS,
-		.type = USER_VFS_OPEN,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply_port = reply_port,
-		.cap_type = IPC_CAP_NONE,
-		.cap_object = 0,
-		.words = { packed[0], packed[1], 0, 0 },
-	};
+	if (path_len <= 16) {
+		pack_bytes(packed, (const u8 *)path, path_len);
+		request = (struct ipc_message){
+			.protocol = USER_FOURCC_VFS,
+			.type = USER_VFS_OPEN,
+			.sender = 0,
+			.cap_rights = 0,
+			.reply_port = reply_port,
+			.cap_type = IPC_CAP_NONE,
+			.cap_object = 0,
+			.words = { packed[0], packed[1], 0, 0 },
+		};
+	} else {
+		const char cwd[] = "/";
+		const u64 cwd_len = sizeof(cwd);
+		struct shared_buffer *path_buffer =
+			buffer_create(cwd_len + path_len);
+
+		if (path_buffer == 0 ||
+		    buffer_write(path_buffer, 0, cwd, cwd_len) != 0 ||
+		    buffer_write(path_buffer, cwd_len, path, path_len) != 0) {
+			buffer_release(path_buffer);
+			return -1;
+		}
+		request = (struct ipc_message){
+			.protocol = USER_FOURCC_VFS,
+			.type = USER_VFS_OPEN_BUFFER,
+			.sender = 0,
+			.cap_rights = TASK_RIGHT_RECV,
+			.reply_port = reply_port,
+			.cap_type = IPC_CAP_BUFFER,
+			.cap_object = path_buffer,
+			.words = { cwd_len, path_len, 0, 0 },
+		};
+		if (ipc_send(vfs, &request) != 0 ||
+		    ipc_recv(reply_port, &reply) != 0 ||
+		    reply.words[0] != 0 ||
+		    reply.words[3] != USER_VFS_TYPE_REGULAR) {
+			buffer_release(path_buffer);
+			return -1;
+		}
+		buffer_release(path_buffer);
+		goto opened;
+	}
 	if (ipc_send(vfs, &request) != 0 ||
 	    ipc_recv(reply_port, &reply) != 0 ||
 	    reply.words[0] != 0 ||
@@ -766,6 +801,7 @@ static int linux_vfs_read_file(struct task *task, const char *path,
 		return -1;
 	}
 
+opened:
 	file = reply.words[1];
 	size = reply.words[2];
 	if (size == 0 || size > image_cap) {
