@@ -831,6 +831,41 @@ static int linux_unmap_task_range(struct task *task, u64 base, u64 len)
 	return task_remove_vm_region(task, base, len);
 }
 
+static int linux_forward_message(struct ipc_port *linux,
+				 struct ipc_port *reply_port,
+				 struct ipc_message *request,
+				 struct ipc_message *reply)
+{
+	if (linux == 0 || reply_port == 0 || request == 0 || reply == 0) {
+		return -1;
+	}
+
+	request->protocol = USER_FOURCC_LINX;
+	request->reply_port = reply_port;
+	return ipc_send(linux, request) == 0 &&
+	       ipc_recv(reply_port, reply) == 0 ? 0 : -1;
+}
+
+static u64 linux_forward_words(struct ipc_port *linux,
+			       struct ipc_port *reply_port, u64 number,
+			       u64 word0, u64 word1, u64 word2)
+{
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = (u32)number,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { word0, word1, word2, 0 },
+	};
+	struct ipc_message reply;
+
+	return linux_forward_message(linux, reply_port, &request, &reply) == 0 ?
+	       reply.words[0] : (u64)-LINUX_ENOSYS;
+}
+
 static u64 linux_exit_current(u64 status)
 {
 	struct ipc_port *linux = ipc_port_find("linux");
@@ -847,10 +882,7 @@ static u64 linux_exit_current(u64 status)
 	};
 	struct ipc_message reply;
 
-	if (linux != 0 && reply_port != 0) {
-		(void)ipc_send(linux, &request);
-		(void)ipc_recv(reply_port, &reply);
-	}
+	(void)linux_forward_message(linux, reply_port, &request, &reply);
 	console_printf("linux: exit_group status=%u\n", (u32)status);
 	__asm__ volatile ("sti");
 	thread_exit();
@@ -896,8 +928,7 @@ static u64 linux_write_one(struct ipc_port *linux, struct ipc_port *reply_port,
 	request.cap_type = IPC_CAP_BUFFER;
 	request.cap_rights = TASK_RIGHT_RECV;
 	request.cap_object = buffer;
-	if (ipc_send(linux, &request) != 0 ||
-	    ipc_recv(reply_port, &reply) != 0) {
+	if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 		buffer_release(buffer);
 		return (u64)-LINUX_ENOSYS;
 	}
@@ -1221,9 +1252,7 @@ static u64 linux_fork_process(struct task *parent, struct task *child)
 	};
 	struct ipc_message reply;
 
-	if (linux == 0 || reply_port == 0 ||
-	    ipc_send(linux, &request) != 0 ||
-	    ipc_recv(reply_port, &reply) != 0) {
+	if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 		return (u64)-LINUX_ENOSYS;
 	}
 
@@ -1246,9 +1275,7 @@ static u64 linux_exec_process(struct task *task)
 	};
 	struct ipc_message reply;
 
-	if (linux == 0 || reply_port == 0 ||
-	    ipc_send(linux, &request) != 0 ||
-	    ipc_recv(reply_port, &reply) != 0) {
+	if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 		return (u64)-LINUX_ENOSYS;
 	}
 
@@ -1988,8 +2015,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP;
 		request.cap_object = buffer;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
@@ -2019,8 +2045,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_SEND;
 		request.cap_object = buffer;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
@@ -2052,8 +2077,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		request.words[1] = 0;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			return (u64)-LINUX_ENOSYS;
 		}
 		if ((i64)reply.words[0] < 0) {
@@ -2082,69 +2106,35 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		request.words[1] = packed[1];
 		request.words[2] = 0;
 		request.words[3] = 0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			return (u64)-LINUX_ENOSYS;
 		}
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_GETPID:
-		request.type = LINUX_SYSCALL_GETPID;
-		request.words[0] = task_id(task);
-		request.words[1] = thread_id(thread_current());
-		request.words[2] = 0;
-		request.words[3] = 0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			return (u64)-LINUX_ENOSYS;
-		}
-		return reply.words[0];
+		return linux_forward_words(linux, reply_port, number,
+					   task_id(task),
+					   thread_id(thread_current()), 0);
 	case LINUX_SYSCALL_GETTID:
-		request.type = LINUX_SYSCALL_GETTID;
-		request.words[0] = task_id(task);
-		request.words[1] = thread_id(thread_current());
-		request.words[2] = 0;
-		request.words[3] = 0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			return (u64)-LINUX_ENOSYS;
-		}
-		return reply.words[0];
+		return linux_forward_words(linux, reply_port, number,
+					   task_id(task),
+					   thread_id(thread_current()), 0);
 	case LINUX_SYSCALL_GETUID:
 	case LINUX_SYSCALL_GETGID:
 	case LINUX_SYSCALL_GETEUID:
 	case LINUX_SYSCALL_GETEGID:
-		request.type = (u32)number;
-		request.words[0] = 0;
-		request.words[1] = 0;
-		request.words[2] = 0;
-		request.words[3] = 0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			return (u64)-LINUX_ENOSYS;
-		}
-		return reply.words[0];
+		return linux_forward_words(linux, reply_port, number, 0, 0, 0);
 	case LINUX_SYSCALL_GETPPID:
 	case LINUX_SYSCALL_GETPGRP:
 	case LINUX_SYSCALL_SETSID:
-		request.type = (u32)number;
-		request.words[0] = 0;
-		request.words[1] = 0;
-		request.words[2] = 0;
-		request.words[3] = 0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			return (u64)-LINUX_ENOSYS;
-		}
-		return reply.words[0];
+		return linux_forward_words(linux, reply_port, number, 0, 0, 0);
 	case LINUX_SYSCALL_GETGROUPS:
 		request.type = LINUX_SYSCALL_GETGROUPS;
 		request.words[0] = arg0;
 		request.words[1] = 0;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			return (u64)-LINUX_ENOSYS;
 		}
 		if ((i64)reply.words[0] > 0 && arg0 != 0) {
@@ -2165,16 +2155,8 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_SETGID:
 	case LINUX_SYSCALL_SETRESUID:
 	case LINUX_SYSCALL_SETRESGID:
-		request.type = (u32)number;
-		request.words[0] = arg0;
-		request.words[1] = arg1;
-		request.words[2] = arg2;
-		request.words[3] = 0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			return (u64)-LINUX_ENOSYS;
-		}
-		return reply.words[0];
+		return linux_forward_words(linux, reply_port, number,
+					   arg0, arg1, arg2);
 	case LINUX_SYSCALL_SETGROUPS: {
 		u32 groups[2] = { 0, 0 };
 
@@ -2192,24 +2174,15 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		request.words[1] = groups[0];
 		request.words[2] = groups[1];
 		request.words[3] = 0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			return (u64)-LINUX_ENOSYS;
 		}
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_GETPGID:
 	case LINUX_SYSCALL_SETPGID:
-		request.type = (u32)number;
-		request.words[0] = arg0;
-		request.words[1] = arg1;
-		request.words[2] = 0;
-		request.words[3] = 0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			return (u64)-LINUX_ENOSYS;
-		}
-		return reply.words[0];
+		return linux_forward_words(linux, reply_port, number,
+					   arg0, arg1, 0);
 	case LINUX_SYSCALL_IOCTL: {
 		struct shared_buffer *buffer = 0;
 		u64 output_size = 0;
@@ -2274,8 +2247,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 				       arg1 == LINUX_TCSETSF) ?
 				      TASK_RIGHT_RECV : TASK_RIGHT_SEND) : 0;
 		request.cap_object = buffer;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			if (buffer != 0) {
 				buffer_release(buffer);
 			}
@@ -2312,8 +2284,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		request.words[1] = arg2;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
@@ -2346,8 +2317,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_SEND;
 		request.cap_object = buffer;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
@@ -2360,36 +2330,16 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_CLOSE:
-		request.type = LINUX_SYSCALL_CLOSE;
-		request.words[0] = arg0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			return (u64)-LINUX_ENOSYS;
-		}
-		return reply.words[0];
+		return linux_forward_words(linux, reply_port, number,
+					   arg0, 0, 0);
 	case LINUX_SYSCALL_DUP:
 	case LINUX_SYSCALL_DUP2:
 	case LINUX_SYSCALL_DUP3:
-		request.type = (u32)number;
-		request.words[0] = arg0;
-		request.words[1] = arg1;
-		request.words[2] = arg2;
-		request.words[3] = 0;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			return (u64)-LINUX_ENOSYS;
-		}
-		return reply.words[0];
+		return linux_forward_words(linux, reply_port, number,
+					   arg0, arg1, arg2);
 	case LINUX_SYSCALL_FCNTL:
-		request.type = LINUX_SYSCALL_FCNTL;
-		request.words[0] = arg0;
-		request.words[1] = arg1;
-		request.words[2] = arg2;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
-			return (u64)-LINUX_ENOSYS;
-		}
-		return reply.words[0];
+		return linux_forward_words(linux, reply_port, number,
+					   arg0, arg1, arg2);
 	case LINUX_SYSCALL_OPEN:
 	case LINUX_SYSCALL_OPENAT: {
 		struct shared_buffer *buffer;
@@ -2426,8 +2376,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_RECV;
 		request.cap_object = buffer;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
@@ -2474,8 +2423,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		request.cap_type = IPC_CAP_BUFFER;
 		request.cap_rights = TASK_RIGHT_SEND;
 		request.cap_object = buffer;
-		if (ipc_send(linux, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0) {
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
