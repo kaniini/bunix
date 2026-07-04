@@ -983,6 +983,7 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOTDIR;
 				break;
 			}
+			reply.words[0] = BUNIX_VFS_ERR_NOENT;
 			u64 current = 0;
 			for (struct bunix_tree_node *node =
 				     bunix_tree_first_node(&files);
@@ -1004,9 +1005,6 @@ int main(void)
 					break;
 				}
 				current++;
-			}
-			if (reply.words[0] != 0) {
-				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 			}
 			break;
 		case BUNIX_VFS_CLOSE:

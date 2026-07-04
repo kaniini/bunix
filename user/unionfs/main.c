@@ -10,6 +10,7 @@ enum {
 	UNIONFS_MOUNT_PATH_LEN = 10,
 	UNIONFS_OPEN_LOWER = 1,
 	UNIONFS_OPEN_UPPER = 2,
+	UNIONFS_OPEN_DIR = 3,
 };
 
 struct rootfs_header {
@@ -45,6 +46,7 @@ struct unionfs_open {
 	u64 remote_handle;
 	struct rootfs_entry lower;
 	char upper_path[UNIONFS_MAX_PATH];
+	char relative_path[UNIONFS_MAX_PATH];
 };
 
 struct unionfs_whiteout {
@@ -88,6 +90,32 @@ static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
 	for (u64 i = 0; i < len && i < BUNIX_IPC_DATA_BYTES; i++) {
 		words[i / 8] |= ((u64)data[i]) << ((i % 8) * 8);
 	}
+}
+
+static void unpack_name(char *name, u64 word0, u64 word1)
+{
+	const u64 words[] = { word0, word1 };
+
+	for (u64 i = 0; i < BUNIX_IPC_DATA_BYTES; i++) {
+		name[i] = (char)((words[i / 8] >> ((i % 8) * 8)) & 0xff);
+		if (name[i] == '\0') {
+			return;
+		}
+	}
+	name[BUNIX_IPC_DATA_BYTES - 1] = '\0';
+}
+
+static int name_is_valid(const char *name)
+{
+	if (name == 0 || name[0] == '\0') {
+		return 0;
+	}
+	for (u64 i = 0; i < BUNIX_IPC_DATA_BYTES && name[i] != '\0'; i++) {
+		if (name[i] == '/') {
+			return 0;
+		}
+	}
+	return 1;
 }
 
 static void pack_path(u64 *words, const char *path)
@@ -181,6 +209,37 @@ static int compose_lower_path(const char *relative, char *path)
 		}
 	}
 	return -1;
+}
+
+static int compose_child_path(const char *directory, const char *name,
+			      char *path)
+{
+	u64 pos = 0;
+
+	if (directory == 0 || name == 0 || directory[0] != '/' ||
+	    name[0] == '\0') {
+		return -1;
+	}
+	for (u64 i = 0; directory[i] != '\0'; i++) {
+		if (pos + 1 >= UNIONFS_MAX_PATH) {
+			return -1;
+		}
+		path[pos++] = directory[i];
+	}
+	if (pos > 1) {
+		if (pos + 1 >= UNIONFS_MAX_PATH) {
+			return -1;
+		}
+		path[pos++] = '/';
+	}
+	for (u64 i = 0; name[i] != '\0'; i++) {
+		if (name[i] == '/' || pos + 1 >= UNIONFS_MAX_PATH) {
+			return -1;
+		}
+		path[pos++] = name[i];
+	}
+	path[pos] = '\0';
+	return 0;
 }
 
 static char *str_dup(const char *text)
@@ -388,12 +447,71 @@ static const struct rootfs_entry *rootfs_find(const char *path)
 	return 0;
 }
 
+static int path_is_child_of(const char *path, const char *directory)
+{
+	const u64 dir_len = str_len(directory);
+	u64 pos;
+
+	if (path == 0 || directory == 0 || str_eq(path, directory)) {
+		return 0;
+	}
+	if (str_eq(directory, "/")) {
+		if (path[0] != '/' || path[1] == '\0') {
+			return 0;
+		}
+		pos = 1;
+	} else {
+		for (u64 i = 0; i < dir_len; i++) {
+			if (path[i] != directory[i]) {
+				return 0;
+			}
+		}
+		if (path[dir_len] != '/') {
+			return 0;
+		}
+		pos = dir_len + 1;
+	}
+	while (path[pos] != '\0') {
+		if (path[pos] == '/') {
+			return 0;
+		}
+		pos++;
+	}
+	return 1;
+}
+
+static const char *path_name_in_dir(const char *path, const char *directory)
+{
+	const u64 dir_len = str_len(directory);
+
+	return str_eq(directory, "/") ? path + 1 : path + dir_len + 1;
+}
+
+static int lower_is_directory(const char *path)
+{
+	const struct rootfs_entry *entry;
+
+	if (str_eq(path, "/")) {
+		return 1;
+	}
+	entry = rootfs_find(path);
+	return entry != 0 && entry->type == BUNIX_VFS_TYPE_DIRECTORY;
+}
+
 static void stat_lower(struct bunix_msg *reply, const struct rootfs_entry *entry)
 {
 	reply->words[0] = 0;
 	reply->words[1] = entry->size;
 	reply->words[2] = entry->mode | ((u64)entry->type << 32);
 	reply->words[3] = ((u64)entry->uid) | ((u64)entry->gid << 32);
+}
+
+static void stat_root_dir(struct bunix_msg *reply)
+{
+	reply->words[0] = 0;
+	reply->words[1] = 0;
+	reply->words[2] = 0555 | ((u64)BUNIX_VFS_TYPE_DIRECTORY << 32);
+	reply->words[3] = 0;
 }
 
 static int service_path_call(u64 service, u64 type, const char *path, u64 word3,
@@ -498,6 +616,40 @@ static u64 remember_lower_open(const struct rootfs_entry *entry)
 	return id;
 }
 
+static u64 remember_dir_open(const char *relative, u64 upper_handle)
+{
+	struct unionfs_open *open;
+	u64 id;
+
+	if (relative == 0) {
+		return 0;
+	}
+	open = (struct unionfs_open *)bunix_calloc(1, sizeof(*open));
+	if (open == 0) {
+		return 0;
+	}
+	id = next_open_id++;
+	while (id == 0 || bunix_u64_tree_get(&open_files, id) != 0) {
+		id = next_open_id++;
+	}
+	open->id = id;
+	open->kind = UNIONFS_OPEN_DIR;
+	open->service = tmpfs_service;
+	open->remote_handle = upper_handle;
+	for (u64 i = 0; i < UNIONFS_MAX_PATH; i++) {
+		open->relative_path[i] = relative[i];
+		if (relative[i] == '\0') {
+			break;
+		}
+	}
+	if (bunix_u64_tree_insert_node(&open_files, &open->node, id,
+				       (u64)open) != 0) {
+		bunix_free(open);
+		return 0;
+	}
+	return id;
+}
+
 static int copy_lower_to_upper(struct unionfs_open *open, u64 task)
 {
 	enum {
@@ -564,10 +716,29 @@ static struct unionfs_open *open_from_handle(u64 handle)
 	return (struct unionfs_open *)bunix_u64_tree_get(&open_files, handle);
 }
 
+static int close_remote_handle(u64 service, u64 handle)
+{
+	struct bunix_msg close = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_CLOSE,
+		.words = { handle, 0, 0, 0 },
+	};
+	struct bunix_msg ignored;
+
+	return service != 0 && handle != 0 ?
+	       bunix_ipc_call(service, &close, &ignored) : 0;
+}
+
 static void forget_open(struct unionfs_open *open)
 {
 	if (open == 0) {
 		return;
+	}
+	if ((open->kind == UNIONFS_OPEN_UPPER ||
+	     open->kind == UNIONFS_OPEN_DIR) &&
+	    open->service != 0 &&
+	    open->remote_handle != 0) {
+		(void)close_remote_handle(open->service, open->remote_handle);
 	}
 	bunix_u64_tree_remove_node(&open_files, &open->node);
 	bunix_free(open);
@@ -597,7 +768,11 @@ static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 	}
 	const struct rootfs_entry *entry = rootfs_find(lower);
 	if (entry == 0) {
-		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		if (str_eq(lower, "/")) {
+			stat_root_dir(reply);
+		} else {
+			reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		}
 	} else if (message->type == BUNIX_VFS_ACCESS_BUFFER) {
 		reply->words[0] = 0;
 	} else {
@@ -614,6 +789,10 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 	struct bunix_msg layer_reply;
 	const struct rootfs_entry *entry;
 	u64 handle;
+	u64 upper_handle = 0;
+	u64 upper_type = 0;
+	u64 upper_size = 0;
+	int lower_dir;
 
 	if (mounted_relative_path(path, relative) != 0 ||
 	    compose_upper_path(relative, upper) != 0 ||
@@ -633,6 +812,18 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 			reply->words[0] = BUNIX_VFS_ERR_NOENT;
 			return;
 		}
+		if (entry->type == BUNIX_VFS_TYPE_DIRECTORY) {
+			handle = remember_dir_open(relative, 0);
+			if (handle == 0) {
+				reply->words[0] = (u64)-1;
+				return;
+			}
+			reply->words[0] = 0;
+			reply->words[1] = handle;
+			reply->words[2] = 0;
+			reply->words[3] = BUNIX_VFS_TYPE_DIRECTORY;
+			return;
+		}
 		handle = remember_lower_open(entry);
 		if (handle == 0) {
 			reply->words[0] = (u64)-1;
@@ -644,22 +835,35 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 		reply->words[3] = entry->type;
 		return;
 	}
+	upper_handle = layer_reply.words[1];
+	upper_size = layer_reply.words[2];
+	upper_type = layer_reply.words[3];
+	lower_dir = lower_is_directory(lower) && !whiteout_exists(relative);
+	if (upper_type == BUNIX_VFS_TYPE_DIRECTORY || lower_dir) {
+		handle = remember_dir_open(relative,
+					   upper_type == BUNIX_VFS_TYPE_DIRECTORY ?
+					   upper_handle : 0);
+		if (handle == 0) {
+			(void)close_remote_handle(tmpfs_service, upper_handle);
+			reply->words[0] = (u64)-1;
+			return;
+		}
+		reply->words[0] = 0;
+		reply->words[1] = handle;
+		reply->words[2] = 0;
+		reply->words[3] = BUNIX_VFS_TYPE_DIRECTORY;
+		return;
+	}
 
-	handle = remember_upper_open(tmpfs_service, layer_reply.words[1]);
+	handle = remember_upper_open(tmpfs_service, upper_handle);
 	if (handle == 0) {
-		struct bunix_msg close = {
-			.protocol = BUNIX_PROTO_VFS,
-			.type = BUNIX_VFS_CLOSE,
-			.words = { layer_reply.words[1], 0, 0, 0 },
-		};
-		struct bunix_msg ignored;
-
-		(void)bunix_ipc_call(tmpfs_service, &close, &ignored);
+		(void)close_remote_handle(tmpfs_service, upper_handle);
 		reply->words[0] = (u64)-1;
 		return;
 	}
 	*reply = layer_reply;
 	reply->words[1] = handle;
+	reply->words[2] = upper_size;
 }
 
 static void reply_mutate(struct bunix_msg *message, struct bunix_msg *reply,
@@ -703,6 +907,131 @@ static void reply_mutate(struct bunix_msg *message, struct bunix_msg *reply,
 	}
 }
 
+static int upper_child_exists(const char *directory, const char *name)
+{
+	char relative[UNIONFS_MAX_PATH];
+	char upper[UNIONFS_MAX_PATH];
+	struct bunix_msg reply;
+
+	if (compose_child_path(directory, name, relative) != 0 ||
+	    compose_upper_path(relative, upper) != 0) {
+		return 0;
+	}
+	return service_path_call(tmpfs_service,
+				 BUNIX_VFS_STAT_PATH_META_BUFFER, upper, 0,
+				 &reply) == 0 &&
+	       reply.words[0] == 0;
+}
+
+static int whiteout_child_exists(const char *directory, const char *name)
+{
+	char relative[UNIONFS_MAX_PATH];
+
+	return compose_child_path(directory, name, relative) == 0 &&
+	       whiteout_exists(relative);
+}
+
+static int read_upper_dir(struct unionfs_open *open, u64 index,
+			  struct bunix_msg *reply, u64 *count)
+{
+	u64 remote_index = 0;
+	u64 visible_index = 0;
+
+	if (count != 0) {
+		*count = 0;
+	}
+	if (open->remote_handle == 0) {
+		return 0;
+	}
+	for (;;) {
+		char name[BUNIX_IPC_DATA_BYTES];
+		struct bunix_msg request = {
+			.protocol = BUNIX_PROTO_VFS,
+			.type = BUNIX_VFS_READDIR,
+			.words = { open->remote_handle, remote_index, 0, 0 },
+		};
+		struct bunix_msg upper_reply;
+
+		if (bunix_ipc_call(open->service, &request, &upper_reply) != 0 ||
+		    upper_reply.words[0] != 0) {
+			return 0;
+		}
+		unpack_name(name, upper_reply.words[2], upper_reply.words[3]);
+		if (!name_is_valid(name)) {
+			remote_index++;
+			continue;
+		}
+		if (count != 0) {
+			(*count)++;
+		}
+		if (visible_index == index) {
+			*reply = upper_reply;
+			reply->words[1] = (index + 1) |
+					  (upper_reply.words[1] &
+					   0xffffffff00000000UL);
+			return 1;
+		}
+		remote_index++;
+		visible_index++;
+	}
+}
+
+static int read_lower_dir(struct unionfs_open *open, u64 index,
+			  struct bunix_msg *reply)
+{
+	u64 current = 0;
+
+	for (u64 i = 0; i < root_entry_count; i++) {
+		const struct rootfs_entry *entry = &root_entries[i];
+		const char *name;
+
+		if (!path_is_child_of(entry->path, open->relative_path)) {
+			continue;
+		}
+		name = path_name_in_dir(entry->path, open->relative_path);
+		if (!name_is_valid(name)) {
+			continue;
+		}
+		if (whiteout_child_exists(open->relative_path, name) ||
+		    upper_child_exists(open->relative_path, name)) {
+			continue;
+		}
+		if (current == index) {
+			reply->words[0] = 0;
+			reply->words[1] = (index + 1) |
+					 ((u64)entry->type << 32);
+			pack_bytes(&reply->words[2],
+				   (const unsigned char *)name,
+				   str_len(name) + 1);
+			return 1;
+		}
+		current++;
+	}
+	return 0;
+}
+
+static void readdir_merged(struct unionfs_open *open, struct bunix_msg *message,
+			   struct bunix_msg *reply)
+{
+	u64 upper_count = 0;
+	const u64 index = message->words[1];
+
+	if (open == 0 || open->kind != UNIONFS_OPEN_DIR) {
+		reply->words[0] = BUNIX_VFS_ERR_NOTDIR;
+		return;
+	}
+	if (read_upper_dir(open, index, reply, &upper_count)) {
+		return;
+	}
+	if (index >= upper_count &&
+	    read_lower_dir(open, index - upper_count, reply)) {
+		reply->words[1] = (index + 1) |
+				  (reply->words[1] & 0xffffffff00000000UL);
+		return;
+	}
+	reply->words[0] = BUNIX_VFS_ERR_NOENT;
+}
+
 static void forward_open_handle(struct bunix_msg *message,
 				struct bunix_msg *reply)
 {
@@ -710,6 +1039,23 @@ static void forward_open_handle(struct bunix_msg *message,
 
 	if (open == 0) {
 		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (open->kind == UNIONFS_OPEN_DIR) {
+		if (message->type == BUNIX_VFS_CLOSE) {
+			forget_open(open);
+			reply->words[0] = 0;
+		} else if (message->type == BUNIX_VFS_STAT_META) {
+			stat_root_dir(reply);
+		} else if (message->type == BUNIX_VFS_STAT) {
+			reply->words[0] = 0;
+			reply->words[1] = 0;
+			reply->words[2] = BUNIX_VFS_TYPE_DIRECTORY;
+		} else if (message->type == BUNIX_VFS_READDIR) {
+			readdir_merged(open, message, reply);
+		} else {
+			reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		}
 		return;
 	}
 	if (open->kind == UNIONFS_OPEN_LOWER) {
@@ -761,6 +1107,7 @@ static void forward_open_handle(struct bunix_msg *message,
 		return;
 	}
 	if (message->type == BUNIX_VFS_CLOSE && reply->words[0] == 0) {
+		open->remote_handle = 0;
 		forget_open(open);
 	}
 }
