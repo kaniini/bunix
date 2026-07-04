@@ -1,5 +1,6 @@
 #include <bunix/libbunix.h>
 #include <bunix/id_table.h>
+#include <bunix/tree.h>
 
 enum {
 	TMPFS_HANDLE_NAMES = 3,
@@ -11,7 +12,7 @@ enum {
 };
 
 struct tmpfs_file {
-	struct tmpfs_file *next;
+	struct bunix_tree_node node;
 	char *path;
 	char *data;
 	u64 size;
@@ -35,7 +36,7 @@ static const char *tmpfs_roots[TMPFS_ROOT_COUNT] = {
 	"/run",
 	"/var/tmp",
 };
-static struct tmpfs_file *files;
+static struct bunix_tree files;
 static struct bunix_id_table open_files;
 static u64 user_service;
 
@@ -202,12 +203,7 @@ static int read_resolved_path(const struct bunix_msg *message, char *path)
 
 static struct tmpfs_file *file_find(const char *path)
 {
-	for (struct tmpfs_file *file = files; file != 0; file = file->next) {
-		if (!file->deleted && str_eq(file->path, path)) {
-			return file;
-		}
-	}
-	return 0;
+	return (struct tmpfs_file *)bunix_tree_get(&files, path);
 }
 
 static int path_parent_exists(const char *path)
@@ -323,7 +319,7 @@ static struct tmpfs_file *parent_file_for_path(const char *path)
 	}
 	if (path_is_root(parent)) {
 		static struct tmpfs_file root = {
-			.next = 0,
+			.node = { 0, 0, 0, 0, 0 },
 			.path = 0,
 			.data = 0,
 			.size = 0,
@@ -343,7 +339,10 @@ static struct tmpfs_file *parent_file_for_path(const char *path)
 
 static int directory_is_empty(const char *path)
 {
-	for (struct tmpfs_file *file = files; file != 0; file = file->next) {
+	for (struct bunix_tree_node *node = bunix_tree_first_node(&files);
+	     node != 0; node = bunix_tree_next_node(node)) {
+		struct tmpfs_file *file = (struct tmpfs_file *)node->value;
+
 		if (file_is_child_of(file, path)) {
 			return 0;
 		}
@@ -444,8 +443,12 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 	file->mode = (unsigned int)(mode & 0777);
 	file->uid = (unsigned int)uid;
 	file->gid = (unsigned int)gid;
-	file->next = files;
-	files = file;
+	if (bunix_tree_insert_node(&files, &file->node, file->path,
+				   (u64)file) != 0) {
+		bunix_free(file->path);
+		bunix_free(file);
+		return 0;
+	}
 	return file;
 }
 
@@ -516,17 +519,7 @@ static void file_unlink(struct tmpfs_file *file)
 		return;
 	}
 	file->deleted = 1;
-	if (files == file) {
-		files = file->next;
-	} else {
-		for (struct tmpfs_file *prev = files; prev != 0;
-		     prev = prev->next) {
-			if (prev->next == file) {
-				prev->next = file->next;
-				break;
-			}
-		}
-	}
+	bunix_tree_remove_node(&files, &file->node);
 	file_release(file);
 }
 
@@ -623,6 +616,7 @@ int main(void)
 	const u64 vfs = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
 
 	bunix_console_log(online, sizeof(online) - 1);
+	bunix_tree_init(&files);
 	bunix_id_table_init(&open_files);
 	if (register_service(BUNIX_SERVICE_TMPFS, BUNIX_HANDLE_SELF) != 0 ||
 	    vfs == 0) {
@@ -956,7 +950,10 @@ int main(void)
 				break;
 			}
 			u64 current = 0;
-			for (file = files; file != 0; file = file->next) {
+			for (struct bunix_tree_node *node =
+				     bunix_tree_first_node(&files);
+			     node != 0; node = bunix_tree_next_node(node)) {
+				file = (struct tmpfs_file *)node->value;
 				if (!file_is_child_of(file, open->path)) {
 					continue;
 				}
