@@ -866,6 +866,33 @@ static u64 linux_forward_words(struct ipc_port *linux,
 	       reply.words[0] : (u64)-LINUX_ENOSYS;
 }
 
+static int linux_syscall_forwards_scalar(u64 number)
+{
+	switch (number) {
+	case LINUX_SYSCALL_CLOSE:
+	case LINUX_SYSCALL_DUP:
+	case LINUX_SYSCALL_DUP2:
+	case LINUX_SYSCALL_DUP3:
+	case LINUX_SYSCALL_FCNTL:
+	case LINUX_SYSCALL_GETUID:
+	case LINUX_SYSCALL_GETGID:
+	case LINUX_SYSCALL_GETEUID:
+	case LINUX_SYSCALL_GETEGID:
+	case LINUX_SYSCALL_GETPPID:
+	case LINUX_SYSCALL_GETPGRP:
+	case LINUX_SYSCALL_SETSID:
+	case LINUX_SYSCALL_SETUID:
+	case LINUX_SYSCALL_SETGID:
+	case LINUX_SYSCALL_SETRESUID:
+	case LINUX_SYSCALL_SETRESGID:
+	case LINUX_SYSCALL_GETPGID:
+	case LINUX_SYSCALL_SETPGID:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
 static u64 linux_exit_current(u64 status)
 {
 	struct ipc_port *linux = ipc_port_find("linux");
@@ -1991,6 +2018,10 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return (u64)-LINUX_ENOSYS;
 	}
 	request.reply_port = reply_port;
+	if (linux_syscall_forwards_scalar(number)) {
+		return linux_forward_words(linux, reply_port, number,
+					   arg0, arg1, arg2);
+	}
 
 	switch (number) {
 	case LINUX_SYSCALL_READ: {
@@ -2112,22 +2143,10 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_GETPID:
-		return linux_forward_words(linux, reply_port, number,
-					   task_id(task),
-					   thread_id(thread_current()), 0);
 	case LINUX_SYSCALL_GETTID:
 		return linux_forward_words(linux, reply_port, number,
 					   task_id(task),
 					   thread_id(thread_current()), 0);
-	case LINUX_SYSCALL_GETUID:
-	case LINUX_SYSCALL_GETGID:
-	case LINUX_SYSCALL_GETEUID:
-	case LINUX_SYSCALL_GETEGID:
-		return linux_forward_words(linux, reply_port, number, 0, 0, 0);
-	case LINUX_SYSCALL_GETPPID:
-	case LINUX_SYSCALL_GETPGRP:
-	case LINUX_SYSCALL_SETSID:
-		return linux_forward_words(linux, reply_port, number, 0, 0, 0);
 	case LINUX_SYSCALL_GETGROUPS:
 		request.type = LINUX_SYSCALL_GETGROUPS;
 		request.words[0] = arg0;
@@ -2151,12 +2170,6 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			}
 		}
 		return reply.words[0];
-	case LINUX_SYSCALL_SETUID:
-	case LINUX_SYSCALL_SETGID:
-	case LINUX_SYSCALL_SETRESUID:
-	case LINUX_SYSCALL_SETRESGID:
-		return linux_forward_words(linux, reply_port, number,
-					   arg0, arg1, arg2);
 	case LINUX_SYSCALL_SETGROUPS: {
 		u32 groups[2] = { 0, 0 };
 
@@ -2179,10 +2192,6 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 		return reply.words[0];
 	}
-	case LINUX_SYSCALL_GETPGID:
-	case LINUX_SYSCALL_SETPGID:
-		return linux_forward_words(linux, reply_port, number,
-					   arg0, arg1, 0);
 	case LINUX_SYSCALL_IOCTL: {
 		struct shared_buffer *buffer = 0;
 		u64 output_size = 0;
@@ -2329,17 +2338,6 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		buffer_release(buffer);
 		return reply.words[0];
 	}
-	case LINUX_SYSCALL_CLOSE:
-		return linux_forward_words(linux, reply_port, number,
-					   arg0, 0, 0);
-	case LINUX_SYSCALL_DUP:
-	case LINUX_SYSCALL_DUP2:
-	case LINUX_SYSCALL_DUP3:
-		return linux_forward_words(linux, reply_port, number,
-					   arg0, arg1, arg2);
-	case LINUX_SYSCALL_FCNTL:
-		return linux_forward_words(linux, reply_port, number,
-					   arg0, arg1, arg2);
 	case LINUX_SYSCALL_OPEN:
 	case LINUX_SYSCALL_OPENAT: {
 		struct shared_buffer *buffer;
