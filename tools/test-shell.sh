@@ -230,7 +230,7 @@ for expected in "PROC_STATUS_OK" "PROC_FD_OK" "PROC_STAT_OK" "PROC_IPC_OK" "PROC
 		sleep 1
 	done
 done
-for expected in "cpu  " "/bin/sh" "direct_delivered " "direct_handoff " "ipcstress ok"; do
+for expected in "cpu  " "/bin/sh" "PPid:	1" "direct_delivered " "direct_handoff " "ipcstress ok"; do
 	i=0
 	while ! grep -F "$expected" "$log" >/dev/null 2>&1; do
 		i=$((i + 1))

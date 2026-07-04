@@ -33,6 +33,12 @@ struct proc_info {
 	u64 linux_pid;
 };
 
+struct proc_details {
+	u64 ppid;
+	char state;
+	u64 status;
+};
+
 static u64 build_kthreads(void);
 
 static u64 resolve_service(u64 service, unsigned int rights)
@@ -259,6 +265,20 @@ static int proc_cmdline(u64 pid, char *out, u64 out_size)
 
 		out[i] = (char)((reply.words[slot] >> shift) & 0xff);
 	}
+	return 0;
+}
+
+static int proc_details(u64 pid, struct proc_details *details)
+{
+	struct bunix_msg reply;
+
+	if (pid == 0 || details == 0 ||
+	    proc_call(BUNIX_PROC_DETAILS, pid, &reply) != 0) {
+		return -1;
+	}
+	details->ppid = reply.words[1];
+	details->state = (char)reply.words[2];
+	details->status = reply.words[3];
 	return 0;
 }
 
@@ -731,11 +751,18 @@ static const char *pid_cmdline(u64 pid)
 static u64 build_pid_stat(u64 pid)
 {
 	u64 len = 0;
+	struct proc_details details = { 0, 'S', 0 };
+
+	(void)proc_details(pid, &details);
 
 	append_u64(&len, pid);
 	append_str(&len, " (");
 	append_str(&len, pid_name(pid));
-	append_str(&len, ") S 0 1 1 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ");
+	append_str(&len, ") ");
+	append_char(&len, details.state == '\0' ? 'S' : details.state);
+	append_char(&len, ' ');
+	append_u64(&len, details.ppid);
+	append_str(&len, " 1 1 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ");
 	append_u64(&len, bunix_timer_ticks());
 	append_str(&len, " 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n");
 	return len;
@@ -745,12 +772,16 @@ static u64 build_pid_status(u64 pid)
 {
 	u64 len = 0;
 	struct proc_info info = { 0, 0, 0 };
+	struct proc_details details = { 0, 'S', 0 };
 
 	(void)proc_info(pid, &info);
+	(void)proc_details(pid, &details);
 	append_str(&len, "Name:\t");
 	append_str(&len, pid_name(pid));
 	append_char(&len, '\n');
-	append_str(&len, "State:\tS (sleeping)\n");
+	append_str(&len, "State:\t");
+	append_char(&len, details.state == '\0' ? 'S' : details.state);
+	append_str(&len, details.state == 'Z' ? " (zombie)\n" : " (sleeping)\n");
 	append_str(&len, "Pid:\t");
 	append_u64(&len, pid);
 	append_char(&len, '\n');
@@ -760,7 +791,9 @@ static u64 build_pid_status(u64 pid)
 	append_str(&len, "LinuxPid:\t");
 	append_u64(&len, info.linux_pid);
 	append_char(&len, '\n');
-	append_str(&len, "PPid:\t0\n");
+	append_str(&len, "PPid:\t");
+	append_u64(&len, details.ppid);
+	append_char(&len, '\n');
 	append_str(&len, "Uid:\t1000\t1000\t1000\t1000\n");
 	append_str(&len, "Gid:\t1000\t1000\t1000\t1000\n");
 	append_str(&len, "Groups:\t1000\n");

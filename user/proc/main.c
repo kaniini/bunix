@@ -50,6 +50,7 @@ enum {
 
 struct process {
 	u64 pid;
+	u64 ppid;
 	u64 task_id;
 	u64 linux_pid;
 	u64 task_handle;
@@ -961,6 +962,7 @@ static void process_reset(struct process *process)
 				       process->linux_pid);
 	}
 	process->pid = 0;
+	process->ppid = 0;
 	process->task_id = 0;
 	process->linux_pid = 0;
 	process->task_handle = 0;
@@ -1072,6 +1074,7 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 	}
 
 	process->pid = next_pid++;
+	process->ppid = 0;
 	process->task_id = 0;
 	process->linux_pid = 0;
 	process->task_handle = 0;
@@ -1089,7 +1092,10 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 	}
 
 	if (is_linux_path(path) && first_linux_pid != 0) {
+		struct process *parent = process_find_linux_pid(first_linux_pid);
+
 		linux_parent_pid = first_linux_pid;
+		process->ppid = parent == 0 ? 0 : parent->pid;
 	}
 
 	if (exec_path(vfs, process, path, task_name_for_path(path),
@@ -1119,6 +1125,7 @@ static long register_linux_child_process(u64 linux_pid, u64 task_id, u64 ppid,
 					 u64 cmd_len, u64 *pid)
 {
 	struct process *process;
+	struct process *parent = 0;
 
 	if (linux_pid == 0 || task_id == 0 || pid == 0 ||
 	    process_find_linux_pid(linux_pid) != 0) {
@@ -1134,7 +1141,11 @@ static long register_linux_child_process(u64 linux_pid, u64 task_id, u64 ppid,
 	if (process == 0) {
 		return -1;
 	}
+	if (ppid != 0) {
+		parent = process_find_linux_pid(ppid);
+	}
 	process->pid = next_pid++;
+	process->ppid = parent == 0 ? 0 : parent->pid;
 	process->task_id = task_id;
 	process->linux_pid = linux_pid;
 	process->task_handle = 0;
@@ -1144,10 +1155,6 @@ static long register_linux_child_process(u64 linux_pid, u64 task_id, u64 ppid,
 	process->cmd_words[0] = cmd_left;
 	process->cmd_words[1] = cmd_right;
 	process->cmd_len = cmd_len;
-	if (ppid != 0 && process_find_linux_pid(ppid) == 0) {
-		process_reset(process);
-		return -1;
-	}
 	if (bunix_map_set(&processes_by_pid, process->pid,
 			  (u64)process) != 0 ||
 	    bunix_map_set(&processes_by_task_id, task_id,
@@ -1348,6 +1355,19 @@ int main(void)
 				reply.words[1] = process->cmd_len;
 				reply.words[2] = process->cmd_words[0];
 				reply.words[3] = process->cmd_words[1];
+			}
+			break;
+		}
+		case BUNIX_PROC_DETAILS: {
+			struct process *process = process_find(message.words[0]);
+
+			if (process == 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				reply.words[0] = 0;
+				reply.words[1] = process->ppid;
+				reply.words[2] = process->exited ? 'Z' : 'S';
+				reply.words[3] = process->status;
 			}
 			break;
 		}
