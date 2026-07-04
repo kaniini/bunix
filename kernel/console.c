@@ -21,6 +21,10 @@ static char console_log_buffer[CONSOLE_LOG_BUFFER_SIZE];
 static u64 console_log_start;
 static u64 console_log_len;
 static int console_log_ring_only;
+static char console_input_pending[32];
+static u64 console_input_pending_start;
+static u64 console_input_pending_len;
+static u32 console_cpr_state;
 
 enum console_log_level {
 	CONSOLE_LOG_ERROR,
@@ -195,6 +199,15 @@ static void serial_putc(char c)
 
 static int serial_try_getc(char *out)
 {
+	if (console_input_pending_len != 0) {
+		*out = console_input_pending[console_input_pending_start];
+		console_input_pending_start =
+			(console_input_pending_start + 1) %
+			sizeof(console_input_pending);
+		console_input_pending_len--;
+		return 1;
+	}
+
 	if ((arch_inb(COM1 + 5) & 0x01) == 0) {
 		return 0;
 	}
@@ -212,6 +225,49 @@ static char serial_getc(void)
 	}
 
 	return c;
+}
+
+int console_can_read(void)
+{
+	if (console_input_pending_len != 0) {
+		return 1;
+	}
+	return (arch_inb(COM1 + 5) & 0x01) != 0;
+}
+
+static void console_queue_input_raw(const char *text)
+{
+	while (*text != '\0' &&
+	       console_input_pending_len < sizeof(console_input_pending)) {
+		const u64 index = (console_input_pending_start +
+				   console_input_pending_len) %
+				  sizeof(console_input_pending);
+
+		console_input_pending[index] = *text++;
+		console_input_pending_len++;
+	}
+}
+
+static void console_track_vt_query_raw(char c)
+{
+	if (console_cpr_state == 0) {
+		console_cpr_state = c == '\033' ? 1 : 0;
+		return;
+	}
+	if (console_cpr_state == 1) {
+		console_cpr_state = c == '[' ? 2 : (c == '\033' ? 1 : 0);
+		return;
+	}
+	if (console_cpr_state == 2) {
+		console_cpr_state = c == '6' ? 3 : (c == '\033' ? 1 : 0);
+		return;
+	}
+	if (console_cpr_state == 3 && c == 'n') {
+		console_queue_input_raw("\033[1;1R");
+		console_cpr_state = 0;
+		return;
+	}
+	console_cpr_state = c == '\033' ? 1 : 0;
 }
 
 static void vga_newline(void)
@@ -248,6 +304,8 @@ void console_init(void)
 
 static void console_putc_raw(char c)
 {
+	console_track_vt_query_raw(c);
+
 	if (c == '\n') {
 		serial_putc('\r');
 		serial_putc('\n');

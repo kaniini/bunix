@@ -5,7 +5,8 @@ arch_syscall_entry:
 	movq %rsp, %r11
 	movq %gs:8, %rsp
 
-	subq $128, %rsp
+	subq $4288, %rsp
+	andq $-64, %rsp
 
 	movq %r8, 0(%rsp)
 	movq %rdi, 8(%rsp)
@@ -26,8 +27,30 @@ arch_syscall_entry:
 
 	movq %rax, 0(%rsp)
 
+	cmpl $0, arch_thread_use_xsave(%rip)
+	je 1f
+	movl arch_thread_xstate_mask_low(%rip), %eax
+	movl arch_thread_xstate_mask_high(%rip), %edx
+	xsave64 128(%rsp)
+	jmp 2f
+1:
+	fxsave64 128(%rsp)
+2:
+
 	movq %rsp, %rdi
 	call arch_syscall_dispatch
+
+	movq %rax, 0(%rsp)
+	cmpl $0, arch_thread_use_xsave(%rip)
+	je 3f
+	movl arch_thread_xstate_mask_low(%rip), %eax
+	movl arch_thread_xstate_mask_high(%rip), %edx
+	xrstor64 128(%rsp)
+	jmp 4f
+3:
+	fxrstor64 128(%rsp)
+4:
+	movq 0(%rsp), %rax
 
 	movq 8(%rsp), %rdi
 	movq 16(%rsp), %rsi

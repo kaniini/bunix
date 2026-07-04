@@ -6,7 +6,7 @@
 enum {
 	SLAB_MAGIC = 0x534c4142,
 	SLAB_LARGE_MAGIC = 0x534c4247,
-	SLAB_MIN_ALIGN = 16,
+	SLAB_MIN_ALIGN = 64,
 };
 
 struct slab_free {

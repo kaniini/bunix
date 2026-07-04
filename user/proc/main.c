@@ -212,6 +212,7 @@ static int is_linux_path(const char *path)
 {
 	return str_eq(path, "/bin/lxtest") ||
 	       str_eq(path, "/bin/musl-hello") ||
+	       str_eq(path, "/bin/fputest") ||
 	       str_eq(path, "/bin/sh") ||
 	       str_eq(path, "/bin/busybox");
 }
@@ -223,6 +224,9 @@ static const char *task_name_for_path(const char *path)
 	}
 	if (str_eq(path, "/bin/musl-hello")) {
 		return "musl-hello";
+	}
+	if (str_eq(path, "/bin/fputest")) {
+		return "fputest";
 	}
 	if (str_eq(path, "/bin/sh") || str_eq(path, "/bin/busybox")) {
 		return "busybox";

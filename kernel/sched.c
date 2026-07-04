@@ -416,6 +416,7 @@ void sched_init(void)
 	}
 
 	boot_cpu_id = 0;
+	arch_thread_context_init_current(&cpus[boot_cpu_id].scheduler_thread.context);
 	next_auto_cpu = 0;
 	console_printf("sched: init cpus=%u boot_cpu=%u\n", sched_cpu_count,
 		       boot_cpu_id);
@@ -436,6 +437,7 @@ void sched_secondary_start(u32 cpu_id)
 	}
 
 	console_printf("sched: cpu=%u online\n", cpu_id);
+	arch_thread_context_init_current(&cpus[cpu_id].scheduler_thread.context);
 
 	sched_idle_loop();
 }

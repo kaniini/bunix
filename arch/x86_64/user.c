@@ -1,6 +1,7 @@
 #include <arch/user.h>
 #include <arch/io.h>
 #include <arch/smp.h>
+#include <arch/thread.h>
 #include "buffer.h"
 #include "console.h"
 #include "ipc.h"
@@ -79,6 +80,7 @@ enum {
 	LINUX_SYSCALL_GETCWD = 79,
 	LINUX_SYSCALL_CHDIR = 80,
 	LINUX_SYSCALL_READLINK = 89,
+	LINUX_SYSCALL_GETTIMEOFDAY = 96,
 	LINUX_SYSCALL_SYSINFO = 99,
 	LINUX_SYSCALL_GETUID = 102,
 	LINUX_SYSCALL_SYSLOG = 103,
@@ -103,6 +105,7 @@ enum {
 	LINUX_SYSCALL_SETRESGID = 119,
 	LINUX_SYSCALL_GETPGID = 121,
 	LINUX_SYSCALL_ARCH_PRCTL = 158,
+	LINUX_SYSCALL_TIME = 201,
 	LINUX_SYSCALL_FUTEX = 202,
 	LINUX_SYSCALL_SET_TID_ADDRESS = 218,
 	LINUX_SYSCALL_CLOCK_GETTIME = 228,
@@ -560,6 +563,58 @@ static u64 linux_sleep_absolute(u64 request)
 		thread_sleep_ns(target - now);
 	}
 	return 0;
+}
+
+static u64 linux_poll_timeout_ns(u64 number, u64 timeout)
+{
+	if (number == LINUX_SYSCALL_PPOLL) {
+		u64 ns;
+
+		if (timeout == 0) {
+			return 1000000000ull;
+		}
+		return linux_timespec_to_ns(timeout, &ns) == 0 ? ns : 0;
+	}
+
+	{
+		const u32 raw = (u32)timeout;
+
+		if ((raw & 0x80000000u) != 0) {
+			return 1000000000ull;
+		}
+		return (u64)raw * 1000000ull;
+	}
+}
+
+static int linux_poll_timeout_is_infinite(u64 number, u64 timeout)
+{
+	if (number == LINUX_SYSCALL_PPOLL) {
+		return timeout == 0;
+	}
+	return ((u32)timeout & 0x80000000u) != 0;
+}
+
+static short linux_poll_revents(int fd, short events, int suppress_pollin)
+{
+	short revents = 0;
+
+	if (fd < 0) {
+		return 0;
+	}
+	if ((events & LINUX_POLLOUT) != 0) {
+		revents |= events & LINUX_POLLOUT;
+	}
+	if ((events & LINUX_POLLIN) != 0) {
+		if (fd == 0) {
+			if (console_can_read()) {
+				revents |= events & LINUX_POLLIN;
+			}
+		} else if (!suppress_pollin) {
+			revents |= events & LINUX_POLLIN;
+		}
+	}
+
+	return revents;
 }
 
 static int console_write_user(u64 vaddr, u64 len)
@@ -1469,6 +1524,8 @@ static const char *linux_syscall_name(u64 number)
 		return "getcwd";
 	case LINUX_SYSCALL_CHDIR:
 		return "chdir";
+	case LINUX_SYSCALL_GETTIMEOFDAY:
+		return "gettimeofday";
 	case LINUX_SYSCALL_SYSINFO:
 		return "sysinfo";
 	case LINUX_SYSCALL_GETUID:
@@ -1519,6 +1576,8 @@ static const char *linux_syscall_name(u64 number)
 		return "fcntl";
 	case LINUX_SYSCALL_ARCH_PRCTL:
 		return "arch_prctl";
+	case LINUX_SYSCALL_TIME:
+		return "time";
 	case LINUX_SYSCALL_FUTEX:
 		return "futex";
 	case LINUX_SYSCALL_SET_TID_ADDRESS:
@@ -1985,6 +2044,27 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return write_current_user(arg1, timespec, sizeof(timespec)) == 0 ?
 		       0 : (u64)-LINUX_EINVAL;
 	}
+	case LINUX_SYSCALL_GETTIMEOFDAY: {
+		u64 timeval[2];
+		const u64 ns = timer_monotonic_ns();
+
+		if (arg0 == 0) {
+			return 0;
+		}
+		timeval[0] = ns / 1000000000ull;
+		timeval[1] = (ns % 1000000000ull) / 1000ull;
+		return write_current_user(arg0, timeval, sizeof(timeval)) == 0 ?
+		       0 : (u64)-LINUX_EINVAL;
+	}
+	case LINUX_SYSCALL_TIME: {
+		const u64 seconds = timer_monotonic_ns() / 1000000000ull;
+
+		if (arg0 != 0 &&
+		    write_current_user(arg0, &seconds, sizeof(seconds)) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		return seconds;
+	}
 	case LINUX_SYSCALL_NANOSLEEP:
 		return linux_sleep_relative(arg0, arg1);
 	case LINUX_SYSCALL_CLOCK_NANOSLEEP:
@@ -2077,10 +2157,26 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			short revents;
 		} pollfd;
 		u64 ready = 0;
+		u64 timeout_ns;
+		int infinite_timeout;
+		int slept = 0;
+		int suppress_pollin = 0;
 
-		if (arg0 == 0 || arg1 > 64) {
+		if (arg1 > 64 || (arg1 != 0 && arg0 == 0)) {
 			return (u64)-LINUX_EINVAL;
 		}
+		timeout_ns = linux_poll_timeout_ns(number, arg2);
+		infinite_timeout = linux_poll_timeout_is_infinite(number, arg2);
+		if (number == LINUX_SYSCALL_PPOLL) {
+			suppress_pollin = arg2 != 0 && timeout_ns != 0;
+		} else {
+			const u32 raw = (u32)arg2;
+
+			suppress_pollin = raw != 0 &&
+					   (raw & 0x80000000u) == 0;
+		}
+poll_again:
+		ready = 0;
 		for (u64 i = 0; i < arg1; i++) {
 			const u64 addr = arg0 + i * sizeof(pollfd);
 			short revents = 0;
@@ -2088,10 +2184,8 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			if (read_current_user(addr, &pollfd, sizeof(pollfd)) != 0) {
 				return (u64)-LINUX_EINVAL;
 			}
-			if (pollfd.fd >= 0) {
-				revents = pollfd.events &
-					(LINUX_POLLIN | LINUX_POLLOUT);
-			}
+			revents = linux_poll_revents(pollfd.fd, pollfd.events,
+						     suppress_pollin);
 			if (revents != 0) {
 				ready++;
 			}
@@ -2099,6 +2193,12 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 					       sizeof(revents)) != 0) {
 				return (u64)-LINUX_EINVAL;
 			}
+		}
+		if (ready == 0 && timeout_ns != 0 &&
+		    (infinite_timeout || !slept)) {
+			slept = 1;
+			thread_sleep_ns(infinite_timeout ? 10000000ull : timeout_ns);
+			goto poll_again;
 		}
 		return ready;
 	}
@@ -2838,18 +2938,60 @@ static void gdt_set_tss(struct arch_user_cpu *cpu, u32 index, u64 base,
 
 static void arch_enable_sse(void)
 {
+	enum {
+		CR4_OSFXSR = 1u << 9,
+		CR4_OSXMMEXCPT = 1u << 10,
+		CR4_OSXSAVE = 1u << 18,
+		CPUID1_ECX_XSAVE = 1u << 26,
+		CPUID1_ECX_AVX = 1u << 28,
+		XCR0_X87 = 1u << 0,
+		XCR0_SSE = 1u << 1,
+		XCR0_AVX = 1u << 2,
+	};
 	u64 cr0;
 	u64 cr4;
+	u32 eax;
+	u32 ebx;
+	u32 ecx;
+	u32 edx;
+	u64 xstate_mask = XCR0_X87 | XCR0_SSE;
+	int use_xsave = 0;
 
 	__asm__ volatile ("movq %%cr0, %0" : "=r"(cr0));
 	cr0 |= 1u << 1;
+	cr0 |= 1u << 5;
 	cr0 &= ~(1u << 2);
 	cr0 &= ~(1u << 3);
 	__asm__ volatile ("movq %0, %%cr0" : : "r"(cr0) : "memory");
 
 	__asm__ volatile ("movq %%cr4, %0" : "=r"(cr4));
-	cr4 |= (1u << 9) | (1u << 10);
-	__asm__ volatile ("movq %0, %%cr4" : : "r"(cr4) : "memory");
+	cr4 |= CR4_OSFXSR | CR4_OSXMMEXCPT;
+
+	__asm__ volatile ("cpuid"
+			  : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+			  : "a"(1), "c"(0)
+			  : "memory");
+	if ((ecx & (CPUID1_ECX_XSAVE | CPUID1_ECX_AVX)) ==
+	    (CPUID1_ECX_XSAVE | CPUID1_ECX_AVX)) {
+		u32 xcr_low;
+		u32 xcr_high;
+
+		cr4 |= CR4_OSXSAVE;
+		__asm__ volatile ("movq %0, %%cr4" : : "r"(cr4) : "memory");
+		xstate_mask |= XCR0_AVX;
+		xcr_low = (u32)xstate_mask;
+		xcr_high = (u32)(xstate_mask >> 32);
+		__asm__ volatile ("xsetbv"
+				  :
+				  : "a"(xcr_low), "d"(xcr_high), "c"(0)
+				  : "memory");
+		use_xsave = 1;
+	} else {
+		cr4 &= ~((u64)CR4_OSXSAVE);
+		__asm__ volatile ("movq %0, %%cr4" : : "r"(cr4) : "memory");
+	}
+
+	arch_thread_fpu_init_cpu(xstate_mask, use_xsave);
 }
 
 void arch_user_init_cpu(u32 cpu_id)
@@ -2924,6 +3066,7 @@ void arch_user_enter(u64 entry, u64 stack)
 {
 	console_printf("user: enter rip=%p rsp=%p\n",
 		       (const void *)entry, (const void *)stack);
+	arch_thread_fpu_reset_current();
 
 	__asm__ volatile (
 		"cli\n"

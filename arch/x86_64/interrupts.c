@@ -42,14 +42,42 @@ struct idt_ptr {
 static struct idt_entry idt[IDT_ENTRIES];
 static volatile u64 timer_ticks;
 
-extern void isr_stub_0(void);
-extern void isr_stub_6(void);
-extern void isr_stub_8(void);
-extern void isr_stub_13(void);
-extern void isr_stub_14(void);
-extern void isr_stub_32(void);
-extern void isr_stub_64(void);
-extern void isr_stub_65(void);
+#define DECL_ISR(vector) extern void isr_stub_##vector(void)
+DECL_ISR(0);
+DECL_ISR(1);
+DECL_ISR(2);
+DECL_ISR(3);
+DECL_ISR(4);
+DECL_ISR(5);
+DECL_ISR(6);
+DECL_ISR(7);
+DECL_ISR(8);
+DECL_ISR(9);
+DECL_ISR(10);
+DECL_ISR(11);
+DECL_ISR(12);
+DECL_ISR(13);
+DECL_ISR(14);
+DECL_ISR(15);
+DECL_ISR(16);
+DECL_ISR(17);
+DECL_ISR(18);
+DECL_ISR(19);
+DECL_ISR(20);
+DECL_ISR(21);
+DECL_ISR(22);
+DECL_ISR(23);
+DECL_ISR(24);
+DECL_ISR(25);
+DECL_ISR(26);
+DECL_ISR(27);
+DECL_ISR(28);
+DECL_ISR(29);
+DECL_ISR(30);
+DECL_ISR(31);
+DECL_ISR(32);
+DECL_ISR(64);
+DECL_ISR(65);
 
 static void idt_set_gate_flags(u8 vector, void (*handler)(void), u8 flags)
 {
@@ -173,14 +201,42 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 
 void arch_interrupts_init(void)
 {
+#define SET_ISR(vector) idt_set_gate(vector, isr_stub_##vector)
 	idt_set_gate(0, isr_stub_0);
-	idt_set_gate(6, isr_stub_6);
-	idt_set_gate(8, isr_stub_8);
-	idt_set_gate(13, isr_stub_13);
-	idt_set_gate(14, isr_stub_14);
-	idt_set_gate(IRQ_TIMER_VECTOR, isr_stub_32);
-	idt_set_gate(IRQ_SCHED_IPI_VECTOR, isr_stub_64);
-	idt_set_gate(IRQ_LAPIC_TIMER_VECTOR, isr_stub_65);
+	SET_ISR(1);
+	SET_ISR(2);
+	SET_ISR(3);
+	SET_ISR(4);
+	SET_ISR(5);
+	SET_ISR(6);
+	SET_ISR(7);
+	SET_ISR(8);
+	SET_ISR(9);
+	SET_ISR(10);
+	SET_ISR(11);
+	SET_ISR(12);
+	SET_ISR(13);
+	SET_ISR(14);
+	SET_ISR(15);
+	SET_ISR(16);
+	SET_ISR(17);
+	SET_ISR(18);
+	SET_ISR(19);
+	SET_ISR(20);
+	SET_ISR(21);
+	SET_ISR(22);
+	SET_ISR(23);
+	SET_ISR(24);
+	SET_ISR(25);
+	SET_ISR(26);
+	SET_ISR(27);
+	SET_ISR(28);
+	SET_ISR(29);
+	SET_ISR(30);
+	SET_ISR(31);
+	SET_ISR(32);
+	SET_ISR(64);
+	SET_ISR(65);
 	arch_interrupts_load();
 	console_printf("interrupts: idt loaded\n");
 
