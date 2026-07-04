@@ -239,12 +239,14 @@ int vm_alloc_user_range(struct vm_space *space, u64 vaddr, u64 len,
 		struct vm_frame frame = vm_rpc_alloc_frame();
 
 		if (frame.addr == 0) {
+			(void)vm_unmap_user_range(space, start, page - start);
 			return -1;
 		}
 
 		mem_zero((u8 *)frame.addr, VM_PAGE_SIZE);
 		if (vm_map_user_page(space, page, frame, writable) != 0) {
 			vm_rpc_free_frame(frame);
+			(void)vm_unmap_user_range(space, start, page - start);
 			return -1;
 		}
 	}
@@ -316,6 +318,11 @@ int vm_clone_user_range(struct vm_space *dst, struct vm_space *src,
 		const u64 src_phys = arch_vm_translate(&src->arch, page, 0);
 
 		if (frame.addr == 0 || src_phys == 0) {
+			if (frame.addr != 0) {
+				(void)arch_vm_unmap_page(&dst->arch, page);
+				vm_rpc_free_frame(frame);
+			}
+			(void)vm_unmap_user_range(dst, start, page - start);
 			return -1;
 		}
 

@@ -22,6 +22,8 @@ enum {
 	PROCFS_KIND_PID_STATM = 15,
 	PROCFS_KIND_IPC = 16,
 	PROCFS_KIND_PID_EXE = 17,
+	PROCFS_KIND_FILESYSTEMS = 18,
+	PROCFS_KIND_CPUINFO = 19,
 };
 
 static struct bunix_id_table open_files;
@@ -372,6 +374,12 @@ static u64 file_for_path(const char *path)
 	if (str_eq(path, "/proc/meminfo")) {
 		return make_file(PROCFS_KIND_MEMINFO, 0);
 	}
+	if (str_eq(path, "/proc/filesystems")) {
+		return make_file(PROCFS_KIND_FILESYSTEMS, 0);
+	}
+	if (str_eq(path, "/proc/cpuinfo")) {
+		return make_file(PROCFS_KIND_CPUINFO, 0);
+	}
 	if (str_eq(path, "/proc/mounts")) {
 		return make_file(PROCFS_KIND_MOUNTS, 0);
 	}
@@ -597,10 +605,24 @@ static u64 build_uptime(void)
 static u64 build_meminfo(void)
 {
 	u64 len = 0;
+	struct bunix_vm_stats stats = { 0, 0 };
+	u64 total_kb = 131072;
+	u64 free_kb = 65536;
 
-	append_str(&len, "MemTotal:       131072 kB\n");
-	append_str(&len, "MemFree:         65536 kB\n");
-	append_str(&len, "MemAvailable:    65536 kB\n");
+	if (bunix_vm_stats(&stats) == 0 && stats.total_frames != 0) {
+		total_kb = stats.total_frames * 4;
+		free_kb = stats.free_frames * 4;
+	}
+
+	append_str(&len, "MemTotal:       ");
+	append_u64(&len, total_kb);
+	append_str(&len, " kB\n");
+	append_str(&len, "MemFree:        ");
+	append_u64(&len, free_kb);
+	append_str(&len, " kB\n");
+	append_str(&len, "MemAvailable:   ");
+	append_u64(&len, free_kb);
+	append_str(&len, " kB\n");
 	append_str(&len, "Buffers:             0 kB\n");
 	append_str(&len, "Cached:              0 kB\n");
 	append_str(&len, "SwapCached:          0 kB\n");
@@ -616,13 +638,41 @@ static u64 build_meminfo(void)
 	append_str(&len, "SwapFree:            0 kB\n");
 	append_str(&len, "Dirty:               0 kB\n");
 	append_str(&len, "Writeback:           0 kB\n");
-	append_str(&len, "AnonPages:       65536 kB\n");
+	append_str(&len, "AnonPages:       ");
+	append_u64(&len, total_kb > free_kb ? total_kb - free_kb : 0);
+	append_str(&len, " kB\n");
 	append_str(&len, "Mapped:              0 kB\n");
 	append_str(&len, "Shmem:               0 kB\n");
 	append_str(&len, "KReclaimable:        0 kB\n");
 	append_str(&len, "Slab:                0 kB\n");
 	append_str(&len, "SReclaimable:        0 kB\n");
 	append_str(&len, "SUnreclaim:          0 kB\n");
+	return len;
+}
+
+static u64 build_filesystems(void)
+{
+	u64 len = 0;
+
+	append_str(&len, "nodev\tsysfs\n");
+	append_str(&len, "nodev\tproc\n");
+	append_str(&len, "nodev\tdevtmpfs\n");
+	append_str(&len, "nodev\ttmpfs\n");
+	append_str(&len, "\trootfs\n");
+	return len;
+}
+
+static u64 build_cpuinfo(void)
+{
+	u64 len = 0;
+
+	append_str(&len, "processor\t: 0\n");
+	append_str(&len, "vendor_id\t: Bunix\n");
+	append_str(&len, "cpu family\t: 6\n");
+	append_str(&len, "model\t\t: 0\n");
+	append_str(&len, "model name\t: Bunix virtual CPU\n");
+	append_str(&len, "cpu MHz\t\t: 1000.000\n");
+	append_str(&len, "flags\t\t: fpu sse sse2 syscall\n\n");
 	return len;
 }
 
@@ -885,6 +935,10 @@ static u64 build_file_text(u64 file)
 		return build_loadavg();
 	case PROCFS_KIND_MEMINFO:
 		return build_meminfo();
+	case PROCFS_KIND_FILESYSTEMS:
+		return build_filesystems();
+	case PROCFS_KIND_CPUINFO:
+		return build_cpuinfo();
 	case PROCFS_KIND_MOUNTS:
 		return build_mounts();
 	case PROCFS_KIND_PID_STAT:
@@ -946,14 +1000,14 @@ static const char *proc_dir_entry(u64 index, u64 *type)
 {
 	static const char *names[] = {
 		"kthreads", "uptime", "stat", "ipc", "loadavg", "meminfo",
-		"mounts", "self"
+		"filesystems", "cpuinfo", "mounts", "self"
 	};
 	static char pid_name_buf[20];
 	struct proc_info info;
 	const u64 static_count = sizeof(names) / sizeof(names[0]);
 
 	if (index < static_count) {
-		*type = index == 7 ? BUNIX_VFS_TYPE_DIRECTORY :
+		*type = index == 9 ? BUNIX_VFS_TYPE_DIRECTORY :
 				     BUNIX_VFS_TYPE_REGULAR;
 		return names[index];
 	}

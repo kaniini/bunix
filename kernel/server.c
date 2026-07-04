@@ -6,6 +6,7 @@
 #include "pmm.h"
 #include "sched.h"
 #include "server.h"
+#include "slab.h"
 #include "types.h"
 #include "vm.h"
 #include <arch/user.h>
@@ -58,8 +59,6 @@ struct fork_start {
 
 static struct task_start task_starts[64];
 static u32 task_start_count;
-static struct fork_start fork_starts[64];
-static u32 fork_start_count;
 static char task_names[64][32];
 static u32 task_name_count;
 
@@ -327,9 +326,11 @@ static void task_entry_thread(void *arg)
 
 static void fork_entry_thread(void *arg)
 {
-	const struct fork_start *start = (const struct fork_start *)arg;
+	struct fork_start *start = (struct fork_start *)arg;
+	const struct arch_syscall_frame frame = start->frame;
 
-	arch_user_resume(&start->frame);
+	slab_free(start);
+	arch_user_resume(&frame);
 }
 
 int server_launch_module(const char *name)
@@ -698,20 +699,25 @@ int server_task_start_fork(struct task *child,
 			   const struct arch_syscall_frame *frame)
 {
 	struct task *parent = task_current();
-	if (parent == 0 || child == 0 || frame == 0 ||
-	    fork_start_count >= sizeof(fork_starts) / sizeof(fork_starts[0])) {
+	if (parent == 0 || child == 0 || frame == 0) {
 		return -1;
 	}
 
-	struct fork_start *start = &fork_starts[fork_start_count++];
+	struct fork_start *start = slab_alloc(sizeof(*start));
+	if (start == 0) {
+		return -1;
+	}
 	start->frame = *frame;
 
 	console_printf("kernel: task fork parent=%u child=%u rip=%p rsp=%p\n",
 		       task_id(parent), task_id(child),
 		       (const void *)frame->user_rip,
 		       (const void *)frame->user_rsp);
-	return thread_create(child, task_name(child), fork_entry_thread, start) != 0 ?
-	       0 : -1;
+	if (thread_create(child, task_name(child), fork_entry_thread, start) == 0) {
+		slab_free(start);
+		return -1;
+	}
+	return 0;
 }
 
 struct task *server_task_fork_current(const struct arch_syscall_frame *frame)

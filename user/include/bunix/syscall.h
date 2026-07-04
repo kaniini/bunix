@@ -36,6 +36,7 @@ enum {
 	BUNIX_SYSCALL_EARLY_CONSOLE_LOG = -56,
 	BUNIX_SYSCALL_EARLY_CONSOLE_LOGS_TO_RING = -58,
 	BUNIX_SYSCALL_IPC_STATS = -60,
+	BUNIX_SYSCALL_VM_STATS = -62,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
@@ -232,6 +233,11 @@ struct bunix_ipc_stats {
 	u64 cpu_fallback_nested[BUNIX_IPC_STATS_CPUS];
 	u64 cpu_fallback_scheduler[BUNIX_IPC_STATS_CPUS];
 	u64 cpu_fallback_invalid[BUNIX_IPC_STATS_CPUS];
+};
+
+struct bunix_vm_stats {
+	u64 total_frames;
+	u64 free_frames;
 };
 
 static inline long bunix_syscall0(long number)
@@ -525,6 +531,11 @@ static inline long bunix_console_read(char *buffer, usize len)
 static inline long bunix_ipc_stats(struct bunix_ipc_stats *stats)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_IPC_STATS, (u64)stats);
+}
+
+static inline long bunix_vm_stats(struct bunix_vm_stats *stats)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_VM_STATS, (u64)stats);
 }
 
 #endif

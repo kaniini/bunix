@@ -135,7 +135,8 @@ itself to VFS as the `/proc` translator. It currently exposes `/proc/kthreads`,
 showing internal Bunix tasks as kernel threads for observability from Linux
 userspace, plus process metadata such as `/proc/self/status`,
 `/proc/self/cmdline`, `/proc/self/fd`, `/proc/self/exe`, `/proc/stat`,
-`/proc/ipc`, `/proc/meminfo`, `/proc/mounts`, and `/proc/uptime`.
+`/proc/ipc`, `/proc/filesystems`, `/proc/cpuinfo`, `/proc/meminfo`,
+`/proc/mounts`, and `/proc/uptime`.
 
 ## User Mode
 

@@ -55,6 +55,7 @@ enum {
 	SYSCALL_EARLY_CONSOLE_LOG = -56,
 	SYSCALL_EARLY_CONSOLE_LOGS_TO_RING = -58,
 	SYSCALL_IPC_STATS = -60,
+	SYSCALL_VM_STATS = -62,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -1376,6 +1377,8 @@ static int linux_exec_map_segment(struct task *task, const u8 *image,
 					     segment_start + phdr->filesz);
 
 		if (frame.addr == 0) {
+			(void)vm_unmap_user_range(space, page_start,
+						  page - page_start);
 			return -1;
 		}
 		mem_zero((u8 *)frame.addr, VM_PAGE_SIZE);
@@ -1397,6 +1400,8 @@ static int linux_exec_map_segment(struct task *task, const u8 *image,
 	if (task_add_vm_mapping(task, page_start, page_end - page_start,
 				prot, TASK_VM_MAP_PRIVATE, TASK_VM_REGION_ELF,
 				TASK_VM_OBJECT_FILE, 0, phdr->offset) != 0) {
+		(void)vm_unmap_user_range(space, page_start,
+					  page_end - page_start);
 		return -1;
 	}
 
@@ -3797,6 +3802,11 @@ struct native_syscall_entry {
 	native_syscall_fn handler;
 };
 
+struct user_vm_stats {
+	u64 total_frames;
+	u64 free_frames;
+};
+
 static u64 native_sys_exit(const struct native_syscall_args *args)
 {
 	console_printf("syscall: exit status=%u\n", (u32)args->arg0);
@@ -4137,6 +4147,19 @@ static u64 native_sys_ipc_stats(const struct native_syscall_args *args)
 	       0 : (u64)-1;
 }
 
+static u64 native_sys_vm_stats(const struct native_syscall_args *args)
+{
+	struct user_vm_stats stats;
+
+	if (args->arg0 == 0) {
+		return (u64)-1;
+	}
+	stats.total_frames = vm_rpc_total_frames();
+	stats.free_frames = vm_rpc_free_frames();
+	return write_current_user(args->arg0, &stats, sizeof(stats)) == 0 ?
+	       0 : (u64)-1;
+}
+
 static u64 native_sys_ipc_send(const struct native_syscall_args *args)
 {
 	struct user_ipc_message user_message;
@@ -4266,6 +4289,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_EARLY_CONSOLE_LOGS_TO_RING, "early_console_logs_to_ring",
 	  native_sys_early_console_logs_to_ring },
 	{ SYSCALL_IPC_STATS, "ipc_stats", native_sys_ipc_stats },
+	{ SYSCALL_VM_STATS, "vm_stats", native_sys_vm_stats },
 };
 
 static const struct native_syscall_entry *native_syscall_lookup(i64 number)
