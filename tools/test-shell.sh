@@ -547,7 +547,7 @@ while [ "$(grep -F -c "~ # " "$log" 2>/dev/null || true)" -le "$root_prompts_bef
 	sleep 1
 done
 
-printf 'busybox id\nenv\nbusybox cat /secret.txt && echo ROOT_SECRET_OK\nbusybox chown root:root /tmp/bunix-write.txt && echo ROOT_CHOWN_OK\nbusybox stat -c "%%u:%%g" /tmp/bunix-write.txt\nexit\n' >&3
+printf 'busybox id\nenv\nbusybox cat /secret.txt && echo ROOT_SECRET_OK\nbusybox chown 0:0 /tmp/bunix-write.txt && echo ROOT_CHOWN_OK\nbusybox stat -c "%%u:%%g" /tmp/bunix-write.txt\nexit\n' >&3
 
 i=0
 while ! grep -F "uid=0(root)" "$log" >/dev/null 2>&1; do

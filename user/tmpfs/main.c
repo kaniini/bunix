@@ -1,5 +1,5 @@
+#include <bunix/alloc.h>
 #include <bunix/libbunix.h>
-#include <bunix/id_table.h>
 #include <bunix/tree.h>
 
 enum {
@@ -26,6 +26,8 @@ struct tmpfs_file {
 };
 
 struct tmpfs_open {
+	struct bunix_u64_tree_node node;
+	u64 id;
 	u64 kind;
 	struct tmpfs_file *file;
 	char path[TMPFS_MAX_PATH];
@@ -37,7 +39,8 @@ static const char *tmpfs_roots[TMPFS_ROOT_COUNT] = {
 	"/var/tmp",
 };
 static struct bunix_tree files;
-static struct bunix_id_table open_files;
+static struct bunix_u64_tree open_files;
+static u64 next_open_id = 1;
 static u64 user_service;
 
 static u64 str_len(const char *text)
@@ -455,7 +458,6 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 static u64 open_dir(const char *path)
 {
 	struct tmpfs_open *open;
-	u64 handle;
 
 	open = (struct tmpfs_open *)bunix_calloc(1, sizeof(*open));
 	if (open == 0) {
@@ -465,17 +467,31 @@ static u64 open_dir(const char *path)
 	for (u64 i = 0; i <= str_len(path); i++) {
 		open->path[i] = path[i];
 	}
-	handle = bunix_id_alloc(&open_files, (u64)open);
-	if (handle == 0) {
+	for (u64 tries = 0; tries < 1024; tries++) {
+		const u64 id = next_open_id++;
+
+		if (next_open_id == 0) {
+			next_open_id = 1;
+		}
+		if (bunix_u64_tree_get(&open_files, id) != 0) {
+			continue;
+		}
+		open->id = id;
+		if (bunix_u64_tree_insert_node(&open_files, &open->node,
+					       id, (u64)open) == 0) {
+			return id;
+		}
+		break;
+	}
+	if (open->id == 0) {
 		bunix_free(open);
 	}
-	return handle;
+	return 0;
 }
 
 static u64 open_file(struct tmpfs_file *file)
 {
 	struct tmpfs_open *open;
-	u64 handle;
 
 	if (file == 0 || file->deleted) {
 		return 0;
@@ -487,17 +503,32 @@ static u64 open_file(struct tmpfs_file *file)
 	open->kind = TMPFS_OPEN_FILE;
 	open->file = file;
 	file->refs++;
-	handle = bunix_id_alloc(&open_files, (u64)open);
-	if (handle == 0) {
+	for (u64 tries = 0; tries < 1024; tries++) {
+		const u64 id = next_open_id++;
+
+		if (next_open_id == 0) {
+			next_open_id = 1;
+		}
+		if (bunix_u64_tree_get(&open_files, id) != 0) {
+			continue;
+		}
+		open->id = id;
+		if (bunix_u64_tree_insert_node(&open_files, &open->node,
+					       id, (u64)open) == 0) {
+			return id;
+		}
+		break;
+	}
+	if (open->id == 0) {
 		file_release(file);
 		bunix_free(open);
 	}
-	return handle;
+	return 0;
 }
 
 static struct tmpfs_open *open_from_handle(u64 handle)
 {
-	return (struct tmpfs_open *)bunix_id_get(&open_files, handle);
+	return (struct tmpfs_open *)bunix_u64_tree_get(&open_files, handle);
 }
 
 static void close_handle(u64 handle)
@@ -508,9 +539,9 @@ static void close_handle(u64 handle)
 		if (open->kind == TMPFS_OPEN_FILE) {
 			file_release(open->file);
 		}
+		bunix_u64_tree_remove_node(&open_files, &open->node);
 		bunix_free(open);
 	}
-	(void)bunix_id_remove(&open_files, handle);
 }
 
 static void file_unlink(struct tmpfs_file *file)
@@ -617,7 +648,8 @@ int main(void)
 
 	bunix_console_log(online, sizeof(online) - 1);
 	bunix_tree_init(&files);
-	bunix_id_table_init(&open_files);
+	bunix_u64_tree_init(&open_files);
+	next_open_id = 1;
 	if (register_service(BUNIX_SERVICE_TMPFS, BUNIX_HANDLE_SELF) != 0 ||
 	    vfs == 0) {
 		return 1;
