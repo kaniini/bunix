@@ -76,6 +76,7 @@ enum {
 	LINUX_FD_CONSOLE = 1,
 	LINUX_FD_FILE = 2,
 	LINUX_FD_DIR = 3,
+	LINUX_FD_UTMP = 4,
 	LINUX_AT_FDCWD = (u64)-100,
 	LINUX_F_DUPFD = 0,
 	LINUX_F_GETFD = 1,
@@ -85,6 +86,8 @@ enum {
 	LINUX_F_DUPFD_CLOEXEC = 1030,
 	LINUX_DT_DIR = 4,
 	LINUX_DT_REG = 8,
+	LINUX_UTMP_RECORD_SIZE = 400,
+	LINUX_UTMP_USER_PROCESS = 7,
 };
 
 struct linux_fd {
@@ -113,12 +116,14 @@ struct linux_process {
 	u64 wait_buffer;
 	u64 wait_pid;
 	u64 pending_signals;
+	u64 session_id;
 	char cwd[LINUX_MAX_PATH];
 	struct linux_fd fds[LINUX_MAX_FDS];
 };
 
 static struct linux_process processes[LINUX_MAX_PROCESSES];
 static char write_buffer[LINUX_MAX_WRITE];
+static char utmp_buffer[LINUX_MAX_WRITE];
 static char tty_termios[LINUX_TERM_SIZE];
 static char tty_line[256];
 static u64 tty_line_offset;
@@ -214,6 +219,120 @@ static long linux_user_process_exit(u64 bunix_task)
 		return -LINUX_ESRCH;
 	}
 
+	return 0;
+}
+
+static long linux_user_session_get(u64 session_id, u64 *uid, u64 *gid,
+				   u64 *tty, u64 *foreground)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_SESSION_GET,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { session_id, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = linux_user_service();
+
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_ESRCH;
+	}
+	if (uid != 0) {
+		*uid = reply.words[1];
+	}
+	if (gid != 0) {
+		*gid = reply.words[2];
+	}
+	if (tty != 0) {
+		*tty = reply.words[3] >> 32;
+	}
+	if (foreground != 0) {
+		*foreground = reply.words[3] & 0xffffffff;
+	}
+	return 0;
+}
+
+static long linux_user_session_set_foreground(u64 session_id, u64 foreground)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_SESSION_SET_FOREGROUND,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { session_id, foreground, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = linux_user_service();
+
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_ESRCH;
+	}
+	return 0;
+}
+
+static u64 linux_user_session_count(void)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_SESSION_COUNT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = linux_user_service();
+
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return 0;
+	}
+	return reply.words[1];
+}
+
+static long linux_user_session_at(u64 index, u64 *session_id, u64 *uid,
+				  u64 *tty, u64 *foreground)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_SESSION_AT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { index, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = linux_user_service();
+
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_ESRCH;
+	}
+	if (session_id != 0) {
+		*session_id = reply.words[1];
+	}
+	if (uid != 0) {
+		*uid = reply.words[2];
+	}
+	if (tty != 0) {
+		*tty = reply.words[3] >> 32;
+	}
+	if (foreground != 0) {
+		*foreground = reply.words[3] & 0xffffffff;
+	}
 	return 0;
 }
 
@@ -429,6 +548,95 @@ static int string_equal(const char *left, const char *right)
 	return left[i] == right[i];
 }
 
+static int is_utmp_path(const char *path)
+{
+	return string_equal(path, "/run/utmp") ||
+	       string_equal(path, "/var/run/utmp");
+}
+
+static void copy_literal(char *dst, u64 dst_len, const char *src)
+{
+	for (u64 i = 0; i < dst_len; i++) {
+		dst[i] = src[i];
+		if (src[i] == '\0') {
+			return;
+		}
+	}
+}
+
+static const char *user_name_for_uid(u64 uid)
+{
+	if (uid == 0) {
+		return "root";
+	}
+	if (uid == 1000) {
+		return "kaniini";
+	}
+	return "user";
+}
+
+static void build_utmp_record(char *record, u64 index)
+{
+	u64 session_id = 0;
+	u64 uid = 0;
+	u64 tty = 0;
+	u64 foreground = 0;
+
+	zero_bytes(record, LINUX_UTMP_RECORD_SIZE);
+	if (linux_user_session_at(index, &session_id, &uid,
+				  &tty, &foreground) != 0) {
+		return;
+	}
+
+	store_u16(record, 0, LINUX_UTMP_USER_PROCESS);
+	store_u32(record, 4, (unsigned int)foreground);
+	copy_literal(record + 8, 32, tty == 1 ? "ttyS0" : "tty");
+	copy_literal(record + 40, 4, tty == 1 ? "S0" : "tt");
+	copy_literal(record + 44, 32, user_name_for_uid(uid));
+	store_u32(record, 336, (unsigned int)session_id);
+}
+
+static long read_utmp(u64 offset, u64 len, u64 buffer)
+{
+	const u64 size = linux_user_session_count() * LINUX_UTMP_RECORD_SIZE;
+	u64 done = 0;
+
+	if (buffer == 0) {
+		return -LINUX_EBADF;
+	}
+	if (offset >= size) {
+		return 0;
+	}
+	if (len > LINUX_MAX_WRITE) {
+		len = LINUX_MAX_WRITE;
+	}
+	if (len > size - offset) {
+		len = size - offset;
+	}
+
+	while (done < len) {
+		const u64 absolute = offset + done;
+		const u64 record_index = absolute / LINUX_UTMP_RECORD_SIZE;
+		const u64 record_offset = absolute % LINUX_UTMP_RECORD_SIZE;
+		u64 chunk = LINUX_UTMP_RECORD_SIZE - record_offset;
+		char record[LINUX_UTMP_RECORD_SIZE];
+
+		if (chunk > len - done) {
+			chunk = len - done;
+		}
+		build_utmp_record(record, record_index);
+		for (u64 i = 0; i < chunk; i++) {
+			utmp_buffer[done + i] = record[record_offset + i];
+		}
+		done += chunk;
+	}
+
+	if (bunix_buffer_write(buffer, 0, utmp_buffer, done) != 0) {
+		return -LINUX_EINVAL;
+	}
+	return (long)done;
+}
+
 static u64 string_len(const char *text)
 {
 	u64 len = 0;
@@ -634,7 +842,7 @@ static struct linux_process *linux_process_for(const struct bunix_msg *message)
 	return 0;
 }
 
-static long linux_register_process(u64 bunix_task, u64 ppid)
+static long linux_register_process(u64 bunix_task, u64 ppid, u64 session_id)
 {
 	if (bunix_task == 0 || linux_process_find(bunix_task) != 0) {
 		return -LINUX_EINVAL;
@@ -659,9 +867,14 @@ static long linux_register_process(u64 bunix_task, u64 ppid)
 			processes[i].wait_buffer = 0;
 			processes[i].wait_pid = 0;
 			processes[i].pending_signals = 0;
+			processes[i].session_id = session_id;
 			linux_process_init_fds(&processes[i]);
 			if (foreground_pgid == 0 || pid == 1) {
 				foreground_pgid = pid;
+			}
+			if (session_id != 0) {
+				(void)linux_user_session_set_foreground(session_id,
+									processes[i].pgid);
 			}
 			if (linux_user_process_register(bunix_task) != 0) {
 				linux_process_reset(&processes[i]);
@@ -703,6 +916,7 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 			processes[i].wait_buffer = 0;
 			processes[i].wait_pid = 0;
 			processes[i].pending_signals = 0;
+			processes[i].session_id = parent->session_id;
 			for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
 				processes[i].fds[fd] = parent->fds[fd];
 				if (processes[i].fds[fd].kind == LINUX_FD_FILE) {
@@ -911,13 +1125,47 @@ static int linux_signal_process(struct linux_process *process, u64 signal)
 	return 0;
 }
 
-static int linux_signal_foreground(u64 signal)
+static u64 linux_foreground_pgid(const struct linux_process *process)
+{
+	u64 foreground = 0;
+
+	if (process != 0 &&
+	    process->session_id != 0 &&
+	    linux_user_session_get(process->session_id, 0, 0, 0,
+				   &foreground) == 0 &&
+	    foreground != 0) {
+		return foreground;
+	}
+	if (process != 0) {
+		return process->pgid;
+	}
+	return foreground_pgid;
+}
+
+static long linux_set_foreground_pgid(struct linux_process *process, u64 pgid)
+{
+	if (pgid == 0) {
+		return -LINUX_EINVAL;
+	}
+	if (process != 0 && process->session_id != 0) {
+		return linux_user_session_set_foreground(process->session_id,
+							 pgid);
+	}
+	foreground_pgid = pgid;
+	return 0;
+}
+
+static int linux_signal_foreground(struct linux_process *source, u64 signal)
 {
 	int delivered = 0;
+	const u64 pgid = linux_foreground_pgid(source);
 
 	for (u64 i = 0; i < LINUX_MAX_PROCESSES; i++) {
 		if (processes[i].pid != 0 &&
-		    processes[i].pgid == foreground_pgid) {
+		    processes[i].pgid == pgid &&
+		    (source == 0 ||
+		     source->session_id == 0 ||
+		     processes[i].session_id == source->session_id)) {
 			delivered |= linux_signal_process(&processes[i], signal);
 		}
 	}
@@ -1086,7 +1334,7 @@ static long linux_setsid(struct linux_process *process)
 
 	process->sid = process->pid;
 	process->pgid = process->pid;
-	foreground_pgid = process->pgid;
+	(void)linux_set_foreground_pgid(process, process->pgid);
 	return (long)process->sid;
 }
 
@@ -1191,7 +1439,7 @@ static long tty_read_raw(u64 len, u64 buffer)
 	return (long)done;
 }
 
-static long tty_fill_canonical_line(void)
+static long tty_fill_canonical_line(struct linux_process *process)
 {
 	const unsigned int lflag = tty_lflag();
 	const unsigned int iflag = tty_iflag();
@@ -1215,7 +1463,7 @@ static long tty_fill_canonical_line(void)
 			}
 			tty_line_offset = 0;
 			tty_line_len = 0;
-			(void)linux_signal_foreground(LINUX_SIGINT);
+			(void)linux_signal_foreground(process, LINUX_SIGINT);
 			return -LINUX_EINTR;
 		}
 		if ((c == erase || c == '\b') && used != 0) {
@@ -1248,10 +1496,11 @@ static long tty_fill_canonical_line(void)
 	return 0;
 }
 
-static long tty_read_canonical(u64 len, u64 buffer)
+static long tty_read_canonical(struct linux_process *process, u64 len,
+			       u64 buffer)
 {
 	if (tty_line_offset >= tty_line_len &&
-	    tty_fill_canonical_line() != 0) {
+	    tty_fill_canonical_line(process) != 0) {
 		return -LINUX_EINVAL;
 	}
 
@@ -1273,13 +1522,13 @@ static long tty_read_canonical(u64 len, u64 buffer)
 	return (long)nread;
 }
 
-static long tty_read(u64 len, u64 buffer)
+static long tty_read(struct linux_process *process, u64 len, u64 buffer)
 {
 	if (len == 0) {
 		return 0;
 	}
 	if ((tty_lflag() & LINUX_ICANON) != 0) {
-		return tty_read_canonical(len, buffer);
+		return tty_read_canonical(process, len, buffer);
 	}
 	return tty_read_raw(len, buffer);
 }
@@ -1306,18 +1555,14 @@ static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
 		if (buffer == 0) {
 			return -LINUX_EINVAL;
 		}
-		/* Until job-control stops exist, each caller is foreground. */
 		zero_bytes(data, sizeof(data));
-		store_u32(data, 0, (unsigned int)process->pgid);
+		store_u32(data, 0,
+			  (unsigned int)linux_foreground_pgid(process));
 		return bunix_buffer_write(buffer, 0, data, 4) == 0 ?
 		       0 : -LINUX_EINVAL;
 	case LINUX_TIOCSPGRP:
 		pgid = value;
-		if (pgid == 0) {
-			return -LINUX_EINVAL;
-		}
-		foreground_pgid = pgid;
-		return 0;
+		return linux_set_foreground_pgid(process, pgid);
 	case LINUX_TIOCGWINSZ:
 		if (buffer == 0) {
 			return -LINUX_EINVAL;
@@ -1381,6 +1626,11 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	if (string_equal(full_path, "/dev/tty")) {
 		return alloc_fd(process, LINUX_FD_CONSOLE,
 				BUNIX_HANDLE_CONSOLE, 0);
+	}
+	if (is_utmp_path(full_path)) {
+		return alloc_fd(process, LINUX_FD_UTMP, 0,
+				linux_user_session_count() *
+				LINUX_UTMP_RECORD_SIZE);
 	}
 	if ((flags & LINUX_O_ACCMODE) != 0) {
 		return -LINUX_EINVAL;
@@ -1465,6 +1715,12 @@ static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 		return linux_stat_write(stat_buffer, LINUX_S_IFCHR | 0600,
 					0, 0, 0);
 	}
+	if (process->fds[fd].kind == LINUX_FD_UTMP) {
+		return linux_stat_write(stat_buffer, LINUX_S_IFREG | 0444,
+					0, 0,
+					linux_user_session_count() *
+					LINUX_UTMP_RECORD_SIZE);
+	}
 
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
@@ -1508,6 +1764,12 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 	unpack_path(path, word0, word1);
 	if (path_normalize(process->cwd, path, full_path) != 0) {
 		return -LINUX_EINVAL;
+	}
+	if (is_utmp_path(full_path)) {
+		return linux_stat_write(stat_buffer, LINUX_S_IFREG | 0444,
+					0, 0,
+					linux_user_session_count() *
+					LINUX_UTMP_RECORD_SIZE);
 	}
 	pack_path(&request.words[0], full_path);
 	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
@@ -1707,7 +1969,16 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	}
 
 	if (process->fds[fd].kind == LINUX_FD_CONSOLE) {
-		return tty_read(len, buffer);
+		return tty_read(process, len, buffer);
+	}
+	if (process->fds[fd].kind == LINUX_FD_UTMP) {
+		const long nread = read_utmp(process->fds[fd].offset, len,
+					     buffer);
+
+		if (nread > 0) {
+			process->fds[fd].offset += (u64)nread;
+		}
+		return nread;
 	}
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
 		return -LINUX_EISDIR;
@@ -1969,6 +2240,7 @@ static void linux_process_reset(struct linux_process *process)
 	process->wait_buffer = 0;
 	process->wait_pid = 0;
 	process->pending_signals = 0;
+	process->session_id = 0;
 	process->cwd[0] = '\0';
 	for (u64 fd = 0; fd < LINUX_MAX_FDS; fd++) {
 		process->fds[fd].handle = 0;
@@ -2018,7 +2290,8 @@ int main(void)
 		reply.type = message.type;
 		if (message.type == BUNIX_LINUX_REGISTER_PROCESS) {
 			reply.words[0] = (u64)linux_register_process(message.words[0],
-								     message.words[1]);
+								     message.words[1],
+								     message.words[2]);
 			if ((long)reply.words[0] > 0) {
 				bunix_console_write(registered_ok,
 						    sizeof(registered_ok) - 1);

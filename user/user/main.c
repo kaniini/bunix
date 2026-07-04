@@ -727,6 +727,44 @@ static long session_get(u64 session_id, struct bunix_msg *reply)
 	return 0;
 }
 
+static u64 session_count(void)
+{
+	u64 count = 0;
+
+	for (u64 i = 0; i < USER_MAX_SESSIONS; i++) {
+		if (sessions[i].id != 0) {
+			count++;
+		}
+	}
+
+	return count;
+}
+
+static long session_at(u64 index, struct bunix_msg *reply)
+{
+	u64 count = 0;
+
+	if (reply == 0) {
+		return -1;
+	}
+
+	for (u64 i = 0; i < USER_MAX_SESSIONS; i++) {
+		if (sessions[i].id == 0) {
+			continue;
+		}
+		if (count == index) {
+			reply->words[1] = sessions[i].id;
+			reply->words[2] = sessions[i].uid;
+			reply->words[3] = (sessions[i].tty << 32) |
+					  sessions[i].foreground;
+			return 0;
+		}
+		count++;
+	}
+
+	return -1;
+}
+
 static long session_set_foreground(u64 session_id, u64 foreground)
 {
 	struct user_session *session = session_find(session_id);
@@ -869,6 +907,14 @@ int main(void)
 		case BUNIX_USER_SESSION_SET_FOREGROUND:
 			reply.words[0] = (u64)session_set_foreground(message.words[0],
 								     message.words[1]);
+			break;
+		case BUNIX_USER_SESSION_COUNT:
+			reply.words[0] = 0;
+			reply.words[1] = session_count();
+			break;
+		case BUNIX_USER_SESSION_AT:
+			reply.words[0] = (u64)session_at(message.words[0],
+							 &reply);
 			break;
 		default:
 			reply.words[0] = (u64)-1;

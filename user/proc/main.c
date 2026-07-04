@@ -44,6 +44,8 @@ enum {
 	PROC_MAX_PROCESSES = 16,
 	PROC_DYN_LOAD_BIAS = 0x400000,
 	PROC_SPAWN_SET_LOGIN = 1,
+	PROC_SPAWN_FLAGS_MASK = 0xffffffff,
+	PROC_SPAWN_SESSION_SHIFT = 32,
 };
 
 struct process {
@@ -637,7 +639,8 @@ static long build_initial_stack(u64 task, const char *path,
 	return 0;
 }
 
-static long register_linux_process(u64 task, u64 ppid, u64 *linux_pid)
+static long register_linux_process(u64 task, u64 ppid, u64 session_id,
+				   u64 *linux_pid)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_LINUX,
@@ -646,7 +649,7 @@ static long register_linux_process(u64 task, u64 ppid, u64 *linux_pid)
 		.cap_rights = 0,
 		.reply = 0,
 		.cap = 0,
-		.words = { task, ppid, 0, 0 },
+		.words = { task, ppid, session_id, 0 },
 	};
 	struct bunix_msg reply;
 	const u64 linux = resolve_service(BUNIX_SERVICE_LINUX, BUNIX_RIGHT_SEND);
@@ -688,6 +691,7 @@ static long apply_login_to_task(u64 task, u64 login_uid)
 
 static long exec_path(u64 vfs, const char *path, const char *task_name,
 		      u64 linux_parent_pid, u64 login_uid, int set_login,
+		      u64 session_id,
 		      u64 *linux_pid,
 		      u64 *task_handle)
 {
@@ -838,6 +842,7 @@ static long exec_path(u64 vfs, const char *path, const char *task_name,
 
 		if (bunix_id <= 0 ||
 		    register_linux_process((u64)bunix_id, linux_parent_pid,
+					   session_id,
 					   linux_pid) != 0) {
 			bunix_handle_close((u64)task);
 			return -1;
@@ -928,7 +933,7 @@ static struct process *process_alloc(void)
 }
 
 static long spawn_process(const char *path, u64 login_uid, int set_login,
-			  u64 *pid)
+			  u64 session_id, u64 *pid)
 {
 	u64 vfs;
 	u64 linux_pid = 0;
@@ -958,7 +963,7 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 	}
 
 	if (exec_path(vfs, path, task_name_for_path(path),
-		      linux_parent_pid, login_uid, set_login,
+		      linux_parent_pid, login_uid, set_login, session_id,
 		      &linux_pid, &task_handle) != 0) {
 		process_reset(process);
 		*pid = 0;
@@ -1013,9 +1018,13 @@ int main(void)
 			}
 			unpack_bytes((unsigned char *)path, &message.words[0],
 				     sizeof(path));
+			const u64 flags = message.words[3] &
+					  PROC_SPAWN_FLAGS_MASK;
+			const u64 session_id = message.words[3] >>
+					       PROC_SPAWN_SESSION_SHIFT;
 			if (spawn_process(path, message.words[2],
-					  (message.words[3] &
-					   PROC_SPAWN_SET_LOGIN) != 0,
+					  (flags & PROC_SPAWN_SET_LOGIN) != 0,
+					  session_id,
 					  &pid) == 0) {
 				reply.words[0] = 0;
 				reply.words[1] = pid;

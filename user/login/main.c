@@ -4,6 +4,7 @@ enum {
 	LOGIN_PID = 4,
 	AT_NULL = 0,
 	BUNIX_PROC_SPAWN_SET_LOGIN = 1,
+	BUNIX_PROC_SPAWN_SESSION_SHIFT = 32,
 };
 
 struct startup_aux {
@@ -139,7 +140,7 @@ static long authenticate(u64 user, const char *name, const char *password,
 	return 0;
 }
 
-static long spawn_shell(u64 proc, u64 uid, u64 *pid)
+static long spawn_shell(u64 proc, u64 uid, u64 session_id, u64 *pid)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_PROC,
@@ -148,7 +149,9 @@ static long spawn_shell(u64 proc, u64 uid, u64 *pid)
 		.cap_rights = 0,
 		.reply = 0,
 		.cap = 0,
-		.words = { 0, 0, uid, BUNIX_PROC_SPAWN_SET_LOGIN },
+		.words = { 0, 0, uid,
+			   BUNIX_PROC_SPAWN_SET_LOGIN |
+			   (session_id << BUNIX_PROC_SPAWN_SESSION_SHIFT) },
 	};
 	struct bunix_msg reply;
 
@@ -200,28 +203,6 @@ static long session_end(u64 user, u64 session_id)
 		.reply = 0,
 		.cap = 0,
 		.words = { session_id, 0, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	if (user == 0 ||
-	    bunix_ipc_call(user, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		return -1;
-	}
-
-	return 0;
-}
-
-static long session_set_foreground(u64 user, u64 session_id, u64 foreground)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_USER,
-		.type = BUNIX_USER_SESSION_SET_FOREGROUND,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { session_id, foreground, 0, 0 },
 	};
 	struct bunix_msg reply;
 
@@ -289,9 +270,8 @@ int main(int argc, char **argv, char **envp)
 
 		if (authenticate(user, name, password, &uid, &gid) == 0 &&
 		    session_begin(user, uid, gid, &session_id) == 0) {
-			if (spawn_shell(aux.proc_handle, uid, &shell_pid) == 0) {
-				(void)session_set_foreground(user, session_id,
-							     shell_pid);
+			if (spawn_shell(aux.proc_handle, uid, session_id,
+					&shell_pid) == 0) {
 				write_text(aux.stdout_handle,
 					   "login: shell spawned\n");
 				(void)wait_process(aux.proc_handle, shell_pid);
