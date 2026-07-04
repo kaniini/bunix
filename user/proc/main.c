@@ -1180,27 +1180,7 @@ static void clear_pending_linux_exit(u64 linux_pid)
 
 static struct process *process_at(u64 index)
 {
-	if (processes_by_pid.slots == 0) {
-		return 0;
-	}
-
-	for (u64 i = 0; i < processes_by_pid.capacity; i++) {
-		struct process *process;
-
-		if (processes_by_pid.slots[i].key == 0) {
-			continue;
-		}
-		process = (struct process *)processes_by_pid.slots[i].value;
-		if (process == 0 || process->pid == 0) {
-			continue;
-		}
-		if (index == 0) {
-			return process;
-		}
-		index--;
-	}
-
-	return 0;
+	return (struct process *)bunix_map_at(&processes_by_pid, index);
 }
 
 static struct process *process_alloc(void)

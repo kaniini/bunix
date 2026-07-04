@@ -1332,12 +1332,15 @@ static int linux_same_session(const struct linux_process *left,
 
 static int linux_pgrp_exists(u64 pgid)
 {
-	for (u64 i = 0; i < process_by_pid.capacity; i++) {
+	for (u64 i = 0;; i++) {
 		struct linux_process *process =
-			(struct linux_process *)process_by_pid.slots[i].value;
+			(struct linux_process *)bunix_map_at(&process_by_pid,
+							     i);
 
-		if (process != 0 && !process->exited &&
-		    process->pgid == pgid) {
+		if (process == 0) {
+			break;
+		}
+		if (!process->exited && process->pgid == pgid) {
 			return 1;
 		}
 	}
@@ -1641,11 +1644,15 @@ static int linux_signal_pgrp(struct linux_process *source, u64 pgid, u64 signal)
 {
 	int delivered = 0;
 
-	for (u64 i = 0; i < process_by_pid.capacity; i++) {
+	for (u64 i = 0;; i++) {
 		struct linux_process *process =
-			(struct linux_process *)process_by_pid.slots[i].value;
+			(struct linux_process *)bunix_map_at(&process_by_pid,
+							     i);
 
-		if (process != 0 && !process->exited &&
+		if (process == 0) {
+			break;
+		}
+		if (!process->exited &&
 		    process->pgid == pgid &&
 		    (source == 0 || linux_same_session(source, process))) {
 			delivered |= linux_signal_process(process, signal);

@@ -3,6 +3,7 @@
 
 #include <bunix/alloc.h>
 #include <bunix/syscall.h>
+#include <bunix/tree.h>
 
 struct bunix_id_slot {
 	u64 id;
@@ -16,14 +17,14 @@ struct bunix_id_table {
 	u64 count;
 };
 
-struct bunix_map_slot {
+struct bunix_map_entry {
+	struct bunix_u64_tree_node node;
 	u64 key;
 	u64 value;
 };
 
 struct bunix_map {
-	struct bunix_map_slot *slots;
-	u64 capacity;
+	struct bunix_u64_tree tree;
 	u64 count;
 };
 
@@ -140,101 +141,93 @@ static inline int bunix_id_remove(struct bunix_id_table *table, u64 id)
 
 static inline void bunix_map_init(struct bunix_map *map)
 {
-	map->slots = 0;
-	map->capacity = 0;
+	bunix_u64_tree_init(&map->tree);
 	map->count = 0;
 }
 
-static inline int bunix_map_grow(struct bunix_map *map)
+static inline struct bunix_map_entry *bunix_map_find_entry(
+	const struct bunix_map *map, u64 key)
 {
-	const u64 old_capacity = map->capacity;
-	const u64 new_capacity = old_capacity == 0 ? 8 : old_capacity * 2;
-	struct bunix_map_slot *slots = (struct bunix_map_slot *)
-		bunix_calloc(new_capacity, sizeof(slots[0]));
+	struct bunix_u64_tree_node *node;
 
-	if (slots == 0) {
-		return -1;
-	}
-	for (u64 i = 0; i < old_capacity; i++) {
-		slots[i] = map->slots[i];
-	}
-	bunix_free(map->slots);
-	map->slots = slots;
-	map->capacity = new_capacity;
-	return 0;
-}
-
-static inline int bunix_map_ensure_space(struct bunix_map *map)
-{
-	if (map->count < map->capacity) {
+	if (map == 0 || key == 0) {
 		return 0;
 	}
-	return bunix_map_grow(map);
+	node = bunix_u64_tree_find_node(&map->tree, key);
+	return node != 0 ? (struct bunix_map_entry *)node->value : 0;
 }
 
 static inline u64 bunix_map_get(const struct bunix_map *map, u64 key)
 {
-	if (map == 0 || map->slots == 0 || key == 0) {
-		return 0;
-	}
+	struct bunix_map_entry *entry = bunix_map_find_entry(map, key);
 
-	for (u64 i = 0; i < map->capacity; i++) {
-		if (map->slots[i].key == key) {
-			return map->slots[i].value;
-		}
-	}
-
-	return 0;
+	return entry != 0 ? entry->value : 0;
 }
 
 static inline int bunix_map_set(struct bunix_map *map, u64 key, u64 value)
 {
-	struct bunix_map_slot *free_slot = 0;
+	struct bunix_map_entry *entry;
 
-	if (map == 0 || key == 0 || value == 0 ||
-	    bunix_map_ensure_space(map) != 0) {
+	if (map == 0 || key == 0 || value == 0) {
 		return -1;
 	}
 
-	for (u64 i = 0; i < map->capacity; i++) {
-		struct bunix_map_slot *slot = &map->slots[i];
-
-		if (slot->key == key) {
-			slot->value = value;
-			return 0;
-		}
-		if (slot->key == 0 && free_slot == 0) {
-			free_slot = slot;
-		}
+	entry = bunix_map_find_entry(map, key);
+	if (entry != 0) {
+		entry->value = value;
+		return 0;
 	}
-
-	if (free_slot == 0) {
+	entry = (struct bunix_map_entry *)bunix_calloc(1, sizeof(*entry));
+	if (entry == 0) {
 		return -1;
 	}
-	free_slot->key = key;
-	free_slot->value = value;
+	entry->key = key;
+	entry->value = value;
+	if (bunix_u64_tree_insert_node(&map->tree, &entry->node, key,
+				       (u64)entry) != 0) {
+		bunix_free(entry);
+		return -1;
+	}
 	map->count++;
 	return 0;
 }
 
 static inline int bunix_map_remove(struct bunix_map *map, u64 key)
 {
-	if (map == 0 || map->slots == 0 || key == 0) {
+	struct bunix_map_entry *entry = bunix_map_find_entry(map, key);
+
+	if (entry == 0) {
 		return -1;
 	}
-
-	for (u64 i = 0; i < map->capacity; i++) {
-		if (map->slots[i].key == key) {
-			map->slots[i].key = 0;
-			map->slots[i].value = 0;
-			if (map->count != 0) {
-				map->count--;
-			}
-			return 0;
-		}
+	bunix_u64_tree_remove_node(&map->tree, &entry->node);
+	bunix_free(entry);
+	if (map->count != 0) {
+		map->count--;
 	}
+	return 0;
+}
 
-	return -1;
+static inline u64 bunix_map_at(const struct bunix_map *map, u64 index)
+{
+	struct bunix_u64_tree_node *node;
+
+	if (map == 0) {
+		return 0;
+	}
+	node = bunix_u64_tree_first_node(&map->tree);
+	while (node != 0) {
+		struct bunix_map_entry *entry =
+			(struct bunix_map_entry *)node->value;
+
+		if (entry != 0 && entry->value != 0) {
+			if (index == 0) {
+				return entry->value;
+			}
+			index--;
+		}
+		node = bunix_u64_tree_next_node(node);
+	}
+	return 0;
 }
 
 #endif

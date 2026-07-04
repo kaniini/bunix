@@ -237,6 +237,46 @@ static inline u64 bunix_u64_tree_get(const struct bunix_u64_tree *tree,
 	return node != 0 ? node->value : 0;
 }
 
+static inline struct bunix_u64_tree_node *bunix_u64_tree_first_node(
+	const struct bunix_u64_tree *tree)
+{
+	struct bunix_u64_tree_node *node;
+
+	if (tree == 0) {
+		return 0;
+	}
+	node = tree->root;
+	if (node == 0) {
+		return 0;
+	}
+	while (node->left != 0) {
+		node = node->left;
+	}
+	return node;
+}
+
+static inline struct bunix_u64_tree_node *bunix_u64_tree_next_node(
+	const struct bunix_u64_tree_node *node)
+{
+	const struct bunix_u64_tree_node *current = node;
+	struct bunix_u64_tree_node *next;
+
+	if (node == 0) {
+		return 0;
+	}
+	if (node->right != 0) {
+		next = node->right;
+		while (next->left != 0) {
+			next = next->left;
+		}
+		return next;
+	}
+	while (current->parent != 0 && current == current->parent->right) {
+		current = current->parent;
+	}
+	return current->parent;
+}
+
 static inline int bunix_u64_tree_insert_node(
 	struct bunix_u64_tree *tree, struct bunix_u64_tree_node *node,
 	u64 key, u64 value)
