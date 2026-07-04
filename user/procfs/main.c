@@ -1,4 +1,5 @@
 #include <bunix/libbunix.h>
+#include <bunix/id_table.h>
 
 enum {
 	PROCFS_HANDLE_NAMES = 3,
@@ -8,7 +9,8 @@ enum {
 	PROCFS_FILE_KTHREADS = 2,
 };
 
-static u64 open_files[PROCFS_MAX_OPEN_FILES];
+static struct bunix_id_slot open_file_slots[PROCFS_MAX_OPEN_FILES];
+static struct bunix_id_table open_files;
 static char text[PROCFS_MAX_TEXT];
 
 static u64 build_kthreads(void);
@@ -160,28 +162,17 @@ static u64 build_kthreads(void)
 
 static u64 open_file(u64 file)
 {
-	for (u64 i = 0; i < PROCFS_MAX_OPEN_FILES; i++) {
-		if (open_files[i] == 0) {
-			open_files[i] = file;
-			return i + 1;
-		}
-	}
-	return 0;
+	return bunix_id_alloc(&open_files, file);
 }
 
 static u64 file_from_handle(u64 handle)
 {
-	if (handle == 0 || handle > PROCFS_MAX_OPEN_FILES) {
-		return 0;
-	}
-	return open_files[handle - 1];
+	return bunix_id_get(&open_files, handle);
 }
 
 static void close_file(u64 handle)
 {
-	if (handle != 0 && handle <= PROCFS_MAX_OPEN_FILES) {
-		open_files[handle - 1] = 0;
-	}
+	(void)bunix_id_remove(&open_files, handle);
 }
 
 static void stat_reply(struct bunix_msg *reply, u64 file)
@@ -200,6 +191,7 @@ int main(void)
 	struct bunix_msg message;
 
 	bunix_console_write(online, sizeof(online) - 1);
+	bunix_id_table_init(&open_files, open_file_slots, PROCFS_MAX_OPEN_FILES);
 	if (register_service(BUNIX_SERVICE_PROCFS, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
 	}

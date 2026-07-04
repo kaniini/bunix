@@ -1,4 +1,5 @@
 #include <bunix/libbunix.h>
+#include <bunix/id_table.h>
 
 enum {
 	VFS_HANDLE_NAMES = 3,
@@ -26,7 +27,8 @@ struct rootfs_entry {
 
 static struct rootfs_entry root_entries[ROOTFS_MAX_ENTRIES];
 static unsigned int root_entry_count;
-static const struct rootfs_entry *open_files[VFS_MAX_OPEN_FILES];
+static struct bunix_id_slot open_file_slots[VFS_MAX_OPEN_FILES];
+static struct bunix_id_table open_files;
 static u64 user_service;
 static u64 procfs_service;
 
@@ -440,30 +442,17 @@ static u64 open_file(const struct rootfs_entry *entry)
 		return 0;
 	}
 
-	for (u64 i = 0; i < VFS_MAX_OPEN_FILES; i++) {
-		if (open_files[i] == 0) {
-			open_files[i] = entry;
-			return i + 1;
-		}
-	}
-
-	return 0;
+	return bunix_id_alloc(&open_files, (u64)entry);
 }
 
 static const struct rootfs_entry *file_from_handle(u64 handle)
 {
-	if (handle == 0 || handle > VFS_MAX_OPEN_FILES) {
-		return 0;
-	}
-
-	return open_files[handle - 1];
+	return (const struct rootfs_entry *)bunix_id_get(&open_files, handle);
 }
 
 static void close_file(u64 handle)
 {
-	if (handle != 0 && handle <= VFS_MAX_OPEN_FILES) {
-		open_files[handle - 1] = 0;
-	}
+	(void)bunix_id_remove(&open_files, handle);
 }
 
 int main(void)
@@ -479,9 +468,7 @@ int main(void)
 	if (block == 0 || rootfs_mount(block) != 0) {
 		return 1;
 	}
-	for (u64 i = 0; i < VFS_MAX_OPEN_FILES; i++) {
-		open_files[i] = 0;
-	}
+	bunix_id_table_init(&open_files, open_file_slots, VFS_MAX_OPEN_FILES);
 	bunix_console_write(ready, sizeof(ready) - 1);
 
 	for (;;) {
