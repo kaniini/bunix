@@ -18,6 +18,7 @@ struct rootfs_header {
 };
 
 struct rootfs_entry {
+	struct bunix_tree_node node;
 	char *path;
 	u64 offset;
 	u64 size;
@@ -55,7 +56,7 @@ struct vfs_open {
 };
 
 static struct rootfs_entry *root_entries;
-static unsigned int root_entry_count;
+static struct bunix_tree rootfs_by_path;
 static struct bunix_tree mounts;
 static struct bunix_u64_tree open_files;
 static u64 next_open_id = 1;
@@ -488,6 +489,7 @@ static int rootfs_mount(u64 block)
 	struct rootfs_header header;
 	struct rootfs_disk_entry *disk_entries;
 
+	bunix_tree_init(&rootfs_by_path);
 	if (bunix_ipc_call(block, &request, &reply) != 0 ||
 	    reply.words[0] != 0 ||
 	    reply.words[1] < sizeof(header) ||
@@ -534,35 +536,36 @@ static int rootfs_mount(u64 block)
 		     root_entries[i].size > reply.words[1] - root_entries[i].offset)) {
 			return -1;
 		}
+		if (bunix_tree_insert_node(&rootfs_by_path,
+					   &root_entries[i].node,
+					   root_entries[i].path,
+					   (u64)&root_entries[i]) != 0) {
+			return -1;
+		}
 	}
 
 	bunix_free(disk_entries);
-	root_entry_count = header.entries;
 	root_block = block;
 	return 0;
 }
 
 static int rootfs_find(const char *path, struct rootfs_entry *entry)
 {
-	for (u64 i = 0; i < root_entry_count; i++) {
-		if (path_eq(root_entries[i].path, path)) {
-			*entry = root_entries[i];
-			return 0;
-		}
+	const struct rootfs_entry *found =
+		(struct rootfs_entry *)bunix_tree_get(&rootfs_by_path, path);
+
+	if (found == 0) {
+		return -1;
 	}
 
-	return -1;
+	*entry = *found;
+	return 0;
 }
 
 static const struct rootfs_entry *rootfs_find_ref(const char *path)
 {
-	for (u64 i = 0; i < root_entry_count; i++) {
-		if (path_eq(root_entries[i].path, path)) {
-			return &root_entries[i];
-		}
-	}
-
-	return 0;
+	return (const struct rootfs_entry *)
+		bunix_tree_get(&rootfs_by_path, path);
 }
 
 static int rootfs_read_entry_text(u64 block, const struct rootfs_entry *entry,
@@ -695,12 +698,16 @@ static const struct rootfs_entry *directory_entry_at(
 		return 0;
 	}
 
-	for (u64 i = 0; i < root_entry_count; i++) {
-		if (!entry_is_child_of(&root_entries[i], directory->path)) {
+	for (struct bunix_tree_node *node = bunix_tree_first_node(&rootfs_by_path);
+	     node != 0; node = bunix_tree_next_node(node)) {
+		const struct rootfs_entry *entry =
+			(const struct rootfs_entry *)node->value;
+
+		if (!entry_is_child_of(entry, directory->path)) {
 			continue;
 		}
 		if (current == index) {
-			return &root_entries[i];
+			return entry;
 		}
 		current++;
 	}
