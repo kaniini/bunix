@@ -227,6 +227,8 @@ enum {
 	LINUX_SYSINFO_SIZE = 112,
 	LINUX_UTSNAME_SIZE = 65 * 6,
 	LINUX_S_IFDIR = 0040000,
+	LINUX_S_IFCHR = 0020000,
+	LINUX_S_IFIFO = 0010000,
 	LINUX_S_IFLNK = 0120000,
 	LINUX_S_IFREG = 0100000,
 	LINUX_INITIAL_BRK = 0x900000,
@@ -255,6 +257,8 @@ enum {
 	USER_VFS_TYPE_REGULAR = 1,
 	USER_VFS_TYPE_DIRECTORY = 2,
 	USER_VFS_TYPE_SYMLINK = 3,
+	USER_VFS_TYPE_FIFO = 4,
+	USER_VFS_TYPE_CHARACTER = 5,
 	USER_VFS_ERR_NOENT = 1,
 	USER_VFS_ERR_ACCESS = 2,
 	USER_VFS_ERR_NOTDIR = 3,
@@ -626,7 +630,11 @@ static int linux_write_stat_user(u64 addr, u64 size, u64 type_mode,
 	const u64 linux_type = type == USER_VFS_TYPE_DIRECTORY ?
 			       LINUX_S_IFDIR :
 			       (type == USER_VFS_TYPE_SYMLINK ?
-				LINUX_S_IFLNK : LINUX_S_IFREG);
+				LINUX_S_IFLNK :
+				(type == USER_VFS_TYPE_FIFO ?
+				 LINUX_S_IFIFO :
+				 (type == USER_VFS_TYPE_CHARACTER ?
+				  LINUX_S_IFCHR : LINUX_S_IFREG)));
 
 	mem_zero(stat, sizeof(stat));
 	write_u64_le(stat + 0, 1);
