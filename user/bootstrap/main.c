@@ -118,6 +118,69 @@ static void pack_path(u64 *words, const char *path)
 	}
 }
 
+static u64 str_len(const char *text)
+{
+	u64 len = 0;
+
+	while (text[len] != '\0') {
+		len++;
+	}
+	return len;
+}
+
+static long proc_register_exec(u64 proc, const char *path,
+			       const char *task_name, u64 linux,
+			       u64 log_kind)
+{
+	const u64 path_len = str_len(path) + 1;
+	const u64 task_len = str_len(task_name) + 1;
+	const long buffer = bunix_buffer_create(path_len + task_len);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = BUNIX_PROC_REGISTER_EXEC,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { path_len, task_len, linux, log_kind },
+	};
+	struct bunix_msg reply;
+
+	if (proc == 0 || buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, path, path_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, path_len, task_name,
+			       task_len) != 0 ||
+	    bunix_ipc_call(proc, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
+static long register_proc_execs(u64 proc)
+{
+	return proc_register_exec(proc, "/bin/lxtest", "lxtest", 1,
+				  BUNIX_PROC_EXEC_LOG_LINUX) != 0 ||
+	       proc_register_exec(proc, "/bin/musl-hello", "musl-hello", 1,
+				  BUNIX_PROC_EXEC_LOG_MUSL) != 0 ||
+	       proc_register_exec(proc, "/bin/fputest", "fputest", 1,
+				  BUNIX_PROC_EXEC_LOG_DEFAULT) != 0 ||
+	       proc_register_exec(proc, "/bin/sh", "busybox", 1,
+				  BUNIX_PROC_EXEC_LOG_SHELL) != 0 ||
+	       proc_register_exec(proc, "/bin/busybox", "busybox", 1,
+				  BUNIX_PROC_EXEC_LOG_DEFAULT) != 0 ||
+	       proc_register_exec(proc, "/bin/login", "login", 1,
+				  BUNIX_PROC_EXEC_LOG_LOGIN) != 0 ||
+	       proc_register_exec(proc, "/sbin/init", "busybox", 1,
+				  BUNIX_PROC_EXEC_LOG_INIT) != 0 ||
+	       proc_register_exec(proc, "/bin/ipcstress", "ipcstress", 0,
+				  BUNIX_PROC_EXEC_LOG_DEFAULT) != 0;
+}
+
 static long tmpfs_mount_root(u64 tmpfs, const char *path)
 {
 	struct bunix_msg request = {
@@ -345,7 +408,7 @@ int main(void)
 				      sizeof(proc_caps) / sizeof(proc_caps[0]));
 	proc = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROC,
 					 BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
-	if (proc == 0) {
+	if (proc == 0 || register_proc_execs(proc) != 0) {
 		return 1;
 	}
 

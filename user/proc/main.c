@@ -256,6 +256,24 @@ static const char *log_line_for_path(const char *path)
 	       proc_exec;
 }
 
+static const char *log_line_for_kind(u64 kind)
+{
+	switch (kind) {
+	case BUNIX_PROC_EXEC_LOG_LINUX:
+		return proc_exec_linux;
+	case BUNIX_PROC_EXEC_LOG_MUSL:
+		return proc_exec_musl;
+	case BUNIX_PROC_EXEC_LOG_SHELL:
+		return proc_exec_shell;
+	case BUNIX_PROC_EXEC_LOG_LOGIN:
+		return proc_exec_login;
+	case BUNIX_PROC_EXEC_LOG_INIT:
+		return proc_exec_init;
+	default:
+		return 0;
+	}
+}
+
 static int exec_registry_add(const char *path, const char *task_name,
 			     int linux, const char *log_line)
 {
@@ -285,21 +303,38 @@ static int exec_registry_add(const char *path, const char *task_name,
 	return 0;
 }
 
-static int exec_registry_seed(void)
+static int read_buffer_text(u64 buffer, u64 offset, u64 len, char *out,
+			    u64 out_size)
 {
-	return exec_registry_add("/bin/lxtest", "lxtest", 1,
-				 proc_exec_linux) != 0 ||
-	       exec_registry_add("/bin/musl-hello", "musl-hello", 1,
-				 proc_exec_musl) != 0 ||
-	       exec_registry_add("/bin/fputest", "fputest", 1, 0) != 0 ||
-	       exec_registry_add("/bin/sh", "busybox", 1,
-				 proc_exec_shell) != 0 ||
-	       exec_registry_add("/bin/busybox", "busybox", 1, 0) != 0 ||
-	       exec_registry_add("/bin/login", "login", 1,
-				 proc_exec_login) != 0 ||
-	       exec_registry_add("/sbin/init", "busybox", 1,
-				 proc_exec_init) != 0 ||
-	       exec_registry_add("/bin/ipcstress", "ipcstress", 0, 0) != 0;
+	if (buffer == 0 || len == 0 || len > out_size) {
+		return -1;
+	}
+	for (u64 i = 0; i < out_size; i++) {
+		out[i] = '\0';
+	}
+	if (bunix_buffer_read(buffer, offset, out, len) != 0 ||
+	    out[len - 1] != '\0') {
+		return -1;
+	}
+	return 0;
+}
+
+static int register_exec_from_message(const struct bunix_msg *message)
+{
+	char path[PROC_EXEC_PATH_MAX];
+	char task_name[PROC_TASK_NAME_MAX];
+
+	if (message == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    read_buffer_text(message->cap, 0, message->words[0],
+			     path, sizeof(path)) != 0 ||
+	    read_buffer_text(message->cap, message->words[0],
+			     message->words[1], task_name,
+			     sizeof(task_name)) != 0) {
+		return -1;
+	}
+	return exec_registry_add(path, task_name, message->words[2] != 0,
+				 log_line_for_kind(message->words[3]));
 }
 
 static u64 str_len(const char *text)
@@ -1370,8 +1405,7 @@ int main(void)
 	bunix_map_init(&pending_linux_exits);
 	bunix_tree_init(&exec_registry);
 	bunix_console_log(proc_online, sizeof(proc_online) - 1);
-	if (exec_registry_seed() != 0 ||
-	    register_service(BUNIX_SERVICE_PROC, BUNIX_HANDLE_SELF) != 0) {
+	if (register_service(BUNIX_SERVICE_PROC, BUNIX_HANDLE_SELF) != 0) {
 		bunix_console_log(proc_register_failed,
 				    sizeof(proc_register_failed) - 1);
 		return 1;
@@ -1425,6 +1459,12 @@ int main(void)
 			}
 			break;
 		}
+		case BUNIX_PROC_REGISTER_EXEC:
+			reply.words[0] = (u64)register_exec_from_message(&message);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
 		case BUNIX_PROC_WAIT: {
 			struct process *process = process_find(message.words[0]);
 
