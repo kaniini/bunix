@@ -135,6 +135,7 @@ struct linux_fd {
 	u64 offset;
 	u64 size;
 	u64 flags;
+	u64 status_flags;
 };
 
 struct linux_process {
@@ -783,6 +784,7 @@ static int linux_process_init_fds(struct linux_process *process)
 		process->fds[fd].offset = 0;
 		process->fds[fd].size = 0;
 		process->fds[fd].flags = 0;
+		process->fds[fd].status_flags = 0;
 	}
 
 	process->fds[0].handle = BUNIX_HANDLE_CONSOLE;
@@ -828,6 +830,7 @@ static int linux_process_ensure_fds(struct linux_process *process, u64 count)
 		fds[fd].offset = 0;
 		fds[fd].size = 0;
 		fds[fd].flags = 0;
+		fds[fd].status_flags = 0;
 	}
 	process->fds = fds;
 	process->fd_capacity = new_capacity;
@@ -845,6 +848,7 @@ static long alloc_fd(struct linux_process *process, u64 kind, u64 handle,
 				process->fds[fd].offset = 0;
 				process->fds[fd].size = size;
 				process->fds[fd].flags = 0;
+				process->fds[fd].status_flags = 0;
 				return (long)fd;
 			}
 		}
@@ -2312,6 +2316,8 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	if ((flags & LINUX_O_CLOEXEC) != 0) {
 		process->fds[fd].flags |= LINUX_FD_CLOEXEC;
 	}
+	process->fds[fd].status_flags = flags &
+		(LINUX_O_ACCMODE | LINUX_O_APPEND);
 	if ((flags & LINUX_O_TRUNC) != 0 &&
 	    (flags & LINUX_O_ACCMODE) != 0 &&
 	    process->fds[fd].kind == LINUX_FD_FILE &&
@@ -3292,6 +3298,9 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 	}
 	if (process->fds[fd].kind == LINUX_FD_FILE) {
 		const long tmp = bunix_buffer_create(len == 0 ? 1 : len);
+		const u64 offset =
+			(process->fds[fd].status_flags & LINUX_O_APPEND) != 0 ?
+			process->fds[fd].size : process->fds[fd].offset;
 		struct bunix_msg request = {
 			.protocol = BUNIX_PROTO_VFS,
 			.type = BUNIX_VFS_WRITE_FILE_BUFFER,
@@ -3300,7 +3309,7 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 			.reply = 0,
 			.cap = (u64)tmp,
 			.words = { process->fds[fd].handle,
-				   process->fds[fd].offset, len,
+				   offset, len,
 				   process->bunix_task },
 		};
 		struct bunix_msg reply;
@@ -3318,7 +3327,7 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 			return -LINUX_EBADF;
 		}
 		bunix_handle_close((u64)tmp);
-		process->fds[fd].offset += reply.words[1];
+		process->fds[fd].offset = offset + reply.words[1];
 		if (process->fds[fd].offset > process->fds[fd].size) {
 			process->fds[fd].size = process->fds[fd].offset;
 		}
@@ -3387,6 +3396,7 @@ static long linux_close(struct linux_process *process, u64 fd)
 	process->fds[fd].offset = 0;
 	process->fds[fd].size = 0;
 	process->fds[fd].flags = 0;
+	process->fds[fd].status_flags = 0;
 	return 0;
 }
 
@@ -3469,7 +3479,13 @@ static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 		}
 		return 0;
 	}
-	if (cmd == LINUX_F_GETFL || cmd == LINUX_F_SETFL) {
+	if (cmd == LINUX_F_GETFL) {
+		return (long)process->fds[fd].status_flags;
+	}
+	if (cmd == LINUX_F_SETFL) {
+		process->fds[fd].status_flags =
+			(process->fds[fd].status_flags & LINUX_O_ACCMODE) |
+			(arg & LINUX_O_APPEND);
 		return 0;
 	}
 	if (cmd == LINUX_F_DUPFD || cmd == LINUX_F_DUPFD_CLOEXEC) {

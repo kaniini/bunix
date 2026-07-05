@@ -344,9 +344,9 @@ make test-shell
 `make test-shell` builds the default dynamic-BusyBox rootfs, drives the serial
 console, logs in, runs BusyBox applets,
 checks pipes and file reads, verifies login/session-visible `uptime`, checks
-`id`, `stat`, `ls`, `cat`, shell `cd`/`pwd`, backspace, Ctrl-C, permission
-denial for `/secret.txt`, and confirms that exiting the shell returns to the
-login prompt. It also checks writable-root unionfs behavior and live
+`id`, `stat`, `ls`, `cat`, append writes, shell `cd`/`pwd`, backspace, Ctrl-C,
+permission denial for `/secret.txt`, and confirms that exiting the shell returns
+to the login prompt. It also checks writable-root unionfs behavior and live
 `/proc/mounts` output.
 
 `make test-rootfs-tool` is a host-side regression for the rootfs image builder;
