@@ -187,7 +187,7 @@ struct linux_process {
 	u64 umask;
 	u64 session_id;
 	u64 cwd_handle;
-	char cwd[LINUX_MAX_PATH];
+	char *cwd;
 	struct linux_fd *fds;
 	u64 fd_capacity;
 };
@@ -775,6 +775,45 @@ static void string_copy(char *dst, const char *src)
 	dst[i] = '\0';
 }
 
+static char *path_dup(const char *src)
+{
+	u64 len;
+	char *dst;
+
+	if (src == 0) {
+		return 0;
+	}
+	len = string_len(src);
+	if (len >= LINUX_MAX_PATH) {
+		return 0;
+	}
+	dst = (char *)bunix_alloc(len + 1);
+	if (dst == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i <= len; i++) {
+		dst[i] = src[i];
+	}
+	return dst;
+}
+
+static int linux_process_set_cwd(struct linux_process *process,
+				 const char *cwd)
+{
+	char *copy;
+
+	if (process == 0 || cwd == 0 || cwd[0] != '/') {
+		return -1;
+	}
+	copy = path_dup(cwd);
+	if (copy == 0) {
+		return -1;
+	}
+	bunix_free(process->cwd);
+	process->cwd = copy;
+	return 0;
+}
+
 static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
 				u64 path_cap)
 {
@@ -898,8 +937,6 @@ static int linux_process_init_fds(struct linux_process *process)
 	process->fds[1].kind = LINUX_FD_CONSOLE;
 	process->fds[2].handle = BUNIX_HANDLE_CONSOLE;
 	process->fds[2].kind = LINUX_FD_CONSOLE;
-	process->cwd[0] = '/';
-	process->cwd[1] = '\0';
 	return 0;
 }
 
@@ -1218,6 +1255,11 @@ static long linux_register_process(u64 bunix_task, u64 ppid, u64 session_id,
 		bunix_free(process);
 		return -LINUX_ESRCH;
 	}
+	if (linux_process_set_cwd(process, "/") != 0) {
+		bunix_free(process->fds);
+		bunix_free(process);
+		return -LINUX_ESRCH;
+	}
 	if (foreground_pgid == 0 || pid == 1) {
 		foreground_pgid = pid;
 	}
@@ -1288,7 +1330,10 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 			linux_pipe_ref_add(&process->fds[fd]);
 		}
 	}
-	string_copy(process->cwd, parent->cwd);
+	if (linux_process_set_cwd(process, parent->cwd) != 0) {
+		linux_process_reset(process);
+		return -LINUX_ESRCH;
+	}
 	if (linux_user_process_fork(parent_task, child_task) != 0) {
 		linux_process_reset(process);
 		return -LINUX_ESRCH;
@@ -3776,8 +3821,11 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 static long linux_getcwd(struct linux_process *process, u64 size,
 			 u64 buffer, u64 *word0, u64 *word1)
 {
-	const u64 len = string_len(process->cwd) + 1;
+	const u64 len = process->cwd != 0 ? string_len(process->cwd) + 1 : 0;
 
+	if (len == 0) {
+		return -LINUX_ENOENT;
+	}
 	if (size < len) {
 		return -LINUX_ERANGE;
 	}
@@ -3844,11 +3892,27 @@ static long linux_chdir(struct linux_process *process, u64 path_len,
 		return -LINUX_ENOTDIR;
 	}
 
+	if (linux_process_set_cwd(process, full_path) != 0) {
+		const u64 close_handle = reply.words[1];
+		struct bunix_msg close_reply;
+		struct bunix_msg close_request = {
+			.protocol = BUNIX_PROTO_VFS,
+			.type = BUNIX_VFS_CLOSE,
+			.sender = 0,
+			.cap_rights = 0,
+			.reply = 0,
+			.cap = 0,
+			.words = { close_handle, 0, 0, 0 },
+		};
+
+		(void)bunix_ipc_call(LINUX_HANDLE_VFS, &close_request,
+				     &close_reply);
+		return -LINUX_ENOMEM;
+	}
 	old_handle = process->cwd_handle;
 	process->cwd_handle = reply.words[1];
 	linux_file_ref_add(process->cwd_handle);
 	(void)linux_close_vfs_handle(old_handle);
-	string_copy(process->cwd, full_path);
 	return 0;
 }
 
@@ -4555,7 +4619,8 @@ static void linux_process_reset(struct linux_process *process)
 	process->session_id = 0;
 	(void)linux_close_vfs_handle(process->cwd_handle);
 	process->cwd_handle = 0;
-	process->cwd[0] = '\0';
+	bunix_free(process->cwd);
+	process->cwd = 0;
 	bunix_free(process->fds);
 	process->fds = 0;
 	process->fd_capacity = 0;
