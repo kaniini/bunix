@@ -117,7 +117,9 @@ require_no_fixed() {
 	fi
 }
 
-check_fixed_markers() {
+check_markers() {
+	mode=$1
+	shift
 	log=$1
 	label=$2
 	limit=$3
@@ -127,22 +129,26 @@ check_fixed_markers() {
 		case "$expected" in
 		''|\#*) continue ;;
 		esac
-		wait_for_fixed "$log" "$expected" "$label" "$limit" "$tail_lines"
+		case "$mode" in
+		fixed)
+			wait_for_fixed "$log" "$expected" "$label" "$limit" "$tail_lines"
+			;;
+		exact)
+			wait_for_marker "$log" "$expected" "$label" "$limit" "$tail_lines"
+			;;
+		*)
+			fail_with_log "unknown marker mode: $mode" "$log" "$tail_lines"
+			;;
+		esac
 	done
 }
 
-check_exact_markers() {
-	log=$1
-	label=$2
-	limit=$3
-	tail_lines=$4
+check_fixed_markers() {
+	check_markers fixed "$@"
+}
 
-	while IFS= read -r expected; do
-		case "$expected" in
-		''|\#*) continue ;;
-		esac
-		wait_for_marker "$log" "$expected" "$label" "$limit" "$tail_lines"
-	done
+check_exact_markers() {
+	check_markers exact "$@"
 }
 
 check_fixed_markers_file() {
