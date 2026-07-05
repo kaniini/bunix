@@ -3384,10 +3384,67 @@ static const char *linux_syscall_name(u64 number)
 	}
 }
 
+enum linux_strace_mode {
+	LINUX_STRACE_LEGACY = 0,
+	LINUX_STRACE_STRUCTURED,
+	LINUX_STRACE_OFF,
+};
+
+static u32 linux_strace_mode = LINUX_STRACE_LEGACY;
+
+static int str_token_eq(const char *left, const char *right)
+{
+	while (*left != '\0' && *left != ' ' && *right != '\0') {
+		if (*left++ != *right++) {
+			return 0;
+		}
+	}
+
+	return (*left == '\0' || *left == ' ') && *right == '\0';
+}
+
+void arch_user_set_strace_mode(const char *mode)
+{
+	if (mode == 0 ||
+	    str_token_eq(mode, "legacy") ||
+	    str_token_eq(mode, "human")) {
+		linux_strace_mode = LINUX_STRACE_LEGACY;
+		return;
+	}
+	if (str_token_eq(mode, "structured") || str_token_eq(mode, "kv")) {
+		linux_strace_mode = LINUX_STRACE_STRUCTURED;
+		return;
+	}
+	if (str_token_eq(mode, "off") || str_token_eq(mode, "none")) {
+		linux_strace_mode = LINUX_STRACE_OFF;
+		return;
+	}
+
+	linux_strace_mode = LINUX_STRACE_LEGACY;
+}
+
 static void linux_strace_log(const struct arch_syscall_frame *frame, u64 result)
 {
 	const struct task *task = task_current();
+	const struct thread *thread = thread_current();
 	const u64 number = frame->number;
+
+	if (linux_strace_mode == LINUX_STRACE_OFF) {
+		return;
+	}
+	if (linux_strace_mode == LINUX_STRACE_STRUCTURED) {
+		console_printf("linux-strace phase=exit bunix_task=%u bunix_tid=%u task_name=%s thread_name=%s nr=%u syscall=%s rip=%p ret=%p arg0=%p arg1=%p arg2=%p arg3=%p\n",
+			       task_id(task), thread_id(thread), task_name(task),
+			       thread_name(thread), (u32)number,
+			       linux_syscall_name(number),
+			       (const void *)frame->user_rip,
+			       (const void *)result,
+			       (const void *)frame->arg0,
+			       (const void *)frame->arg1,
+			       (const void *)frame->arg2,
+			       (const void *)frame->arg3);
+		return;
+	}
 
 	console_printf("linux-strace: task=%u name=%s rip=%p %s(%p,%p,%p,%p) = %p\n",
 		       task_id(task), task_name(task),
@@ -3401,7 +3458,24 @@ static void linux_strace_log(const struct arch_syscall_frame *frame, u64 result)
 static void linux_strace_enter(const struct arch_syscall_frame *frame)
 {
 	const struct task *task = task_current();
+	const struct thread *thread = thread_current();
 	const u64 number = frame->number;
+
+	if (linux_strace_mode == LINUX_STRACE_OFF) {
+		return;
+	}
+	if (linux_strace_mode == LINUX_STRACE_STRUCTURED) {
+		console_printf("linux-strace phase=enter bunix_task=%u bunix_tid=%u task_name=%s thread_name=%s nr=%u syscall=%s rip=%p arg0=%p arg1=%p arg2=%p arg3=%p\n",
+			       task_id(task), thread_id(thread), task_name(task),
+			       thread_name(thread), (u32)number,
+			       linux_syscall_name(number),
+			       (const void *)frame->user_rip,
+			       (const void *)frame->arg0,
+			       (const void *)frame->arg1,
+			       (const void *)frame->arg2,
+			       (const void *)frame->arg3);
+		return;
+	}
 
 	console_printf("linux-strace-enter: task=%u name=%s rip=%p %s(%p,%p,%p,%p)\n",
 		       task_id(task), task_name(task),

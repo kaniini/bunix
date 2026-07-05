@@ -4,6 +4,8 @@ ISO_ROOT := $(BUILD_DIR)/iso
 ESP_DIR := $(BUILD_DIR)/esp
 EFI_BOOT_IMG := $(BUILD_DIR)/bunixos-efi.iso
 EFI_BOOT_APP := $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI
+GRUB_CFG := $(BUILD_DIR)/grub.cfg
+GRUB_STANDALONE_CFG := $(BUILD_DIR)/grub-standalone.cfg
 KERNEL := $(BUILD_DIR)/bunixos.kernel
 BOOTSTRAP_MODULE := $(BUILD_DIR)/modules/bootstrap.server
 USER_CRT0_OBJ := $(BUILD_DIR)/user/crt0.S.o
@@ -127,6 +129,7 @@ SMP ?= 2
 GRUB_MKRESCUE ?= grub-mkrescue
 GRUB_MKSTANDALONE ?= grub-mkstandalone
 OVMF_CODE ?= /usr/share/OVMF/OVMF_CODE.fd
+KERNEL_CMDLINE ?= log=info
 
 CFLAGS := -m64 -std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 	-fno-pic -fno-pie -fno-builtin -mno-red-zone \
@@ -198,7 +201,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-kernel run-iso test test-command test-shell test-shell-static test-shell-dynamic test-rootfs-tool audit-linux-syscalls iso esp check-tools
+.PHONY: all clean run run-kernel run-iso test test-command test-shell test-shell-static test-shell-dynamic test-rootfs-tool audit-linux-syscalls iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -399,14 +402,24 @@ $(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED)
 	mkdir -p $(dir $@)
 	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /rename-lower.txt $(ROOTFS_NESTED) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) $(ROOTFS_LONG_PATH) $(ROOTFS_NESTED) $(ROOTFS_LONG_EXEC_PATH) $(DYN_HELLO_MODULE) $(ROOTFS_LONG_PROC_EXEC_PATH) $(FIRST_MODULE) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /etc/group $(ROOTFS_GROUP) /etc/inittab $(ROOTFS_INITTAB) /etc/execs $(ROOTFS_EXECS) /etc/spawns $(ROOTFS_SPAWNS) /lib/ld-musl-x86_64.so.1 $(MUSL_LDSO) /bin/first $(FIRST_MODULE) /bin/alloctest $(ALLOCTEST_MODULE) /bin/ipcstress $(IPCSTRESS_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/getdentstest $(GETDENTSTEST_MODULE) /bin/vforkstress $(VFORKSTRESS_MODULE) /bin/execok $(EXECOK_MODULE) /bin/readbig $(READBIG_MODULE) /bin/mmapbig $(MMAPBIG_MODULE) /bin/mmaphuge $(MMAPHUGE_MODULE) /bin/execbig $(EXECBIG_MODULE) /bin/phdrstress $(PHDRSTRESS_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/dyn-hello $(DYN_HELLO_MODULE) /bin/fputest $(FPUTEST_MODULE) /bin/iovtest $(IOVTEST_MODULE) /bin/fchmodattest $(FCHMODATTEST_MODULE) /bin/waitpgidtest $(WAITPGIDTEST_MODULE) /bin/execlongtest $(EXECLONGTEST_MODULE) /bin/auxidtest $(AUXIDTEST_MODULE) /bin/pathmaxtest $(PATHMAXTEST_MODULE) /bin/patherrtest $(PATHERRTEST_MODULE) /bin/fcntllocktest $(FCNTLLOCKTEST_MODULE) /bin/busybox $(BUSYBOX) --dir /home/kaniini --dir /root --dir /tmp --dir /run --dir /mnt --dir /sys --dir /var/tmp --dir /var/run --symlink $(ROOTFS_LONG_SYMLINK) $(ROOTFS_LONG_PATH) --symlink /lib/libc.musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1 $(ROOTFS_BUSYBOX_LINKS)
 
-$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(GRUB_CFG): boot/grub.cfg FORCE
+	mkdir -p $(BUILD_DIR)
+	sed 's|@KERNEL_CMDLINE@|$(KERNEL_CMDLINE)|g' $< > $@.tmp
+	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
+
+$(GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
+	mkdir -p $(BUILD_DIR)
+	sed 's|@KERNEL_CMDLINE@|$(KERNEL_CMDLINE)|g' $< > $@.tmp
+	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
+
+$(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
 	mkdir -p $(ESP_DIR)/EFI/BOOT $(ESP_DIR)/boot
 	cp $(KERNEL) $(ESP_DIR)/boot/bunixos.kernel
 	$(GRUB_MKSTANDALONE) -O x86_64-efi -o $@ \
-		"boot/grub/grub.cfg=boot/grub-standalone.cfg" \
+		"boot/grub/grub.cfg=$(GRUB_STANDALONE_CFG)" \
 		"boot/bunixos.kernel=$(KERNEL)" \
 		"modules/console.server=$(CONSOLE_MODULE)" \
 		"modules/names.server=$(NAMES_MODULE)" \
@@ -427,7 +440,7 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(BOOTSTRAP_MODULE) $(CONSOL
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -437,7 +450,7 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $
 	mkdir -p $(ISO_ROOT)/boot/grub
 	mkdir -p $(ISO_ROOT)/modules
 	cp $(KERNEL) $(ISO_ROOT)/boot/bunixos.kernel
-	cp boot/grub.cfg $(ISO_ROOT)/boot/grub/grub.cfg
+	cp $(GRUB_CFG) $(ISO_ROOT)/boot/grub/grub.cfg
 	cp $(CONSOLE_MODULE) $(ISO_ROOT)/modules/console.server
 	cp $(NAMES_MODULE) $(ISO_ROOT)/modules/names.server
 	cp $(BOOTSTRAP_MODULE) $(ISO_ROOT)/modules/bootstrap.server

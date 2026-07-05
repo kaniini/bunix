@@ -24,9 +24,10 @@ static int starts_with(const char *text, const char *prefix)
 	return 1;
 }
 
-static void configure_console(u64 multiboot_info)
+static void configure_boot_options(u64 multiboot_info)
 {
 	const char *cmdline = multiboot2_cmdline(multiboot_info);
+	int have_log = 0;
 
 	while (*cmdline != '\0') {
 		while (*cmdline == ' ') {
@@ -35,7 +36,10 @@ static void configure_console(u64 multiboot_info)
 
 		if (starts_with(cmdline, "log=")) {
 			console_set_verbosity(cmdline + 4);
-			return;
+			have_log = 1;
+		}
+		if (starts_with(cmdline, "strace=")) {
+			arch_user_set_strace_mode(cmdline + 7);
 		}
 
 		while (*cmdline != '\0' && *cmdline != ' ') {
@@ -43,7 +47,9 @@ static void configure_console(u64 multiboot_info)
 		}
 	}
 
-	console_set_verbosity("info");
+	if (!have_log) {
+		console_set_verbosity("info");
+	}
 }
 
 void kernel_main(u32 magic, u64 multiboot_info)
@@ -61,7 +67,7 @@ void kernel_main(u32 magic, u64 multiboot_info)
 		}
 	}
 
-	configure_console(multiboot_info);
+	configure_boot_options(multiboot_info);
 	multiboot2_dump(multiboot_info);
 	vm_init(multiboot_info);
 	slab_init();

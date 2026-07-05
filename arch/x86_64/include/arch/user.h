@@ -23,6 +23,7 @@ struct arch_syscall_frame {
 };
 
 void arch_user_init(void);
+void arch_user_set_strace_mode(const char *mode);
 void arch_user_init_cpu(u32 cpu_id);
 void arch_user_set_kernel_stack(u64 stack);
 void arch_user_set_fs_base(u64 fs_base);

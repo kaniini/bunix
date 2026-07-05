@@ -40,6 +40,9 @@ Useful test targets:
 - `make audit-linux-syscalls` reports Linux syscall enum coverage, arch
   dispatch forwarding, Linux-server cases, obvious fallback sites, and heuristic
   test marker hints.
+- `KERNEL_CMDLINE='log=debug strace=structured' BUNIX_CMD='busybox true' make test-command`
+  boots with machine-readable Linux syscall traces. Structured lines use stable
+  `linux-strace key=value` fields for shell-friendly assertions.
 
 The init, names, time, user, linux, proc, procfs, block, VFS, and ping servers
 are freestanding C ELF images loaded as Multiboot2 modules and entered in ring 3.
@@ -68,7 +71,10 @@ common kernel and server code.
 Kernel logging uses `console_printf`, a small freestanding formatter supporting
 `%s`, `%c`, `%d`, `%i`, `%u`, `%x`, `%p`, and `%%`. Once Linux userspace starts,
 kernel/server logs route into the kernel ring buffer and BusyBox `dmesg` can
-read them without trampling the interactive shell.
+read them without trampling the interactive shell. Linux syscall tracing accepts
+`strace=legacy`, `strace=structured`, or `strace=off` on the kernel command
+line; `KERNEL_CMDLINE=...` regenerates the GRUB config used by the EFI/ISO
+builds.
 
 ## IPC shape
 
