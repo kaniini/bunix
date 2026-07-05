@@ -418,7 +418,12 @@ test: $(EFI_BOOT_APP)
 	grep -F "proc: spawned pid=2" $(BUILD_DIR)/serial.log
 	grep -F "first: stdout ready" $(BUILD_DIR)/serial.log
 	grep -F "first: argc=1" $(BUILD_DIR)/serial.log
+	grep -F "first: argc=4" $(BUILD_DIR)/serial.log
 	grep -F "first: argv0=/bin/first" $(BUILD_DIR)/serial.log
+	grep -F "first: argv1=alpha" $(BUILD_DIR)/serial.log
+	grep -F "first: argv2=beta" $(BUILD_DIR)/serial.log
+	grep -F "first: argv3=gamma" $(BUILD_DIR)/serial.log
+	grep -F "first: env PROC_SPAWN_ENV=ok" $(BUILD_DIR)/serial.log
 	grep -F "first: aux pagesz=4096" $(BUILD_DIR)/serial.log
 	grep -F "first: aux entry=0x400000" $(BUILD_DIR)/serial.log
 	grep -F "first: aux phdr=0x" $(BUILD_DIR)/serial.log

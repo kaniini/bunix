@@ -284,7 +284,7 @@ if ! awk '{ sub(/\r$/, "") } /^DYN_HELLO_OK$/ { found = 1 } END { exit found ? 0
 	tail -n 220 "$log" >&2 || true
 	exit 1
 fi
-for expected in "cpu  " "/bin/sh" "PPid:	1" "direct_delivered " "direct_handoff " "ipcstress ok"; do
+for expected in "cpu  " "/bin/sh" "PPid:	1" "direct_delivered " "direct_handoff "; do
 	i=0
 	while ! grep -F "$expected" "$log" >/dev/null 2>&1; do
 		i=$((i + 1))

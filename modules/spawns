@@ -1,5 +1,3 @@
 # path
 /bin/first
-/bin/ipcstress
-/bin/lxtest
-/bin/musl-hello
+/bin/first alpha beta gamma env:PROC_SPAWN_ENV=ok

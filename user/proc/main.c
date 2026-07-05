@@ -6,7 +6,8 @@ enum {
 	PROC_HANDLE_NAMES = 3,
 	PROC_HANDLE_TIME = 4,
 	PROC_SEGMENT_MAX = 4096,
-	PROC_INIT_STACK_MAX = 4096,
+	PROC_INIT_STACK_MAX = 16384,
+	PROC_SPAWN_BUFFER_MAX = 4096,
 	PROC_MAX_PHDRS = 16,
 	USER_STACK_TOP = 0x800000,
 	ELF_MAGIC = 0x464c457f,
@@ -120,6 +121,13 @@ struct exec_info {
 	const struct elf64_phdr *phdrs;
 };
 
+struct exec_strings {
+	u64 argc;
+	u64 envc;
+	char **argv;
+	char **envp;
+};
+
 static struct bunix_map processes_by_pid;
 static struct bunix_map processes_by_task_id;
 static struct bunix_map processes_by_linux_pid;
@@ -127,6 +135,7 @@ static struct bunix_map pending_linux_exits;
 static struct bunix_tree exec_registry;
 static u64 next_pid = 1;
 static u64 first_linux_pid;
+static unsigned char spawn_buffer[PROC_SPAWN_BUFFER_MAX];
 static unsigned char segment_buffer[PROC_SEGMENT_MAX];
 static unsigned char init_stack[PROC_INIT_STACK_MAX];
 static const char proc_online[] = "proc: online\n";
@@ -424,6 +433,144 @@ static void mem_copy(unsigned char *dst, const unsigned char *src, u64 len)
 	for (u64 i = 0; i < len; i++) {
 		dst[i] = src[i];
 	}
+}
+
+static char *text_dup(const char *text)
+{
+	const u64 len = str_len(text) + 1;
+	char *copy = (char *)bunix_alloc(len);
+
+	if (copy == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < len; i++) {
+		copy[i] = text[i];
+	}
+	return copy;
+}
+
+static void exec_strings_free(struct exec_strings *strings)
+{
+	if (strings == 0) {
+		return;
+	}
+	if (strings->argv != 0) {
+		for (u64 i = 0; i < strings->argc; i++) {
+			if (strings->argv[i] != 0) {
+				bunix_free(strings->argv[i]);
+			}
+		}
+		bunix_free(strings->argv);
+	}
+	if (strings->envp != 0) {
+		for (u64 i = 0; i < strings->envc; i++) {
+			if (strings->envp[i] != 0) {
+				bunix_free(strings->envp[i]);
+			}
+		}
+		bunix_free(strings->envp);
+	}
+	strings->argc = 0;
+	strings->envc = 0;
+	strings->argv = 0;
+	strings->envp = 0;
+}
+
+static int exec_strings_default(struct exec_strings *strings, const char *path)
+{
+	if (strings == 0 || path == 0) {
+		return -1;
+	}
+	strings->argc = 1;
+	strings->envc = 0;
+	strings->argv = (char **)bunix_calloc(1, sizeof(char *));
+	strings->envp = 0;
+	if (strings->argv == 0) {
+		return -1;
+	}
+	strings->argv[0] = text_dup(path);
+	if (strings->argv[0] == 0) {
+		exec_strings_free(strings);
+		return -1;
+	}
+	return 0;
+}
+
+static int spawn_buffer_string(u64 *pos, u64 total, char **out)
+{
+	u64 start;
+	u64 len = 0;
+	char *copy;
+
+	if (pos == 0 || out == 0 || *pos >= total) {
+		return -1;
+	}
+	start = *pos;
+	while (*pos < total && spawn_buffer[*pos] != '\0') {
+		(*pos)++;
+		len++;
+	}
+	if (*pos >= total || len == 0) {
+		return -1;
+	}
+	(*pos)++;
+	copy = (char *)bunix_alloc(len + 1);
+	if (copy == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < len; i++) {
+		copy[i] = (char)spawn_buffer[start + i];
+	}
+	copy[len] = '\0';
+	*out = copy;
+	return 0;
+}
+
+static int exec_strings_from_spawn_buffer(const struct bunix_msg *message,
+					  char **path,
+					  struct exec_strings *strings)
+{
+	u64 total;
+	u64 pos = 0;
+
+	if (message == 0 || path == 0 || strings == 0 ||
+	    message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    message->words[0] == 0 ||
+	    message->words[0] > sizeof(spawn_buffer) ||
+	    message->words[1] == 0 ||
+	    message->words[1] > 64 ||
+	    message->words[2] > 64) {
+		return -1;
+	}
+	total = message->words[0];
+	mem_zero(spawn_buffer, sizeof(spawn_buffer));
+	if (bunix_buffer_read(message->cap, 0, spawn_buffer, total) != 0) {
+		return -1;
+	}
+	if (spawn_buffer_string(&pos, total, path) != 0) {
+		return -1;
+	}
+
+	strings->argc = message->words[1];
+	strings->envc = message->words[2];
+	strings->argv = (char **)bunix_calloc(strings->argc, sizeof(char *));
+	strings->envp = strings->envc == 0 ? 0 :
+		(char **)bunix_calloc(strings->envc, sizeof(char *));
+	if (strings->argv == 0 || (strings->envc != 0 && strings->envp == 0)) {
+		return -1;
+	}
+	for (u64 i = 0; i < strings->argc; i++) {
+		if (spawn_buffer_string(&pos, total, &strings->argv[i]) != 0) {
+			return -1;
+		}
+	}
+	for (u64 i = 0; i < strings->envc; i++) {
+		if (spawn_buffer_string(&pos, total, &strings->envp[i]) != 0) {
+			return -1;
+		}
+	}
+	return pos == total ? 0 : -1;
 }
 
 static long vfs_open(u64 vfs, const char *path, struct vfs_file *file)
@@ -807,38 +954,76 @@ static long map_load_segments(u64 vfs, const struct vfs_file *file,
 static long build_initial_stack(u64 task, const char *path,
 				const struct exec_info *exec,
 				u64 load_bias, u64 interpreter_base,
+				const struct exec_strings *strings,
 				u64 *stack)
 {
 	const u64 stack_base = USER_STACK_TOP - PROC_INIT_STACK_MAX;
 	const u64 path_len = str_len(path);
 	const u64 phdr_size = exec != 0 ? exec->phnum * exec->phent : 0;
 	const u64 auxv_pairs = interpreter_base != 0 ? 20 : 19;
-	const u64 stack_words = 4 + auxv_pairs * 2;
+	const u64 argc = strings != 0 && strings->argc != 0 ?
+			strings->argc : 1;
+	const u64 envc = strings != 0 ? strings->envc : 0;
+	const u64 stack_words = 1 + argc + 1 + envc + 1 + auxv_pairs * 2;
 	const unsigned char random_bytes[16] = {
 		0x62, 0x75, 0x6e, 0x69, 0x78, 0x2d, 0x6d, 0x75,
 		0x73, 0x6c, 0x2d, 0x72, 0x61, 0x6e, 0x64, 0x00,
 	};
+	u64 argv_addrs[64];
+	u64 env_addrs[64];
 	u64 sp = PROC_INIT_STACK_MAX;
 
 	if (exec == 0 ||
 	    exec->phdrs == 0 ||
 	    phdr_size == 0 ||
-	    path_len + 1 + phdr_size + stack_words * sizeof(u64) >
-	    PROC_INIT_STACK_MAX) {
+	    argc > sizeof(argv_addrs) / sizeof(argv_addrs[0]) ||
+	    envc > sizeof(env_addrs) / sizeof(env_addrs[0])) {
 		return -1;
 	}
 
 	mem_zero(init_stack, sizeof(init_stack));
+	for (u64 i = envc; i > 0; i--) {
+		const char *value = strings->envp[i - 1];
+		const u64 len = str_len(value) + 1;
+
+		if (len > sp) {
+			return -1;
+		}
+		sp -= len;
+		env_addrs[i - 1] = stack_base + sp;
+		mem_copy(init_stack + sp, (const unsigned char *)value, len);
+	}
+	for (u64 i = argc; i > 0; i--) {
+		const char *value = strings != 0 && strings->argc != 0 ?
+				    strings->argv[i - 1] : path;
+		const u64 len = str_len(value) + 1;
+
+		if (len > sp) {
+			return -1;
+		}
+		sp -= len;
+		argv_addrs[i - 1] = stack_base + sp;
+		mem_copy(init_stack + sp, (const unsigned char *)value, len);
+	}
+	if (path_len + 1 > sp) {
+		return -1;
+	}
 	sp -= path_len + 1;
-	const u64 argv0 = stack_base + sp;
+	const u64 execfn = stack_base + sp;
 	mem_copy(init_stack + sp, (const unsigned char *)path, path_len + 1);
 
 	sp = align_down(sp, 16);
+	if (sizeof(random_bytes) > sp) {
+		return -1;
+	}
 	sp -= sizeof(random_bytes);
 	const u64 random_addr = stack_base + sp;
 	mem_copy(init_stack + sp, random_bytes, sizeof(random_bytes));
 
 	sp = align_down(sp, 8);
+	if (phdr_size > sp) {
+		return -1;
+	}
 	sp -= phdr_size;
 	const u64 copied_phdr_addr = stack_base + sp;
 	mem_copy(init_stack + sp, (const unsigned char *)exec->phdrs,
@@ -848,13 +1033,21 @@ static long build_initial_stack(u64 task, const char *path,
 			       copied_phdr_addr;
 
 	sp = align_down(sp, 16);
+	if (stack_words * sizeof(u64) > sp) {
+		return -1;
+	}
 	sp -= stack_words * sizeof(u64);
 	u64 *words = (u64 *)(init_stack + sp);
 	u64 word = 0;
 
-	words[word++] = 1;
-	words[word++] = argv0;
+	words[word++] = argc;
+	for (u64 i = 0; i < argc; i++) {
+		words[word++] = argv_addrs[i];
+	}
 	words[word++] = 0;
+	for (u64 i = 0; i < envc; i++) {
+		words[word++] = env_addrs[i];
+	}
 	words[word++] = 0;
 	words[word++] = AT_PAGESZ;
 	words[word++] = 4096;
@@ -871,7 +1064,7 @@ static long build_initial_stack(u64 task, const char *path,
 	words[word++] = AT_PHNUM;
 	words[word++] = exec->phnum;
 	words[word++] = AT_EXECFN;
-	words[word++] = argv0;
+	words[word++] = execfn;
 	words[word++] = AT_UID;
 	words[word++] = 0;
 	words[word++] = AT_EUID;
@@ -961,7 +1154,7 @@ static long apply_login_to_task(u64 task, u64 login_uid)
 static long exec_path(u64 vfs, struct process *process,
 		      const char *path, const char *task_name,
 		      u64 linux_parent_pid, u64 login_uid, int set_login,
-		      u64 session_id,
+		      u64 session_id, const struct exec_strings *strings,
 		      u64 *linux_pid)
 {
 	const struct bunix_launch_cap caps[] = {
@@ -1156,7 +1349,7 @@ static long exec_path(u64 vfs, struct process *process,
 	}
 
 	if (build_initial_stack((u64)task, path, &exec, load_bias,
-				interp_bias, &stack) != 0) {
+				interp_bias, strings, &stack) != 0) {
 		if (interp_file.handle != 0) {
 			vfs_close(vfs, interp_file.handle);
 		}
@@ -1289,25 +1482,36 @@ static struct process *process_alloc(void)
 }
 
 static long spawn_process(const char *path, u64 login_uid, int set_login,
-			  u64 session_id, u64 *pid)
+			  u64 session_id, const struct exec_strings *strings,
+			  u64 *pid)
 {
 	u64 vfs;
 	u64 linux_pid = 0;
 	u64 linux_parent_pid = 0;
 	struct process *process;
+	struct exec_strings default_strings = { 0, 0, 0, 0 };
+	const struct exec_strings *exec_strings = strings;
 
 	if (pid == 0) {
 		return -1;
 	}
+	if (exec_strings == 0) {
+		if (exec_strings_default(&default_strings, path) != 0) {
+			return -1;
+		}
+		exec_strings = &default_strings;
+	}
 
 	process = process_alloc();
 	if (process == 0) {
+		exec_strings_free(&default_strings);
 		return -1;
 	}
 
 	vfs = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
 	if (vfs == 0) {
 		bunix_free(process);
+		exec_strings_free(&default_strings);
 		return -1;
 	}
 
@@ -1326,6 +1530,7 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 			  (u64)process) != 0) {
 		process_reset(process);
 		*pid = 0;
+		exec_strings_free(&default_strings);
 		return -1;
 	}
 
@@ -1338,9 +1543,10 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 
 	if (exec_path(vfs, process, path, task_name_for_path(path),
 		      linux_parent_pid, login_uid, set_login, session_id,
-		      &linux_pid) != 0) {
+		      exec_strings, &linux_pid) != 0) {
 		process_reset(process);
 		*pid = 0;
+		exec_strings_free(&default_strings);
 		return -1;
 	}
 
@@ -1350,11 +1556,13 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 			  (u64)process) != 0) {
 		process_reset(process);
 		*pid = 0;
+		exec_strings_free(&default_strings);
 		return -1;
 	}
 	if (linux_pid != 0 && first_linux_pid == 0) {
 		first_linux_pid = linux_pid;
 	}
+	exec_strings_free(&default_strings);
 	return 0;
 }
 
@@ -1458,6 +1666,7 @@ int main(void)
 			if (spawn_process(path, message.words[2],
 					  (flags & PROC_SPAWN_SET_LOGIN) != 0,
 					  session_id,
+					  0,
 					  &pid) == 0) {
 				reply.words[0] = 0;
 				reply.words[1] = pid;
@@ -1468,6 +1677,38 @@ int main(void)
 				bunix_console_log("proc: spawn failed\n",
 						  sizeof("proc: spawn failed\n") - 1);
 			}
+			break;
+		}
+		case BUNIX_PROC_SPAWN_BUFFER: {
+			char *path = 0;
+			struct exec_strings strings = { 0, 0, 0, 0 };
+			u64 pid = 0;
+			const u64 flags = message.words[3] &
+					  PROC_SPAWN_FLAGS_MASK;
+			const u64 session_id = message.words[3] >>
+					       PROC_SPAWN_SESSION_SHIFT;
+
+			if (exec_strings_from_spawn_buffer(&message, &path,
+							   &strings) == 0 &&
+			    spawn_process(path, 0,
+					  (flags & PROC_SPAWN_SET_LOGIN) != 0,
+					  session_id, &strings, &pid) == 0) {
+				reply.words[0] = 0;
+				reply.words[1] = pid;
+				log_exec_line(path);
+				log_pid_line("proc: spawned pid=", pid);
+			} else {
+				reply.words[0] = (u64)-1;
+				bunix_console_log("proc: spawn failed\n",
+						  sizeof("proc: spawn failed\n") - 1);
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			if (path != 0) {
+				bunix_free(path);
+			}
+			exec_strings_free(&strings);
 			break;
 		}
 		case BUNIX_PROC_REGISTER_EXEC:

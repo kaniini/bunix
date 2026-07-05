@@ -51,7 +51,7 @@ static void proc_exit(u64 status)
 		.cap_rights = 0,
 		.reply = 0,
 		.cap = 0,
-		.words = { 0, status, 0, 0 },
+		.words = { 0, status, 0, 1 },
 	};
 	struct bunix_msg reply;
 

@@ -348,6 +348,105 @@ static long proc_spawn_wait(u64 proc, const char *path)
 	return 0;
 }
 
+static int token_is_env(const char *token)
+{
+	const char prefix[] = "env:";
+
+	for (u64 i = 0; i < sizeof(prefix) - 1; i++) {
+		if (token[i] != prefix[i]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static long proc_spawn_wait_args(u64 proc, const char *path,
+				 const char **args, u64 arg_count,
+				 const char **envs, u64 env_count)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = BUNIX_PROC_SPAWN_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 1 + arg_count, env_count, 0 },
+	};
+	struct bunix_msg reply;
+	u64 total = str_len(path) + 1 + str_len(path) + 1;
+	u64 offset = 0;
+	long buffer;
+
+	for (u64 i = 0; i < arg_count; i++) {
+		total += str_len(args[i]) + 1;
+	}
+	for (u64 i = 0; i < env_count; i++) {
+		total += str_len(envs[i]) + 1;
+	}
+	buffer = bunix_buffer_create(total);
+	if (proc == 0 || path == 0 || buffer <= 0) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	request.cap = (u64)buffer;
+	request.words[0] = total;
+	if (bunix_buffer_write((u64)buffer, offset, path,
+			       str_len(path) + 1) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	offset += str_len(path) + 1;
+	if (bunix_buffer_write((u64)buffer, offset, path,
+			       str_len(path) + 1) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	offset += str_len(path) + 1;
+	for (u64 i = 0; i < arg_count; i++) {
+		const u64 len = str_len(args[i]) + 1;
+
+		if (bunix_buffer_write((u64)buffer, offset, args[i],
+				       len) != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		offset += len;
+	}
+	for (u64 i = 0; i < env_count; i++) {
+		const u64 len = str_len(envs[i]) + 1;
+
+		if (bunix_buffer_write((u64)buffer, offset, envs[i],
+				       len) != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		offset += len;
+	}
+	if (bunix_ipc_call(proc, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	log_path_line("bootstrap: spawned ", path);
+	request.type = BUNIX_PROC_WAIT;
+	request.cap = 0;
+	request.cap_rights = 0;
+	request.words[0] = reply.words[1];
+	request.words[1] = 0;
+	request.words[2] = 0;
+	request.words[3] = 0;
+	if (bunix_ipc_call(proc, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+	log_path_line("bootstrap: exited ", path);
+	return 0;
+}
+
 static long run_boot_spawns(u64 proc, u64 vfs)
 {
 	char text[BOOT_EXECS_MAX];
@@ -359,6 +458,11 @@ static long run_boot_spawns(u64 proc, u64 vfs)
 	}
 	while (text[pos] != '\0') {
 		char path[BOOT_TOKEN_MAX];
+		char tokens[32][BOOT_TOKEN_MAX];
+		const char *args[32];
+		const char *envs[32];
+		u64 arg_count = 0;
+		u64 env_count = 0;
 
 		while (is_space(text[pos])) {
 			pos++;
@@ -370,8 +474,35 @@ static long run_boot_spawns(u64 proc, u64 vfs)
 		if (text[pos] == '\0') {
 			break;
 		}
-		if (read_token(text, &pos, path, sizeof(path)) != 0 ||
-		    proc_spawn_wait(proc, path) != 0) {
+		if (read_token(text, &pos, path, sizeof(path)) != 0) {
+			return -1;
+		}
+		while (text[pos] != '\0' && text[pos] != '\n') {
+			const u64 token = arg_count + env_count;
+
+			if (text[pos] == '#') {
+				break;
+			}
+			if (is_space(text[pos])) {
+				pos++;
+				continue;
+			}
+			if (token >= sizeof(tokens) / sizeof(tokens[0]) ||
+			    read_token(text, &pos, tokens[token],
+				       sizeof(tokens[token])) != 0) {
+				return -1;
+			}
+			if (token_is_env(tokens[token])) {
+				envs[env_count++] = tokens[token] + 4;
+			} else {
+				args[arg_count++] = tokens[token];
+			}
+		}
+		if ((arg_count == 0 && env_count == 0 &&
+		     proc_spawn_wait(proc, path) != 0) ||
+		    ((arg_count != 0 || env_count != 0) &&
+		     proc_spawn_wait_args(proc, path, args, arg_count,
+					  envs, env_count) != 0)) {
 			return -1;
 		}
 		count++;

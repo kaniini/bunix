@@ -31,24 +31,6 @@ static void stdout_write(const char *text, u64 len)
 	}
 }
 
-static void time_sleep(u64 ns)
-{
-	const struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_TIME,
-		.type = BUNIX_TIME_SLEEP_NS,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { ns, 0, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	if (time_handle != 0) {
-		bunix_ipc_call(time_handle, &request, &reply);
-	}
-}
-
 static void proc_exit(u64 status)
 {
 	struct bunix_msg self_request = {
@@ -68,7 +50,7 @@ static void proc_exit(u64 status)
 		.cap_rights = 0,
 		.reply = 0,
 		.cap = 0,
-		.words = { 0, status, 0, 0 },
+		.words = { 0, status, 0, 1 },
 	};
 	struct bunix_msg reply;
 
@@ -91,6 +73,24 @@ static void stdout_write_argv0(const char *value)
 	}
 	for (u64 i = 0; value[i] != '\0' && cursor + 1 < sizeof(line); i++) {
 		line[cursor++] = value[i];
+	}
+	line[cursor++] = '\n';
+	stdout_write(line, cursor);
+}
+
+static void stdout_write_text_value(const char *prefix, const char *value)
+{
+	char line[96];
+	u64 cursor = 0;
+
+	for (u64 i = 0; prefix[i] != '\0' && cursor < sizeof(line); i++) {
+		line[cursor++] = prefix[i];
+	}
+	if (value != 0) {
+		for (u64 i = 0; value[i] != '\0' && cursor + 1 < sizeof(line);
+		     i++) {
+			line[cursor++] = value[i];
+		}
 	}
 	line[cursor++] = '\n';
 	stdout_write(line, cursor);
@@ -230,6 +230,8 @@ int main(int argc, char **argv, char **envp)
 {
 	const char started[] = "first: stdout ready\n";
 	const char argc_ok[] = "first: argc=1\n";
+	const char argc_many_ok[] = "first: argc=4\n";
+	const char env_ok[] = "first: env PROC_SPAWN_ENV=ok\n";
 	const char exiting[] = "first: exit 0\n";
 	struct startup_aux aux;
 
@@ -239,8 +241,29 @@ int main(int argc, char **argv, char **envp)
 		stdout_write(argc_ok, sizeof(argc_ok) - 1);
 		stdout_write_argv0(argv[0]);
 	}
+	if (argc == 4 && argv != 0 && argv[1] != 0 && argv[2] != 0 &&
+	    argv[3] != 0) {
+		stdout_write(argc_many_ok, sizeof(argc_many_ok) - 1);
+		stdout_write_text_value("first: argv1=", argv[1]);
+		stdout_write_text_value("first: argv2=", argv[2]);
+		stdout_write_text_value("first: argv3=", argv[3]);
+	}
+	if (envp != 0) {
+		for (char **env = envp; *env != 0; env++) {
+			if ((*env)[0] == 'P' && (*env)[1] == 'R' &&
+			    (*env)[2] == 'O' && (*env)[3] == 'C' &&
+			    (*env)[4] == '_' && (*env)[5] == 'S' &&
+			    (*env)[6] == 'P' && (*env)[7] == 'A' &&
+			    (*env)[8] == 'W' && (*env)[9] == 'N' &&
+			    (*env)[10] == '_' && (*env)[11] == 'E' &&
+			    (*env)[12] == 'N' && (*env)[13] == 'V' &&
+			    (*env)[14] == '=' && (*env)[15] == 'o' &&
+			    (*env)[16] == 'k' && (*env)[17] == '\0') {
+				stdout_write(env_ok, sizeof(env_ok) - 1);
+			}
+		}
+	}
 	inspect_auxv(&aux);
-	time_sleep(100000000ULL);
 	stdout_write(exiting, sizeof(exiting) - 1);
 	proc_exit(0);
 

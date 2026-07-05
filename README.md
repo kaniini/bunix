@@ -161,13 +161,13 @@ query its size/type, read positioned byte ranges through a shared buffer, and
 close the open object. Proc allocates a buffer, sends duplicate/write authority
 to VFS, VFS forwards write-only authority to block, block fills it from the
 rootfs module, and proc copies the bytes back through its read authority. Proc
-also builds a minimal exec stack for the new task: `argc`, `argv[]`, null
-`envp`, and auxv entries for page size, entry point, program headers, and
-`AT_EXECFN`. Bunix-private auxv entries publish startup service capabilities
-for stdout, stderr, time, and proc, so a process consumes delegated handles from
-its initial image instead of baking in ambient handle numbers. The kernel still
-has an internal bootstrap name registry, but it is no longer exposed as a normal
-user authority path.
+builds the initial exec stack with caller-supplied `argc`, `argv[]`, `envp[]`,
+and auxv entries for page size, entry point, program headers, and `AT_EXECFN`.
+Bunix-private auxv entries publish startup service capabilities for stdout,
+stderr, time, and proc, so a process consumes delegated handles from its initial
+image instead of baking in ambient handle numbers. The kernel still has an
+internal bootstrap name registry, but it is no longer exposed as a normal user
+authority path.
 
 Linux syscall numbers are kept separate from the native negative Bunix syscall
 space. Nonnegative syscall numbers trap into the kernel. The kernel still owns
@@ -181,7 +181,9 @@ the server's Linux-style result value.
 
 Bootstrap loads `/etc/execs` through the mounted root filesystem and uses it to
 seed proc's executable metadata before spawning `/sbin/init`. It then reads
-`/etc/spawns` for native smoke processes to run and wait on. Proc explicitly
+`/etc/spawns` for native smoke processes to run and wait on; extra tokens become
+argv entries, and `env:NAME=value` tokens become environment entries through
+proc's buffer-backed spawn request. Proc explicitly
 registers Linux tasks with the Linux server before starting them, carrying the
 backing Bunix task id and Linux parent PID. The Linux server owns dynamic maps
 keyed by Bunix task id and Linux PID, so Linux PID 1 exists inside the

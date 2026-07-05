@@ -765,7 +765,8 @@ static int linux_vfs_close(struct task *task, u64 file)
 }
 
 static int linux_vfs_read_file(struct task *task, const char *path,
-			       u8 *image, u64 image_cap, u64 *image_size)
+			       u8 **image_out, u64 image_cap,
+			       u64 *image_size)
 {
 	struct ipc_port *vfs = ipc_port_find("vfs");
 	struct ipc_port *reply_port = task_reply_port(task);
@@ -776,11 +777,13 @@ static int linux_vfs_read_file(struct task *task, const char *path,
 	u64 size;
 	struct shared_buffer *buffer;
 	const u64 path_len = str_len(path) + 1;
+	u8 *image;
 
-	if (vfs == 0 || reply_port == 0 || path == 0 || image == 0 ||
+	if (vfs == 0 || reply_port == 0 || path == 0 || image_out == 0 ||
 	    image_size == 0) {
 		return -1;
 	}
+	*image_out = 0;
 
 	if (path_len <= 16) {
 		pack_bytes(packed, (const u8 *)path, path_len);
@@ -840,11 +843,17 @@ opened:
 		(void)linux_vfs_close(task, file);
 		return -1;
 	}
+	image = (u8 *)slab_alloc(size);
+	if (image == 0) {
+		(void)linux_vfs_close(task, file);
+		return -2;
+	}
 
 	buffer = buffer_create(LINUX_MAX_SYSCALL_BUFFER);
 	if (buffer == 0) {
+		slab_free(image);
 		(void)linux_vfs_close(task, file);
-		return -1;
+		return -2;
 	}
 
 	for (u64 offset = 0; offset < size;) {
@@ -867,6 +876,7 @@ opened:
 		    reply.words[1] != chunk ||
 		    buffer_read(buffer, 0, image + offset, chunk) != 0) {
 			buffer_release(buffer);
+			slab_free(image);
 			(void)linux_vfs_close(task, file);
 			return -1;
 		}
@@ -875,9 +885,11 @@ opened:
 
 	buffer_release(buffer);
 	if (linux_vfs_close(task, file) != 0) {
+		slab_free(image);
 		return -1;
 	}
 
+	*image_out = image;
 	*image_size = size;
 	return 0;
 }
@@ -1989,6 +2001,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	u64 program_entry = 0;
 	const u64 stack_base =
 		LINUX_EXEC_STACK_TOP - LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE;
+	int read_result;
 
 	if (copy_cstr_from_user(path, user_path, sizeof(path)) != 0 ||
 	    str_len(path) >= sizeof(path) ||
@@ -1997,14 +2010,13 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		return (u64)-LINUX_EINVAL;
 	}
 
-	image = slab_alloc(LINUX_EXEC_MAX_IMAGE);
-	if (image == 0) {
-		return (u64)-LINUX_ENOMEM;
+	read_result = linux_vfs_read_file(task, path, &image,
+					  LINUX_EXEC_MAX_IMAGE, &image_size);
+	if (read_result != 0) {
+		return read_result == -2 ? (u64)-LINUX_ENOMEM :
+		       (u64)-LINUX_EINVAL;
 	}
-
-	if (linux_vfs_read_file(task, path, image, LINUX_EXEC_MAX_IMAGE,
-				&image_size) != 0 ||
-	    linux_exec_validate(image, image_size, &ehdr) != 0) {
+	if (linux_exec_validate(image, image_size, &ehdr) != 0) {
 		slab_free(image);
 		return (u64)-LINUX_EINVAL;
 	}
@@ -2021,14 +2033,16 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		return (u64)-LINUX_EINVAL;
 	}
 	if (interp > 0) {
-		interp_image = slab_alloc(LINUX_EXEC_MAX_IMAGE);
-		if (interp_image == 0) {
+		read_result = linux_vfs_read_file(task, interp_path,
+						  &interp_image,
+						  LINUX_EXEC_MAX_IMAGE,
+						  &interp_size);
+		if (read_result != 0) {
 			slab_free(image);
-			return (u64)-LINUX_ENOMEM;
+			return read_result == -2 ? (u64)-LINUX_ENOMEM :
+			       (u64)-LINUX_EINVAL;
 		}
-		if (linux_vfs_read_file(task, interp_path, interp_image,
-					LINUX_EXEC_MAX_IMAGE, &interp_size) != 0 ||
-		    linux_exec_validate(interp_image, interp_size,
+		if (linux_exec_validate(interp_image, interp_size,
 					&interp_ehdr) != 0) {
 			slab_free(interp_image);
 			slab_free(image);
