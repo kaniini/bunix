@@ -2503,9 +2503,9 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	if ((flags & LINUX_O_TRUNC) != 0 &&
 	    (flags & LINUX_O_ACCMODE) != 0 &&
 	    process->fds[fd].kind == LINUX_FD_FILE &&
-	    linux_ftruncate(process, (u64)fd, 0) != 0) {
+	    (base_result = linux_ftruncate(process, (u64)fd, 0)) != 0) {
 		(void)linux_close(process, (u64)fd);
-		return -LINUX_EINVAL;
+		return base_result;
 	}
 	return fd;
 }
@@ -2537,8 +2537,10 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 
 	if (linux_vfs_path_call_flags(process, BUNIX_VFS_ACCESS_BUFFER,
 				      base_handle, path, mode,
-				      &reply) != 0 ||
-	    reply.words[0] != 0) {
+				      &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
 	return 0;
@@ -2576,12 +2578,11 @@ static long linux_unlinkat(struct linux_process *process, u64 dirfd,
 	if (linux_vfs_path_call_word3(process, BUNIX_VFS_UNLINK_BUFFER,
 				      base_handle, path,
 				      process->bunix_task | (flags << 32),
-				      &reply) != 0 ||
-	    reply.words[0] != 0) {
-		if (reply.words[0] != 0) {
-			return linux_vfs_error(reply.words[0]);
-		}
-		return -LINUX_EINVAL;
+				      &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
 	}
 	return 0;
 }
@@ -2613,12 +2614,11 @@ static long linux_rmdir(struct linux_process *process, u64 path_len,
 	}
 	if (linux_vfs_path_call_word3(process, BUNIX_VFS_RMDIR_BUFFER,
 				      base_handle, path,
-				      process->bunix_task, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		if (reply.words[0] != 0) {
-			return linux_vfs_error(reply.words[0]);
-		}
-		return -LINUX_EINVAL;
+				      process->bunix_task, &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
 	}
 	return 0;
 }
@@ -2692,12 +2692,11 @@ static long linux_mkdirat(struct linux_process *process, u64 dirfd,
 				      base_handle, path,
 				      process->bunix_task |
 				      (((mode & ~process->umask) & 0777) << 32),
-				      &reply) != 0 ||
-	    reply.words[0] != 0) {
-		if (reply.words[0] != 0) {
-			return linux_vfs_error(reply.words[0]);
-		}
-		return -LINUX_EINVAL;
+				      &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
 	}
 	return 0;
 }
@@ -2731,12 +2730,11 @@ static long linux_symlinkat(struct linux_process *process, u64 dirfd,
 		return base_result;
 	}
 	if (linux_vfs_symlink_call(process, base_handle, target, path,
-				   &reply) != 0 ||
-	    reply.words[0] != 0) {
-		if (reply.words[0] != 0) {
-			return linux_vfs_error(reply.words[0]);
-		}
+				   &reply) != 0) {
 		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
 	}
 	return 0;
 }
@@ -2774,12 +2772,11 @@ static long linux_chmodat(struct linux_process *process, u64 dirfd,
 				      base_handle, path,
 				      process->bunix_task |
 				      ((mode & 0777) << 32),
-				      &reply) != 0 ||
-	    reply.words[0] != 0) {
-		if (reply.words[0] != 0) {
-			return linux_vfs_error(reply.words[0]);
-		}
-		return -LINUX_EINVAL;
+				      &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
 	}
 	return 0;
 }
@@ -2804,12 +2801,11 @@ static long linux_fchmod(struct linux_process *process, u64 fd, u64 mode)
 	request.words[1] = mode & 0777;
 	request.words[2] = 0;
 	request.words[3] = process->bunix_task;
-	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		if (reply.words[0] != 0) {
-			return linux_vfs_error(reply.words[0]);
-		}
-		return -LINUX_EINVAL;
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
 	}
 	return 0;
 }
@@ -2839,12 +2835,11 @@ static long linux_fchown(struct linux_process *process, u64 fd, u64 uid,
 	request.words[1] = owner;
 	request.words[2] = group;
 	request.words[3] = process->bunix_task;
-	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		if (reply.words[0] != 0) {
-			return linux_vfs_error(reply.words[0]);
-		}
-		return -LINUX_EINVAL;
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
 	}
 	return 0;
 }
@@ -3017,9 +3012,11 @@ static long linux_statfs(struct linux_process *process, u64 path_len,
 		return base_result;
 	}
 	if (linux_vfs_path_call_flags(process, BUNIX_VFS_STAT_PATH_META_BUFFER,
-				      base_handle, path, 0, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		return -LINUX_ENOENT;
+				      base_handle, path, 0, &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
 	}
 	return linux_statfs_write(path_buffer);
 }
@@ -3229,9 +3226,11 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 
 	if (linux_vfs_path_call_flags(process, BUNIX_VFS_STAT_PATH_META_BUFFER,
 				      base_handle, path, flags != 0 ? 1 : 0,
-				      &reply) != 0 ||
-	    reply.words[0] != 0) {
-		return -LINUX_ENOENT;
+				      &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
 	}
 
 	out->words[1] = reply.words[1];
@@ -3819,10 +3818,17 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 				bunix_handle_close((u64)tmp);
 				return done != 0 ? (long)done : -(long)LINUX_EFAULT;
 			}
-			if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
-			    reply.words[0] != 0) {
+			if (bunix_ipc_call(LINUX_HANDLE_VFS,
+					   &request, &reply) != 0) {
 				bunix_handle_close((u64)tmp);
-				return done != 0 ? (long)done : -(long)LINUX_EBADF;
+				return done != 0 ? (long)done :
+				       -(long)LINUX_EIO;
+			}
+			if (reply.words[0] != 0) {
+				const long error = linux_vfs_error(reply.words[0]);
+
+				bunix_handle_close((u64)tmp);
+				return done != 0 ? (long)done : error;
 			}
 			bunix_handle_close((u64)tmp);
 			done += reply.words[1];
