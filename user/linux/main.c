@@ -625,8 +625,6 @@ struct linux_virtual_path {
 };
 
 static const struct linux_virtual_path virtual_paths[] = {
-	{ "/dev/tty", LINUX_FD_CONSOLE, LINUX_S_IFCHR | 0600 },
-	{ "/dev/console", LINUX_FD_CONSOLE, LINUX_S_IFCHR | 0600 },
 	{ "/run/utmp", LINUX_FD_UTMP, LINUX_S_IFREG | 0444 },
 	{ "/var/run/utmp", LINUX_FD_UTMP, LINUX_S_IFREG | 0444 },
 };
@@ -665,6 +663,12 @@ static void linux_virtual_path_meta(const struct linux_virtual_path *path,
 	out->words[1] = linux_virtual_path_size(path);
 	out->words[2] = path->mode;
 	out->words[3] = 0;
+}
+
+static int linux_console_path(const char *path)
+{
+	return string_equal(path, "/dev/tty") ||
+	       string_equal(path, "/dev/console");
 }
 
 static void copy_literal(char *dst, u64 dst_len, const char *src)
@@ -2354,6 +2358,14 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 
 		(void)bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply);
 		return -LINUX_ENOTDIR;
+	}
+	if (linux_console_path(full_path)) {
+		const u64 remote_handle = reply.words[1];
+		const long fd = alloc_fd(process, LINUX_FD_CONSOLE,
+					 BUNIX_HANDLE_CONSOLE, 0);
+
+		(void)linux_close_vfs_handle(remote_handle);
+		return fd;
 	}
 
 	const long fd = alloc_fd(process,
