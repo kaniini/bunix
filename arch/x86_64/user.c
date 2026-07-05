@@ -1501,6 +1501,39 @@ static u64 linux_forward_output_buffer(struct ipc_port *linux,
 	return reply.words[0];
 }
 
+static u64 linux_forward_fixed_output_buffer(struct ipc_port *linux,
+					     struct ipc_port *reply_port,
+					     struct ipc_message *request,
+					     void *user_out, u64 size,
+					     int copy_on_zero,
+					     int copy_on_positive)
+{
+	struct shared_buffer *buffer;
+	struct ipc_message reply;
+	u64 result;
+
+	buffer = buffer_create(size == 0 ? 1 : size);
+	if (buffer == 0) {
+		return (u64)-LINUX_EINVAL;
+	}
+	request->cap_type = IPC_CAP_BUFFER;
+	request->cap_rights = TASK_RIGHT_SEND;
+	request->cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	result = reply.words[0];
+	if (((copy_on_zero && result == 0) ||
+	     (copy_on_positive && (i64)result > 0)) &&
+	    buffer_read(buffer, 0, user_out, size) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_EINVAL;
+	}
+	buffer_release(buffer);
+	return result;
+}
+
 static int linux_exec_map_segment(struct task *task, const u8 *image,
 				  const struct elf64_phdr *phdr,
 				  u64 load_bias)
@@ -3289,67 +3322,35 @@ poll_again:
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_WAIT4: {
-		struct shared_buffer *buffer = 0;
-
-		if (arg1 != 0) {
-			buffer = buffer_create(LINUX_WAIT_STATUS_SIZE);
-			if (buffer == 0) {
-				return (u64)-LINUX_EINVAL;
-			}
-			request.cap_type = IPC_CAP_BUFFER;
-			request.cap_rights = TASK_RIGHT_SEND;
-			request.cap_object = buffer;
-		}
-
 		request.type = LINUX_SYSCALL_WAIT4;
 		request.words[0] = arg0;
 		request.words[1] = arg2;
 		request.words[2] = 0;
 		request.words[3] = 0;
+		if (arg1 != 0) {
+			return linux_forward_fixed_output_buffer(
+				linux, reply_port, &request, (void *)arg1,
+				LINUX_WAIT_STATUS_SIZE, 0, 1);
+		}
 		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
-		if ((i64)reply.words[0] > 0 && arg1 != 0 &&
-		    buffer_read(buffer, 0, (void *)arg1,
-				LINUX_WAIT_STATUS_SIZE) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
-		}
-		buffer_release(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_FSTAT: {
-		struct shared_buffer *buffer;
-
 		if (arg1 == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
-
-		buffer = buffer_create(LINUX_STAT_SIZE);
-		if (buffer == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-
 		request.type = LINUX_SYSCALL_FSTAT;
 		request.words[0] = arg0;
 		request.words[1] = LINUX_STAT_SIZE;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		request.cap_type = IPC_CAP_BUFFER;
-		request.cap_rights = TASK_RIGHT_SEND;
-		request.cap_object = buffer;
-		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_ENOSYS;
-		}
-		if (reply.words[0] == 0 &&
-		    buffer_read(buffer, 0, (void *)arg1, LINUX_STAT_SIZE) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
-		}
-		buffer_release(buffer);
-		return reply.words[0];
+		return linux_forward_fixed_output_buffer(linux, reply_port,
+							 &request,
+							 (void *)arg1,
+							 LINUX_STAT_SIZE, 1,
+							 0);
 	}
 	case LINUX_SYSCALL_OPEN:
 	case LINUX_SYSCALL_OPENAT: {
