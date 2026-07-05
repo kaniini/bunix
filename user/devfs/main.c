@@ -13,6 +13,7 @@ enum {
 };
 
 static u64 random_state = 0x6465766673726e67ull;
+static u64 vfs_service;
 
 static u64 str_len(const char *text)
 {
@@ -59,6 +60,17 @@ static void pack_path(u64 *words, const char *path)
 
 		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
 	}
+}
+
+static void unpack_path(char *path, const u64 *words)
+{
+	for (u64 i = 0; i < BUNIX_IPC_DATA_BYTES; i++) {
+		const u64 slot = i / 8;
+		const u64 shift = (i % 8) * 8;
+
+		path[i] = (char)((words[slot] >> shift) & 0xff);
+	}
+	path[BUNIX_IPC_DATA_BYTES] = '\0';
 }
 
 static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
@@ -125,7 +137,7 @@ static void stat_device(struct bunix_msg *reply, u64 device)
 	reply->words[3] = 0;
 }
 
-static u64 mount_devfs(u64 vfs)
+static u64 mount_devfs(u64 vfs, const char *path)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
@@ -138,7 +150,7 @@ static u64 mount_devfs(u64 vfs)
 	};
 	struct bunix_msg reply;
 
-	pack_path(&request.words[0], "/dev");
+	pack_path(&request.words[0], path);
 	return bunix_ipc_call(vfs, &request, &reply) == 0 &&
 	       reply.words[0] == 0 ? 0 : (u64)-1;
 }
@@ -195,14 +207,13 @@ int main(void)
 		"zero",
 	};
 	struct bunix_msg message;
-	const u64 vfs = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
 
 	bunix_console_log(online, sizeof(online) - 1);
-	if (vfs == 0 || mount_devfs(vfs) != 0 ||
+	vfs_service = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
+	if (vfs_service == 0 ||
 	    register_service(BUNIX_SERVICE_DEVFS, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
 	}
-	bunix_console_log(mounted, sizeof(mounted) - 1);
 
 	for (;;) {
 		struct bunix_msg reply = {
@@ -217,11 +228,34 @@ int main(void)
 		char path[DEVFS_MAX_PATH];
 		u64 device;
 
-		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
-		    message.protocol != BUNIX_PROTO_VFS) {
+		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0) {
 			continue;
 		}
 		reply.type = message.type;
+
+		if (message.protocol == BUNIX_PROTO_DEVFS) {
+			reply.protocol = BUNIX_PROTO_DEVFS;
+			switch (message.type) {
+			case BUNIX_DEVFS_MOUNT_PATH:
+				unpack_path(path, &message.words[0]);
+				reply.words[0] =
+					(u64)mount_devfs(vfs_service, path);
+				if (reply.words[0] == 0) {
+					bunix_console_log(mounted,
+							  sizeof(mounted) - 1);
+				}
+				break;
+			default:
+				reply.words[0] = (u64)-1;
+				break;
+			}
+			bunix_ipc_send(message.reply, &reply);
+			continue;
+		}
+		if (message.protocol != BUNIX_PROTO_VFS) {
+			continue;
+		}
+		reply.protocol = BUNIX_PROTO_VFS;
 
 		switch (message.type) {
 		case BUNIX_VFS_OPEN_BUFFER:
