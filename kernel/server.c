@@ -7,6 +7,7 @@
 #include "sched.h"
 #include "server.h"
 #include "slab.h"
+#include "tree.h"
 #include "types.h"
 #include "vm.h"
 #include <arch/user.h>
@@ -30,6 +31,7 @@ static const struct server boot_servers[] = {
 };
 
 struct module_server_start {
+	struct tree_node node;
 	const struct server *server;
 	u64 image_start;
 	u64 image_end;
@@ -46,8 +48,7 @@ struct boot_data_module {
 	u64 end;
 };
 
-static struct module_server_start module_starts[16];
-static u32 module_start_count;
+static struct tree module_starts_by_name;
 static struct boot_data_module disk0_module;
 
 struct task_start {
@@ -69,6 +70,7 @@ enum {
 
 static int str_eq(const char *left, const char *right);
 static const struct server *find_boot_server(const char *name);
+static struct module_server_start *module_start_find(const char *name);
 static void grant_bootstrap_caps(struct task *task, const char *server_name);
 static u64 align_up(u64 value, u64 align);
 static void console_input_thread(void *arg);
@@ -231,6 +233,12 @@ static const struct server *find_boot_server(const char *name)
 	return 0;
 }
 
+static struct module_server_start *module_start_find(const char *name)
+{
+	return (struct module_server_start *)
+		tree_get(&module_starts_by_name, name);
+}
+
 static int str_eq(const char *left, const char *right)
 {
 	while (*left != '\0' && *right != '\0') {
@@ -374,12 +382,9 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 				   const struct task_launch_cap *caps,
 				   u64 cap_count)
 {
-	for (u32 i = 0; i < module_start_count; i++) {
-		struct module_server_start *start = &module_starts[i];
+	struct module_server_start *start = module_start_find(name);
 
-		if (!str_eq(start->server->name, name)) {
-			continue;
-		}
+	if (start != 0) {
 		const char *server_name = start->server->name;
 
 		if (start->launched) {
@@ -387,11 +392,9 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 				       server_name);
 			return -1;
 		}
-
 		if (validate_inherited_caps(name, parent, caps, cap_count) != 0) {
 			return (u64)-1;
 		}
-
 		console_printf("kernel: launching module server %s\n",
 			       server_name);
 		start->launched = 1;
@@ -752,13 +755,7 @@ static struct module_server_start *current_module_start(void)
 {
 	const char *name = task_name(task_current());
 
-	for (u32 i = 0; i < module_start_count; i++) {
-		if (str_eq(module_starts[i].server->name, name)) {
-			return &module_starts[i];
-		}
-	}
-
-	return 0;
+	return module_start_find(name);
 }
 
 u64 server_boot_module_size(void)
@@ -800,11 +797,11 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 				       (const void *)disk0_module.start,
 				       (const void *)disk0_module.end,
 				       (u32)size);
-			for (u32 i = 0; i < module_start_count; i++) {
-				if (str_eq(module_starts[i].server->name, "block")) {
-					module_starts[i].data_start = disk0_module.start;
-					module_starts[i].data_end = disk0_module.end;
-				}
+			struct module_server_start *block =
+				module_start_find("block");
+			if (block != 0) {
+				block->data_start = disk0_module.start;
+				block->data_end = disk0_module.end;
 			}
 			return;
 		}
@@ -813,13 +810,12 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 		return;
 	}
 
-	if (module_start_count >=
-	    sizeof(module_starts) / sizeof(module_starts[0])) {
-		console_printf("kernel: module server table full\n");
+	struct module_server_start *start =
+		(struct module_server_start *)slab_zalloc(sizeof(*start));
+	if (start == 0) {
+		console_printf("kernel: module server alloc failed\n");
 		return;
 	}
-
-	struct module_server_start *start = &module_starts[module_start_count++];
 	start->server = server;
 	start->image_start = module->start;
 	start->image_end = module->end;
@@ -832,6 +828,13 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 	start->space = 0;
 	start->stack = 0;
 	start->launched = 0;
+	if (tree_insert_node(&module_starts_by_name, &start->node,
+			     server->name, (u64)start) != 0) {
+		console_printf("kernel: duplicate module server %s\n",
+			       server->name);
+		slab_free(start);
+		return;
+	}
 
 	console_printf("kernel: recorded module server %s image=%p-%p\n",
 		       server->name, (const void *)module->start,
@@ -841,6 +844,8 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 void server_start_boot_modules(u64 multiboot_info)
 {
 	struct ipc_port *console_port = ipc_port_create("console");
+
+	tree_init(&module_starts_by_name);
 	name_service_register("console", NAME_SERVICE_IPC_PORT,
 			      (u64)console_port);
 	(void)thread_create(task_current(), "console-input",
