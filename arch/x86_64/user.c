@@ -1441,6 +1441,28 @@ static u64 linux_forward_path(struct ipc_port *linux,
 	return reply->words[0];
 }
 
+static u64 linux_forward_path_words(struct ipc_port *linux,
+				    struct ipc_port *reply_port,
+				    struct ipc_message *request,
+				    struct ipc_message *reply,
+				    u32 type,
+				    const char *path,
+				    u64 word0,
+				    u64 word2,
+				    u64 word3)
+{
+	if (path == 0) {
+		return (u64)-LINUX_EINVAL;
+	}
+	request->type = type;
+	request->words[0] = word0;
+	request->words[1] = 0;
+	request->words[2] = word2;
+	request->words[3] = word3;
+	return linux_forward_path(linux, reply_port, request, reply, path, 0, 1,
+				  TASK_RIGHT_RECV);
+}
+
 static struct shared_buffer *linux_forward_path_buffer(
 	struct ipc_port *linux, struct ipc_port *reply_port,
 	struct ipc_message *request, struct ipc_message *reply,
@@ -3510,16 +3532,9 @@ poll_again:
 				  (u64)-100 : arg0;
 		const u64 mode = number == LINUX_SYSCALL_ACCESS ? arg1 : arg2;
 
-		if (path == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		request.type = LINUX_SYSCALL_FACCESSAT;
-		request.words[0] = dirfd;
-		request.words[1] = 0;
-		request.words[2] = mode;
-		request.words[3] = 0;
-		return linux_forward_path(linux, reply_port, &request, &reply,
-					  path, 0, 1, TASK_RIGHT_RECV);
+		return linux_forward_path_words(linux, reply_port, &request,
+						&reply, LINUX_SYSCALL_FACCESSAT,
+						path, dirfd, mode, 0);
 	}
 	case LINUX_SYSCALL_FACCESSAT2: {
 		const char *path = (const char *)arg1;
@@ -3527,16 +3542,9 @@ poll_again:
 		const u64 mode = arg2;
 		const u64 flags = arg3;
 
-		if (path == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		request.type = LINUX_SYSCALL_FACCESSAT2;
-		request.words[0] = dirfd;
-		request.words[1] = 0;
-		request.words[2] = mode;
-		request.words[3] = flags;
-		return linux_forward_path(linux, reply_port, &request, &reply,
-					  path, 0, 1, TASK_RIGHT_RECV);
+		return linux_forward_path_words(linux, reply_port, &request,
+						&reply, LINUX_SYSCALL_FACCESSAT2,
+						path, dirfd, mode, flags);
 	}
 	case LINUX_SYSCALL_READLINK:
 	case LINUX_SYSCALL_READLINKAT: {
