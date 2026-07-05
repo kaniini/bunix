@@ -14,6 +14,16 @@ static int expect_enoent(const char *name, int result)
 	return 0;
 }
 
+static int expect_errno(const char *name, int result, int expected)
+{
+	if (result != -1 || errno != expected) {
+		printf("linux patherr %s result=%d errno=%d expected=%d\n",
+		       name, result, errno, expected);
+		return -1;
+	}
+	return 0;
+}
+
 int main(void)
 {
 	struct stat st;
@@ -42,6 +52,20 @@ int main(void)
 	errno = 0;
 	if (expect_enoent("readlink-empty",
 			  (int)readlink("", link_buf, sizeof(link_buf))) != 0) {
+		return 1;
+	}
+
+	(void)unlink("/tmp/patherr-link");
+	if (symlink("/hello.txt", "/tmp/patherr-link") != 0) {
+		perror("linux patherr symlink");
+		return 1;
+	}
+	errno = 0;
+	fd = open("/tmp/patherr-link", O_RDONLY | O_NOFOLLOW);
+	if (expect_errno("open-nofollow-symlink", fd, ELOOP) != 0) {
+		if (fd >= 0) {
+			close(fd);
+		}
 		return 1;
 	}
 

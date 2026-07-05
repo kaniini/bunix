@@ -25,6 +25,7 @@ enum {
 	LINUX_ENAMETOOLONG = 36,
 	LINUX_ENOSYS = 38,
 	LINUX_ENOTEMPTY = 39,
+	LINUX_ELOOP = 40,
 	LINUX_EAFNOSUPPORT = 97,
 	LINUX_EPROTONOSUPPORT = 93,
 	LINUX_ENOTSOCK = 88,
@@ -112,6 +113,7 @@ enum {
 	LINUX_O_EXCL = 0200,
 	LINUX_O_TRUNC = 01000,
 	LINUX_O_APPEND = 02000,
+	LINUX_O_NOFOLLOW = 00400000,
 	LINUX_O_DIRECTORY = 00200000,
 	LINUX_O_CLOEXEC = 02000000,
 	LINUX_DUP_CLOEXEC = 02000000,
@@ -2610,6 +2612,17 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 					      &base_handle);
 	if (base_result != 0) {
 		return base_result;
+	}
+	if ((flags & LINUX_O_NOFOLLOW) != 0) {
+		struct bunix_msg meta;
+
+		if (linux_vfs_path_call_flags(
+			    process, BUNIX_VFS_STAT_PATH_META_BUFFER,
+			    base_handle, path, 1, &meta) == 0 &&
+		    meta.words[0] == 0 &&
+		    (meta.words[2] >> 32) == BUNIX_VFS_TYPE_SYMLINK) {
+			return -LINUX_ELOOP;
+		}
 	}
 
 	if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER, base_handle,
