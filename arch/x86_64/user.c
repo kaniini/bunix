@@ -91,6 +91,7 @@ enum {
 	LINUX_SYSCALL_FCNTL = 72,
 	LINUX_SYSCALL_GETCWD = 79,
 	LINUX_SYSCALL_CHDIR = 80,
+	LINUX_SYSCALL_RENAME = 82,
 	LINUX_SYSCALL_MKDIR = 83,
 	LINUX_SYSCALL_SYMLINK = 88,
 	LINUX_SYSCALL_CHMOD = 90,
@@ -153,9 +154,11 @@ enum {
 	LINUX_SYSCALL_OPENAT = 257,
 	LINUX_SYSCALL_MKDIRAT = 258,
 	LINUX_SYSCALL_FCHOWNAT = 260,
+	LINUX_SYSCALL_RENAMEAT = 264,
 	LINUX_SYSCALL_UNLINKAT = 263,
 	LINUX_SYSCALL_SYMLINKAT = 266,
 	LINUX_SYSCALL_PRLIMIT64 = 302,
+	LINUX_SYSCALL_RENAMEAT2 = 316,
 	LINUX_SYSCALL_GETRANDOM = 318,
 	LINUX_SYSCALL_STATX = 332,
 	LINUX_SYSCALL_EXIT_GROUP = 231,
@@ -1846,6 +1849,73 @@ static u64 linux_forward_symlinkat(struct ipc_port *linux,
 	return reply.words[0];
 }
 
+static u64 linux_forward_renameat2(struct ipc_port *linux,
+				   struct ipc_port *reply_port,
+				   struct ipc_message *request,
+				   u64 olddirfd, const char *oldpath,
+				   u64 newdirfd, const char *newpath,
+				   u64 flags)
+{
+	struct shared_buffer *buffer;
+	struct ipc_message reply;
+	u64 old_len;
+	u64 new_len;
+	u64 total_len;
+	int rc;
+
+	if (oldpath == 0 || newpath == 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	rc = copy_cstr_from_user_errno((char *)syscall_copy_buffer, oldpath,
+				       LINUX_MAX_SYSCALL_BUFFER);
+	if (rc != 0) {
+		return (u64)rc;
+	}
+	old_len = str_len((const char *)syscall_copy_buffer) + 1;
+	if (old_len == 1) {
+		return (u64)-LINUX_ENOENT;
+	}
+	if (old_len >= LINUX_MAX_SYSCALL_BUFFER) {
+		return (u64)-LINUX_ENAMETOOLONG;
+	}
+	rc = copy_cstr_from_user_errno((char *)syscall_copy_buffer + old_len,
+				       newpath, LINUX_MAX_SYSCALL_BUFFER -
+				       old_len);
+	if (rc != 0) {
+		return (u64)rc;
+	}
+	new_len = str_len((const char *)syscall_copy_buffer + old_len) + 1;
+	if (new_len == 1) {
+		return (u64)-LINUX_ENOENT;
+	}
+	total_len = old_len + new_len;
+	if (total_len > LINUX_MAX_SYSCALL_BUFFER ||
+	    old_len > 0xffffffff || new_len > 0xffffffff ||
+	    flags > 0xffffffff) {
+		return (u64)-LINUX_ENAMETOOLONG;
+	}
+	buffer = buffer_create(total_len);
+	if (buffer == 0 ||
+	    buffer_write(buffer, 0, syscall_copy_buffer, total_len) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOMEM;
+	}
+	request->type = LINUX_SYSCALL_RENAMEAT2;
+	request->words[0] = olddirfd;
+	request->words[1] = newdirfd;
+	request->words[2] = old_len;
+	request->words[3] = new_len | (flags << 32);
+	request->cap_type = IPC_CAP_BUFFER;
+	request->cap_rights = TASK_RIGHT_RECV;
+	request->cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	buffer_release(buffer);
+	return reply.words[0];
+}
+
 static u64 linux_forward_mount(struct ipc_port *linux,
 			       struct ipc_port *reply_port,
 			       struct ipc_message *request,
@@ -2961,6 +3031,8 @@ static const char *linux_syscall_name(u64 number)
 		return "getcwd";
 	case LINUX_SYSCALL_CHDIR:
 		return "chdir";
+	case LINUX_SYSCALL_RENAME:
+		return "rename";
 	case LINUX_SYSCALL_MKDIR:
 		return "mkdir";
 	case LINUX_SYSCALL_GETTIMEOFDAY:
@@ -3073,12 +3145,16 @@ static const char *linux_syscall_name(u64 number)
 		return "mkdirat";
 	case LINUX_SYSCALL_FCHOWNAT:
 		return "fchownat";
+	case LINUX_SYSCALL_RENAMEAT:
+		return "renameat";
 	case LINUX_SYSCALL_UNLINKAT:
 		return "unlinkat";
 	case LINUX_SYSCALL_SYMLINKAT:
 		return "symlinkat";
 	case LINUX_SYSCALL_PRLIMIT64:
 		return "prlimit64";
+	case LINUX_SYSCALL_RENAMEAT2:
+		return "renameat2";
 	case LINUX_SYSCALL_GETRANDOM:
 		return "getrandom";
 	case LINUX_SYSCALL_STATX:
@@ -4210,6 +4286,26 @@ poll_again:
 					       number == LINUX_SYSCALL_SYMLINK ?
 					       (const char *)arg1 :
 					       (const char *)arg2);
+	}
+	case LINUX_SYSCALL_RENAME:
+	case LINUX_SYSCALL_RENAMEAT:
+	case LINUX_SYSCALL_RENAMEAT2: {
+		const u64 olddirfd = number == LINUX_SYSCALL_RENAME ?
+				     (u64)-100 : arg0;
+		const char *oldpath = number == LINUX_SYSCALL_RENAME ?
+				      (const char *)arg0 :
+				      (const char *)arg1;
+		const u64 newdirfd = number == LINUX_SYSCALL_RENAME ?
+				     (u64)-100 : arg2;
+		const char *newpath = number == LINUX_SYSCALL_RENAME ?
+				      (const char *)arg1 :
+				      (const char *)arg3;
+		const u64 flags = number == LINUX_SYSCALL_RENAMEAT2 ?
+				  frame->r8 : 0;
+
+		return linux_forward_renameat2(linux, reply_port, &request,
+					       olddirfd, oldpath, newdirfd,
+					       newpath, flags);
 	}
 	case LINUX_SYSCALL_STAT:
 	case LINUX_SYSCALL_LSTAT:

@@ -12,6 +12,8 @@ enum {
 	LINUX_EACCES = 13,
 	LINUX_EFAULT = 14,
 	LINUX_EBUSY = 16,
+	LINUX_EEXIST = 17,
+	LINUX_EXDEV = 18,
 	LINUX_ENODEV = 19,
 	LINUX_ENOTDIR = 20,
 	LINUX_EISDIR = 21,
@@ -22,6 +24,7 @@ enum {
 	LINUX_ERANGE = 34,
 	LINUX_ENAMETOOLONG = 36,
 	LINUX_ENOSYS = 38,
+	LINUX_ENOTEMPTY = 39,
 	LINUX_EAFNOSUPPORT = 97,
 	LINUX_EPROTONOSUPPORT = 93,
 	LINUX_ENOTSOCK = 88,
@@ -131,6 +134,7 @@ enum {
 	LINUX_AT_EACCESS = 0x200,
 	LINUX_AT_NO_AUTOMOUNT = 0x800,
 	LINUX_AT_STATX_SYNC_TYPE = 0x6000,
+	LINUX_RENAME_NOREPLACE = 1,
 	LINUX_R_OK = 4,
 	LINUX_W_OK = 2,
 	LINUX_X_OK = 1,
@@ -2144,6 +2148,15 @@ static long linux_vfs_error(u64 status)
 	if (status == BUNIX_VFS_ERR_ISDIR) {
 		return -LINUX_EISDIR;
 	}
+	if (status == BUNIX_VFS_ERR_EXIST) {
+		return -LINUX_EEXIST;
+	}
+	if (status == BUNIX_VFS_ERR_NOTEMPTY) {
+		return -LINUX_ENOTEMPTY;
+	}
+	if (status == BUNIX_VFS_ERR_XDEV) {
+		return -LINUX_EXDEV;
+	}
 	return -LINUX_ENOENT;
 }
 
@@ -2250,6 +2263,60 @@ static long linux_vfs_symlink_call(struct linux_process *process,
 			       process->cwd, cwd_len) != 0 ||
 	    bunix_buffer_write((u64)path_buffer, target_len + cwd_len,
 			       path, path_len) != 0) {
+		if (path_buffer >= 0) {
+			bunix_handle_close((u64)path_buffer);
+		}
+		return -1;
+	}
+
+	result = bunix_ipc_call(LINUX_HANDLE_VFS, &request, reply);
+	bunix_handle_close((u64)path_buffer);
+	return result;
+}
+
+static long linux_vfs_rename_call(struct linux_process *process,
+				  u64 old_base, const char *old_path,
+				  u64 new_base, const char *new_path, u64 flags,
+				  struct bunix_msg *reply)
+{
+	const u64 old_cwd_len = string_len(process->cwd) + 1;
+	const u64 old_path_len = string_len(old_path) + 1;
+	const u64 new_cwd_len = old_cwd_len;
+	const u64 new_path_len = string_len(new_path) + 1;
+	const u64 len = old_cwd_len + old_path_len + new_cwd_len +
+			new_path_len;
+	const long path_buffer = bunix_buffer_create(len);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_RENAME_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = (u64)path_buffer,
+		.words = {
+			old_base | (new_base << 32),
+			old_cwd_len | (old_path_len << 32),
+			new_cwd_len | (new_path_len << 32),
+			(process->bunix_task & 0xffffffff) | (flags << 32),
+		},
+	};
+	long result;
+
+	if (path_buffer < 0 || old_cwd_len == 0 || old_path_len == 0 ||
+	    new_cwd_len == 0 || new_path_len == 0 ||
+	    old_cwd_len > LINUX_MAX_PATH || old_path_len > LINUX_MAX_PATH ||
+	    new_cwd_len > LINUX_MAX_PATH || new_path_len > LINUX_MAX_PATH ||
+	    len > LINUX_MAX_PATH * 4 || old_base > 0xffffffff ||
+	    new_base > 0xffffffff || flags > 0xffffffff ||
+	    bunix_buffer_write((u64)path_buffer, 0, process->cwd,
+			       old_cwd_len) != 0 ||
+	    bunix_buffer_write((u64)path_buffer, old_cwd_len, old_path,
+			       old_path_len) != 0 ||
+	    bunix_buffer_write((u64)path_buffer, old_cwd_len + old_path_len,
+			       process->cwd, new_cwd_len) != 0 ||
+	    bunix_buffer_write((u64)path_buffer,
+			       old_cwd_len + old_path_len + new_cwd_len,
+			       new_path, new_path_len) != 0) {
 		if (path_buffer >= 0) {
 			bunix_handle_close((u64)path_buffer);
 		}
@@ -2731,6 +2798,54 @@ static long linux_symlinkat(struct linux_process *process, u64 dirfd,
 	}
 	if (linux_vfs_symlink_call(process, base_handle, target, path,
 				   &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
+	}
+	return 0;
+}
+
+static long linux_renameat2(struct linux_process *process, u64 olddirfd,
+			    u64 newdirfd, u64 old_len, u64 new_len,
+			    u64 flags, u64 buffer)
+{
+	char old_path[LINUX_MAX_PATH];
+	char new_path[LINUX_MAX_PATH];
+	struct bunix_msg reply = {
+		.words = { 0, 0, 0, 0 },
+	};
+	u64 old_base;
+	u64 new_base;
+	long base_result;
+
+	if ((flags & ~LINUX_RENAME_NOREPLACE) != 0) {
+		return -LINUX_EINVAL;
+	}
+	if (old_len == 0 || new_len == 0 ||
+	    old_len > sizeof(old_path) || new_len > sizeof(new_path) ||
+	    buffer == 0 ||
+	    bunix_buffer_read(buffer, 0, old_path, old_len) != 0 ||
+	    bunix_buffer_read(buffer, old_len, new_path, new_len) != 0) {
+		return -LINUX_EFAULT;
+	}
+	if (old_path[old_len - 1] != '\0' ||
+	    new_path[new_len - 1] != '\0' ||
+	    old_path[0] == '\0' || new_path[0] == '\0') {
+		return -LINUX_ENOENT;
+	}
+	base_result = linux_dirfd_base_handle(process, olddirfd, old_path,
+					      &old_base);
+	if (base_result != 0) {
+		return base_result;
+	}
+	base_result = linux_dirfd_base_handle(process, newdirfd, new_path,
+					      &new_base);
+	if (base_result != 0) {
+		return base_result;
+	}
+	if (linux_vfs_rename_call(process, old_base, old_path, new_base,
+				  new_path, flags, &reply) != 0) {
 		return -LINUX_EIO;
 	}
 	if (reply.words[0] != 0) {
@@ -3392,8 +3507,8 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 
 	while (written < out_len) {
 		char name[LINUX_MAX_PATH];
-		u64 type;
-		u64 next_offset;
+		u64 type = BUNIX_VFS_TYPE_DIRECTORY;
+		u64 next_offset = process->fds[fd].offset;
 		u64 reclen;
 
 		for (u64 i = 0; i < sizeof(name); i++) {
@@ -4593,6 +4708,17 @@ int main(void)
 							      message.words[1],
 							      message.words[2],
 							      message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_RENAME:
+		case BUNIX_LINUX_RENAMEAT:
+		case BUNIX_LINUX_RENAMEAT2:
+			reply.words[0] = (u64)linux_renameat2(
+				process, message.words[0], message.words[1],
+				message.words[2], message.words[3] & 0xffffffff,
+				message.words[3] >> 32, message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

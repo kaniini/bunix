@@ -104,6 +104,42 @@ static int read_resolved_path(const struct bunix_msg *message, char *path)
 	return 0;
 }
 
+static int read_rename_buffer(const struct bunix_msg *message, char *old_path,
+			      char *new_path)
+{
+	char old_cwd[UNIONFS_MAX_PATH];
+	char new_cwd[UNIONFS_MAX_PATH];
+	const u64 old_cwd_len = message->words[1] & 0xffffffff;
+	const u64 old_path_len = message->words[1] >> 32;
+	const u64 new_cwd_len = message->words[2] & 0xffffffff;
+	const u64 new_path_len = message->words[2] >> 32;
+	u64 offset = 0;
+
+	if ((message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    read_path_buffer_at(message->cap, offset, old_cwd_len,
+				old_cwd) != 0) {
+		return -1;
+	}
+	offset += old_cwd_len;
+	if (read_path_buffer_at(message->cap, offset, old_path_len,
+				old_path) != 0) {
+		return -1;
+	}
+	offset += old_path_len;
+	if (read_path_buffer_at(message->cap, offset, new_cwd_len,
+				new_cwd) != 0) {
+		return -1;
+	}
+	offset += new_cwd_len;
+	if (read_path_buffer_at(message->cap, offset, new_path_len,
+				new_path) != 0) {
+		return -1;
+	}
+	(void)old_cwd;
+	(void)new_cwd;
+	return old_path[0] == '/' && new_path[0] == '/' ? 0 : -1;
+}
+
 static int mounted_relative_path(const char *path, char *relative)
 {
 	const u64 mount_len = str_len(unionfs_mount_path);
@@ -422,6 +458,49 @@ static int service_symlink_call(u64 service, const char *target,
 	    bunix_buffer_write((u64)buffer, target_len, root, cwd_len) != 0 ||
 	    bunix_buffer_write((u64)buffer, target_len + cwd_len, path,
 			       path_len) != 0) {
+		if (buffer >= 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	request.cap = (u64)buffer;
+	if (bunix_ipc_call(service, &request, reply) == 0) {
+		result = 0;
+	}
+	bunix_handle_close((u64)buffer);
+	return result;
+}
+
+static int service_rename_call(u64 service, const char *old_path,
+			       const char *new_path, u64 word3,
+			       struct bunix_msg *reply)
+{
+	const char root[] = "/";
+	const u64 cwd_len = 2;
+	const u64 old_len = str_len(old_path) + 1;
+	const u64 new_len = str_len(new_path) + 1;
+	const long buffer = bunix_buffer_create(cwd_len + old_len +
+						cwd_len + new_len);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_RENAME_BUFFER,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.words = {
+			0,
+			cwd_len | (old_len << 32),
+			cwd_len | (new_len << 32),
+			word3,
+		},
+	};
+	int result = -1;
+
+	if (buffer < 0 ||
+	    bunix_buffer_write((u64)buffer, 0, root, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, cwd_len, old_path, old_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, cwd_len + old_len, root,
+			       cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, cwd_len + old_len + cwd_len,
+			       new_path, new_len) != 0) {
 		if (buffer >= 0) {
 			bunix_handle_close((u64)buffer);
 		}
@@ -1106,6 +1185,30 @@ static void reply_symlink(struct bunix_msg *message, struct bunix_msg *reply,
 	}
 }
 
+static void reply_rename(struct bunix_msg *message, struct bunix_msg *reply,
+			 const char *old_path, const char *new_path)
+{
+	char old_relative[UNIONFS_MAX_PATH];
+	char new_relative[UNIONFS_MAX_PATH];
+	char old_upper[UNIONFS_MAX_PATH];
+	char new_upper[UNIONFS_MAX_PATH];
+
+	if (mounted_relative_path(old_path, old_relative) != 0 ||
+	    mounted_relative_path(new_path, new_relative) != 0 ||
+	    compose_upper_path(old_relative, old_upper) != 0 ||
+	    compose_upper_path(new_relative, new_upper) != 0 ||
+	    materialize_upper_parent(new_relative, message->words[3]) != 0 ||
+	    service_rename_call(upper_service, old_upper, new_upper,
+				message->words[3], reply) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (reply->words[0] == 0) {
+		(void)whiteout_add(old_relative);
+		whiteout_remove(new_relative);
+	}
+}
+
 static int upper_child_exists(const char *directory, const char *name)
 {
 	char relative[UNIONFS_MAX_PATH];
@@ -1494,6 +1597,19 @@ int main(void)
 			} else {
 				(void)cwd;
 				reply_symlink(&message, &reply, target, input);
+			}
+			break;
+		}
+		case BUNIX_VFS_RENAME_BUFFER: {
+			char old_path[UNIONFS_MAX_PATH];
+			char new_path[UNIONFS_MAX_PATH];
+
+			if (read_rename_buffer(&message, old_path,
+					       new_path) != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+			} else {
+				reply_rename(&message, &reply, old_path,
+					     new_path);
 			}
 			break;
 		}

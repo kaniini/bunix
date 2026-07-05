@@ -829,6 +829,45 @@ static int forward_mount_symlink_path(struct vfs_mount *mount,
 	return result;
 }
 
+static int forward_mount_rename_path(struct vfs_mount *mount,
+				     struct bunix_msg *message,
+				     struct bunix_msg *reply,
+				     const char *old_path,
+				     const char *new_path)
+{
+	const char root[] = "/";
+	const u64 cwd_len = 2;
+	const u64 old_len = str_len(old_path) + 1;
+	const u64 new_len = str_len(new_path) + 1;
+	const long buffer = bunix_buffer_create(cwd_len + old_len +
+						cwd_len + new_len);
+	struct bunix_msg forwarded = *message;
+	int result;
+
+	if (buffer < 0 ||
+	    bunix_buffer_write((u64)buffer, 0, root, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, cwd_len, old_path, old_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, cwd_len + old_len, root,
+			       cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, cwd_len + old_len + cwd_len,
+			       new_path, new_len) != 0) {
+		if (buffer >= 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		reply->words[0] = (u64)-1;
+		return -1;
+	}
+
+	forwarded.cap = (u64)buffer;
+	forwarded.cap_rights = BUNIX_RIGHT_RECV;
+	forwarded.words[0] = 0;
+	forwarded.words[1] = cwd_len | (old_len << 32);
+	forwarded.words[2] = cwd_len | (new_len << 32);
+	result = forward_mount_path(mount, &forwarded, reply, new_path);
+	bunix_handle_close((u64)buffer);
+	return result;
+}
+
 static int forward_remote_handle(struct vfs_open *open,
 				 struct bunix_msg *message,
 				 struct bunix_msg *reply)
@@ -1122,6 +1161,25 @@ static void vfs_symlink_path(struct bunix_msg *message,
 	reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 }
 
+static void vfs_rename_path(struct bunix_msg *message, struct bunix_msg *reply,
+			    const char *old_path, const char *new_path)
+{
+	struct vfs_mount *old_mount = mount_for_path(old_path);
+	struct vfs_mount *new_mount = mount_for_path(new_path);
+
+	if (old_mount == 0 || new_mount == 0) {
+		reply->words[0] = old_mount == new_mount ?
+				  BUNIX_VFS_ERR_ACCESS : BUNIX_VFS_ERR_XDEV;
+		return;
+	}
+	if (old_mount != new_mount) {
+		reply->words[0] = BUNIX_VFS_ERR_XDEV;
+		return;
+	}
+	(void)forward_mount_rename_path(old_mount, message, reply, old_path,
+					new_path);
+}
+
 static void vfs_readlink_path(struct bunix_msg *message,
 			      struct bunix_msg *reply, const char *path)
 {
@@ -1326,6 +1384,55 @@ int main(void)
 				break;
 			}
 			vfs_symlink_path(&message, &reply, target, path);
+			break;
+		}
+		case BUNIX_VFS_RENAME_BUFFER: {
+			char old_cwd[VFS_MAX_PATH];
+			char old_input[VFS_MAX_PATH];
+			char old_path[VFS_MAX_PATH];
+			char new_cwd[VFS_MAX_PATH];
+			char new_input[VFS_MAX_PATH];
+			char new_path[VFS_MAX_PATH];
+			const u64 old_base = message.words[0] & 0xffffffff;
+			const u64 new_base = message.words[0] >> 32;
+			const u64 old_cwd_len = message.words[1] & 0xffffffff;
+			const u64 old_path_len = message.words[1] >> 32;
+			const u64 new_cwd_len = message.words[2] & 0xffffffff;
+			const u64 new_path_len = message.words[2] >> 32;
+			u64 error = (u64)-1;
+			u64 offset = 0;
+
+			if ((message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+			    read_path_buffer_at(message.cap, offset,
+						old_cwd_len, old_cwd) != 0) {
+				reply.words[0] = error;
+				break;
+			}
+			offset += old_cwd_len;
+			if (read_path_buffer_at(message.cap, offset,
+						old_path_len, old_input) != 0) {
+				reply.words[0] = error;
+				break;
+			}
+			offset += old_path_len;
+			if (read_path_buffer_at(message.cap, offset,
+						new_cwd_len, new_cwd) != 0) {
+				reply.words[0] = error;
+				break;
+			}
+			offset += new_cwd_len;
+			if (read_path_buffer_at(message.cap, offset,
+						new_path_len, new_input) != 0 ||
+			    vfs_resolve_with_base(old_base, old_cwd,
+						  old_input, old_path,
+						  &error) != 0 ||
+			    vfs_resolve_with_base(new_base, new_cwd,
+						  new_input, new_path,
+						  &error) != 0) {
+				reply.words[0] = error;
+				break;
+			}
+			vfs_rename_path(&message, &reply, old_path, new_path);
 			break;
 		}
 		case BUNIX_VFS_CHMOD: {
