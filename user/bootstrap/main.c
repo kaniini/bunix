@@ -178,6 +178,26 @@ static long devfs_mount_path(u64 devfs, const char *path)
 	return reply.words[0] == 0 ? 0 : -1;
 }
 
+static long procfs_mount_path(u64 procfs, const char *path)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_PROCFS,
+		.type = BUNIX_PROCFS_MOUNT_PATH,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	pack_path(&request.words[0], path);
+	if (bunix_ipc_call(procfs, &request, &reply) != 0) {
+		return -1;
+	}
+	return reply.words[0] == 0 ? 0 : -1;
+}
+
 static void sleep_ns(u64 time, u64 ns)
 {
 	struct bunix_msg request = {
@@ -300,9 +320,14 @@ int main(void)
 	vfs_launch = vfs;
 	bunix_launch_module_with_caps("procfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
-	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROCFS,
-				      BUNIX_RIGHT_SEND) == 0) {
-		return 1;
+	{
+		u64 procfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						       BUNIX_SERVICE_PROCFS,
+						       BUNIX_RIGHT_SEND);
+
+		if (procfs == 0 || procfs_mount_path(procfs, "/proc") != 0) {
+			return 1;
+		}
 	}
 	bunix_launch_module_with_caps("tmpfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));

@@ -347,7 +347,7 @@ static u64 proc_path_pid(u64 pid)
 	return proc_info(pid, &info) == 0 ? pid : 0;
 }
 
-static long mount_procfs(void)
+static long mount_procfs(const char *path)
 {
 	const u64 vfs = resolve_service(BUNIX_SERVICE_VFS,
 					BUNIX_RIGHT_SEND);
@@ -365,7 +365,7 @@ static long mount_procfs(void)
 	if (vfs == 0) {
 		return -1;
 	}
-	pack_path(&request.words[0], "/proc");
+	pack_path(&request.words[0], path);
 	if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
 	    reply.words[0] != 0) {
 		return -1;
@@ -1172,9 +1172,6 @@ int main(void)
 	if (register_service(BUNIX_SERVICE_PROCFS, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
 	}
-	if (mount_procfs() != 0) {
-		return 1;
-	}
 
 	for (;;) {
 		struct bunix_msg reply = {
@@ -1196,6 +1193,17 @@ int main(void)
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
+			continue;
+		}
+		if (message.protocol == BUNIX_PROTO_PROCFS &&
+		    message.type == BUNIX_PROCFS_MOUNT_PATH) {
+			char path[PROCFS_MAX_PATH];
+
+			unpack_path(path, &message.words[0]);
+			reply.protocol = BUNIX_PROTO_PROCFS;
+			reply.type = message.type;
+			reply.words[0] = (u64)mount_procfs(path);
+			bunix_ipc_send(message.reply, &reply);
 			continue;
 		}
 		if (message.protocol != BUNIX_PROTO_VFS) {

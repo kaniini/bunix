@@ -59,6 +59,7 @@ enum {
 	BUNIX_PROTO_DEVFS = ('D') | ('E' << 8) | ('V' << 16) | ('F' << 24),
 	BUNIX_PROTO_UTMPFS = ('U') | ('T' << 8) | ('M' << 16) | ('P' << 24),
 	BUNIX_PROCFS_MOUNT_NOTIFY = 1,
+	BUNIX_PROCFS_MOUNT_PATH = 2,
 	BUNIX_NAMES_REGISTER = 1,
 	BUNIX_NAMES_RESOLVE = 2,
 	BUNIX_NAMES_CREATE_NS = 3,
