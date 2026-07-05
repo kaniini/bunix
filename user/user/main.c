@@ -3,7 +3,8 @@
 
 enum {
 	USER_HANDLE_NAMES = 3,
-	USER_MAX_GROUPS = 2,
+	USER_DEFAULT_GROUP_CAPACITY = 4,
+	USER_WIRE_GROUPS = 2,
 	USER_ID_KEEP = (u64)-1,
 	USER_ACCOUNT_BUFFER = 512,
 	USER_NAME_MAX = 16,
@@ -26,7 +27,8 @@ struct user_credential {
 	u64 suid;
 	u64 sgid;
 	u64 group_count;
-	u64 groups[USER_MAX_GROUPS];
+	u64 group_capacity;
+	u64 *groups;
 };
 
 struct user_session {
@@ -121,6 +123,108 @@ static struct user_credential *credential_alloc(u64 task)
 	return credential;
 }
 
+static void credential_groups_free(struct user_credential *credential)
+{
+	if (credential == 0) {
+		return;
+	}
+	if (credential->groups != 0) {
+		bunix_free(credential->groups);
+	}
+	credential->groups = 0;
+	credential->group_count = 0;
+	credential->group_capacity = 0;
+}
+
+static long credential_groups_reserve(struct user_credential *credential,
+				      u64 needed)
+{
+	u64 capacity;
+	u64 *groups;
+
+	if (credential == 0) {
+		return -1;
+	}
+	if (needed <= credential->group_capacity) {
+		return 0;
+	}
+	capacity = credential->group_capacity != 0 ?
+		   credential->group_capacity : USER_DEFAULT_GROUP_CAPACITY;
+	while (capacity < needed) {
+		capacity *= 2;
+	}
+	groups = (u64 *)bunix_realloc(credential->groups,
+				      credential->group_capacity *
+				      sizeof(*credential->groups),
+				      capacity * sizeof(*groups));
+	if (groups == 0) {
+		return -1;
+	}
+	for (u64 i = credential->group_capacity; i < capacity; i++) {
+		groups[i] = 0;
+	}
+	credential->groups = groups;
+	credential->group_capacity = capacity;
+	return 0;
+}
+
+static long credential_groups_set(struct user_credential *credential,
+				  u64 count, const u64 *groups)
+{
+	if (credential == 0 ||
+	    credential_groups_reserve(credential, count) != 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < count; i++) {
+		credential->groups[i] = groups[i];
+	}
+	for (u64 i = count; i < credential->group_capacity; i++) {
+		credential->groups[i] = 0;
+	}
+	credential->group_count = count;
+	return 0;
+}
+
+static long credential_groups_copy(struct user_credential *dst,
+				   const struct user_credential *src)
+{
+	if (dst == 0 || src == 0) {
+		return -1;
+	}
+	return credential_groups_set(dst, src->group_count, src->groups);
+}
+
+static long credential_group_append(u64 **groups, u64 *count, u64 *capacity,
+				    u64 gid)
+{
+	u64 *new_groups;
+
+	if (groups == 0 || count == 0 || capacity == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < *count; i++) {
+		if ((*groups)[i] == gid) {
+			return 0;
+		}
+	}
+	if (*count == *capacity) {
+		u64 new_capacity = *capacity != 0 ?
+				   *capacity * 2 : USER_DEFAULT_GROUP_CAPACITY;
+
+		new_groups = (u64 *)bunix_realloc(*groups,
+						  *capacity * sizeof(**groups),
+						  new_capacity *
+						  sizeof(**groups));
+		if (new_groups == 0) {
+			return -1;
+		}
+		*groups = new_groups;
+		*capacity = new_capacity;
+	}
+	(*groups)[(*count)++] = gid;
+	return 0;
+}
+
 static void credential_clear(struct user_credential *credential)
 {
 	if (credential == 0) {
@@ -135,10 +239,7 @@ static void credential_clear(struct user_credential *credential)
 	credential->egid = 0;
 	credential->suid = 0;
 	credential->sgid = 0;
-	credential->group_count = 0;
-	for (u64 i = 0; i < USER_MAX_GROUPS; i++) {
-		credential->groups[i] = 0;
-	}
+	credential_groups_free(credential);
 	bunix_free(credential);
 }
 
@@ -428,17 +529,15 @@ static long login_groups_lookup(const char *name, u64 name_len,
 {
 	u64 len = 0;
 	u64 count = 0;
-	u64 groups[USER_MAX_GROUPS];
+	u64 capacity = 0;
+	u64 *groups = 0;
 
 	if (reply == 0 ||
 	    read_account_file("/etc/group", account_buffer,
 			      sizeof(account_buffer), &len) != 0) {
 		return -1;
 	}
-	for (u64 i = 0; i < USER_MAX_GROUPS; i++) {
-		groups[i] = 0;
-	}
-	for (u64 cursor = 0; cursor < len && count < USER_MAX_GROUPS;) {
+	for (u64 cursor = 0; cursor < len;) {
 		const u64 line = cursor;
 		u64 field;
 		u64 gid;
@@ -460,22 +559,22 @@ static long login_groups_lookup(const char *name, u64 name_len,
 		if (gid == primary_gid ||
 		    group_line_has_member(account_buffer, members_start,
 					  members_end, name, name_len)) {
-			int duplicate = 0;
-
-			for (u64 i = 0; i < count; i++) {
-				if (groups[i] == gid) {
-					duplicate = 1;
+			if (credential_group_append(&groups, &count,
+						    &capacity, gid) != 0) {
+				if (groups != 0) {
+					bunix_free(groups);
 				}
-			}
-			if (!duplicate) {
-				groups[count++] = gid;
+				return -1;
 			}
 		}
 		cursor = members_end < len ? members_end + 1 : members_end;
 	}
-	reply->words[1] = count;
-	reply->words[2] = groups[0];
-	reply->words[3] = USER_MAX_GROUPS > 1 ? groups[1] : 0;
+	reply->words[1] = count < USER_WIRE_GROUPS ? count : USER_WIRE_GROUPS;
+	reply->words[2] = count > 0 ? groups[0] : 0;
+	reply->words[3] = count > 1 ? groups[1] : 0;
+	if (groups != 0) {
+		bunix_free(groups);
+	}
 	return 0;
 }
 
@@ -498,11 +597,13 @@ static long credential_register(u64 task)
 	credential->egid = 0;
 	credential->suid = 0;
 	credential->sgid = 0;
-	credential->group_count = 2;
-	credential->groups[0] = 0;
-	credential->groups[1] = 1;
-	for (u64 i = 2; i < USER_MAX_GROUPS; i++) {
-		credential->groups[i] = 0;
+	{
+		const u64 root_groups[] = { 0, 1 };
+
+		if (credential_groups_set(credential, 2, root_groups) != 0) {
+			credential_clear(credential);
+			return -1;
+		}
 	}
 	return 0;
 }
@@ -533,9 +634,9 @@ static long credential_fork(u64 parent_task, u64 child_task)
 	child->egid = parent->egid;
 	child->suid = parent->suid;
 	child->sgid = parent->sgid;
-	child->group_count = parent->group_count;
-	for (u64 i = 0; i < USER_MAX_GROUPS; i++) {
-		child->groups[i] = parent->groups[i];
+	if (credential_groups_copy(child, parent) != 0) {
+		credential_clear(child);
+		return -1;
 	}
 	return 0;
 }
@@ -586,13 +687,12 @@ static long credential_getgroups(u64 task, u64 max_groups,
 	if (credential == 0 || reply == 0) {
 		return -1;
 	}
-	if (credential->group_count > USER_MAX_GROUPS ||
-	    (max_groups != 0 && max_groups < credential->group_count)) {
+	if (max_groups != 0 && max_groups < credential->group_count) {
 		return -1;
 	}
 
 	reply->words[1] = credential->group_count;
-	for (u64 i = 0; i < USER_MAX_GROUPS; i++) {
+	for (u64 i = 0; i < USER_WIRE_GROUPS; i++) {
 		reply->words[2 + i] = i < credential->group_count ?
 				      credential->groups[i] : 0;
 	}
@@ -648,16 +748,14 @@ static long credential_setgroups(u64 task, u64 group_count, u64 group0,
 				 u64 group1)
 {
 	struct user_credential *credential = credential_find(task);
+	const u64 groups[] = { group0, group1 };
 
 	if (!credential_can_mutate(credential) ||
-	    group_count > USER_MAX_GROUPS) {
+	    group_count > USER_WIRE_GROUPS) {
 		return -1;
 	}
 
-	credential->group_count = group_count;
-	credential->groups[0] = group_count > 0 ? group0 : 0;
-	credential->groups[1] = group_count > 1 ? group1 : 0;
-	return 0;
+	return credential_groups_set(credential, group_count, groups);
 }
 
 static long credential_has_group(u64 task, u64 gid, u64 *has_group)
@@ -669,7 +767,7 @@ static long credential_has_group(u64 task, u64 gid, u64 *has_group)
 	}
 
 	*has_group = credential->gid == gid;
-	for (u64 i = 0; i < credential->group_count && i < USER_MAX_GROUPS; i++) {
+	for (u64 i = 0; i < credential->group_count; i++) {
 		if (credential->groups[i] == gid) {
 			*has_group = 1;
 		}
@@ -727,10 +825,7 @@ static long credential_apply_login(u64 task, u64 login_uid)
 	credential->egid = account.gid;
 	credential->suid = account.uid;
 	credential->sgid = account.gid;
-	credential->group_count = 1;
-	credential->groups[0] = account.gid;
-	credential->groups[1] = 0;
-	return 0;
+	return credential_groups_set(credential, 1, &account.gid);
 }
 
 static void unpack_text(char *out, u64 out_size, u64 left, u64 right)
