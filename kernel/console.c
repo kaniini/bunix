@@ -161,6 +161,7 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "linux: munmap") ||
 	    str_starts_with(fmt, "linux: execve") ||
 	    str_starts_with(fmt, "linux: fork") ||
+	    str_starts_with(fmt, "linux-einval") ||
 	    str_starts_with(fmt, "linux-strace") ||
 	    str_starts_with(fmt, "multiboot2: module") ||
 	    str_starts_with(fmt, "names: lookup") ||

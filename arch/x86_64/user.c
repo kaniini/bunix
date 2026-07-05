@@ -261,6 +261,18 @@ enum {
 	USER_PROC_SET_CMDLINE_BUFFER = 14,
 };
 
+static int linux_einval_int(const char *function, u64 line)
+{
+	console_printf("linux-einval: kernel %s:%u\n", function, (u32)line);
+	return -LINUX_EINVAL;
+}
+
+static u64 linux_einval_u64(const char *function, u64 line)
+{
+	console_printf("linux-einval: kernel %s:%u\n", function, (u32)line);
+	return (u64)-LINUX_EINVAL;
+}
+
 enum {
 	ELF_MAGIC0 = 0x7f,
 	ELF_MAGIC1 = 'E',
@@ -613,7 +625,7 @@ static int linux_timespec_to_ns(u64 vaddr, u64 *ns)
 	const u64 nsec_per_sec = 1000000000ull;
 
 	if (ns == 0) {
-		return -LINUX_EINVAL;
+		return linux_einval_int(__func__, __LINE__);
 	}
 	if (vaddr == 0 ||
 	    read_current_user(vaddr, timespec, sizeof(timespec)) != 0) {
@@ -621,7 +633,7 @@ static int linux_timespec_to_ns(u64 vaddr, u64 *ns)
 	}
 	if (timespec[1] >= nsec_per_sec ||
 	    timespec[0] > (~0ull - timespec[1]) / nsec_per_sec) {
-		return -LINUX_EINVAL;
+		return linux_einval_int(__func__, __LINE__);
 	}
 
 	*ns = timespec[0] * nsec_per_sec + timespec[1];
@@ -643,7 +655,7 @@ static int linux_validate_utimens(u64 vaddr)
 		if (timespec[i] >= nsec_per_sec &&
 		    timespec[i] != LINUX_UTIME_NOW &&
 		    timespec[i] != LINUX_UTIME_OMIT) {
-			return -LINUX_EINVAL;
+			return linux_einval_int(__func__, __LINE__);
 		}
 	}
 	return 0;
@@ -827,7 +839,7 @@ static int linux_vfs_status_to_errno(u64 status)
 	if (status == USER_VFS_ERR_ISDIR) {
 		return -LINUX_EISDIR;
 	}
-	return status == 0 ? 0 : -LINUX_EINVAL;
+	return status == 0 ? 0 : linux_einval_int(__func__, __LINE__);
 }
 
 static int linux_vfs_read_file(struct task *task, const char *path,
@@ -1466,7 +1478,7 @@ static u64 linux_write_one(struct ipc_port *linux, struct ipc_port *reply_port,
 	};
 
 	if (len > LINUX_MAX_SYSCALL_BUFFER) {
-		return (u64)-LINUX_EINVAL;
+		return linux_einval_u64(__func__, __LINE__);
 	}
 	return linux_forward_input_buffer(linux, reply_port, &request,
 					  user_buffer, len, TASK_RIGHT_RECV);
@@ -1517,7 +1529,7 @@ static u64 linux_read_one(struct ipc_port *linux, struct ipc_port *reply_port,
 	};
 
 	if (len > LINUX_MAX_SYSCALL_BUFFER) {
-		return (u64)-LINUX_EINVAL;
+		return linux_einval_u64(__func__, __LINE__);
 	}
 	return linux_forward_output_words(linux, reply_port, &request,
 					  LINUX_SYSCALL_READ,
@@ -1565,7 +1577,7 @@ static u64 linux_getdents64_chunked(struct ipc_port *linux,
 
 	if (user_buffer == 0 || len == 0) {
 		return user_buffer == 0 ? (u64)-LINUX_EFAULT :
-		       (u64)-LINUX_EINVAL;
+		       linux_einval_u64(__func__, __LINE__);
 	}
 	while (total < len) {
 		const u64 chunk = min_u64(len - total,
@@ -1641,7 +1653,7 @@ static u64 linux_sendfile_chunked(struct ipc_port *linux,
 			return (u64)-LINUX_EFAULT;
 		}
 		if ((offset >> 63) != 0) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 	}
 	while (total < count) {
@@ -1979,7 +1991,7 @@ static u64 linux_forward_mount(struct ipc_port *linux,
 	}
 	target_len = str_len((const char *)syscall_copy_buffer) + 1;
 	if (target_len == 1 || target_len >= LINUX_MAX_SYSCALL_BUFFER) {
-		return (u64)-LINUX_EINVAL;
+		return linux_einval_u64(__func__, __LINE__);
 	}
 	rc = copy_cstr_from_user_errno(
 		(char *)syscall_copy_buffer + target_len, fstype,
@@ -1990,7 +2002,7 @@ static u64 linux_forward_mount(struct ipc_port *linux,
 	fstype_len = str_len((const char *)syscall_copy_buffer + target_len) + 1;
 	total_len = target_len + fstype_len;
 	if (fstype_len == 1 || total_len > LINUX_MAX_SYSCALL_BUFFER) {
-		return (u64)-LINUX_EINVAL;
+		return linux_einval_u64(__func__, __LINE__);
 	}
 	buffer = buffer_create(total_len);
 	if (buffer == 0 ||
@@ -2188,7 +2200,7 @@ static u64 linux_forward_groups_out(struct task *task, struct ipc_port *linux,
 	u64 size;
 
 	if (count > LINUX_MAX_GROUPS) {
-		return (u64)-LINUX_EINVAL;
+		return linux_einval_u64(__func__, __LINE__);
 	}
 	if (count != 0) {
 		size = count * sizeof(u32);
@@ -2210,7 +2222,7 @@ static u64 linux_forward_groups_out(struct task *task, struct ipc_port *linux,
 		if (reply.words[0] > count ||
 		    reply.words[0] > LINUX_MAX_GROUPS) {
 			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		if (buffer_read(buffer, 0, syscall_copy_buffer,
 				reply.words[0] * sizeof(u32)) != 0 ||
@@ -2754,7 +2766,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	if (linux_exec_validate(image, image_size, &ehdr) != 0) {
 		slab_free(image);
 		linux_exec_args_free(&args);
-		return (u64)-LINUX_EINVAL;
+		return linux_einval_u64(__func__, __LINE__);
 	}
 
 	load_bias = ehdr->type == ELF_TYPE_DYN ? LINUX_EXEC_DYN_LOAD_BIAS : 0;
@@ -2767,7 +2779,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	if (interp < 0) {
 		slab_free(image);
 		linux_exec_args_free(&args);
-		return (u64)-LINUX_EINVAL;
+		return linux_einval_u64(__func__, __LINE__);
 	}
 	if (interp > 0) {
 		read_result = linux_vfs_read_file(task, interp_path,
@@ -2785,7 +2797,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			slab_free(interp_image);
 			slab_free(image);
 			linux_exec_args_free(&args);
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		interp_bias = interp_ehdr->type == ELF_TYPE_DYN ?
 			      LINUX_EXEC_INTERP_LOAD_BIAS : 0;
@@ -2812,7 +2824,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		}
 		slab_free(image);
 		linux_exec_args_free(&args);
-		return (u64)-LINUX_EINVAL;
+		return linux_einval_u64(__func__, __LINE__);
 	}
 
 	if (linux_exec_unmap_current(task) != 0) {
@@ -2822,7 +2834,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		}
 		slab_free(image);
 		linux_exec_args_free(&args);
-		return (u64)-LINUX_EINVAL;
+		return linux_einval_u64(__func__, __LINE__);
 	}
 
 	for (u64 i = 0; i < ehdr->phnum; i++) {
@@ -3382,7 +3394,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		    (flags & LINUX_MAP_PRIVATE) == 0 ||
 		    len + VM_PAGE_SIZE - 1 < len ||
 		    (!anonymous && (offset & (VM_PAGE_SIZE - 1)) != 0)) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 
 		len = align_up(len, VM_PAGE_SIZE);
@@ -3391,7 +3403,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		} else if ((flags & LINUX_MAP_FIXED) == 0) {
 			base = align_up(base, VM_PAGE_SIZE);
 		} else if ((base & (VM_PAGE_SIZE - 1)) != 0) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 
 		const u64 min_base = (flags & LINUX_MAP_FIXED) != 0 ?
@@ -3404,7 +3416,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		if ((flags & LINUX_MAP_FIXED) != 0 &&
 		    !task_vm_range_is_free(task, base, len) &&
 		    linux_unmap_task_range(task, base, len) != 0) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		if ((flags & LINUX_MAP_FIXED) == 0 &&
 		    !task_vm_range_is_free(task, base, len)) {
@@ -3425,12 +3437,12 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		    linux_mmap_file_into_task(task, linux, reply_port, base, len,
 					     fd, offset) != 0) {
 			(void)linux_unmap_task_range(task, base, len);
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		if (!anonymous && !writable &&
 		    vm_protect_user_range(task_vm_space(task), base, len, 0) != 0) {
 			(void)linux_unmap_task_range(task, base, len);
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 
 		if (base + len > task_linux_mmap_next(task)) {
@@ -3448,12 +3460,12 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		if (base == 0 || len == 0 ||
 		    (base & (VM_PAGE_SIZE - 1)) != 0 ||
 		    len + VM_PAGE_SIZE - 1 < len) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 
 		len = align_up(len, VM_PAGE_SIZE);
 		if (linux_unmap_task_range(task, base, len) != 0) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		console_printf("linux: munmap task=%u addr=%p len=%u\n",
 			       task_id(task), (const void *)base, (u32)len);
@@ -3536,7 +3548,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return task_linux_brk(task);
 	case LINUX_SYSCALL_ARCH_PRCTL:
 		if (arg0 != LINUX_ARCH_SET_FS) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		task_set_linux_fs_base(task, arg1);
 		arch_user_set_fs_base(arg1);
@@ -3573,7 +3585,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		case LINUX_SYSLOG_ACTION_READ_ALL:
 		case LINUX_SYSLOG_ACTION_READ_CLEAR:
 			if (arg1 == 0) {
-				return (u64)-LINUX_EINVAL;
+				return linux_einval_u64(__func__, __LINE__);
 			}
 			nread = min_u64(arg2, size);
 			flags = spin_lock_irqsave(&syscall_copy_lock);
@@ -3587,7 +3599,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			spin_unlock_irqrestore(&syscall_copy_lock, flags);
 			return nread;
 		default:
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 	}
 	case LINUX_SYSCALL_SET_ROBUST_LIST:
@@ -3596,7 +3608,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		u64 handler = ~0ull;
 
 		if (arg3 != 8) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		if (arg1 != 0 &&
 		    read_current_user(arg1, &handler, sizeof(handler)) != 0) {
@@ -3631,7 +3643,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		u64 how = arg1 == 0 ? ~0ull : arg0;
 
 		if (arg3 != 8) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		if (arg1 != 0 &&
 		    read_current_user(arg1, &set, sizeof(set)) != 0) {
@@ -3660,7 +3672,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		u64 set = 0;
 
 		if (arg3 != 8 || arg0 == 0) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		if (read_current_user(arg0, &set, sizeof(set)) != 0) {
 			return (u64)-LINUX_EFAULT;
@@ -3679,7 +3691,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_MPROTECT:
 		if (arg0 == 0 || (arg0 & (VM_PAGE_SIZE - 1)) != 0 ||
 		    arg1 == 0 || arg1 + VM_PAGE_SIZE - 1 < arg1) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		{
 			const u64 len = align_up(arg1, VM_PAGE_SIZE);
@@ -3696,7 +3708,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 								   len, prot);
 
 			if (vm_rc != 0 || task_rc != 0) {
-				return (u64)-LINUX_EINVAL;
+				return linux_einval_u64(__func__, __LINE__);
 			}
 			console_printf("linux: mprotect task=%u addr=%p len=%u prot=0x%x\n",
 				       task_id(task), (const void *)arg0,
@@ -3717,10 +3729,10 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_CLOCK_NANOSLEEP:
 		if (arg0 != LINUX_CLOCK_REALTIME &&
 		    arg0 != LINUX_CLOCK_MONOTONIC) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		if ((arg1 & ~LINUX_TIMER_ABSTIME) != 0) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		if ((arg1 & LINUX_TIMER_ABSTIME) != 0) {
 			return linux_sleep_absolute(arg2);
@@ -3731,7 +3743,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			u64 limit[2] = { 0x800000, 0x800000 };
 
 			if (write_current_user(arg3, limit, sizeof(limit)) != 0) {
-				return (u64)-LINUX_EINVAL;
+				return linux_einval_u64(__func__, __LINE__);
 			}
 		}
 		return 0;
@@ -3766,7 +3778,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		int suppress_pollin = 0;
 
 		if (arg1 > 64 || (arg1 != 0 && arg0 == 0)) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		timeout_ns = linux_poll_timeout_ns(number, arg2);
 		infinite_timeout = linux_poll_timeout_is_infinite(number, arg2);
@@ -3813,7 +3825,7 @@ poll_again:
 		u64 total = 0;
 
 		if (linux == 0 || reply_port == 0 || arg1 == 0 || arg2 > 16) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		for (u64 i = 0; i < arg2; i++) {
 			if (read_current_user(arg1 + i * sizeof(iov), &iov,
@@ -3821,7 +3833,7 @@ poll_again:
 				return (u64)-LINUX_EFAULT;
 			}
 			if (iov.base == 0 && iov.len != 0) {
-				return (u64)-LINUX_EINVAL;
+				return linux_einval_u64(__func__, __LINE__);
 			}
 			for (u64 offset = 0; offset < iov.len;) {
 				const u64 chunk =
@@ -3953,7 +3965,7 @@ poll_again:
 
 		if (arg1 == 0 || len == 0) {
 			return arg1 == 0 ? (u64)-LINUX_EFAULT :
-			       (u64)-LINUX_EINVAL;
+			       linux_einval_u64(__func__, __LINE__);
 		}
 		request.type = LINUX_SYSCALL_CONNECT;
 		request.words[0] = arg0;
@@ -4003,7 +4015,7 @@ poll_again:
 
 		if (arg0 == 0 || arg1 == 0) {
 			return arg0 == 0 ? (u64)-LINUX_EFAULT :
-			       (u64)-LINUX_EINVAL;
+			       linux_einval_u64(__func__, __LINE__);
 		}
 		size = min_u64(arg1, LINUX_EXEC_MAX_PATH);
 		return linux_forward_output_words(linux, reply_port, &request,
@@ -4043,7 +4055,7 @@ poll_again:
 
 		if (arg0 > LINUX_MAX_GROUPS ||
 		    size > LINUX_MAX_SYSCALL_BUFFER) {
-			return (u64)-LINUX_EINVAL;
+			return linux_einval_u64(__func__, __LINE__);
 		}
 		if (arg0 != 0 &&
 		    vm_read_user(task_vm_space(task), arg1, syscall_copy_buffer,
@@ -4310,7 +4322,7 @@ poll_again:
 
 		if (path == 0 || out == 0 || out_size == 0) {
 			return path == 0 || out == 0 ? (u64)-LINUX_EFAULT :
-			       (u64)-LINUX_EINVAL;
+			       linux_einval_u64(__func__, __LINE__);
 		}
 		request.type = LINUX_SYSCALL_READLINKAT;
 		request.words[0] = dirfd;
