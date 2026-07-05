@@ -45,29 +45,6 @@ static void store_u32(char *buffer, u64 offset, unsigned int value)
 	}
 }
 
-static void pack_path(u64 *words, const char *path)
-{
-	words[0] = 0;
-	words[1] = 0;
-	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
-	}
-}
-
-static void unpack_path(char *path, const u64 *words)
-{
-	for (u64 i = 0; i < BUNIX_IPC_DATA_BYTES; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		path[i] = (char)((words[slot] >> shift) & 0xff);
-	}
-	path[BUNIX_IPC_DATA_BYTES] = '\0';
-}
-
 static void copy_literal(char *dst, u64 dst_len, const char *src)
 {
 	for (u64 i = 0; i < dst_len; i++) {
@@ -154,19 +131,11 @@ static long register_service(u64 service, u64 handle)
 
 static u64 mount_path(u64 vfs, const char *path)
 {
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_MOUNT,
-		.sender = 0,
-		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
-		.reply = 0,
-		.cap = BUNIX_HANDLE_SELF,
-		.words = { 0, 0, BUNIX_SERVICE_UTMPFS, 0 },
-	};
 	struct bunix_msg reply;
 
-	pack_path(&request.words[0], path);
-	return bunix_ipc_call(vfs, &request, &reply) == 0 &&
+	return bunix_ipc_call_path(vfs, BUNIX_PROTO_VFS,
+				   BUNIX_VFS_MOUNT_BUFFER, path,
+				   BUNIX_SERVICE_UTMPFS, 0, 0, &reply) == 0 &&
 	       reply.words[0] == 0 ? 0 : (u64)-1;
 }
 
@@ -391,7 +360,11 @@ int main(void)
 						    message.cap) == 0 ? 0 : (u64)-1;
 				break;
 			case BUNIX_UTMPFS_MOUNT_PATH:
-				unpack_path(path, &message.words[0]);
+				if (bunix_read_path_cap(&message, path,
+							sizeof(path)) != 0) {
+					reply.words[0] = (u64)-1;
+					break;
+				}
 				reply.words[0] =
 					(u64)mount_path(vfs_service, path);
 				if (reply.words[0] == 0) {
@@ -402,6 +375,9 @@ int main(void)
 			default:
 				reply.words[0] = (u64)-1;
 				break;
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
 			}
 			bunix_ipc_send(message.reply, &reply);
 			continue;

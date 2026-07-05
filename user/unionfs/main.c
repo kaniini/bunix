@@ -62,15 +62,6 @@ static int str_eq(const char *left, const char *right)
 	return *left == '\0' && *right == '\0';
 }
 
-static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
-{
-	words[0] = 0;
-	words[1] = 0;
-	for (u64 i = 0; i < len && i < BUNIX_IPC_DATA_BYTES; i++) {
-		words[i / 8] |= ((u64)data[i]) << ((i % 8) * 8);
-	}
-}
-
 static int name_is_valid(const char *name)
 {
 	if (name == 0 || name[0] == '\0') {
@@ -82,22 +73,6 @@ static int name_is_valid(const char *name)
 		}
 	}
 	return 1;
-}
-
-static void pack_path(u64 *words, const char *path)
-{
-	pack_bytes(words, (const unsigned char *)path, str_len(path) + 1);
-}
-
-static void unpack_path(char *path, const u64 *words)
-{
-	for (u64 i = 0; i < BUNIX_IPC_DATA_BYTES; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		path[i] = (char)((words[slot] >> shift) & 0xff);
-	}
-	path[BUNIX_IPC_DATA_BYTES] = '\0';
 }
 
 static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
@@ -535,17 +510,11 @@ static int materialize_upper_parent(const char *relative, u64 task)
 
 static int vfs_mount_path(const char *path)
 {
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_MOUNT,
-		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
-		.cap = BUNIX_HANDLE_SELF,
-		.words = { 0, 0, BUNIX_SERVICE_UNIONFS, 0 },
-	};
 	struct bunix_msg reply;
 
-	pack_path(&request.words[0], path);
-	return bunix_ipc_call(vfs_service, &request, &reply) == 0 &&
+	return bunix_ipc_call_path(vfs_service, BUNIX_PROTO_VFS,
+				   BUNIX_VFS_MOUNT_BUFFER, path,
+				   BUNIX_SERVICE_UNIONFS, 0, 0, &reply) == 0 &&
 	       reply.words[0] == 0 ? 0 : -1;
 }
 
@@ -1341,14 +1310,22 @@ int main(void)
 		};
 		char path[UNIONFS_MAX_PATH];
 
-		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0) {
-			continue;
-		}
-		if (message.protocol == BUNIX_PROTO_UNIONFS) {
-			unpack_path(path, &message.words[0]);
-			reply.protocol = BUNIX_PROTO_UNIONFS;
-			reply.type = message.type;
-			switch (message.type) {
+			if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0) {
+				continue;
+			}
+			if (message.protocol == BUNIX_PROTO_UNIONFS) {
+				reply.protocol = BUNIX_PROTO_UNIONFS;
+				reply.type = message.type;
+				if (bunix_read_path_cap(&message, path,
+							sizeof(path)) != 0) {
+					reply.words[0] = (u64)-1;
+					if (message.cap != 0) {
+						bunix_handle_close(message.cap);
+					}
+					bunix_ipc_send(message.reply, &reply);
+					continue;
+				}
+				switch (message.type) {
 			case BUNIX_UNIONFS_SET_LOWER:
 				reply.words[0] =
 					(u64)unionfs_set_lower_path(path);
@@ -1365,13 +1342,16 @@ int main(void)
 							  sizeof(mounted) - 1);
 				}
 				break;
-			default:
-				reply.words[0] = (u64)-1;
-				break;
+				default:
+					reply.words[0] = (u64)-1;
+					break;
+				}
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				bunix_ipc_send(message.reply, &reply);
+				continue;
 			}
-			bunix_ipc_send(message.reply, &reply);
-			continue;
-		}
 		if (message.protocol != BUNIX_PROTO_VFS) {
 			continue;
 		}

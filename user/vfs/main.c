@@ -120,14 +120,6 @@ static void unpack_bytes(unsigned char *out, const u64 *words, u64 len)
 	}
 }
 
-static void unpack_path(char *path, const u64 *words)
-{
-	for (u64 i = 0; i < VFS_MAX_PATH; i++) {
-		path[i] = '\0';
-	}
-	unpack_bytes((unsigned char *)path, words, 16);
-}
-
 static int path_eq(const char *left, const char *right)
 {
 	for (u64 i = 0; i < VFS_MAX_PATH; i++) {
@@ -1459,22 +1451,24 @@ int main(void)
 				bunix_console_log("vfs: close\n", 11);
 			}
 			break;
-		case BUNIX_VFS_MOUNT: {
-			char path[VFS_MAX_PATH];
+			case BUNIX_VFS_MOUNT_BUFFER: {
+				char path[VFS_MAX_PATH];
+				u64 service;
 
-			unpack_path(path, &message.words[0]);
-			if (message.cap == 0 ||
-			    (message.cap_rights & BUNIX_RIGHT_SEND) == 0 ||
-			    mount_translator(path, message.cap,
-					     message.words[2]) != 0) {
-				reply.words[0] = (u64)-1;
-			} else {
-				reply.words[0] = 0;
-				message.cap = 0;
-				notify_procfs_mount(path, message.words[2]);
-				bunix_console_log("vfs: mounted translator\n", 24);
-			}
-			break;
+				service = resolve_service(message.words[1],
+							  BUNIX_RIGHT_SEND);
+				if (service == 0 ||
+				    bunix_read_path_cap(&message, path,
+							sizeof(path)) != 0 ||
+				    mount_translator(path, service,
+						     message.words[1]) != 0) {
+					reply.words[0] = (u64)-1;
+				} else {
+					reply.words[0] = 0;
+					notify_procfs_mount(path, message.words[1]);
+					bunix_console_log("vfs: mounted translator\n", 24);
+				}
+				break;
 		}
 		default:
 			reply.words[0] = (u64)-1;

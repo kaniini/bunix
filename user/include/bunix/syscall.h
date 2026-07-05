@@ -73,7 +73,6 @@ enum {
 	BUNIX_VFS_READ_FILE_BUFFER = 6,
 	BUNIX_VFS_CLOSE = 7,
 	BUNIX_VFS_STAT_META = 8,
-	BUNIX_VFS_MOUNT = 11,
 	BUNIX_VFS_OPEN_BUFFER = 12,
 	BUNIX_VFS_STAT_PATH_META_BUFFER = 13,
 	BUNIX_VFS_READLINK_BUFFER = 14,
@@ -89,6 +88,7 @@ enum {
 	BUNIX_VFS_CHOWN = 24,
 	BUNIX_VFS_RMDIR_BUFFER = 25,
 	BUNIX_VFS_READDIR_BUFFER = 26,
+	BUNIX_VFS_MOUNT_BUFFER = 27,
 	BUNIX_VFS_TYPE_REGULAR = 1,
 	BUNIX_VFS_TYPE_DIRECTORY = 2,
 	BUNIX_VFS_TYPE_SYMLINK = 3,
@@ -491,6 +491,64 @@ static inline long bunix_buffer_write(u64 handle, u64 offset, const void *src,
 	const u64 args[] = { handle, offset, (u64)src, len };
 
 	return bunix_syscall3(BUNIX_SYSCALL_BUFFER_WRITE, (u64)args, 0, 0);
+}
+
+static inline u64 bunix_cstring_len(const char *text)
+{
+	u64 len = 0;
+
+	while (text != 0 && text[len] != '\0') {
+		len++;
+	}
+	return len;
+}
+
+static inline long bunix_read_path_cap(const struct bunix_msg *message,
+				       char *path, u64 path_cap)
+{
+	const u64 len = message != 0 ? message->words[0] : 0;
+
+	if (message == 0 || path == 0 || len == 0 || len > path_cap ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    bunix_buffer_read(message->cap, 0, path, len) != 0 ||
+	    path[len - 1] != '\0') {
+		return -1;
+	}
+	return 0;
+}
+
+static inline long bunix_ipc_call_path(u64 port, unsigned int protocol,
+				       unsigned int type, const char *path,
+				       u64 word1, u64 word2, u64 word3,
+				       struct bunix_msg *reply)
+{
+	const u64 len = bunix_cstring_len(path) + 1;
+	long buffer;
+	long result;
+	struct bunix_msg request = {
+		.protocol = protocol,
+		.type = type,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = 0,
+		.words = { len, word1, word2, word3 },
+	};
+
+	if (path == 0 || len == 1) {
+		return -1;
+	}
+	buffer = bunix_buffer_create(len);
+	if (buffer < 0 || bunix_buffer_write((u64)buffer, 0, path, len) != 0) {
+		if (buffer >= 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	request.cap = (u64)buffer;
+	result = bunix_ipc_call(port, &request, reply);
+	bunix_handle_close((u64)buffer);
+	return result;
 }
 
 static inline long bunix_boot_module_read(u64 offset, void *buffer, u64 len)

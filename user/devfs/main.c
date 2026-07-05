@@ -38,29 +38,6 @@ static int str_eq(const char *left, const char *right)
 	return left[i] == right[i];
 }
 
-static void pack_path(u64 *words, const char *path)
-{
-	words[0] = 0;
-	words[1] = 0;
-	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
-	}
-}
-
-static void unpack_path(char *path, const u64 *words)
-{
-	for (u64 i = 0; i < BUNIX_IPC_DATA_BYTES; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		path[i] = (char)((words[slot] >> shift) & 0xff);
-	}
-	path[BUNIX_IPC_DATA_BYTES] = '\0';
-}
-
 static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
 {
 	if (buffer == 0 || len == 0 || len > DEVFS_MAX_PATH) {
@@ -127,19 +104,11 @@ static void stat_device(struct bunix_msg *reply, u64 device)
 
 static u64 mount_devfs(u64 vfs, const char *path)
 {
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_MOUNT,
-		.sender = 0,
-		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
-		.reply = 0,
-		.cap = BUNIX_HANDLE_SELF,
-		.words = { 0, 0, BUNIX_SERVICE_DEVFS, 0 },
-	};
 	struct bunix_msg reply;
 
-	pack_path(&request.words[0], path);
-	return bunix_ipc_call(vfs, &request, &reply) == 0 &&
+	return bunix_ipc_call_path(vfs, BUNIX_PROTO_VFS,
+				   BUNIX_VFS_MOUNT_BUFFER, path,
+				   BUNIX_SERVICE_DEVFS, 0, 0, &reply) == 0 &&
 	       reply.words[0] == 0 ? 0 : (u64)-1;
 }
 
@@ -225,9 +194,11 @@ int main(void)
 			reply.protocol = BUNIX_PROTO_DEVFS;
 			switch (message.type) {
 			case BUNIX_DEVFS_MOUNT_PATH:
-				unpack_path(path, &message.words[0]);
 				reply.words[0] =
-					(u64)mount_devfs(vfs_service, path);
+					bunix_read_path_cap(&message, path,
+							    sizeof(path)) == 0 ?
+					(u64)mount_devfs(vfs_service, path) :
+					(u64)-1;
 				if (reply.words[0] == 0) {
 					bunix_console_log(mounted,
 							  sizeof(mounted) - 1);
@@ -236,6 +207,9 @@ int main(void)
 			default:
 				reply.words[0] = (u64)-1;
 				break;
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
 			}
 			bunix_ipc_send(message.reply, &reply);
 			continue;

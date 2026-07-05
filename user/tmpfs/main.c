@@ -139,17 +139,6 @@ static int file_is_child_of(const struct tmpfs_file *file, const char *dir)
 	return 1;
 }
 
-static void unpack_path(char *path, const u64 *words)
-{
-	for (u64 i = 0; i < BUNIX_IPC_DATA_BYTES; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		path[i] = (char)((words[slot] >> shift) & 0xff);
-	}
-	path[BUNIX_IPC_DATA_BYTES] = '\0';
-}
-
 static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
 {
 	if (buffer == 0 || len == 0 || len > TMPFS_MAX_PATH) {
@@ -555,18 +544,6 @@ static void stat_dir(struct bunix_msg *reply)
 	reply->words[3] = 0;
 }
 
-static void pack_path(u64 *words, const char *path)
-{
-	words[0] = 0;
-	words[1] = 0;
-	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
-	}
-}
-
 static u64 resolve_service(u64 service, unsigned int rights)
 {
 	struct bunix_msg request = {
@@ -608,19 +585,11 @@ static long register_service(u64 service, u64 handle)
 
 static long mount_path(u64 vfs, const char *path)
 {
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_MOUNT,
-		.sender = 0,
-		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
-		.reply = 0,
-		.cap = BUNIX_HANDLE_SELF,
-		.words = { 0, 0, BUNIX_SERVICE_TMPFS, 0 },
-	};
 	struct bunix_msg reply;
 
-	pack_path(&request.words[0], path);
-	return bunix_ipc_call(vfs, &request, &reply) == 0 &&
+	return bunix_ipc_call_path(vfs, BUNIX_PROTO_VFS,
+				   BUNIX_VFS_MOUNT_BUFFER, path,
+				   BUNIX_SERVICE_TMPFS, 0, 0, &reply) == 0 &&
 	       reply.words[0] == 0 ? 0 : -1;
 }
 
@@ -688,23 +657,30 @@ int main(void)
 		if (message.protocol == BUNIX_PROTO_TMPFS) {
 			reply.protocol = BUNIX_PROTO_TMPFS;
 			reply.type = message.type;
-			switch (message.type) {
-			case BUNIX_TMPFS_MOUNT_ROOT:
-				unpack_path(path, &message.words[0]);
-				reply.words[0] =
-					(u64)mount_root(vfs_service, path);
-				if (reply.words[0] == 0) {
-					bunix_console_log(mounted,
-							  sizeof(mounted) - 1);
+				switch (message.type) {
+				case BUNIX_TMPFS_MOUNT_ROOT:
+					if (bunix_read_path_cap(&message, path,
+								sizeof(path)) != 0) {
+						reply.words[0] = (u64)-1;
+						break;
+					}
+					reply.words[0] =
+						(u64)mount_root(vfs_service, path);
+					if (reply.words[0] == 0) {
+						bunix_console_log(mounted,
+								  sizeof(mounted) - 1);
 				}
 				break;
-			default:
-				reply.words[0] = (u64)-1;
-				break;
+				default:
+					reply.words[0] = (u64)-1;
+					break;
+				}
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				bunix_ipc_send(message.reply, &reply);
+				continue;
 			}
-			bunix_ipc_send(message.reply, &reply);
-			continue;
-		}
 		if (message.protocol != BUNIX_PROTO_VFS) {
 			continue;
 		}

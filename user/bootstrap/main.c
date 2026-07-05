@@ -668,19 +668,10 @@ static long send_path_command(u64 service,
 			      unsigned int type,
 			      const char *path)
 {
-	struct bunix_msg request = {
-		.protocol = protocol,
-		.type = type,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { 0, 0, 0, 0 },
-	};
 	struct bunix_msg reply;
 
-	pack_path(&request.words[0], path);
-	if (bunix_ipc_call(service, &request, &reply) != 0) {
+	if (bunix_ipc_call_path(service, protocol, type, path, 0, 0, 0,
+				&reply) != 0) {
 		return -1;
 	}
 	return reply.words[0] == 0 ? 0 : -1;

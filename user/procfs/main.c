@@ -171,19 +171,6 @@ static int parse_u64_component(const char **cursor, u64 *value)
 	return 0;
 }
 
-static void unpack_path(char *path, const u64 *words)
-{
-	for (u64 i = 0; i < PROCFS_MAX_PATH; i++) {
-		path[i] = '\0';
-	}
-	for (u64 i = 0; i < 16; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		path[i] = (char)((words[slot] >> shift) & 0xff);
-	}
-}
-
 static int read_path_buffer(u64 buffer, u64 offset, u64 len, char *path)
 {
 	if (buffer == 0 || len == 0 || len > PROCFS_MAX_PATH) {
@@ -384,22 +371,14 @@ static long mount_procfs(const char *path)
 {
 	const u64 vfs = resolve_service(BUNIX_SERVICE_VFS,
 					BUNIX_RIGHT_SEND);
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_MOUNT,
-		.sender = 0,
-		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
-		.reply = 0,
-		.cap = BUNIX_HANDLE_SELF,
-		.words = { 0, 0, BUNIX_SERVICE_PROCFS, 0 },
-	};
 	struct bunix_msg reply;
 
 	if (vfs == 0) {
 		return -1;
 	}
-	pack_path(&request.words[0], path);
-	if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
+	if (bunix_ipc_call_path(vfs, BUNIX_PROTO_VFS,
+				BUNIX_VFS_MOUNT_BUFFER, path,
+				BUNIX_SERVICE_PROCFS, 0, 0, &reply) != 0 ||
 	    reply.words[0] != 0) {
 		return -1;
 	}
@@ -1260,10 +1239,15 @@ int main(void)
 		    message.type == BUNIX_PROCFS_MOUNT_PATH) {
 			char path[PROCFS_MAX_PATH];
 
-			unpack_path(path, &message.words[0]);
 			reply.protocol = BUNIX_PROTO_PROCFS;
 			reply.type = message.type;
-			reply.words[0] = (u64)mount_procfs(path);
+			reply.words[0] =
+				bunix_read_path_cap(&message, path,
+						    sizeof(path)) == 0 ?
+				(u64)mount_procfs(path) : (u64)-1;
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
 			bunix_ipc_send(message.reply, &reply);
 			continue;
 		}
