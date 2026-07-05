@@ -194,6 +194,9 @@ enum {
 	LINUX_STAT_SIZE = 144,
 	LINUX_STATX_SIZE = 256,
 	LINUX_WAIT_STATUS_SIZE = 4,
+	LINUX_TIMEVAL_SIZE = 16,
+	LINUX_TIMESPEC_SIZE = 16,
+	LINUX_TIME_T_SIZE = 8,
 	LINUX_SYSINFO_SIZE = 112,
 	LINUX_UTSNAME_SIZE = 65 * 6,
 	LINUX_S_IFDIR = 0040000,
@@ -2906,39 +2909,6 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return (u64)-LINUX_ENOTTY;
 	case LINUX_SYSCALL_FCNTL:
 		break;
-	case LINUX_SYSCALL_CLOCK_GETTIME: {
-		u64 timespec[2];
-		const u64 ns = timer_monotonic_ns();
-
-		if (arg1 == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		timespec[0] = ns / 1000000000ull;
-		timespec[1] = ns % 1000000000ull;
-		return write_current_user(arg1, timespec, sizeof(timespec)) == 0 ?
-		       0 : (u64)-LINUX_EINVAL;
-	}
-	case LINUX_SYSCALL_GETTIMEOFDAY: {
-		u64 timeval[2];
-		const u64 ns = timer_monotonic_ns();
-
-		if (arg0 == 0) {
-			return 0;
-		}
-		timeval[0] = ns / 1000000000ull;
-		timeval[1] = (ns % 1000000000ull) / 1000ull;
-		return write_current_user(arg0, timeval, sizeof(timeval)) == 0 ?
-		       0 : (u64)-LINUX_EINVAL;
-	}
-	case LINUX_SYSCALL_TIME: {
-		const u64 seconds = timer_monotonic_ns() / 1000000000ull;
-
-		if (arg0 != 0 &&
-		    write_current_user(arg0, &seconds, sizeof(seconds)) != 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		return seconds;
-	}
 	case LINUX_SYSCALL_NANOSLEEP:
 		return linux_sleep_relative(arg0, arg1);
 	case LINUX_SYSCALL_CLOCK_NANOSLEEP:
@@ -3149,6 +3119,36 @@ poll_again:
 		return linux_forward_fixed_output_words(
 			linux, reply_port, &request, LINUX_SYSCALL_SYSINFO,
 			(void *)arg0, LINUX_SYSINFO_SIZE, 1, 0,
+			0, 0, 0, 0);
+	}
+	case LINUX_SYSCALL_CLOCK_GETTIME: {
+		if (arg1 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		return linux_forward_fixed_output_words(
+			linux, reply_port, &request, LINUX_SYSCALL_CLOCK_GETTIME,
+			(void *)arg1, LINUX_TIMESPEC_SIZE, 1, 0,
+			arg0, 0, 0, 0);
+	}
+	case LINUX_SYSCALL_GETTIMEOFDAY: {
+		if (arg0 == 0) {
+			return linux_forward_words(linux, reply_port,
+						   LINUX_SYSCALL_GETTIMEOFDAY,
+						   0, arg1, 0);
+		}
+		return linux_forward_fixed_output_words(
+			linux, reply_port, &request, LINUX_SYSCALL_GETTIMEOFDAY,
+			(void *)arg0, LINUX_TIMEVAL_SIZE, 1, 0,
+			0, arg1, 0, 0);
+	}
+	case LINUX_SYSCALL_TIME: {
+		if (arg0 == 0) {
+			return linux_forward_words(linux, reply_port,
+						   LINUX_SYSCALL_TIME, 0, 0, 0);
+		}
+		return linux_forward_fixed_output_words(
+			linux, reply_port, &request, LINUX_SYSCALL_TIME,
+			(void *)arg0, LINUX_TIME_T_SIZE, 1, 1,
 			0, 0, 0, 0);
 	}
 	case LINUX_SYSCALL_CONNECT: {

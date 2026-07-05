@@ -68,6 +68,9 @@ enum {
 	LINUX_ECHOK = 0000040,
 	LINUX_MAX_WRITE = 4096,
 	LINUX_MAX_PATH = 256,
+	LINUX_TIMEVAL_SIZE = 16,
+	LINUX_TIMESPEC_SIZE = 16,
+	LINUX_TIME_T_SIZE = 8,
 	LINUX_SYSINFO_SIZE = 112,
 	LINUX_UTSNAME_SIZE = 65 * 6,
 	LINUX_STAT_SIZE = 144,
@@ -3557,6 +3560,53 @@ static long linux_getrandom(u64 len, u64 buffer)
 	       (long)len : (long)-LINUX_EINVAL;
 }
 
+static long linux_clock_gettime(u64 buffer)
+{
+	char timespec[LINUX_TIMESPEC_SIZE];
+	const u64 ns = bunix_timer_ticks();
+
+	if (buffer == 0) {
+		return -LINUX_EINVAL;
+	}
+	zero_bytes(timespec, sizeof(timespec));
+	store_u64(timespec, 0, ns / 1000000000ull);
+	store_u64(timespec, 8, ns % 1000000000ull);
+	return bunix_buffer_write(buffer, 0, timespec, sizeof(timespec)) == 0 ?
+	       0 : -LINUX_EINVAL;
+}
+
+static long linux_gettimeofday(u64 buffer)
+{
+	char timeval[LINUX_TIMEVAL_SIZE];
+	const u64 ns = bunix_timer_ticks();
+
+	if (buffer == 0) {
+		return 0;
+	}
+	zero_bytes(timeval, sizeof(timeval));
+	store_u64(timeval, 0, ns / 1000000000ull);
+	store_u64(timeval, 8, (ns % 1000000000ull) / 1000ull);
+	return bunix_buffer_write(buffer, 0, timeval, sizeof(timeval)) == 0 ?
+	       0 : -LINUX_EINVAL;
+}
+
+static long linux_time(u64 buffer, u64 *seconds_out)
+{
+	char time_value[LINUX_TIME_T_SIZE];
+	const u64 seconds = bunix_timer_ticks() / 1000000000ull;
+
+	if (seconds_out != 0) {
+		*seconds_out = seconds;
+	}
+	if (buffer == 0) {
+		return (long)seconds;
+	}
+	zero_bytes(time_value, sizeof(time_value));
+	store_u64(time_value, 0, seconds);
+	return bunix_buffer_write(buffer, 0, time_value, sizeof(time_value)) == 0 ?
+	       (long)seconds : (long)-LINUX_EINVAL;
+}
+
 static void linux_close_process_fds(struct linux_process *process)
 {
 	if (process == 0) {
@@ -4041,6 +4091,25 @@ int main(void)
 		case BUNIX_LINUX_GETRANDOM:
 			reply.words[0] = (u64)linux_getrandom(message.words[1],
 							     message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_CLOCK_GETTIME:
+			reply.words[0] = (u64)linux_clock_gettime(message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_GETTIMEOFDAY:
+			reply.words[0] = (u64)linux_gettimeofday(message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_TIME:
+			reply.words[0] = (u64)linux_time(message.cap,
+							 &reply.words[1]);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
