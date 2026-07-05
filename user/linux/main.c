@@ -92,7 +92,6 @@ enum {
 	LINUX_FD_CONSOLE = 1,
 	LINUX_FD_FILE = 2,
 	LINUX_FD_DIR = 3,
-	LINUX_FD_UTMP = 4,
 	LINUX_FD_SOCKET = 5,
 	LINUX_FD_PIPE_READ = 6,
 	LINUX_FD_PIPE_WRITE = 7,
@@ -654,53 +653,6 @@ static int is_utmps_socket_path(const char *path)
 	return string_equal(path, "/run/utmps/.utmpd-socket");
 }
 
-struct linux_virtual_path {
-	const char *path;
-	u64 fd_kind;
-	u64 mode;
-};
-
-static const struct linux_virtual_path virtual_paths[] = {
-	{ "/run/utmp", LINUX_FD_UTMP, LINUX_S_IFREG | 0444 },
-	{ "/var/run/utmp", LINUX_FD_UTMP, LINUX_S_IFREG | 0444 },
-};
-
-static const struct linux_virtual_path *linux_virtual_path_find(
-	const char *path)
-{
-	for (u64 i = 0; i < sizeof(virtual_paths) / sizeof(virtual_paths[0]);
-	     i++) {
-		if (string_equal(path, virtual_paths[i].path)) {
-			return &virtual_paths[i];
-		}
-	}
-	return 0;
-}
-
-static u64 linux_virtual_path_size(const struct linux_virtual_path *path)
-{
-	return path != 0 && path->fd_kind == LINUX_FD_UTMP ?
-	       linux_user_session_count() * LINUX_UTMP_RECORD_SIZE : 0;
-}
-
-static long linux_virtual_path_open(struct linux_process *process,
-				    const struct linux_virtual_path *path)
-{
-	const u64 handle = path->fd_kind == LINUX_FD_CONSOLE ?
-			   BUNIX_HANDLE_CONSOLE : 0;
-
-	return alloc_fd(process, path->fd_kind, handle,
-			linux_virtual_path_size(path));
-}
-
-static void linux_virtual_path_meta(const struct linux_virtual_path *path,
-				    struct bunix_msg *out)
-{
-	out->words[1] = linux_virtual_path_size(path);
-	out->words[2] = path->mode;
-	out->words[3] = 0;
-}
-
 static int linux_console_path(const char *path)
 {
 	return string_equal(path, "/dev/tty") ||
@@ -741,47 +693,6 @@ static void build_utmp_record(char *record, u64 index)
 	copy_literal(record + 40, 4, tty == 1 ? "S0" : "tt");
 	copy_literal(record + 44, 32, user_name);
 	store_u32(record, 336, (unsigned int)session_id);
-}
-
-static long read_utmp(u64 offset, u64 len, u64 buffer)
-{
-	const u64 size = linux_user_session_count() * LINUX_UTMP_RECORD_SIZE;
-	u64 done = 0;
-
-	if (buffer == 0) {
-		return -LINUX_EBADF;
-	}
-	if (offset >= size) {
-		return 0;
-	}
-	if (len > LINUX_MAX_WRITE) {
-		len = LINUX_MAX_WRITE;
-	}
-	if (len > size - offset) {
-		len = size - offset;
-	}
-
-	while (done < len) {
-		const u64 absolute = offset + done;
-		const u64 record_index = absolute / LINUX_UTMP_RECORD_SIZE;
-		const u64 record_offset = absolute % LINUX_UTMP_RECORD_SIZE;
-		u64 chunk = LINUX_UTMP_RECORD_SIZE - record_offset;
-		char record[LINUX_UTMP_RECORD_SIZE];
-
-		if (chunk > len - done) {
-			chunk = len - done;
-		}
-		build_utmp_record(record, record_index);
-		for (u64 i = 0; i < chunk; i++) {
-			utmp_buffer[done + i] = record[record_offset + i];
-		}
-		done += chunk;
-	}
-
-	if (bunix_buffer_write(buffer, 0, utmp_buffer, done) != 0) {
-		return -LINUX_EINVAL;
-	}
-	return (long)done;
 }
 
 static long utmps_recv_response(struct linux_fd *fd, u64 len, u64 buffer)
@@ -2336,7 +2247,6 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
-	const struct linux_virtual_path *virtual_path;
 
 	if (path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
 	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
@@ -2350,10 +2260,6 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		return base_result;
 	}
 
-	virtual_path = linux_virtual_path_find(full_path);
-	if (virtual_path != 0) {
-		return linux_virtual_path_open(process, virtual_path);
-	}
 	if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER, base_handle,
 				path, &reply) != 0) {
 		return -LINUX_ENOENT;
@@ -2435,18 +2341,15 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 			    u64 path_buffer)
 {
 	char path[LINUX_MAX_PATH];
-	char full_path[LINUX_MAX_PATH];
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
-	const struct linux_virtual_path *virtual_path;
 
 	if ((mode & ~(LINUX_R_OK | LINUX_W_OK | LINUX_X_OK)) != 0 ||
 	    (flags & ~(LINUX_AT_EACCESS | LINUX_AT_SYMLINK_NOFOLLOW)) != 0 ||
 	    path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
 	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
-	    path[path_len - 1] != '\0' ||
-	    path_normalize(process->cwd, path, full_path) != 0) {
+	    path[path_len - 1] != '\0') {
 		return -LINUX_EINVAL;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
@@ -2455,10 +2358,6 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 		return base_result;
 	}
 
-	virtual_path = linux_virtual_path_find(full_path);
-	if (virtual_path != 0) {
-		return 0;
-	}
 	if (linux_vfs_path_call_flags(process, BUNIX_VFS_ACCESS_BUFFER,
 				      base_handle, path, mode,
 				      &reply) != 0 ||
@@ -2823,12 +2722,6 @@ static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 		return linux_stat_write(stat_buffer, LINUX_S_IFCHR | 0600,
 					0, 0, 0);
 	}
-	if (process->fds[fd].kind == LINUX_FD_UTMP) {
-		return linux_stat_write(stat_buffer, LINUX_S_IFREG | 0444,
-					0, 0,
-					linux_user_session_count() *
-					LINUX_UTMP_RECORD_SIZE);
-	}
 	if (process->fds[fd].kind == LINUX_FD_SOCKET) {
 		return linux_stat_write(stat_buffer, LINUX_S_IFSOCK | 0700,
 					0, 0, 0);
@@ -2896,11 +2789,9 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 			     u64 flags, struct bunix_msg *out)
 {
 	char path[LINUX_MAX_PATH];
-	char full_path[LINUX_MAX_PATH];
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
-	const struct linux_virtual_path *virtual_path;
 
 	if (path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
 	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
@@ -2913,14 +2804,6 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 		return base_result;
 	}
 
-	if (path_normalize(process->cwd, path, full_path) != 0) {
-		return -LINUX_EINVAL;
-	}
-	virtual_path = linux_virtual_path_find(full_path);
-	if (virtual_path != 0) {
-		linux_virtual_path_meta(virtual_path, out);
-		return 0;
-	}
 	if (linux_vfs_path_call_flags(process, BUNIX_VFS_STAT_PATH_META_BUFFER,
 				      base_handle, path, flags != 0 ? 1 : 0,
 				      &reply) != 0 ||
@@ -3298,15 +3181,6 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 
 	if (process->fds[fd].kind == LINUX_FD_CONSOLE) {
 		return tty_read(process, len, buffer);
-	}
-	if (process->fds[fd].kind == LINUX_FD_UTMP) {
-		const long nread = read_utmp(process->fds[fd].offset, len,
-					     buffer);
-
-		if (nread > 0) {
-			process->fds[fd].offset += (u64)nread;
-		}
-		return nread;
 	}
 	if (process->fds[fd].kind == LINUX_FD_PIPE_READ) {
 		struct linux_pipe *pipe = linux_pipe_find(process->fds[fd].handle);

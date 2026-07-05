@@ -256,6 +256,12 @@ int main(void)
 				      BUNIX_RIGHT_SEND) == 0) {
 		return 1;
 	}
+	bunix_launch_module_with_caps("utmpfs", fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_UTMPFS,
+				      BUNIX_RIGHT_SEND) == 0) {
+		return 1;
+	}
 	bunix_launch_module_with_caps("unionfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_UNIONFS,

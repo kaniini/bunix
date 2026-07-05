@@ -26,6 +26,8 @@ TMPFS_MODULE := $(BUILD_DIR)/modules/tmpfs.server
 TMPFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/tmpfs/main.c.o
 DEVFS_MODULE := $(BUILD_DIR)/modules/devfs.server
 DEVFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/devfs/main.c.o
+UTMPFS_MODULE := $(BUILD_DIR)/modules/utmpfs.server
+UTMPFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/utmpfs/main.c.o
 UNIONFS_MODULE := $(BUILD_DIR)/modules/unionfs.server
 UNIONFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/unionfs/main.c.o
 BLOCK_MODULE := $(BUILD_DIR)/modules/block.server
@@ -143,6 +145,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/procfs/main.c.o \
 	$(BUILD_DIR)/user/tmpfs/main.c.o \
 	$(BUILD_DIR)/user/devfs/main.c.o \
+	$(BUILD_DIR)/user/utmpfs/main.c.o \
 	$(BUILD_DIR)/user/unionfs/main.c.o \
 	$(BUILD_DIR)/user/block/main.c.o \
 	$(BUILD_DIR)/user/vfs/main.c.o \
@@ -222,6 +225,10 @@ $(DEVFS_MODULE): $(DEVFS_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(DEVFS_MODULE_OBJS)
 
+$(UTMPFS_MODULE): $(UTMPFS_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(UTMPFS_MODULE_OBJS)
+
 $(UNIONFS_MODULE): $(UNIONFS_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(UNIONFS_MODULE_OBJS)
@@ -278,7 +285,7 @@ $(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED)
 	mkdir -p $(dir $@)
 	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /etc/group $(ROOTFS_GROUP) /etc/inittab $(ROOTFS_INITTAB) /lib/ld-musl-x86_64.so.1 $(MUSL_LDSO) /bin/first $(FIRST_MODULE) /bin/ipcstress $(IPCSTRESS_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/dyn-hello $(DYN_HELLO_MODULE) /bin/fputest $(FPUTEST_MODULE) /bin/busybox $(BUSYBOX) --dir /home/kaniini --dir /root --dir /tmp --dir /run --dir /mnt --dir /sys --dir /var/tmp --dir /var/run --symlink /lib/ld.so /lib/ld-musl-x86_64.so.1 --symlink /lib/libc.musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1 $(ROOTFS_BUSYBOX_LINKS)
 
-$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(UTMPFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -297,6 +304,7 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(BOOTSTRAP_MODULE) $(CONSOL
 		"modules/procfs.server=$(PROCFS_MODULE)" \
 		"modules/tmpfs.server=$(TMPFS_MODULE)" \
 		"modules/devfs.server=$(DEVFS_MODULE)" \
+		"modules/utmpfs.server=$(UTMPFS_MODULE)" \
 		"modules/unionfs.server=$(UNIONFS_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/vfs.server=$(VFS_MODULE)" \
@@ -304,7 +312,7 @@ $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(BOOTSTRAP_MODULE) $(CONSOL
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(UTMPFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -325,6 +333,7 @@ $(EFI_BOOT_IMG): $(KERNEL) boot/grub.cfg $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $
 	cp $(PROCFS_MODULE) $(ISO_ROOT)/modules/procfs.server
 	cp $(TMPFS_MODULE) $(ISO_ROOT)/modules/tmpfs.server
 	cp $(DEVFS_MODULE) $(ISO_ROOT)/modules/devfs.server
+	cp $(UTMPFS_MODULE) $(ISO_ROOT)/modules/utmpfs.server
 	cp $(UNIONFS_MODULE) $(ISO_ROOT)/modules/unionfs.server
 	cp $(BLOCK_MODULE) $(ISO_ROOT)/modules/block.server
 	cp $(VFS_MODULE) $(ISO_ROOT)/modules/vfs.server
@@ -427,6 +436,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "tmpfs: mounted" $(BUILD_DIR)/serial.log
 	grep -F "devfs: online" $(BUILD_DIR)/serial.log
 	grep -F "devfs: mounted" $(BUILD_DIR)/serial.log
+	grep -F "utmpfs: online" $(BUILD_DIR)/serial.log
+	grep -F "utmpfs: mounted" $(BUILD_DIR)/serial.log
 	grep -F "vfs: mounted block" $(BUILD_DIR)/serial.log
 	grep -F "vfs: mounted translator" $(BUILD_DIR)/serial.log
 	grep -F "bootstrap: launching servers" $(BUILD_DIR)/serial.log
@@ -444,6 +455,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "kernel: launching module server procfs" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server tmpfs" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server devfs" $(BUILD_DIR)/serial.log
+	grep -F "kernel: launching module server utmpfs" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server block" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server vfs" $(BUILD_DIR)/serial.log
 	grep -F "kernel: launching module server ping" $(BUILD_DIR)/serial.log
