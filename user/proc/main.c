@@ -1,3 +1,4 @@
+#include <bunix/alloc.h>
 #include <bunix/id_table.h>
 #include <bunix/libbunix.h>
 
@@ -539,8 +540,8 @@ static int exec_strings_from_spawn_buffer(const struct bunix_msg *message,
 	    message->words[0] == 0 ||
 	    message->words[0] > sizeof(spawn_buffer) ||
 	    message->words[1] == 0 ||
-	    message->words[1] > 64 ||
-	    message->words[2] > 64) {
+	    message->words[1] > message->words[0] ||
+	    message->words[2] > message->words[0]) {
 		return -1;
 	}
 	total = message->words[0];
@@ -969,16 +970,21 @@ static long build_initial_stack(u64 task, const char *path,
 		0x62, 0x75, 0x6e, 0x69, 0x78, 0x2d, 0x6d, 0x75,
 		0x73, 0x6c, 0x2d, 0x72, 0x61, 0x6e, 0x64, 0x00,
 	};
-	u64 argv_addrs[64];
-	u64 env_addrs[64];
+	u64 *argv_addrs = 0;
+	u64 *env_addrs = 0;
 	u64 sp = PROC_INIT_STACK_MAX;
+	long result = -1;
 
 	if (exec == 0 ||
 	    exec->phdrs == 0 ||
-	    phdr_size == 0 ||
-	    argc > sizeof(argv_addrs) / sizeof(argv_addrs[0]) ||
-	    envc > sizeof(env_addrs) / sizeof(env_addrs[0])) {
+	    phdr_size == 0) {
 		return -1;
+	}
+
+	argv_addrs = (u64 *)bunix_alloc(argc * sizeof(u64));
+	env_addrs = envc == 0 ? 0 : (u64 *)bunix_alloc(envc * sizeof(u64));
+	if (argv_addrs == 0 || (envc != 0 && env_addrs == 0)) {
+		goto out;
 	}
 
 	mem_zero(init_stack, sizeof(init_stack));
@@ -987,7 +993,7 @@ static long build_initial_stack(u64 task, const char *path,
 		const u64 len = str_len(value) + 1;
 
 		if (len > sp) {
-			return -1;
+			goto out;
 		}
 		sp -= len;
 		env_addrs[i - 1] = stack_base + sp;
@@ -999,14 +1005,14 @@ static long build_initial_stack(u64 task, const char *path,
 		const u64 len = str_len(value) + 1;
 
 		if (len > sp) {
-			return -1;
+			goto out;
 		}
 		sp -= len;
 		argv_addrs[i - 1] = stack_base + sp;
 		mem_copy(init_stack + sp, (const unsigned char *)value, len);
 	}
 	if (path_len + 1 > sp) {
-		return -1;
+		goto out;
 	}
 	sp -= path_len + 1;
 	const u64 execfn = stack_base + sp;
@@ -1014,7 +1020,7 @@ static long build_initial_stack(u64 task, const char *path,
 
 	sp = align_down(sp, 16);
 	if (sizeof(random_bytes) > sp) {
-		return -1;
+		goto out;
 	}
 	sp -= sizeof(random_bytes);
 	const u64 random_addr = stack_base + sp;
@@ -1022,7 +1028,7 @@ static long build_initial_stack(u64 task, const char *path,
 
 	sp = align_down(sp, 8);
 	if (phdr_size > sp) {
-		return -1;
+		goto out;
 	}
 	sp -= phdr_size;
 	const u64 copied_phdr_addr = stack_base + sp;
@@ -1034,7 +1040,7 @@ static long build_initial_stack(u64 task, const char *path,
 
 	sp = align_down(sp, 16);
 	if (stack_words * sizeof(u64) > sp) {
-		return -1;
+		goto out;
 	}
 	sp -= stack_words * sizeof(u64);
 	u64 *words = (u64 *)(init_stack + sp);
@@ -1094,11 +1100,16 @@ static long build_initial_stack(u64 task, const char *path,
 
 	if (bunix_task_write(task, stack_base + sp, init_stack + sp,
 			     PROC_INIT_STACK_MAX - sp) != 0) {
-		return -1;
+		goto out;
 	}
 
 	*stack = stack_base + sp;
-	return 0;
+	result = 0;
+
+out:
+	bunix_free(argv_addrs);
+	bunix_free(env_addrs);
+	return result;
 }
 
 static long register_linux_process(u64 task, u64 requested_pid,

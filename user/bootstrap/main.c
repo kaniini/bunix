@@ -1,3 +1,4 @@
+#include <bunix/alloc.h>
 #include <bunix/libbunix.h>
 
 static long register_service_in_namespace(u64 namespace, u64 service, u64 handle)
@@ -129,8 +130,17 @@ static u64 str_len(const char *text)
 }
 
 enum {
-	BOOT_EXECS_MAX = 1024,
+	BOOT_EXECS_MAX = 4096,
 	BOOT_TOKEN_MAX = 128,
+};
+
+struct boot_spawn_args {
+	char **args;
+	char **envs;
+	u64 arg_count;
+	u64 env_count;
+	u64 arg_cap;
+	u64 env_cap;
 };
 
 static int is_space(char c)
@@ -170,6 +180,68 @@ static int read_token(const char *text, u64 *pos, char *out, u64 out_size)
 		return -1;
 	}
 	out[len] = '\0';
+	return 0;
+}
+
+static char *str_dup(const char *text)
+{
+	const u64 len = str_len(text) + 1;
+	char *copy = (char *)bunix_alloc(len);
+
+	if (copy == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < len; i++) {
+		copy[i] = text[i];
+	}
+	return copy;
+}
+
+static void boot_spawn_args_free(struct boot_spawn_args *spawn)
+{
+	if (spawn == 0) {
+		return;
+	}
+	for (u64 i = 0; i < spawn->arg_count; i++) {
+		bunix_free(spawn->args[i]);
+	}
+	for (u64 i = 0; i < spawn->env_count; i++) {
+		bunix_free(spawn->envs[i]);
+	}
+	bunix_free(spawn->args);
+	bunix_free(spawn->envs);
+	spawn->args = 0;
+	spawn->envs = 0;
+	spawn->arg_count = 0;
+	spawn->env_count = 0;
+	spawn->arg_cap = 0;
+	spawn->env_cap = 0;
+}
+
+static int boot_spawn_push(char ***values, u64 *count, u64 *cap,
+			   const char *text)
+{
+	char **next;
+	char *copy;
+	u64 old_size;
+	u64 new_cap;
+
+	if (*count == *cap) {
+		old_size = *cap * sizeof(char *);
+		new_cap = *cap == 0 ? 8 : *cap * 2;
+		next = (char **)bunix_realloc(*values, old_size,
+					      new_cap * sizeof(char *));
+		if (next == 0) {
+			return -1;
+		}
+		*values = next;
+		*cap = new_cap;
+	}
+	copy = str_dup(text);
+	if (copy == 0) {
+		return -1;
+	}
+	(*values)[(*count)++] = copy;
 	return 0;
 }
 
@@ -458,11 +530,8 @@ static long run_boot_spawns(u64 proc, u64 vfs)
 	}
 	while (text[pos] != '\0') {
 		char path[BOOT_TOKEN_MAX];
-		char tokens[32][BOOT_TOKEN_MAX];
-		const char *args[32];
-		const char *envs[32];
-		u64 arg_count = 0;
-		u64 env_count = 0;
+		struct boot_spawn_args spawn = { 0, 0, 0, 0, 0, 0 };
+		long result;
 
 		while (is_space(text[pos])) {
 			pos++;
@@ -478,7 +547,7 @@ static long run_boot_spawns(u64 proc, u64 vfs)
 			return -1;
 		}
 		while (text[pos] != '\0' && text[pos] != '\n') {
-			const u64 token = arg_count + env_count;
+			char token[BOOT_TOKEN_MAX];
 
 			if (text[pos] == '#') {
 				break;
@@ -487,22 +556,39 @@ static long run_boot_spawns(u64 proc, u64 vfs)
 				pos++;
 				continue;
 			}
-			if (token >= sizeof(tokens) / sizeof(tokens[0]) ||
-			    read_token(text, &pos, tokens[token],
-				       sizeof(tokens[token])) != 0) {
+			if (read_token(text, &pos, token, sizeof(token)) != 0) {
+				boot_spawn_args_free(&spawn);
 				return -1;
 			}
-			if (token_is_env(tokens[token])) {
-				envs[env_count++] = tokens[token] + 4;
+			if (token_is_env(token)) {
+				if (boot_spawn_push(&spawn.envs,
+						    &spawn.env_count,
+						    &spawn.env_cap,
+						    token + 4) != 0) {
+					boot_spawn_args_free(&spawn);
+					return -1;
+				}
 			} else {
-				args[arg_count++] = tokens[token];
+				if (boot_spawn_push(&spawn.args,
+						    &spawn.arg_count,
+						    &spawn.arg_cap,
+						    token) != 0) {
+					boot_spawn_args_free(&spawn);
+					return -1;
+				}
 			}
 		}
-		if ((arg_count == 0 && env_count == 0 &&
-		     proc_spawn_wait(proc, path) != 0) ||
-		    ((arg_count != 0 || env_count != 0) &&
-		     proc_spawn_wait_args(proc, path, args, arg_count,
-					  envs, env_count) != 0)) {
+		if (spawn.arg_count == 0 && spawn.env_count == 0) {
+			result = proc_spawn_wait(proc, path);
+		} else {
+			result = proc_spawn_wait_args(proc, path,
+						     (const char **)spawn.args,
+						     spawn.arg_count,
+						     (const char **)spawn.envs,
+						     spawn.env_count);
+		}
+		boot_spawn_args_free(&spawn);
+		if (result != 0) {
 			return -1;
 		}
 		count++;

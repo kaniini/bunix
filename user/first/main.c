@@ -287,6 +287,9 @@ int main(int argc, char **argv, char **envp)
 		stdout_write_text_value("first: argv2=", argv[2]);
 		stdout_write_text_value("first: argv3=", argv[3]);
 	}
+	if (argc > 64 && argv != 0 && argv[65] != 0) {
+		stdout_write_text_value("first: argv65=", argv[65]);
+	}
 	if (envp != 0) {
 		for (char **env = envp; *env != 0; env++) {
 			if ((*env)[0] == 'P' && (*env)[1] == 'R' &&

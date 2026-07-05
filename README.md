@@ -168,7 +168,8 @@ Proc allocates a buffer, sends duplicate/write authority to VFS, VFS forwards
 write-only authority to block, block fills it from the rootfs module, and proc
 copies the bytes back through its read authority. Proc builds the initial exec
 stack with caller-supplied `argc`, `argv[]`, `envp[]`, and auxv entries for page
-size, entry point, program headers, and `AT_EXECFN`.
+size, entry point, program headers, and `AT_EXECFN`; argv/env address staging is
+allocated dynamically instead of capped by fixed pointer arrays.
 Bunix-private auxv entries publish startup service capabilities for stdout,
 stderr, time, and proc, so a process consumes delegated handles from its initial
 image instead of baking in ambient handle numbers. The kernel still has an
