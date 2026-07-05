@@ -185,7 +185,6 @@ enum {
 	ARCH_USER_MAX_CPUS = 8,
 	LINUX_MAX_SYSCALL_BUFFER = 65536,
 	LINUX_MAX_SOCKADDR = 128,
-	LINUX_EXEC_MAX_IMAGE = 2 * 1024 * 1024,
 	LINUX_EXEC_MAX_PATH = 4096,
 	LINUX_EXEC_MAX_STRING = 4096,
 	LINUX_EXEC_MAX_STRING_BYTES = 128 * 1024,
@@ -815,7 +814,7 @@ static int linux_vfs_read_file(struct task *task, const char *path,
 
 	file = reply.words[1];
 	size = reply.words[2];
-	if (size == 0 || size > image_cap) {
+	if (size == 0 || (image_cap != 0 && size > image_cap)) {
 		(void)linux_vfs_close(task, file);
 		return -1;
 	}
@@ -2237,8 +2236,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		return (u64)-LINUX_EINVAL;
 	}
 
-	read_result = linux_vfs_read_file(task, path, &image,
-					  LINUX_EXEC_MAX_IMAGE, &image_size);
+	read_result = linux_vfs_read_file(task, path, &image, 0, &image_size);
 	if (read_result != 0) {
 		linux_exec_args_free(&args);
 		return read_result == -2 ? (u64)-LINUX_ENOMEM :
@@ -2264,8 +2262,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	}
 	if (interp > 0) {
 		read_result = linux_vfs_read_file(task, interp_path,
-						  &interp_image,
-						  LINUX_EXEC_MAX_IMAGE,
+						  &interp_image, 0,
 						  &interp_size);
 		if (read_result != 0) {
 			slab_free(image);
