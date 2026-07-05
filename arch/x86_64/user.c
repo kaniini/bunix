@@ -1465,6 +1465,35 @@ static struct shared_buffer *linux_forward_path_buffer(
 	return buffer;
 }
 
+static u64 linux_forward_output_buffer(struct ipc_port *linux,
+				       struct ipc_port *reply_port,
+				       struct ipc_message *request,
+				       void *user_out, u64 size,
+				       u32 cap_rights)
+{
+	struct shared_buffer *buffer;
+	struct ipc_message reply;
+
+	buffer = buffer_create(size == 0 ? 1 : size);
+	if (buffer == 0) {
+		return (u64)-LINUX_EINVAL;
+	}
+	request->cap_type = IPC_CAP_BUFFER;
+	request->cap_rights = cap_rights;
+	request->cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	if ((i64)reply.words[0] > 0 &&
+	    buffer_read(buffer, 0, user_out, reply.words[0]) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_EINVAL;
+	}
+	buffer_release(buffer);
+	return reply.words[0];
+}
+
 static int linux_exec_map_segment(struct task *task, const u8 *image,
 				  const struct elf64_phdr *phdr,
 				  u64 load_bias)
@@ -2970,47 +2999,24 @@ poll_again:
 
 	switch (number) {
 	case LINUX_SYSCALL_READ: {
-		struct shared_buffer *buffer;
 		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
 				LINUX_MAX_SYSCALL_BUFFER : arg2;
 
 		if (arg1 == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
-
-		buffer = buffer_create(len == 0 ? 1 : len);
-		if (buffer == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-
 		request.type = LINUX_SYSCALL_READ;
 		request.words[0] = arg0;
 		request.words[1] = len;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		request.cap_type = IPC_CAP_BUFFER;
-		request.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP;
-		request.cap_object = buffer;
-		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_ENOSYS;
-		}
-		if ((i64)reply.words[0] > 0 &&
-		    buffer_read(buffer, 0, (void *)arg1, reply.words[0]) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
-		}
-		buffer_release(buffer);
-		return reply.words[0];
+		return linux_forward_output_buffer(linux, reply_port, &request,
+						   (void *)arg1, len,
+						   TASK_RIGHT_SEND |
+						   TASK_RIGHT_DUP);
 	}
 	case LINUX_SYSCALL_GETDENTS64: {
-		struct shared_buffer *buffer;
-
 		if (arg1 == 0 || arg2 == 0 || arg2 > LINUX_MAX_SYSCALL_BUFFER) {
-			return (u64)-LINUX_EINVAL;
-		}
-		buffer = buffer_create(arg2);
-		if (buffer == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
 		request.type = LINUX_SYSCALL_GETDENTS64;
@@ -3018,20 +3024,9 @@ poll_again:
 		request.words[1] = arg2;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		request.cap_type = IPC_CAP_BUFFER;
-		request.cap_rights = TASK_RIGHT_SEND;
-		request.cap_object = buffer;
-		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_ENOSYS;
-		}
-		if ((i64)reply.words[0] > 0 &&
-		    buffer_read(buffer, 0, (void *)arg1, reply.words[0]) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
-		}
-		buffer_release(buffer);
-		return reply.words[0];
+		return linux_forward_output_buffer(linux, reply_port, &request,
+						   (void *)arg1, arg2,
+						   TASK_RIGHT_SEND);
 	}
 	case LINUX_SYSCALL_WRITE: {
 		if (arg1 == 0 || arg2 > LINUX_MAX_SYSCALL_BUFFER) {
@@ -3133,16 +3128,10 @@ poll_again:
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_RECVFROM: {
-		struct shared_buffer *buffer;
 		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
 				LINUX_MAX_SYSCALL_BUFFER : arg2;
 
 		if (arg1 == 0 && len != 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-
-		buffer = buffer_create(len == 0 ? 1 : len);
-		if (buffer == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
 
@@ -3151,20 +3140,9 @@ poll_again:
 		request.words[1] = len;
 		request.words[2] = arg3;
 		request.words[3] = 0;
-		request.cap_type = IPC_CAP_BUFFER;
-		request.cap_rights = TASK_RIGHT_SEND;
-		request.cap_object = buffer;
-		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_ENOSYS;
-		}
-		if ((i64)reply.words[0] > 0 &&
-		    buffer_read(buffer, 0, (void *)arg1, reply.words[0]) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
-		}
-		buffer_release(buffer);
-		return reply.words[0];
+		return linux_forward_output_buffer(linux, reply_port, &request,
+						   (void *)arg1, len,
+						   TASK_RIGHT_SEND);
 	}
 	case LINUX_SYSCALL_SENDFILE:
 		return (u64)-LINUX_EINVAL;
