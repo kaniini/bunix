@@ -63,13 +63,15 @@ Plan:
      process group probes, and Ctrl-C interruption.
    - `tools/shell-tests/exec-argv-pipe.sh` owns pipe, initial procfs read, and
      argv/env expansion checks, including large argv/env coverage.
+   - `tools/shell-tests/rootfs-vfs-proc-dev.sh` owns rootfs path reads, symlink
+     reads, directory stats, VFS cwd/path normalization, procfs basics, and
+     devfs character-device smoke checks.
 
    Needs:
 
    - Extract the remaining user-phase batches:
-     `rootfs-vfs-proc-dev`, `tmpfs-basic-linux-tests`, `path-limits-statfs`,
-     `union-root-user`, `tmpfs-extended`, `large-io-mount`, and
-     `interactive-tty`.
+     `tmpfs-basic-linux-tests`, `path-limits-statfs`, `union-root-user`,
+     `tmpfs-extended`, `large-io-mount`, and `interactive-tty`.
    - Extract the root-phase batches:
      `root-login-union`, `root-tmpfs-chown`, `long-login`, and
      `root-mount-soak`.
