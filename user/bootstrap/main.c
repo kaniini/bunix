@@ -188,6 +188,7 @@ struct boot_spawn {
 static long register_proc_execs(u64 proc)
 {
 	const struct boot_exec execs[] = {
+		{ "/bin/first", "first", 0, BUNIX_PROC_EXEC_LOG_FIRST },
 		{ "/bin/lxtest", "lxtest", 1, BUNIX_PROC_EXEC_LOG_LINUX },
 		{ "/bin/musl-hello", "musl-hello", 1,
 		  BUNIX_PROC_EXEC_LOG_MUSL },

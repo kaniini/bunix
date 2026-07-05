@@ -133,6 +133,7 @@ static unsigned char init_stack[PROC_INIT_STACK_MAX];
 static const char proc_online[] = "proc: online\n";
 static const char proc_ready[] = "proc: ready\n";
 static const char proc_exec[] = "proc: exec /bin/first\n";
+static const char proc_exec_generic[] = "proc: exec\n";
 static const char proc_exec_linux[] = "proc: exec /bin/lxtest\n";
 static const char proc_exec_musl[] = "proc: exec /bin/musl-hello\n";
 static const char proc_exec_shell[] = "proc: exec /bin/sh\n";
@@ -245,7 +246,7 @@ static const char *task_name_for_path(const char *path)
 {
 	const struct proc_exec_entry *entry = exec_entry_for_path(path);
 
-	return entry != 0 ? entry->task_name : "first";
+	return entry != 0 ? entry->task_name : "process";
 }
 
 static const char *log_line_for_path(const char *path)
@@ -253,7 +254,7 @@ static const char *log_line_for_path(const char *path)
 	const struct proc_exec_entry *entry = exec_entry_for_path(path);
 
 	return entry != 0 && entry->log_line != 0 ? entry->log_line :
-	       proc_exec;
+	       proc_exec_generic;
 }
 
 static const char *log_line_for_kind(u64 kind)
@@ -269,6 +270,8 @@ static const char *log_line_for_kind(u64 kind)
 		return proc_exec_login;
 	case BUNIX_PROC_EXEC_LOG_INIT:
 		return proc_exec_init;
+	case BUNIX_PROC_EXEC_LOG_FIRST:
+		return proc_exec;
 	default:
 		return 0;
 	}
