@@ -1978,7 +1978,7 @@ static long tty_read_raw(struct linux_process *process, u64 len, u64 buffer)
 			if (done != 0) {
 				return (long)done;
 			}
-			return -LINUX_EINVAL;
+			return -LINUX_EIO;
 		}
 		if ((lflag & LINUX_ISIG) != 0 && c == intr) {
 			if ((lflag & LINUX_ECHO) != 0) {
@@ -2015,7 +2015,7 @@ static long tty_fill_canonical_line(struct linux_process *process)
 		const long nread = bunix_console_read(&c, 1);
 
 		if (nread != 1) {
-			return -LINUX_EINVAL;
+			return -LINUX_EIO;
 		}
 		if (c == '\r' && (iflag & LINUX_ICRNL) != 0) {
 			c = '\n';
@@ -3449,10 +3449,11 @@ static long linux_statx(struct linux_process *process, u64 dirfd,
 	if ((flags & ~allowed_flags) != 0) {
 		return -LINUX_EINVAL;
 	}
-	if (linux_newfstatat(process, dirfd, path_len, path_buffer,
-			     flags & LINUX_AT_SYMLINK_NOFOLLOW ? 1 : 0,
-			     &meta) != 0) {
-		return -LINUX_ENOENT;
+	const long result = linux_newfstatat(
+		process, dirfd, path_len, path_buffer,
+		flags & LINUX_AT_SYMLINK_NOFOLLOW ? 1 : 0, &meta);
+	if (result != 0) {
+		return result;
 	}
 	return linux_statx_from_vfs_meta(path_buffer, &meta);
 }
