@@ -3370,31 +3370,17 @@ poll_again:
 	case LINUX_SYSCALL_SENDFILE:
 		return (u64)-LINUX_EINVAL;
 	case LINUX_SYSCALL_GETCWD: {
-		char cwd[16];
-		u64 len;
+		u64 size;
 
-		if (arg0 == 0) {
+		if (arg0 == 0 || arg1 == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
-		request.type = LINUX_SYSCALL_GETCWD;
-		request.words[0] = arg1;
-		request.words[1] = 0;
-		request.words[2] = 0;
-		request.words[3] = 0;
-		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			return (u64)-LINUX_ENOSYS;
-		}
-		if ((i64)reply.words[0] < 0) {
-			return reply.words[0];
-		}
-		len = reply.words[0];
-		if (len == 0 || len > sizeof(cwd)) {
-			return (u64)-LINUX_EINVAL;
-		}
-		mem_zero((u8 *)cwd, sizeof(cwd));
-		mem_copy((u8 *)cwd, (const u8 *)&reply.words[1], len);
-		return write_current_user(arg0, cwd, len) == 0 ?
-		       len : (u64)-LINUX_EINVAL;
+		size = min_u64(arg1, LINUX_EXEC_MAX_PATH);
+		return linux_forward_output_words(linux, reply_port, &request,
+						  LINUX_SYSCALL_GETCWD,
+						  (void *)arg0, size,
+						  TASK_RIGHT_SEND,
+						  arg1, 0, 0);
 	}
 	case LINUX_SYSCALL_CHDIR: {
 		if (arg0 == 0) {

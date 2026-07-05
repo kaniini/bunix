@@ -208,7 +208,9 @@ returns the child PID with a Linux wait status.
 Linux `execve` dynamically copies argv and envp strings within the current
 64 KiB exec stack budget, builds the full replacement stack image, and writes it
 into the new task image instead of using tiny fixed argv/env arrays. Linux
-`execve` accepts executable paths up to the current 256-byte VFS path budget.
+`execve` accepts executable paths up to the current 256-byte VFS path budget,
+and `getcwd` returns cwd strings through shared-buffer transport instead of the
+inline IPC word path.
 The login program now execs the shell with `HOME`, `USER`, `LOGNAME`, `SHELL`,
 `PATH`, and `TERM`, and changes into the account home directory before execing
 the shell. Command lookup, login environment inheritance, larger argv/env

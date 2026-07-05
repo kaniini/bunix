@@ -2976,13 +2976,21 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 }
 
 static long linux_getcwd(struct linux_process *process, u64 size,
-			 u64 *word0, u64 *word1)
+			 u64 buffer, u64 *word0, u64 *word1)
 {
 	const u64 len = string_len(process->cwd) + 1;
 	u64 words[2];
 
-	if (size < len || len > BUNIX_IPC_DATA_BYTES ||
-	    word0 == 0 || word1 == 0) {
+	if (size < len) {
+		return -LINUX_EINVAL;
+	}
+	if (buffer != 0) {
+		if (bunix_buffer_write(buffer, 0, process->cwd, len) != 0) {
+			return -LINUX_EINVAL;
+		}
+		return (long)len;
+	}
+	if (len > BUNIX_IPC_DATA_BYTES || word0 == 0 || word1 == 0) {
 		return -LINUX_EINVAL;
 	}
 	pack_path(words, process->cwd);
@@ -3757,8 +3765,12 @@ int main(void)
 		case BUNIX_LINUX_GETCWD:
 			reply.words[0] = (u64)linux_getcwd(process,
 							   message.words[0],
+							   message.cap,
 							   &reply.words[1],
 							   &reply.words[2]);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
 			break;
 		case BUNIX_LINUX_CHDIR:
 			reply.words[0] = (u64)linux_chdir(process,
