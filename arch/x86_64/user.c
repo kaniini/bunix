@@ -4285,7 +4285,7 @@ poll_again:
 		const u64 mode = is_at ? arg2 : arg1;
 		const u64 owner = is_at ? arg2 : arg1;
 		const u64 group = is_at ? arg3 : arg2;
-		const u64 flags = number == LINUX_SYSCALL_FCHMODAT ? arg3 :
+		const u64 flags = number == LINUX_SYSCALL_FCHMODAT ? 0 :
 				  (number == LINUX_SYSCALL_FCHOWNAT ?
 				   frame->r8 :
 				   (number == LINUX_SYSCALL_LCHOWN ?
