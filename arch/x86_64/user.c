@@ -303,7 +303,12 @@ enum {
 	LINUX_AT_PAGESZ = 6,
 	LINUX_AT_BASE = 7,
 	LINUX_AT_ENTRY = 9,
+	LINUX_AT_UID = 11,
+	LINUX_AT_EUID = 12,
+	LINUX_AT_GID = 13,
+	LINUX_AT_EGID = 14,
 	LINUX_AT_CLKTCK = 17,
+	LINUX_AT_SECURE = 23,
 	LINUX_AT_RANDOM = 25,
 	LINUX_AT_EXECFN = 31,
 	BUNIX_AT_STDOUT = 0x62780101,
@@ -362,6 +367,14 @@ struct linux_exec_args {
 	u64 bytes;
 	char **argv;
 	char **envp;
+};
+
+struct linux_exec_credentials {
+	u64 uid;
+	u64 gid;
+	u64 euid;
+	u64 egid;
+	u64 secure;
 };
 
 struct linux_vfork_wait {
@@ -2584,15 +2597,63 @@ static int linux_exec_collect_env(u64 user_envp, struct linux_exec_args *args)
 	return 0;
 }
 
+static void linux_exec_credentials_load(struct task *task,
+					struct linux_exec_credentials *creds)
+{
+	struct ipc_port *linux;
+	struct ipc_port *reply_port;
+	u64 value;
+
+	if (creds == 0) {
+		return;
+	}
+	creds->uid = 0;
+	creds->gid = 0;
+	creds->euid = 0;
+	creds->egid = 0;
+	creds->secure = 0;
+	if (task == 0) {
+		return;
+	}
+
+	linux = ipc_port_find("linux");
+	reply_port = task_reply_port(task);
+	if (linux == 0 || reply_port == 0) {
+		return;
+	}
+
+	value = linux_forward_words(linux, reply_port, LINUX_SYSCALL_GETUID,
+				    0, 0, 0);
+	if ((i64)value >= 0) {
+		creds->uid = value;
+	}
+	value = linux_forward_words(linux, reply_port, LINUX_SYSCALL_GETGID,
+				    0, 0, 0);
+	if ((i64)value >= 0) {
+		creds->gid = value;
+	}
+	value = linux_forward_words(linux, reply_port, LINUX_SYSCALL_GETEUID,
+				    0, 0, 0);
+	if ((i64)value >= 0) {
+		creds->euid = value;
+	}
+	value = linux_forward_words(linux, reply_port, LINUX_SYSCALL_GETEGID,
+				    0, 0, 0);
+	if ((i64)value >= 0) {
+		creds->egid = value;
+	}
+}
+
 static int linux_exec_build_stack(const char *path,
 				  const struct linux_exec_args *args,
 				  const struct linux_exec_image *exec,
 				  u64 load_bias, u64 program_entry,
 				  u64 interpreter_base,
+				  const struct linux_exec_credentials *creds,
 				  u8 *stack_image, u64 stack_size,
 				  u64 *new_sp)
 {
-	const u64 aux_pairs = interpreter_base == 0 ? 15 : 16;
+	const u64 aux_pairs = interpreter_base == 0 ? 19 : 20;
 	const u64 stack_base = LINUX_EXEC_STACK_TOP - stack_size;
 	u64 *argv_addrs;
 	u64 *env_addrs = 0;
@@ -2600,6 +2661,7 @@ static int linux_exec_build_stack(const char *path,
 	int result = -1;
 
 	if (path == 0 || args == 0 || exec == 0 || exec->phdrs == 0 ||
+	    creds == 0 ||
 	    stack_image == 0 || new_sp == 0 || stack_size == 0 ||
 	    args->argc == 0) {
 		return -1;
@@ -2713,6 +2775,16 @@ static int linux_exec_build_stack(const char *path,
 	stack_words[word++] = random_addr;
 	stack_words[word++] = LINUX_AT_CLKTCK;
 	stack_words[word++] = 100;
+	stack_words[word++] = LINUX_AT_UID;
+	stack_words[word++] = creds->uid;
+	stack_words[word++] = LINUX_AT_EUID;
+	stack_words[word++] = creds->euid;
+	stack_words[word++] = LINUX_AT_GID;
+	stack_words[word++] = creds->gid;
+	stack_words[word++] = LINUX_AT_EGID;
+	stack_words[word++] = creds->egid;
+	stack_words[word++] = LINUX_AT_SECURE;
+	stack_words[word++] = creds->secure;
 	stack_words[word++] = BUNIX_AT_STDOUT;
 	stack_words[word++] = LINUX_EXEC_HANDLE_STDOUT;
 	stack_words[word++] = BUNIX_AT_STDERR;
@@ -2746,6 +2818,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 {
 	char path[LINUX_EXEC_MAX_PATH];
 	struct linux_exec_args args;
+	struct linux_exec_credentials creds;
 	u64 image_size = 0;
 	u64 interp_size = 0;
 	struct linux_exec_image exec;
@@ -2768,6 +2841,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 
 	mem_zero((u8 *)&exec, sizeof(exec));
 	mem_zero((u8 *)&interp_exec, sizeof(interp_exec));
+	mem_zero((u8 *)&creds, sizeof(creds));
 	path_result = copy_cstr_from_user_errno(path, user_path, sizeof(path));
 	if (path_result != 0) {
 		return (u64)path_result;
@@ -2848,11 +2922,12 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		linux_exec_args_free(&args);
 		return (u64)-LINUX_ENOMEM;
 	}
+	linux_exec_credentials_load(task, &creds);
 	if ((interp_image == 0 &&
 	     linux_exec_apply_relative_relocations(image, &exec, image_size,
 						  load_bias) != 0) ||
 	    linux_exec_build_stack(path, &args, &exec, load_bias, program_entry,
-				   interp_bias, stack_image, stack_size,
+				   interp_bias, &creds, stack_image, stack_size,
 				   &new_sp) != 0) {
 		slab_free(stack_image);
 		linux_exec_image_free(&interp_exec);
