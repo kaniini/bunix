@@ -1207,6 +1207,41 @@ static u64 linux_forward_words(struct ipc_port *linux,
 	       reply.words[0] : (u64)-LINUX_ENOSYS;
 }
 
+static u64 linux_forward_input_buffer(struct ipc_port *linux,
+				      struct ipc_port *reply_port,
+				      struct ipc_message *request,
+				      u64 user_buffer, u64 len,
+				      u32 cap_rights)
+{
+	struct ipc_message reply;
+	struct shared_buffer *buffer;
+	u64 flags;
+
+	buffer = buffer_create(len == 0 ? 1 : len);
+	if (buffer == 0) {
+		return (u64)-LINUX_EINVAL;
+	}
+	if (len != 0) {
+		flags = spin_lock_irqsave(&syscall_copy_lock);
+		if (read_current_user(user_buffer, syscall_copy_buffer, len) != 0 ||
+		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
+	}
+	request->cap_type = IPC_CAP_BUFFER;
+	request->cap_rights = cap_rights;
+	request->cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	buffer_release(buffer);
+	return reply.words[0];
+}
+
 static int linux_syscall_forwards_scalar(u64 number)
 {
 	switch (number) {
@@ -1342,40 +1377,12 @@ static u64 linux_write_one(struct ipc_port *linux, struct ipc_port *reply_port,
 		.cap_object = 0,
 		.words = { fd, len, 0, 0 },
 	};
-	struct ipc_message reply;
-	struct shared_buffer *buffer;
-	u64 flags;
 
 	if (len > LINUX_MAX_SYSCALL_BUFFER) {
 		return (u64)-LINUX_EINVAL;
 	}
-
-	buffer = buffer_create(len == 0 ? 1 : len);
-	if (buffer == 0) {
-		buffer_release(buffer);
-		return (u64)-LINUX_EINVAL;
-	}
-	if (len != 0) {
-		flags = spin_lock_irqsave(&syscall_copy_lock);
-		if (read_current_user(user_buffer, syscall_copy_buffer, len) != 0 ||
-		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
-		}
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
-	}
-
-	request.cap_type = IPC_CAP_BUFFER;
-	request.cap_rights = TASK_RIGHT_RECV;
-	request.cap_object = buffer;
-	if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-		buffer_release(buffer);
-		return (u64)-LINUX_ENOSYS;
-	}
-
-	buffer_release(buffer);
-	return reply.words[0];
+	return linux_forward_input_buffer(linux, reply_port, &request,
+					  user_buffer, len, TASK_RIGHT_RECV);
 }
 
 static struct shared_buffer *linux_path_buffer_from_user(const char *path,
@@ -3059,73 +3066,34 @@ poll_again:
 		       0 : (u64)-LINUX_EINVAL;
 	}
 	case LINUX_SYSCALL_CONNECT: {
-		struct shared_buffer *buffer;
 		const u64 len = arg2 > LINUX_MAX_SOCKADDR ?
 				LINUX_MAX_SOCKADDR : arg2;
 
 		if (arg1 == 0 || len == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
-
-		buffer = buffer_create(len);
-		if (buffer == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		if (read_current_user(arg1, syscall_copy_buffer, len) != 0 ||
-		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
-		}
-
 		request.type = LINUX_SYSCALL_CONNECT;
 		request.words[0] = arg0;
 		request.words[1] = len;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		request.cap_type = IPC_CAP_BUFFER;
-		request.cap_rights = TASK_RIGHT_RECV;
-		request.cap_object = buffer;
-		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_ENOSYS;
-		}
-		buffer_release(buffer);
-		return reply.words[0];
+		return linux_forward_input_buffer(linux, reply_port, &request,
+						  arg1, len, TASK_RIGHT_RECV);
 	}
 	case LINUX_SYSCALL_SENDTO: {
-		struct shared_buffer *buffer;
 		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
 				LINUX_MAX_SYSCALL_BUFFER : arg2;
 
 		if (arg1 == 0 && len != 0) {
 			return (u64)-LINUX_EINVAL;
 		}
-
-		buffer = buffer_create(len == 0 ? 1 : len);
-		if (buffer == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		if (len != 0 &&
-		    (read_current_user(arg1, syscall_copy_buffer, len) != 0 ||
-		     buffer_write(buffer, 0, syscall_copy_buffer, len) != 0)) {
-			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
-		}
-
 		request.type = LINUX_SYSCALL_SENDTO;
 		request.words[0] = arg0;
 		request.words[1] = len;
 		request.words[2] = arg3;
 		request.words[3] = 0;
-		request.cap_type = IPC_CAP_BUFFER;
-		request.cap_rights = TASK_RIGHT_RECV;
-		request.cap_object = buffer;
-		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_ENOSYS;
-		}
-		buffer_release(buffer);
-		return reply.words[0];
+		return linux_forward_input_buffer(linux, reply_port, &request,
+						  arg1, len, TASK_RIGHT_RECV);
 	}
 	case LINUX_SYSCALL_RECVFROM: {
 		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
