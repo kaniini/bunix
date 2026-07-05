@@ -1267,6 +1267,14 @@ static void reply_rename(struct bunix_msg *message, struct bunix_msg *reply,
 		reply->words[0] = (u64)-1;
 		return;
 	}
+	if (reply->words[0] == BUNIX_VFS_ERR_NOENT &&
+	    !whiteout_exists(old_relative) &&
+	    copy_lower_path_to_upper(old_relative, message->words[3]) == 0 &&
+	    service_rename_call(upper_service, old_upper, new_upper,
+				message->words[3], reply) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
 	if (reply->words[0] == 0) {
 		(void)whiteout_add(old_relative);
 		whiteout_remove(new_relative);
