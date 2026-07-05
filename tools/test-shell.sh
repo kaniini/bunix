@@ -665,7 +665,7 @@ while [ "$(grep -F -c "~ # " "$log" 2>/dev/null || true)" -le "$root_prompts_bef
 	sleep 1
 done
 
-printf 'busybox id\nenv\nbusybox cat /secret.txt && echo ROOT_SECRET_OK\nbusybox chown 0:0 /tmp/bunix-write.txt && echo ROOT_CHOWN_OK\nbusybox stat -c "%%u:%%g" /tmp/bunix-write.txt\nexit\n' >&3
+printf 'busybox id\nenv\nbusybox cat /secret.txt && echo ROOT_SECRET_OK\n' >&3
 
 i=0
 while ! grep -F "uid=0(root)" "$log" >/dev/null 2>&1; do
@@ -701,6 +701,38 @@ while ! awk '{ sub(/\r$/, "") } /^ROOT_SECRET_OK$/ { found = 1 } END { exit foun
 	fi
 	sleep 1
 done
+printf 'echo UNION_LOWER_PARENT_CREATE_PAYLOAD > /usr/share/bunix/nested/created.txt\n' >&3
+printf 'busybox cat /usr/share/bunix/nested/created.txt && echo UNION_LOWER_PARENT_CREATE_OK\n' >&3
+printf 'busybox cat /tmp/union/usr/share/bunix/nested/created.txt && echo UNION_LOWER_PARENT_UPPER_OK\n' >&3
+printf 'echo UNION_LOWER_COPYUP_APPEND_PAYLOAD >> /usr/share/bunix/nested/hello.txt\n' >&3
+printf 'busybox cat /usr/share/bunix/nested/hello.txt && echo UNION_LOWER_COPYUP_APPEND_OK\n' >&3
+printf 'busybox cat /tmp/union/usr/share/bunix/nested/hello.txt && echo UNION_LOWER_COPYUP_UPPER_OK\n' >&3
+for expected in UNION_LOWER_PARENT_CREATE_OK UNION_LOWER_PARENT_UPPER_OK UNION_LOWER_COPYUP_APPEND_OK UNION_LOWER_COPYUP_UPPER_OK; do
+	i=0
+	while ! awk -v expected="$expected" '{ sub(/\r$/, "") } $0 == expected { found = 1 } END { exit found ? 0 : 1 }' "$log"; do
+		i=$((i + 1))
+		if [ "$i" -gt 45 ]; then
+			echo "root unionfs lower-parent regression missing: $expected" >&2
+			tail -n 220 "$log" >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+done
+for expected in UNION_LOWER_PARENT_CREATE_PAYLOAD UNION_LOWER_COPYUP_APPEND_PAYLOAD; do
+	i=0
+	while [ "$(grep -aF -c "$expected" "$log" 2>/dev/null || true)" -lt 2 ]; do
+		i=$((i + 1))
+		if [ "$i" -gt 45 ]; then
+			echo "root unionfs lower-parent payload missing: $expected" >&2
+			tail -n 220 "$log" >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+done
+printf 'busybox chown 0:0 /tmp/bunix-write.txt && echo ROOT_CHOWN_OK\n' >&3
+printf 'busybox stat -c "%%u:%%g" /tmp/bunix-write.txt\nexit\n' >&3
 i=0
 while ! awk '{ sub(/\r$/, "") } /^ROOT_CHOWN_OK$/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; do
 	i=$((i + 1))

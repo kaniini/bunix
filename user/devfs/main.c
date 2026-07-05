@@ -247,18 +247,20 @@ int main(void)
 
 		switch (message.type) {
 		case BUNIX_VFS_OPEN_BUFFER:
-			if (read_resolved_path(&message, path) != 0 ||
-			    (device = device_for_path(path)) == 0) {
-				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				if (read_resolved_path(&message, path) != 0 ||
+				    (device = device_for_path(path)) == 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+					break;
+				}
+				reply.words[0] = 0;
+				reply.words[1] = device;
+				reply.words[2] = device == DEVFS_ZERO ||
+						 device == DEVFS_RANDOM ?
+						 (u64)-1 : 0;
+				reply.words[3] = device == DEVFS_DIR ?
+						 BUNIX_VFS_TYPE_DIRECTORY :
+						 BUNIX_VFS_TYPE_REGULAR;
 				break;
-			}
-			reply.words[0] = 0;
-			reply.words[1] = device;
-			reply.words[2] = 0;
-			reply.words[3] = device == DEVFS_DIR ?
-					 BUNIX_VFS_TYPE_DIRECTORY :
-					 BUNIX_VFS_TYPE_REGULAR;
-			break;
 		case BUNIX_VFS_STAT_PATH_META_BUFFER:
 		case BUNIX_VFS_ACCESS_BUFFER:
 			if (read_resolved_path(&message, path) != 0 ||

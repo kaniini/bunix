@@ -448,6 +448,91 @@ static int lower_is_directory(const char *relative)
 	       (reply.words[2] >> 32) == BUNIX_VFS_TYPE_DIRECTORY;
 }
 
+static int relative_parent_path(const char *path, char *parent)
+{
+	u64 last = 0;
+
+	if (path == 0 || parent == 0 || path[0] != '/') {
+		return -1;
+	}
+	if (path[1] == '\0') {
+		parent[0] = '/';
+		parent[1] = '\0';
+		return 0;
+	}
+	for (u64 i = 1; path[i] != '\0'; i++) {
+		if (path[i] == '/') {
+			last = i;
+		}
+	}
+	if (last == 0) {
+		parent[0] = '/';
+		parent[1] = '\0';
+		return 0;
+	}
+	for (u64 i = 0; i < last; i++) {
+		parent[i] = path[i];
+	}
+	parent[last] = '\0';
+	return 0;
+}
+
+static int upper_directory_exists(const char *relative)
+{
+	char upper[UNIONFS_MAX_PATH];
+	struct bunix_msg reply;
+
+	return compose_upper_path(relative, upper) == 0 &&
+	       service_path_call(tmpfs_service, BUNIX_VFS_STAT_PATH_META_BUFFER,
+				 upper, 0, 0, &reply) == 0 &&
+	       reply.words[0] == 0 &&
+	       (reply.words[2] >> 32) == BUNIX_VFS_TYPE_DIRECTORY;
+}
+
+static int materialize_upper_directory(const char *relative, u64 task)
+{
+	char parent[UNIONFS_MAX_PATH];
+	char upper[UNIONFS_MAX_PATH];
+	struct bunix_msg stat_reply;
+	struct bunix_msg mkdir_reply;
+	u64 mode;
+
+	if (relative == 0 || relative[0] != '/') {
+		return -1;
+	}
+	if (str_eq(relative, "/") || upper_directory_exists(relative)) {
+		return 0;
+	}
+	if (relative_parent_path(relative, parent) != 0 ||
+	    materialize_upper_directory(parent, task) != 0 ||
+	    lower_path_call(BUNIX_VFS_STAT_PATH_META_BUFFER, relative, 0, 0,
+			    &stat_reply) != 0 ||
+	    stat_reply.words[0] != 0 ||
+	    (stat_reply.words[2] >> 32) != BUNIX_VFS_TYPE_DIRECTORY ||
+	    compose_upper_path(relative, upper) != 0) {
+		return -1;
+	}
+	mode = stat_reply.words[2] & 0777;
+	if (service_path_call(tmpfs_service, BUNIX_VFS_MKDIR_BUFFER, upper,
+			      mode << 32, 0, &mkdir_reply) != 0) {
+		return -1;
+	}
+	if (mkdir_reply.words[0] == 0) {
+		return 0;
+	}
+	return upper_directory_exists(relative) ? 0 : -1;
+}
+
+static int materialize_upper_parent(const char *relative, u64 task)
+{
+	char parent[UNIONFS_MAX_PATH];
+
+	if (relative_parent_path(relative, parent) != 0) {
+		return -1;
+	}
+	return materialize_upper_directory(parent, task);
+}
+
 static int vfs_mount_path(const char *path)
 {
 	struct bunix_msg request = {
@@ -652,6 +737,7 @@ static int copy_lower_to_upper(struct unionfs_open *open, u64 task)
 	mode = stat_reply.words[2] & 0777;
 	size = stat_reply.words[1];
 	if (open->lower_type != BUNIX_VFS_TYPE_REGULAR ||
+	    materialize_upper_parent(open->relative_path, task) != 0 ||
 	    service_path_call(tmpfs_service, BUNIX_VFS_CREATE_BUFFER,
 			      open->upper_path,
 			      (task & 0xffffffff) |
@@ -919,6 +1005,9 @@ static void reply_mutate(struct bunix_msg *message, struct bunix_msg *reply,
 	if (mounted_relative_path(path, relative) != 0 ||
 	    compose_upper_path(relative, upper) != 0 ||
 	    compose_lower_path(relative, lower) != 0 ||
+	    ((message->type == BUNIX_VFS_CREATE_BUFFER ||
+	      message->type == BUNIX_VFS_MKDIR_BUFFER) &&
+	     materialize_upper_parent(relative, message->words[3]) != 0) ||
 	    service_path_call(tmpfs_service, message->type, upper,
 			      message->words[3], 0, reply) != 0) {
 		reply->words[0] = (u64)-1;

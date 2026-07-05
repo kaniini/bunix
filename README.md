@@ -131,6 +131,9 @@ user-space filesystem translators. Procfs attaches at `/proc`, tmpfs attaches
 at `/tmp`, `/run`, and `/var/tmp`, and unionfs attaches at `/` with rootfs as
 its lower layer so the read-only rootfs image is visible through a writable
 tmpfs-backed upper layer.
+Unionfs materializes lower-only parent directories into the upper layer before
+creating files or copying lower files up, so writes under read-only rootfs
+subtrees such as `/usr/share/...` no longer require pre-created upper parents.
 
 This is intentionally not a real disk filesystem yet. The useful primitive is
 the capability-shaped chain `init/proc -> names -> vfs -> unionfs -> rootfs +
@@ -247,8 +250,9 @@ Backspace, canonical tty input, Ctrl-C delivery to foreground jobs, login
 prompt respawn after shell exit, `/secret.txt` permission denial for the login
 user, second login as root, root access to `/secret.txt`, and applet argv
 handling are covered by `make test-shell`. The same regression also verifies
-that creating, copying up, and whiteouting files at `/` uses the unionfs root
-overlay while preserving the read-only lower image as unionfs input.
+that creating, copying up, and whiteouting files through the unionfs root overlay
+preserves the read-only lower image as unionfs input, including writes under
+lower-only parent directory trees.
 
 `/bin/lxtest` contains no Bunix headers or crt0; it issues raw x86_64 Linux
 syscall numbers for the compatibility path and verifies returned byte counts,

@@ -9,11 +9,14 @@ enum {
 	LINUX_EBADF = 9,
 	LINUX_EAGAIN = 11,
 	LINUX_EACCES = 13,
+	LINUX_EFAULT = 14,
 	LINUX_ENOTDIR = 20,
 	LINUX_EISDIR = 21,
 	LINUX_EINVAL = 22,
 	LINUX_EMFILE = 24,
+	LINUX_ESPIPE = 29,
 	LINUX_EPIPE = 32,
+	LINUX_ENAMETOOLONG = 36,
 	LINUX_ENOSYS = 38,
 	LINUX_EAFNOSUPPORT = 97,
 	LINUX_EPROTONOSUPPORT = 93,
@@ -66,7 +69,7 @@ enum {
 	LINUX_ECHO = 0000010,
 	LINUX_ECHOE = 0000020,
 	LINUX_ECHOK = 0000040,
-	LINUX_MAX_WRITE = 4096,
+	LINUX_MAX_WRITE = 65536,
 	LINUX_MAX_PATH = 4096,
 	LINUX_TIMEVAL_SIZE = 16,
 	LINUX_TIMESPEC_SIZE = 16,
@@ -100,6 +103,9 @@ enum {
 	LINUX_FD_SOCKET = 5,
 	LINUX_FD_PIPE_READ = 6,
 	LINUX_FD_PIPE_WRITE = 7,
+	LINUX_SEEK_SET = 0,
+	LINUX_SEEK_CUR = 1,
+	LINUX_SEEK_END = 2,
 	LINUX_AF_UNIX = 1,
 	LINUX_SOCK_STREAM = 1,
 	LINUX_SOCK_NONBLOCK = 00004000,
@@ -689,6 +695,27 @@ static void string_copy(char *dst, const char *src)
 		i++;
 	}
 	dst[i] = '\0';
+}
+
+static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
+				u64 path_cap)
+{
+	if (path_buffer == 0) {
+		return -LINUX_EFAULT;
+	}
+	if (path_len == 0) {
+		return -LINUX_EINVAL;
+	}
+	if (path_len > path_cap) {
+		return -LINUX_ENAMETOOLONG;
+	}
+	if (bunix_buffer_read(path_buffer, 0, path, path_len) != 0) {
+		return -LINUX_EFAULT;
+	}
+	if (path[path_len - 1] != '\0') {
+		return -LINUX_ENAMETOOLONG;
+	}
+	return 0;
 }
 
 static int path_normalize(const char *cwd, const char *input, char *out)
@@ -2299,11 +2326,14 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
+	long path_result;
 
-	if (path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
-	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
-	    path[path_len - 1] != '\0' ||
-	    path_normalize(process->cwd, path, full_path) != 0) {
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
+	}
+	if (path_normalize(process->cwd, path, full_path) != 0) {
 		return -LINUX_EINVAL;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
@@ -2398,13 +2428,16 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
+	long path_result;
 
 	if ((mode & ~(LINUX_R_OK | LINUX_W_OK | LINUX_X_OK)) != 0 ||
-	    (flags & ~(LINUX_AT_EACCESS | LINUX_AT_SYMLINK_NOFOLLOW)) != 0 ||
-	    path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
-	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
-	    path[path_len - 1] != '\0') {
+	    (flags & ~(LINUX_AT_EACCESS | LINUX_AT_SYMLINK_NOFOLLOW)) != 0) {
 		return -LINUX_EINVAL;
+	}
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
@@ -2429,12 +2462,17 @@ static long linux_unlinkat(struct linux_process *process, u64 dirfd,
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
+	long path_result;
 
-	if (flags != 0 ||
-	    path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
-	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
-	    path[path_len - 1] != '\0' ||
-	    path_normalize(process->cwd, path, full_path) != 0) {
+	if (flags != 0) {
+		return -LINUX_EINVAL;
+	}
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
+	}
+	if (path_normalize(process->cwd, path, full_path) != 0) {
 		return -LINUX_EINVAL;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
@@ -2464,11 +2502,14 @@ static long linux_rmdir(struct linux_process *process, u64 path_len,
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
+	long path_result;
 
-	if (path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
-	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
-	    path[path_len - 1] != '\0' ||
-	    path_normalize(process->cwd, path, full_path) != 0) {
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
+	}
+	if (path_normalize(process->cwd, path, full_path) != 0) {
 		return -LINUX_EINVAL;
 	}
 	base_result = linux_dirfd_base_handle(process, LINUX_AT_FDCWD, path,
@@ -2497,12 +2538,17 @@ static long linux_truncate(struct linux_process *process, u64 dirfd,
 	long base_result;
 	long fd;
 	long result;
+	long path_result;
 
-	if ((length >> 63) != 0 ||
-	    path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
-	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
-	    path[path_len - 1] != '\0' ||
-	    path_normalize(process->cwd, path, full_path) != 0) {
+	if ((length >> 63) != 0) {
+		return -LINUX_EINVAL;
+	}
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
+	}
+	if (path_normalize(process->cwd, path, full_path) != 0) {
 		return -LINUX_EINVAL;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
@@ -2529,11 +2575,14 @@ static long linux_mkdirat(struct linux_process *process, u64 dirfd,
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
+	long path_result;
 
-	if (path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
-	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
-	    path[path_len - 1] != '\0' ||
-	    path_normalize(process->cwd, path, full_path) != 0) {
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
+	}
+	if (path_normalize(process->cwd, path, full_path) != 0) {
 		return -LINUX_EINVAL;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
@@ -2564,12 +2613,17 @@ static long linux_chmodat(struct linux_process *process, u64 dirfd,
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
+	long path_result;
 
-	if ((flags & ~LINUX_AT_SYMLINK_NOFOLLOW) != 0 ||
-	    path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
-	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
-	    path[path_len - 1] != '\0' ||
-	    path_normalize(process->cwd, path, full_path) != 0) {
+	if ((flags & ~LINUX_AT_SYMLINK_NOFOLLOW) != 0) {
+		return -LINUX_EINVAL;
+	}
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
+	}
+	if (path_normalize(process->cwd, path, full_path) != 0) {
 		return -LINUX_EINVAL;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
@@ -2666,12 +2720,17 @@ static long linux_chownat(struct linux_process *process, u64 dirfd,
 	long base_result;
 	long fd;
 	long result;
+	long path_result;
 
-	if ((flags & ~LINUX_AT_SYMLINK_NOFOLLOW) != 0 ||
-	    path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
-	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
-	    path[path_len - 1] != '\0' ||
-	    path_normalize(process->cwd, path, full_path) != 0) {
+	if ((flags & ~LINUX_AT_SYMLINK_NOFOLLOW) != 0) {
+		return -LINUX_EINVAL;
+	}
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
+	}
+	if (path_normalize(process->cwd, path, full_path) != 0) {
 		return -LINUX_EINVAL;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
@@ -2846,11 +2905,12 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
+	long path_result;
 
-	if (path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
-	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
-	    path[path_len - 1] != '\0') {
-		return -LINUX_EINVAL;
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
@@ -2906,12 +2966,15 @@ static long linux_readlinkat(struct linux_process *process, u64 dirfd,
 	u64 base_handle;
 	u64 copy_len;
 	long base_result;
+	long path_result;
 
-	if (path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
-	    out_size == 0 ||
-	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
-	    path[path_len - 1] != '\0') {
+	if (out_size == 0) {
 		return -LINUX_EINVAL;
+	}
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
@@ -3109,10 +3172,14 @@ static long linux_chdir(struct linux_process *process, u64 path_len,
 	u64 base_handle;
 	u64 old_handle;
 	long base_result;
+	long path_result;
 
-	if (path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
-	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
-	    path[path_len - 1] != '\0' || path[0] == '\0' ||
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
+	}
+	if (path[0] == '\0' ||
 	    path_normalize(process->cwd, path, full_path) != 0) {
 		return -LINUX_EINVAL;
 	}
@@ -3362,13 +3429,13 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
-	if (buffer == 0 || len > sizeof(write_buffer) ||
-	    bunix_buffer_read(buffer, 0, write_buffer, len) != 0) {
-		return -LINUX_EINVAL;
+	if (buffer == 0) {
+		return -LINUX_EFAULT;
 	}
 
 	if (process->fds[fd].kind == LINUX_FD_PIPE_WRITE) {
 		struct linux_pipe *pipe = linux_pipe_find(process->fds[fd].handle);
+		u64 copy_len;
 		u64 space;
 		u64 nwritten;
 
@@ -3382,7 +3449,12 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 		if (space == 0) {
 			return -LINUX_EAGAIN;
 		}
-		nwritten = len < space ? len : space;
+		copy_len = len < sizeof(write_buffer) ? len : sizeof(write_buffer);
+		nwritten = copy_len < space ? copy_len : space;
+		if (nwritten != 0 &&
+		    bunix_buffer_read(buffer, 0, write_buffer, nwritten) != 0) {
+			return -LINUX_EFAULT;
+		}
 		for (u64 i = 0; i < nwritten; i++) {
 			pipe->data[(pipe->start + pipe->len + i) %
 				   LINUX_PIPE_CAPACITY] = write_buffer[i];
@@ -3392,48 +3464,70 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 		return (long)nwritten;
 	}
 	if (process->fds[fd].kind == LINUX_FD_FILE) {
-		const long tmp = bunix_buffer_create(len == 0 ? 1 : len);
-		const u64 offset =
-			(process->fds[fd].status_flags & LINUX_O_APPEND) != 0 ?
-			process->fds[fd].size : process->fds[fd].offset;
-		struct bunix_msg request = {
-			.protocol = BUNIX_PROTO_VFS,
-			.type = BUNIX_VFS_WRITE_FILE_BUFFER,
-			.sender = 0,
-			.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
-			.reply = 0,
-			.cap = (u64)tmp,
-			.words = { process->fds[fd].handle,
-				   offset, len,
-				   process->bunix_task },
-		};
-		struct bunix_msg reply;
+		u64 done = 0;
+		u64 offset = (process->fds[fd].status_flags & LINUX_O_APPEND) != 0 ?
+			     process->fds[fd].size : process->fds[fd].offset;
 
-		if (tmp < 0 ||
-		    bunix_buffer_write((u64)tmp, 0, write_buffer, len) != 0) {
-			if (tmp >= 0) {
-				bunix_handle_close((u64)tmp);
+		while (done < len || (len == 0 && done == 0)) {
+			const u64 remaining = len - done;
+			const u64 chunk = remaining > sizeof(write_buffer) ?
+					  sizeof(write_buffer) : remaining;
+			const long tmp = bunix_buffer_create(chunk == 0 ? 1 : chunk);
+			struct bunix_msg request = {
+				.protocol = BUNIX_PROTO_VFS,
+				.type = BUNIX_VFS_WRITE_FILE_BUFFER,
+				.sender = 0,
+				.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
+				.reply = 0,
+				.cap = (u64)tmp,
+				.words = { process->fds[fd].handle,
+					   offset + done, chunk,
+					   process->bunix_task },
+			};
+			struct bunix_msg reply;
+
+			if (tmp < 0) {
+				return done != 0 ? (long)done : -(long)LINUX_EBADF;
 			}
-			return -LINUX_EINVAL;
-		}
-		if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
-		    reply.words[0] != 0) {
+			if (chunk != 0 &&
+			    (bunix_buffer_read(buffer, done, write_buffer, chunk) != 0 ||
+			     bunix_buffer_write((u64)tmp, 0, write_buffer,
+						chunk) != 0)) {
+				bunix_handle_close((u64)tmp);
+				return done != 0 ? (long)done : -(long)LINUX_EFAULT;
+			}
+			if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
+			    reply.words[0] != 0) {
+				bunix_handle_close((u64)tmp);
+				return done != 0 ? (long)done : -(long)LINUX_EBADF;
+			}
 			bunix_handle_close((u64)tmp);
-			return -LINUX_EBADF;
+			done += reply.words[1];
+			if (chunk == 0 || reply.words[1] != chunk) {
+				break;
+			}
 		}
-		bunix_handle_close((u64)tmp);
-		process->fds[fd].offset = offset + reply.words[1];
+		process->fds[fd].offset = offset + done;
 		if (process->fds[fd].offset > process->fds[fd].size) {
 			process->fds[fd].size = process->fds[fd].offset;
 		}
-		return (long)reply.words[1];
+		return (long)done;
 	}
 	if (process->fds[fd].kind != LINUX_FD_CONSOLE) {
 		return -LINUX_EBADF;
 	}
 
 	(void)process;
-	bunix_console_write((const char *)write_buffer, len);
+	for (u64 done = 0; done < len;) {
+		const u64 chunk = len - done > sizeof(write_buffer) ?
+				  sizeof(write_buffer) : len - done;
+
+		if (bunix_buffer_read(buffer, done, write_buffer, chunk) != 0) {
+			return done != 0 ? (long)done : -(long)LINUX_EFAULT;
+		}
+		bunix_console_write((const char *)write_buffer, chunk);
+		done += chunk;
+	}
 	return (long)len;
 }
 
@@ -3464,6 +3558,36 @@ static long linux_sendfile(struct linux_process *process, u64 out_fd,
 		return nread;
 	}
 	return linux_write_buffer(process, out_fd, (u64)nread, buffer);
+}
+
+static long linux_lseek(struct linux_process *process, u64 fd, u64 offset,
+			u64 whence)
+{
+	u64 base;
+	u64 next;
+
+	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
+		return -LINUX_EBADF;
+	}
+	if (process->fds[fd].kind != LINUX_FD_FILE &&
+	    process->fds[fd].kind != LINUX_FD_DIR) {
+		return -LINUX_ESPIPE;
+	}
+	if (whence == LINUX_SEEK_SET) {
+		base = 0;
+	} else if (whence == LINUX_SEEK_CUR) {
+		base = process->fds[fd].offset;
+	} else if (whence == LINUX_SEEK_END) {
+		base = process->fds[fd].size;
+	} else {
+		return -LINUX_EINVAL;
+	}
+	if ((offset >> 63) != 0 || base + offset < base) {
+		return -LINUX_EINVAL;
+	}
+	next = base + offset;
+	process->fds[fd].offset = next;
+	return (long)next;
 }
 
 static long linux_close(struct linux_process *process, u64 fd)
@@ -4359,9 +4483,9 @@ int main(void)
 				bunix_handle_close(message.cap);
 			}
 			break;
-		case BUNIX_LINUX_WRITE: {
-			const u64 fd = message.words[0];
-			const u64 len = message.words[1];
+			case BUNIX_LINUX_WRITE: {
+				const u64 fd = message.words[0];
+				const u64 len = message.words[1];
 
 			reply.words[0] = (u64)linux_write_buffer(process, fd, len,
 								 message.cap);
@@ -4370,12 +4494,18 @@ int main(void)
 			}
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
+				}
+				break;
 			}
-			break;
-		}
-		case BUNIX_LINUX_CLOSE:
-			reply.words[0] = (u64)linux_close(process,
-							  message.words[0]);
+			case BUNIX_LINUX_LSEEK:
+				reply.words[0] = (u64)linux_lseek(process,
+								  message.words[0],
+								  message.words[1],
+								  message.words[2]);
+				break;
+			case BUNIX_LINUX_CLOSE:
+				reply.words[0] = (u64)linux_close(process,
+								  message.words[0]);
 			if (reply.words[0] == 0) {
 				bunix_console_log(close_ok, sizeof(close_ok) - 1);
 			}
