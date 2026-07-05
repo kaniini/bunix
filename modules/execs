@@ -1,0 +1,10 @@
+# path task linux
+/bin/first first 0
+/bin/lxtest lxtest 1
+/bin/musl-hello musl-hello 1
+/bin/fputest fputest 1
+/bin/sh busybox 1
+/bin/busybox busybox 1
+/bin/login login 1
+/sbin/init busybox 1
+/bin/ipcstress ipcstress 0

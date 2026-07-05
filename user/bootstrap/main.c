@@ -128,6 +128,51 @@ static u64 str_len(const char *text)
 	return len;
 }
 
+enum {
+	BOOT_EXECS_MAX = 1024,
+	BOOT_TOKEN_MAX = 128,
+};
+
+static int is_space(char c)
+{
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static void skip_line(const char *text, u64 *pos)
+{
+	while (text[*pos] != '\0' && text[*pos] != '\n') {
+		(*pos)++;
+	}
+	if (text[*pos] == '\n') {
+		(*pos)++;
+	}
+}
+
+static int read_token(const char *text, u64 *pos, char *out, u64 out_size)
+{
+	u64 len = 0;
+
+	while (is_space(text[*pos])) {
+		(*pos)++;
+	}
+	if (text[*pos] == '\0' || text[*pos] == '#') {
+		return -1;
+	}
+	while (text[*pos] != '\0' && !is_space(text[*pos]) &&
+	       text[*pos] != '#') {
+		if (len + 1 >= out_size) {
+			return -1;
+		}
+		out[len++] = text[*pos];
+		(*pos)++;
+	}
+	if (len == 0) {
+		return -1;
+	}
+	out[len] = '\0';
+	return 0;
+}
+
 static long proc_register_exec(u64 proc, const char *path,
 			       const char *task_name, u64 linux)
 {
@@ -160,12 +205,6 @@ static long proc_register_exec(u64 proc, const char *path,
 	return 0;
 }
 
-struct boot_exec {
-	const char *path;
-	const char *task_name;
-	u64 linux;
-};
-
 struct boot_path {
 	const char *path;
 };
@@ -183,28 +222,83 @@ struct boot_spawn {
 	const char *done_log;
 };
 
-static long register_proc_execs(u64 proc)
+static long vfs_read_text(u64 vfs, const char *path, char *out, u64 out_size)
 {
-	const struct boot_exec execs[] = {
-		{ "/bin/first", "first", 0 },
-		{ "/bin/lxtest", "lxtest", 1 },
-		{ "/bin/musl-hello", "musl-hello", 1 },
-		{ "/bin/fputest", "fputest", 1 },
-		{ "/bin/sh", "busybox", 1 },
-		{ "/bin/busybox", "busybox", 1 },
-		{ "/bin/login", "login", 1 },
-		{ "/sbin/init", "busybox", 1 },
-		{ "/bin/ipcstress", "ipcstress", 0 },
+	const long buffer = bunix_buffer_create(out_size);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_READ_PATH_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { 0, 0, 0, out_size - 1 },
 	};
+	struct bunix_msg reply;
 
-	for (u64 i = 0; i < sizeof(execs) / sizeof(execs[0]); i++) {
-		if (proc_register_exec(proc, execs[i].path,
-				       execs[i].task_name,
-				       execs[i].linux) != 0) {
+	if (vfs == 0 || path == 0 || out == 0 || out_size == 0 ||
+	    out_size > BOOT_EXECS_MAX || buffer <= 0) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	pack_path(&request.words[0], path);
+	if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] >= out_size ||
+	    bunix_buffer_read((u64)buffer, 0, out, reply.words[1]) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	out[reply.words[1]] = '\0';
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
+static long register_proc_execs(u64 proc, u64 vfs)
+{
+	char text[BOOT_EXECS_MAX];
+	u64 pos = 0;
+	u64 count = 0;
+
+	if (vfs_read_text(vfs, "/etc/execs", text, sizeof(text)) != 0) {
+		return -1;
+	}
+	while (text[pos] != '\0') {
+		char path[BOOT_TOKEN_MAX];
+		char task_name[BOOT_TOKEN_MAX];
+		char linux_text[BOOT_TOKEN_MAX];
+		u64 linux;
+
+		while (is_space(text[pos])) {
+			pos++;
+		}
+		if (text[pos] == '#') {
+			skip_line(text, &pos);
+			continue;
+		}
+		if (text[pos] == '\0') {
+			break;
+		}
+		if (read_token(text, &pos, path, sizeof(path)) != 0 ||
+		    read_token(text, &pos, task_name, sizeof(task_name)) != 0 ||
+		    read_token(text, &pos, linux_text, sizeof(linux_text)) != 0) {
 			return -1;
 		}
+		if (linux_text[0] == '0' && linux_text[1] == '\0') {
+			linux = 0;
+		} else if (linux_text[0] == '1' && linux_text[1] == '\0') {
+			linux = 1;
+		} else {
+			return -1;
+		}
+		if (proc_register_exec(proc, path, task_name, linux) != 0) {
+			return -1;
+		}
+		count++;
+		skip_line(text, &pos);
 	}
-	return 0;
+	return count != 0 ? 0 : -1;
 }
 
 static long proc_spawn_wait(u64 proc, const struct boot_spawn *spawn)
@@ -445,7 +539,7 @@ int main(void)
 				      sizeof(proc_caps) / sizeof(proc_caps[0]));
 	proc = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROC,
 					 BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
-	if (proc == 0 || register_proc_execs(proc) != 0) {
+	if (proc == 0) {
 		return 1;
 	}
 
@@ -535,6 +629,9 @@ int main(void)
 		return 1;
 	}
 	bunix_console_log(fs_ready, sizeof(fs_ready) - 1);
+	if (register_proc_execs(proc, vfs) != 0) {
+		return 1;
+	}
 	pack_path(&vfs_request.words[0], "/hello.txt");
 	if (bunix_ipc_call(vfs, &vfs_request, &vfs_reply) == 0 &&
 	    vfs_reply.words[0] == 0 && vfs_reply.words[1] <= 16) {

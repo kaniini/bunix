@@ -115,9 +115,10 @@ event-port style IPC, currently exercised by the ping heartbeat server.
 
 The filesystem path is still a server-to-server read flow. The build generates
 a tiny `disk0` image containing `/hello.txt`, `/secret.txt`, `/etc/passwd`,
-`/etc/shadow`, `/bin/first`, `/bin/lxtest`, `/bin/login`, `/bin/musl-hello`,
-`/bin/busybox`, and BusyBox applet links, then GRUB loads that image as a
-Multiboot2 data module. The kernel assigns that
+`/etc/shadow`, `/etc/group`, `/etc/inittab`, `/etc/execs`, `/bin/first`,
+`/bin/lxtest`, `/bin/login`, `/bin/musl-hello`, `/bin/busybox`, and BusyBox
+applet links, then GRUB loads that image as a Multiboot2 data module. The
+kernel assigns that
 boot module only to the block server. Init launches a block server and a VFS
 server with only console and names capabilities. The block server registers
 `BLK0` in the root namespace and serves read-only bytes from its assigned disk
@@ -178,10 +179,13 @@ user-space Linux personality server. The kernel attaches user buffers as
 shared-buffer capabilities and blocks the caller on a reply port, then returns
 the server's Linux-style result value.
 
-Proc explicitly registers Linux tasks with the Linux server before starting
-them, carrying the backing Bunix task id and Linux parent PID. The Linux server
-owns dynamic maps keyed by Bunix task id and Linux PID, so Linux PID 1 exists
-inside the personality even though its Bunix task id is different. Each Linux
+Bootstrap loads `/etc/execs` through the mounted root filesystem and uses it to
+seed proc's executable metadata before spawning `/sbin/init` and the native
+smoke processes. Proc explicitly registers Linux tasks with the Linux server
+before starting them, carrying the backing Bunix task id and Linux parent PID.
+The Linux server owns dynamic maps keyed by Bunix task id and Linux PID, so
+Linux PID 1 exists inside the personality even though its Bunix task id is
+different. Each Linux
 process owns a dynamically growing fd table initialized with stdin/stdout/stderr
 on the console. Pipes are in-memory Linux-server objects with blocking read
 semantics; `pipe`, `pipe2`, `dup`, `dup2`, `dup3`, `fcntl`, `sendfile`, and
