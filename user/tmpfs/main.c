@@ -497,7 +497,8 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 	if (!path_parent_exists(path) || file_find(path) != 0 ||
 	    (type != BUNIX_VFS_TYPE_REGULAR &&
 	     type != BUNIX_VFS_TYPE_DIRECTORY &&
-	     type != BUNIX_VFS_TYPE_SYMLINK)) {
+	     type != BUNIX_VFS_TYPE_SYMLINK &&
+	     type != BUNIX_VFS_TYPE_FIFO)) {
 		return 0;
 	}
 	file = (struct tmpfs_file *)bunix_calloc(1, sizeof(*file));
@@ -923,6 +924,29 @@ int main(void)
 					   message.words[3] & 0xffffffff);
 			reply.words[0] = file == 0 ? (u64)-1 : 0;
 			break;
+		case BUNIX_VFS_MKNOD_BUFFER: {
+			const u64 type = message.words[3] >> 48;
+			const u64 mode = (message.words[3] >> 32) & 0777;
+
+			if (read_resolved_path(&message, path) != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			file = parent_file_for_path(path);
+			if (!task_can_access(message.words[3] & 0xffffffff,
+					     file, 03)) {
+				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
+				break;
+			}
+			if (file_find(path) != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_EXIST;
+				break;
+			}
+			file = file_create(path, mode, type,
+					   message.words[3] & 0xffffffff);
+			reply.words[0] = file == 0 ? (u64)-1 : 0;
+			break;
+		}
 		case BUNIX_VFS_SYMLINK_BUFFER: {
 			char target[TMPFS_MAX_PATH];
 			const u64 task = message.words[3] & 0xffffffff;

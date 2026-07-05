@@ -1358,6 +1358,27 @@ int main(void)
 			vfs_mutate_path(&message, &reply, path);
 			break;
 		}
+		case BUNIX_VFS_MKNOD_BUFFER: {
+			char cwd[VFS_MAX_PATH];
+			char input[VFS_MAX_PATH];
+			char path[VFS_MAX_PATH];
+			const u64 cwd_len = message.words[0];
+			const u64 path_len = message.words[1];
+			u64 error = (u64)-1;
+
+			if ((message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+			    read_path_buffer_at(message.cap, 0, cwd_len,
+						cwd) != 0 ||
+			    read_path_buffer_at(message.cap, cwd_len, path_len,
+						input) != 0 ||
+			    vfs_resolve_with_base(message.words[2], cwd,
+						  input, path, &error) != 0) {
+				reply.words[0] = error;
+				break;
+			}
+			vfs_mutate_path(&message, &reply, path);
+			break;
+		}
 		case BUNIX_VFS_SYMLINK_BUFFER: {
 			char target[VFS_MAX_PATH];
 			char cwd[VFS_MAX_PATH];

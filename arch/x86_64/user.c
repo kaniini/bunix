@@ -121,6 +121,7 @@ enum {
 	LINUX_SYSCALL_SETPGID = 109,
 	LINUX_SYSCALL_SETSID = 112,
 	LINUX_SYSCALL_GETSID = 124,
+	LINUX_SYSCALL_MKNOD = 133,
 	LINUX_SYSCALL_STATFS = 137,
 	LINUX_SYSCALL_FSTATFS = 138,
 	LINUX_SYSCALL_GETGROUPS = 115,
@@ -154,6 +155,7 @@ enum {
 	LINUX_SYSCALL_PIPE2 = 293,
 	LINUX_SYSCALL_OPENAT = 257,
 	LINUX_SYSCALL_MKDIRAT = 258,
+	LINUX_SYSCALL_MKNODAT = 259,
 	LINUX_SYSCALL_FCHOWNAT = 260,
 	LINUX_SYSCALL_RENAMEAT = 264,
 	LINUX_SYSCALL_UNLINKAT = 263,
@@ -3095,6 +3097,8 @@ static const char *linux_syscall_name(u64 number)
 		return "getpgid";
 	case LINUX_SYSCALL_GETSID:
 		return "getsid";
+	case LINUX_SYSCALL_MKNOD:
+		return "mknod";
 	case LINUX_SYSCALL_STATFS:
 		return "statfs";
 	case LINUX_SYSCALL_FSTATFS:
@@ -3167,6 +3171,8 @@ static const char *linux_syscall_name(u64 number)
 		return "openat";
 	case LINUX_SYSCALL_MKDIRAT:
 		return "mkdirat";
+	case LINUX_SYSCALL_MKNODAT:
+		return "mknodat";
 	case LINUX_SYSCALL_FCHOWNAT:
 		return "fchownat";
 	case LINUX_SYSCALL_RENAMEAT:
@@ -4196,6 +4202,8 @@ poll_again:
 	}
 	case LINUX_SYSCALL_MKDIR:
 	case LINUX_SYSCALL_MKDIRAT:
+	case LINUX_SYSCALL_MKNOD:
+	case LINUX_SYSCALL_MKNODAT:
 	case LINUX_SYSCALL_CHMOD:
 	case LINUX_SYSCALL_FCHMODAT:
 	case LINUX_SYSCALL_CHOWN:
@@ -4203,10 +4211,13 @@ poll_again:
 	case LINUX_SYSCALL_FCHOWNAT: {
 		const int is_mkdir = number == LINUX_SYSCALL_MKDIR ||
 				     number == LINUX_SYSCALL_MKDIRAT;
+		const int is_mknod = number == LINUX_SYSCALL_MKNOD ||
+				     number == LINUX_SYSCALL_MKNODAT;
 		const int is_chown = number == LINUX_SYSCALL_CHOWN ||
 				     number == LINUX_SYSCALL_LCHOWN ||
 				     number == LINUX_SYSCALL_FCHOWNAT;
 		const int is_at = number == LINUX_SYSCALL_MKDIRAT ||
+				  number == LINUX_SYSCALL_MKNODAT ||
 				  number == LINUX_SYSCALL_FCHMODAT ||
 				  number == LINUX_SYSCALL_FCHOWNAT;
 		const char *path = is_at ? (const char *)arg1 :
@@ -4221,12 +4232,14 @@ poll_again:
 				   (number == LINUX_SYSCALL_LCHOWN ?
 				    LINUX_AT_SYMLINK_NOFOLLOW : 0));
 		const u32 type = is_mkdir ? LINUX_SYSCALL_MKDIRAT :
+				 (is_mknod ? LINUX_SYSCALL_MKNODAT :
 				 (is_chown ? LINUX_SYSCALL_FCHOWNAT :
-				  LINUX_SYSCALL_FCHMODAT);
+				  LINUX_SYSCALL_FCHMODAT));
 		const u64 word2 = is_chown ? owner : mode;
-		const u64 word3 = is_chown ?
+		const u64 word3 = is_mknod ? (is_at ? arg3 : arg2) :
+				  (is_chown ?
 				  ((flags & 0xffffffff) << 32) |
-				  (group & 0xffffffff) : flags;
+				  (group & 0xffffffff) : flags);
 
 		return linux_forward_path_words(linux, reply_port, &request,
 						&reply, type, path, dirfd,

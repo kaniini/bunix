@@ -96,11 +96,13 @@ enum {
 	LINUX_INITIAL_FDS = 16,
 	LINUX_PIPE_CAPACITY = 4096,
 	LINUX_S_IFCHR = 0020000,
+	LINUX_S_IFBLK = 0060000,
 	LINUX_S_IFDIR = 0040000,
 	LINUX_S_IFLNK = 0120000,
 	LINUX_S_IFREG = 0100000,
 	LINUX_S_IFSOCK = 0140000,
 	LINUX_S_IFIFO = 0010000,
+	LINUX_S_IFMT = 0170000,
 	LINUX_O_ACCMODE = 3,
 	LINUX_O_WRONLY = 1,
 	LINUX_O_RDWR = 2,
@@ -127,6 +129,10 @@ enum {
 	LINUX_SOCK_CLOEXEC = 02000000,
 	LINUX_SOCKET_UNIX_STREAM = 1,
 	LINUX_SOCKET_UTMPD = 2,
+	LINUX_DT_FIFO = 1,
+	LINUX_DT_REG = 8,
+	LINUX_DT_DIR = 4,
+	LINUX_DT_LNK = 10,
 	LINUX_UTMPS_NONE = 0,
 	LINUX_UTMPS_REWIND = 'r',
 	LINUX_UTMPS_GETENT = 'e',
@@ -146,9 +152,6 @@ enum {
 	LINUX_F_GETFL = 3,
 	LINUX_F_SETFL = 4,
 	LINUX_F_DUPFD_CLOEXEC = 1030,
-	LINUX_DT_DIR = 4,
-	LINUX_DT_LNK = 10,
-	LINUX_DT_REG = 8,
 	LINUX_UTMP_RECORD_SIZE = 400,
 };
 
@@ -2173,6 +2176,9 @@ static u64 linux_mode_for_type(u64 type, u64 mode)
 	if (type == BUNIX_VFS_TYPE_SYMLINK) {
 		return LINUX_S_IFLNK | mode;
 	}
+	if (type == BUNIX_VFS_TYPE_FIFO) {
+		return LINUX_S_IFIFO | mode;
+	}
 	return LINUX_S_IFREG | mode;
 }
 
@@ -2778,6 +2784,56 @@ static long linux_mkdirat(struct linux_process *process, u64 dirfd,
 				      base_handle, path,
 				      process->bunix_task |
 				      (((mode & ~process->umask) & 0777) << 32),
+				      &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
+	}
+	return 0;
+}
+
+static long linux_mknodat(struct linux_process *process, u64 dirfd,
+			  u64 path_len, u64 mode, u64 dev, u64 path_buffer)
+{
+	char path[LINUX_MAX_PATH];
+	struct bunix_msg reply;
+	const u64 file_type = mode & LINUX_S_IFMT;
+	u64 base_handle;
+	u64 vfs_type;
+	long base_result;
+	long path_result;
+	(void)dev;
+
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
+	}
+	base_result = linux_dirfd_base_handle(process, dirfd, path,
+					      &base_handle);
+	if (base_result != 0) {
+		return base_result;
+	}
+	if (file_type == LINUX_S_IFIFO) {
+		vfs_type = BUNIX_VFS_TYPE_FIFO;
+	} else if (file_type == 0 || file_type == LINUX_S_IFREG) {
+		vfs_type = BUNIX_VFS_TYPE_REGULAR;
+	} else if (file_type == LINUX_S_IFCHR || file_type == LINUX_S_IFBLK) {
+		if (linux_vfs_path_call(process, BUNIX_VFS_STAT_PATH_META_BUFFER,
+					base_handle, path, &reply) == 0 &&
+		    reply.words[0] == 0) {
+			return -LINUX_EEXIST;
+		}
+		return -LINUX_EPERM;
+	} else {
+		return -LINUX_EINVAL;
+	}
+	if (linux_vfs_path_call_word3(process, BUNIX_VFS_MKNOD_BUFFER,
+				      base_handle, path,
+				      process->bunix_task |
+				      (((mode & 0777) & ~process->umask) << 32) |
+				      (vfs_type << 48),
 				      &reply) != 0) {
 		return -LINUX_EIO;
 	}
@@ -3595,7 +3651,9 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 				   type == BUNIX_VFS_TYPE_DIRECTORY ?
 				   LINUX_DT_DIR :
 				   (type == BUNIX_VFS_TYPE_SYMLINK ?
-				    LINUX_DT_LNK : LINUX_DT_REG), name);
+				    LINUX_DT_LNK :
+				    (type == BUNIX_VFS_TYPE_FIFO ?
+				     LINUX_DT_FIFO : LINUX_DT_REG)), name);
 		written += reclen;
 		process->fds[fd].offset = next_offset;
 	}
@@ -4737,6 +4795,18 @@ int main(void)
 							    message.words[0],
 							    message.words[1],
 							    message.words[2],
+							    message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_MKNOD:
+		case BUNIX_LINUX_MKNODAT:
+			reply.words[0] = (u64)linux_mknodat(process,
+							    message.words[0],
+							    message.words[1],
+							    message.words[2],
+							    message.words[3],
 							    message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);

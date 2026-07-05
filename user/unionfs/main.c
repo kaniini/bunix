@@ -1129,6 +1129,7 @@ static void reply_mutate(struct bunix_msg *message, struct bunix_msg *reply,
 	    compose_upper_path(relative, upper) != 0 ||
 	    compose_lower_path(relative, lower) != 0 ||
 	    ((message->type == BUNIX_VFS_CREATE_BUFFER ||
+	      message->type == BUNIX_VFS_MKNOD_BUFFER ||
 	      message->type == BUNIX_VFS_MKDIR_BUFFER) &&
 	     materialize_upper_parent(relative, message->words[3]) != 0) ||
 	    service_path_call(upper_service, message->type, upper,
@@ -1137,6 +1138,7 @@ static void reply_mutate(struct bunix_msg *message, struct bunix_msg *reply,
 		return;
 	}
 	if (message->type == BUNIX_VFS_CREATE_BUFFER ||
+	    message->type == BUNIX_VFS_MKNOD_BUFFER ||
 	    message->type == BUNIX_VFS_MKDIR_BUFFER) {
 		if (reply->words[0] == 0) {
 			whiteout_remove(relative);
@@ -1564,6 +1566,7 @@ int main(void)
 			}
 			break;
 		case BUNIX_VFS_CREATE_BUFFER:
+		case BUNIX_VFS_MKNOD_BUFFER:
 		case BUNIX_VFS_MKDIR_BUFFER:
 		case BUNIX_VFS_CHMOD_BUFFER:
 		case BUNIX_VFS_CHOWN_BUFFER:
