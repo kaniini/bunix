@@ -258,6 +258,9 @@ Linux syscall forwarding uses bounded shared buffers internally. Large
 `write(2)` calls are chunked, and large `getdents64(2)` user buffers are
 handled as short directory reads instead of being rejected; `/bin/getdentstest`
 keeps that path covered by the shell regression.
+Linux `execve` now collects argv/env with growable kernel vectors instead of a
+256-entry fixed table, and the initial Linux stack is 256 KiB. The shell
+regression covers 300 argv entries and 300 inherited environment entries.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with

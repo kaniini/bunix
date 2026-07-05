@@ -182,15 +182,14 @@ enum {
 	LINUX_MAX_SOCKADDR = 128,
 	LINUX_EXEC_MAX_IMAGE = 2 * 1024 * 1024,
 	LINUX_EXEC_MAX_PATH = 4096,
-	LINUX_EXEC_MAX_STRINGS = 256,
 	LINUX_EXEC_MAX_STRING = 4096,
-	LINUX_EXEC_MAX_STRING_BYTES = 49152,
+	LINUX_EXEC_MAX_STRING_BYTES = 128 * 1024,
 	LINUX_EXEC_MAX_PHDRS = 16,
 	LINUX_MAX_GROUPS = 64,
 	LINUX_EXEC_DYN_LOAD_BIAS = 0x400000,
 	LINUX_EXEC_INTERP_LOAD_BIAS = 0x600000,
 	LINUX_EXEC_STACK_TOP = 0x800000,
-	LINUX_EXEC_STACK_PAGES = 16,
+	LINUX_EXEC_STACK_PAGES = 64,
 	LINUX_STAT_SIZE = 144,
 	LINUX_STATX_SIZE = 256,
 	LINUX_WAIT_STATUS_SIZE = 4,
@@ -208,6 +207,7 @@ enum {
 	LINUX_MMAP_BASE = 0x10000000,
 	LINUX_MMAP_LIMIT = 0x20000000,
 	LINUX_MAX_MMAP_SIZE = 0x1000000,
+	LINUX_EXEC_MAX_POINTERS = LINUX_EXEC_MAX_STRING_BYTES / 8,
 	LINUX_PROT_READ = 0x1,
 	LINUX_PROT_WRITE = 0x2,
 	LINUX_PROT_EXEC = 0x4,
@@ -1826,9 +1826,48 @@ static void linux_exec_args_free(struct linux_exec_args *args)
 	args->envp = 0;
 }
 
+static int linux_exec_vector_push(char ***values, u64 *count, u64 *capacity,
+				  char *value)
+{
+	if (values == 0 || count == 0 || capacity == 0 || value == 0 ||
+	    *count >= LINUX_EXEC_MAX_POINTERS) {
+		return -1;
+	}
+
+	if (*count == *capacity) {
+		u64 new_capacity = *capacity == 0 ? 8 : *capacity * 2;
+		char **next;
+
+		if (new_capacity < *capacity ||
+		    new_capacity > LINUX_EXEC_MAX_POINTERS) {
+			new_capacity = LINUX_EXEC_MAX_POINTERS;
+		}
+		if (new_capacity == *capacity) {
+			return -1;
+		}
+		next = (char **)slab_zalloc(new_capacity * sizeof(next[0]));
+		if (next == 0) {
+			return -1;
+		}
+		if (*values != 0) {
+			mem_copy((u8 *)next, (const u8 *)*values,
+				 *count * sizeof(next[0]));
+			slab_free(*values);
+		}
+		*values = next;
+		*capacity = new_capacity;
+	}
+
+	(*values)[*count] = value;
+	(*count)++;
+	return 0;
+}
+
 static int linux_exec_collect_args(const char *path, u64 user_argv,
 				   struct linux_exec_args *args)
 {
+	u64 argv_capacity = 0;
+
 	if (path == 0 || args == 0) {
 		return -1;
 	}
@@ -1846,27 +1885,21 @@ static int linux_exec_collect_args(const char *path, u64 user_argv,
 		    len > LINUX_EXEC_MAX_STRING_BYTES) {
 			return -1;
 		}
-		args->argv = (char **)slab_zalloc(sizeof(char *));
-		if (args->argv == 0) {
+		char *copy = (char *)slab_alloc(len);
+		if (copy == 0) {
 			return -1;
 		}
-		args->argv[0] = (char *)slab_alloc(len);
-		if (args->argv[0] == 0) {
+		mem_copy((u8 *)copy, (const u8 *)path, len);
+		if (linux_exec_vector_push(&args->argv, &args->argc,
+					   &argv_capacity, copy) != 0) {
+			slab_free(copy);
 			return -1;
 		}
-		mem_copy((u8 *)args->argv[0], (const u8 *)path, len);
-		args->argc = 1;
 		args->bytes = len;
 		return 0;
 	}
 
-	args->argv = (char **)slab_zalloc(LINUX_EXEC_MAX_STRINGS *
-					  sizeof(char *));
-	if (args->argv == 0) {
-		return -1;
-	}
-
-	for (u64 i = 0; i < LINUX_EXEC_MAX_STRINGS; i++) {
+	for (u64 i = 0; i < LINUX_EXEC_MAX_POINTERS; i++) {
 		u64 arg_ptr = 0;
 		char *copy;
 		u64 len = 0;
@@ -1887,12 +1920,14 @@ static int linux_exec_collect_args(const char *path, u64 user_argv,
 			}
 			return -1;
 		}
-		args->argv[i] = copy;
-		args->argc++;
+		if (linux_exec_vector_push(&args->argv, &args->argc,
+					   &argv_capacity, copy) != 0) {
+			slab_free(copy);
+			return -1;
+		}
 		args->bytes += len;
 	}
-
-	if (args->argc == LINUX_EXEC_MAX_STRINGS) {
+	{
 		u64 next_arg = 0;
 
 		if (read_current_user(user_argv + args->argc * sizeof(next_arg),
@@ -1909,12 +1944,16 @@ static int linux_exec_collect_args(const char *path, u64 user_argv,
 		    args->bytes + len > LINUX_EXEC_MAX_STRING_BYTES) {
 			return -1;
 		}
-		args->argv[0] = (char *)slab_alloc(len);
-		if (args->argv[0] == 0) {
+		char *copy = (char *)slab_alloc(len);
+		if (copy == 0) {
 			return -1;
 		}
-		mem_copy((u8 *)args->argv[0], (const u8 *)path, len);
-		args->argc = 1;
+		mem_copy((u8 *)copy, (const u8 *)path, len);
+		if (linux_exec_vector_push(&args->argv, &args->argc,
+					   &argv_capacity, copy) != 0) {
+			slab_free(copy);
+			return -1;
+		}
 		args->bytes += len;
 	}
 
@@ -1923,6 +1962,8 @@ static int linux_exec_collect_args(const char *path, u64 user_argv,
 
 static int linux_exec_collect_env(u64 user_envp, struct linux_exec_args *args)
 {
+	u64 env_capacity = 0;
+
 	if (args == 0) {
 		return -1;
 	}
@@ -1930,12 +1971,7 @@ static int linux_exec_collect_env(u64 user_envp, struct linux_exec_args *args)
 	if (user_envp == 0) {
 		return 0;
 	}
-	args->envp = (char **)slab_zalloc(LINUX_EXEC_MAX_STRINGS *
-					  sizeof(char *));
-	if (args->envp == 0) {
-		return -1;
-	}
-	for (u64 i = 0; i < LINUX_EXEC_MAX_STRINGS; i++) {
+	for (u64 i = 0; i < LINUX_EXEC_MAX_POINTERS; i++) {
 		u64 env_ptr = 0;
 		char *copy;
 		u64 len = 0;
@@ -1956,8 +1992,11 @@ static int linux_exec_collect_env(u64 user_envp, struct linux_exec_args *args)
 			}
 			return -1;
 		}
-		args->envp[i] = copy;
-		args->envc++;
+		if (linux_exec_vector_push(&args->envp, &args->envc,
+					   &env_capacity, copy) != 0) {
+			slab_free(copy);
+			return -1;
+		}
 		args->bytes += len;
 	}
 	{
@@ -1990,8 +2029,6 @@ static int linux_exec_build_stack(const char *path,
 
 	if (path == 0 || args == 0 || ehdr == 0 || stack_image == 0 ||
 	    new_sp == 0 || stack_size == 0 || args->argc == 0 ||
-	    args->argc > LINUX_EXEC_MAX_STRINGS ||
-	    args->envc > LINUX_EXEC_MAX_STRINGS ||
 	    ehdr->phnum > LINUX_EXEC_MAX_PHDRS) {
 		return -1;
 	}
