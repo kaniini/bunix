@@ -7,8 +7,8 @@ enum {
 	PROC_HANDLE_NAMES = 3,
 	PROC_HANDLE_TIME = 4,
 	PROC_SEGMENT_MAX = 4096,
-	PROC_INIT_STACK_MAX = 16384,
-	PROC_SPAWN_BUFFER_MAX = 4096,
+	PROC_INIT_STACK_MAX = 65536,
+	PROC_SPAWN_BUFFER_MAX = 65536,
 	PROC_MAX_PHDRS = 16,
 	USER_STACK_TOP = 0x800000,
 	ELF_MAGIC = 0x464c457f,
@@ -136,9 +136,7 @@ static struct bunix_map pending_linux_exits;
 static struct bunix_tree exec_registry;
 static u64 next_pid = 1;
 static u64 first_linux_pid;
-static unsigned char spawn_buffer[PROC_SPAWN_BUFFER_MAX];
 static unsigned char segment_buffer[PROC_SEGMENT_MAX];
-static unsigned char init_stack[PROC_INIT_STACK_MAX];
 static const char proc_online[] = "proc: online\n";
 static const char proc_ready[] = "proc: ready\n";
 static const char proc_register_failed[] = "proc: register failed\n";
@@ -497,17 +495,18 @@ static int exec_strings_default(struct exec_strings *strings, const char *path)
 	return 0;
 }
 
-static int spawn_buffer_string(u64 *pos, u64 total, char **out)
+static int spawn_buffer_string(const unsigned char *buffer, u64 *pos,
+			       u64 total, char **out)
 {
 	u64 start;
 	u64 len = 0;
 	char *copy;
 
-	if (pos == 0 || out == 0 || *pos >= total) {
+	if (buffer == 0 || pos == 0 || out == 0 || *pos >= total) {
 		return -1;
 	}
 	start = *pos;
-	while (*pos < total && spawn_buffer[*pos] != '\0') {
+	while (*pos < total && buffer[*pos] != '\0') {
 		(*pos)++;
 		len++;
 	}
@@ -520,7 +519,7 @@ static int spawn_buffer_string(u64 *pos, u64 total, char **out)
 		return -1;
 	}
 	for (u64 i = 0; i < len; i++) {
-		copy[i] = (char)spawn_buffer[start + i];
+		copy[i] = (char)buffer[start + i];
 	}
 	copy[len] = '\0';
 	*out = copy;
@@ -531,26 +530,31 @@ static int exec_strings_from_spawn_buffer(const struct bunix_msg *message,
 					  char **path,
 					  struct exec_strings *strings)
 {
+	unsigned char *buffer;
 	u64 total;
 	u64 pos = 0;
+	int result = -1;
 
 	if (message == 0 || path == 0 || strings == 0 ||
 	    message->cap == 0 ||
 	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
 	    message->words[0] == 0 ||
-	    message->words[0] > sizeof(spawn_buffer) ||
+	    message->words[0] > PROC_SPAWN_BUFFER_MAX ||
 	    message->words[1] == 0 ||
 	    message->words[1] > message->words[0] ||
 	    message->words[2] > message->words[0]) {
 		return -1;
 	}
 	total = message->words[0];
-	mem_zero(spawn_buffer, sizeof(spawn_buffer));
-	if (bunix_buffer_read(message->cap, 0, spawn_buffer, total) != 0) {
+	buffer = (unsigned char *)bunix_alloc(total);
+	if (buffer == 0) {
 		return -1;
 	}
-	if (spawn_buffer_string(&pos, total, path) != 0) {
-		return -1;
+	if (bunix_buffer_read(message->cap, 0, buffer, total) != 0) {
+		goto out;
+	}
+	if (spawn_buffer_string(buffer, &pos, total, path) != 0) {
+		goto out;
 	}
 
 	strings->argc = message->words[1];
@@ -559,19 +563,31 @@ static int exec_strings_from_spawn_buffer(const struct bunix_msg *message,
 	strings->envp = strings->envc == 0 ? 0 :
 		(char **)bunix_calloc(strings->envc, sizeof(char *));
 	if (strings->argv == 0 || (strings->envc != 0 && strings->envp == 0)) {
-		return -1;
+		goto out;
 	}
 	for (u64 i = 0; i < strings->argc; i++) {
-		if (spawn_buffer_string(&pos, total, &strings->argv[i]) != 0) {
-			return -1;
+		if (spawn_buffer_string(buffer, &pos, total,
+					&strings->argv[i]) != 0) {
+			goto out;
 		}
 	}
 	for (u64 i = 0; i < strings->envc; i++) {
-		if (spawn_buffer_string(&pos, total, &strings->envp[i]) != 0) {
-			return -1;
+		if (spawn_buffer_string(buffer, &pos, total,
+					&strings->envp[i]) != 0) {
+			goto out;
 		}
 	}
-	return pos == total ? 0 : -1;
+	result = pos == total ? 0 : -1;
+out:
+	bunix_free(buffer);
+	if (result != 0) {
+		if (*path != 0) {
+			bunix_free(*path);
+			*path = 0;
+		}
+		exec_strings_free(strings);
+	}
+	return result;
 }
 
 static long vfs_open(u64 vfs, const char *path, struct vfs_file *file)
@@ -727,6 +743,26 @@ static long vfs_read_file(u64 vfs, u64 file, u64 file_size, u64 offset,
 		done += reply.words[1];
 	}
 
+	return 0;
+}
+
+static long task_write_bytes(u64 task, u64 vaddr, const unsigned char *buffer,
+			     u64 len)
+{
+	u64 done = 0;
+
+	while (done < len) {
+		u64 chunk = len - done;
+
+		if (chunk > PROC_SEGMENT_MAX) {
+			chunk = PROC_SEGMENT_MAX;
+		}
+		if (bunix_task_write(task, vaddr + done, buffer + done,
+				     chunk) != 0) {
+			return -1;
+		}
+		done += chunk;
+	}
 	return 0;
 }
 
@@ -972,6 +1008,7 @@ static long build_initial_stack(u64 task, const char *path,
 	};
 	u64 *argv_addrs = 0;
 	u64 *env_addrs = 0;
+	unsigned char *init_stack = 0;
 	u64 sp = PROC_INIT_STACK_MAX;
 	long result = -1;
 
@@ -987,7 +1024,11 @@ static long build_initial_stack(u64 task, const char *path,
 		goto out;
 	}
 
-	mem_zero(init_stack, sizeof(init_stack));
+	init_stack = (unsigned char *)bunix_alloc(PROC_INIT_STACK_MAX);
+	if (init_stack == 0) {
+		goto out;
+	}
+	mem_zero(init_stack, PROC_INIT_STACK_MAX);
 	for (u64 i = envc; i > 0; i--) {
 		const char *value = strings->envp[i - 1];
 		const u64 len = str_len(value) + 1;
@@ -1098,7 +1139,7 @@ static long build_initial_stack(u64 task, const char *path,
 	words[word++] = AT_NULL;
 	words[word++] = 0;
 
-	if (bunix_task_write(task, stack_base + sp, init_stack + sp,
+	if (task_write_bytes(task, stack_base + sp, init_stack + sp,
 			     PROC_INIT_STACK_MAX - sp) != 0) {
 		goto out;
 	}
@@ -1109,6 +1150,7 @@ static long build_initial_stack(u64 task, const char *path,
 out:
 	bunix_free(argv_addrs);
 	bunix_free(env_addrs);
+	bunix_free(init_stack);
 	return result;
 }
 

@@ -435,7 +435,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "first: argv1=alpha" $(BUILD_DIR)/serial.log
 	grep -F "first: argv2=beta" $(BUILD_DIR)/serial.log
 	grep -F "first: argv3=gamma" $(BUILD_DIR)/serial.log
-	grep -F "first: argv65=a65" $(BUILD_DIR)/serial.log
+	grep -F "first: argv65=x065-abcdefghijklmnopqrstuvwxyz0123456789" $(BUILD_DIR)/serial.log
+	grep -F "first: argv120=x120-abcdefghijklmnopqrstuvwxyz0123456789" $(BUILD_DIR)/serial.log
 	grep -F "first: env PROC_SPAWN_ENV=ok" $(BUILD_DIR)/serial.log
 	grep -F "first: aux pagesz=4096" $(BUILD_DIR)/serial.log
 	grep -F "first: aux entry=0x400000" $(BUILD_DIR)/serial.log

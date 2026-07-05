@@ -246,21 +246,27 @@ static int block_read_bytes(u64 offset, unsigned char *buffer, u64 len)
 
 static int block_read_buffer(u64 offset, u64 buffer, u64 len)
 {
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_BLOCK,
-		.type = BUNIX_BLOCK_READ_BUFFER,
-		.cap_rights = BUNIX_RIGHT_SEND,
-		.cap = buffer,
-		.words = { offset, len, 0, 0 },
-	};
-	struct bunix_msg reply;
+	u64 done = 0;
 
-	if (bunix_ipc_call(block_service, &request, &reply) != 0 ||
-	    reply.words[0] != 0 ||
-	    reply.words[1] > len) {
-		return -1;
+	while (done < len) {
+		struct bunix_msg request = {
+			.protocol = BUNIX_PROTO_BLOCK,
+			.type = BUNIX_BLOCK_READ_BUFFER,
+			.cap_rights = BUNIX_RIGHT_SEND,
+			.cap = buffer,
+			.words = { offset + done, len - done, done, 0 },
+		};
+		struct bunix_msg reply;
+
+		if (bunix_ipc_call(block_service, &request, &reply) != 0 ||
+		    reply.words[0] != 0 ||
+		    reply.words[1] == 0 ||
+		    reply.words[1] > len - done) {
+			return -1;
+		}
+		done += reply.words[1];
 	}
-	return (int)reply.words[1];
+	return (int)done;
 }
 
 static int rootfs_mount(void)

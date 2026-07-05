@@ -216,7 +216,9 @@ and `getcwd` returns cwd strings through shared-buffer transport instead of the
 inline IPC word path.
 Proc's native executable registry and bootstrap's `/etc/execs` and
 `/etc/spawns` parsing use the same runtime path budget, so native task spawns
-can exercise long VFS paths as well.
+can exercise long VFS paths as well. Buffer-backed proc spawn requests and the
+native initial stack image now use a 64 KiB budget, with stack writes chunked
+through the lower 4 KiB native syscall transport.
 The login program now execs the shell with `HOME`, `USER`, `LOGNAME`, `SHELL`,
 `PATH`, and `TERM`, and changes into the account home directory before execing
 the shell. Command lookup, login environment inheritance, larger argv/env
