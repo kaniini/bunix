@@ -47,6 +47,7 @@ enum {
 	PROC_DYN_LOAD_BIAS = 0x400000,
 	PROC_INTERP_LOAD_BIAS = 0x600000,
 	PROC_EXEC_PATH_MAX = 128,
+	PROC_TASK_NAME_MAX = 32,
 	PROC_SPAWN_SET_LOGIN = 1,
 	PROC_SPAWN_FLAGS_MASK = 0xffffffff,
 	PROC_SPAWN_SESSION_SHIFT = 32,
@@ -63,6 +64,14 @@ struct process {
 	u64 waiter;
 	u64 cmd_words[2];
 	u64 cmd_len;
+};
+
+struct proc_exec_entry {
+	struct bunix_tree_node node;
+	char path[PROC_EXEC_PATH_MAX];
+	char task_name[PROC_TASK_NAME_MAX];
+	const char *log_line;
+	int linux;
 };
 
 struct elf64_ehdr {
@@ -116,6 +125,7 @@ static struct bunix_map processes_by_pid;
 static struct bunix_map processes_by_task_id;
 static struct bunix_map processes_by_linux_pid;
 static struct bunix_map pending_linux_exits;
+static struct bunix_tree exec_registry;
 static u64 next_pid = 1;
 static u64 first_linux_pid;
 static unsigned char segment_buffer[PROC_SEGMENT_MAX];
@@ -202,50 +212,94 @@ static unsigned int read_magic(const unsigned char *ident)
 	       ((unsigned int)ident[3] << 24);
 }
 
-static int str_eq(const char *left, const char *right)
+static int copy_text(char *dst, u64 dst_len, const char *src)
 {
-	while (*left != '\0' && *right != '\0') {
-		if (*left++ != *right++) {
-			return 0;
-		}
-	}
+	u64 i;
 
-	return *left == *right;
+	if (dst == 0 || dst_len == 0 || src == 0) {
+		return -1;
+	}
+	for (i = 0; i + 1 < dst_len && src[i] != '\0'; i++) {
+		dst[i] = src[i];
+	}
+	if (src[i] != '\0') {
+		return -1;
+	}
+	dst[i] = '\0';
+	return 0;
+}
+
+static struct proc_exec_entry *exec_entry_for_path(const char *path)
+{
+	return (struct proc_exec_entry *)bunix_tree_get(&exec_registry, path);
 }
 
 static int is_linux_path(const char *path)
 {
-	return str_eq(path, "/bin/lxtest") ||
-	       str_eq(path, "/bin/musl-hello") ||
-	       str_eq(path, "/bin/fputest") ||
-	       str_eq(path, "/bin/sh") ||
-	       str_eq(path, "/bin/busybox") ||
-	       str_eq(path, "/bin/login") ||
-	       str_eq(path, "/sbin/init");
+	const struct proc_exec_entry *entry = exec_entry_for_path(path);
+
+	return entry != 0 && entry->linux;
 }
 
 static const char *task_name_for_path(const char *path)
 {
-	if (str_eq(path, "/bin/lxtest")) {
-		return "lxtest";
+	const struct proc_exec_entry *entry = exec_entry_for_path(path);
+
+	return entry != 0 ? entry->task_name : "first";
+}
+
+static const char *log_line_for_path(const char *path)
+{
+	const struct proc_exec_entry *entry = exec_entry_for_path(path);
+
+	return entry != 0 && entry->log_line != 0 ? entry->log_line :
+	       proc_exec;
+}
+
+static int exec_registry_add(const char *path, const char *task_name,
+			     int linux, const char *log_line)
+{
+	struct proc_exec_entry *entry;
+
+	if (path == 0 || task_name == 0 ||
+	    bunix_tree_get(&exec_registry, path) != 0) {
+		return -1;
 	}
-	if (str_eq(path, "/bin/musl-hello")) {
-		return "musl-hello";
+	entry = (struct proc_exec_entry *)bunix_calloc(1, sizeof(*entry));
+	if (entry == 0 ||
+	    copy_text(entry->path, sizeof(entry->path), path) != 0 ||
+	    copy_text(entry->task_name, sizeof(entry->task_name),
+		      task_name) != 0) {
+		if (entry != 0) {
+			bunix_free(entry);
+		}
+		return -1;
 	}
-	if (str_eq(path, "/bin/fputest")) {
-		return "fputest";
+	entry->linux = linux;
+	entry->log_line = log_line;
+	if (bunix_tree_insert_node(&exec_registry, &entry->node, entry->path,
+				   (u64)entry) != 0) {
+		bunix_free(entry);
+		return -1;
 	}
-	if (str_eq(path, "/bin/sh") || str_eq(path, "/bin/busybox") ||
-	    str_eq(path, "/sbin/init")) {
-		return "busybox";
-	}
-	if (str_eq(path, "/bin/login")) {
-		return "login";
-	}
-	if (str_eq(path, "/bin/ipcstress")) {
-		return "ipcstress";
-	}
-	return "first";
+	return 0;
+}
+
+static int exec_registry_seed(void)
+{
+	return exec_registry_add("/bin/lxtest", "lxtest", 1,
+				 proc_exec_linux) != 0 ||
+	       exec_registry_add("/bin/musl-hello", "musl-hello", 1,
+				 proc_exec_musl) != 0 ||
+	       exec_registry_add("/bin/fputest", "fputest", 1, 0) != 0 ||
+	       exec_registry_add("/bin/sh", "busybox", 1,
+				 proc_exec_shell) != 0 ||
+	       exec_registry_add("/bin/busybox", "busybox", 1, 0) != 0 ||
+	       exec_registry_add("/bin/login", "login", 1,
+				 proc_exec_login) != 0 ||
+	       exec_registry_add("/sbin/init", "busybox", 1,
+				 proc_exec_init) != 0 ||
+	       exec_registry_add("/bin/ipcstress", "ipcstress", 0, 0) != 0;
 }
 
 static u64 str_len(const char *text)
@@ -1314,8 +1368,10 @@ int main(void)
 	bunix_map_init(&processes_by_task_id);
 	bunix_map_init(&processes_by_linux_pid);
 	bunix_map_init(&pending_linux_exits);
+	bunix_tree_init(&exec_registry);
 	bunix_console_log(proc_online, sizeof(proc_online) - 1);
-	if (register_service(BUNIX_SERVICE_PROC, BUNIX_HANDLE_SELF) != 0) {
+	if (exec_registry_seed() != 0 ||
+	    register_service(BUNIX_SERVICE_PROC, BUNIX_HANDLE_SELF) != 0) {
 		bunix_console_log(proc_register_failed,
 				    sizeof(proc_register_failed) - 1);
 		return 1;
@@ -1358,27 +1414,11 @@ int main(void)
 					  (flags & PROC_SPAWN_SET_LOGIN) != 0,
 					  session_id,
 					  &pid) == 0) {
+				const char *log_line = log_line_for_path(path);
+
 				reply.words[0] = 0;
 				reply.words[1] = pid;
-				if (str_eq(path, "/bin/lxtest")) {
-					bunix_console_log(proc_exec_linux,
-							    sizeof(proc_exec_linux) - 1);
-				} else if (str_eq(path, "/bin/musl-hello")) {
-					bunix_console_log(proc_exec_musl,
-							    sizeof(proc_exec_musl) - 1);
-				} else if (str_eq(path, "/bin/sh")) {
-					bunix_console_log(proc_exec_shell,
-							    sizeof(proc_exec_shell) - 1);
-				} else if (str_eq(path, "/bin/login")) {
-					bunix_console_log(proc_exec_login,
-							    sizeof(proc_exec_login) - 1);
-				} else if (str_eq(path, "/sbin/init")) {
-					bunix_console_log(proc_exec_init,
-							    sizeof(proc_exec_init) - 1);
-				} else {
-					bunix_console_log(proc_exec,
-							    sizeof(proc_exec) - 1);
-				}
+				bunix_console_log(log_line, str_len(log_line));
 				log_pid_line("proc: spawned pid=", pid);
 			} else {
 				reply.words[0] = (u64)-1;
