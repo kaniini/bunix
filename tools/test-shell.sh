@@ -408,22 +408,24 @@ wait_for_fixed "$log" "0.1" "busybox uname -r did not report 0.1" 45 120
 wait_for_fixed "$log" "uid=1000" "busybox id did not report login identity" 45 120
 wait_for_awk "$log" '{ sub(/\r$/, "") } /groups=1(\(wheel\))?,1000(\(kaniini\))?/ { found = 1 } END { exit found ? 0 : 1 }' "busybox id did not report login supplementary groups" 45 120
 wait_for_awk "$log" '{ sub(/\r$/, "") } /2018(\(g18\))?/ { found = 1 } END { exit found ? 0 : 1 }' "busybox id did not report more than 16 supplementary groups" 45 120
-for expected in "HOME=/home/kaniini" "USER=kaniini" "LOGNAME=kaniini" "SHELL=/bin/sh" "PATH=/bin:/sbin:/usr/bin:/usr/sbin" "TERM=bunix"; do
-	wait_for_fixed "$log" "$expected" "login environment missing" 45 160
-done
+wait_for_each_fixed "$log" "login environment missing" 45 160 \
+	"HOME=/home/kaniini" "USER=kaniini" "LOGNAME=kaniini" \
+	"SHELL=/bin/sh" "PATH=/bin:/sbin:/usr/bin:/usr/sbin" "TERM=bunix"
 wait_for_exact_line "$log" "/home/kaniini" "shell did not cd to login home directory" 45 160
 wait_for_fixed "$log" "USR_ENV_OK" "/usr/bin/env symlink did not execute" 45 160
-for marker in ACCESS_X_OK ACCESS_R_OK ACCESS_DENY_OK; do
-	wait_for_fixed "$log" "$marker" "linux access/faccessat regression missing" 45 160
-done
+wait_for_each_fixed "$log" "linux access/faccessat regression missing" 45 160 \
+	ACCESS_X_OK ACCESS_R_OK ACCESS_DENY_OK
 wait_for_fixed "$log" "erase = ^?" "busybox stty did not report tty erase character" 45 160
 
 wait_for_fixed "$log" "Size: 15" "busybox stat did not report /hello.txt size" 45 120
 require_no_fixed "$log" "can't stat '/hello.txt'" "busybox stat failed for /hello.txt" 120
 
-for expected in "hello.txt" "secret.txt" "musl-hello" "busybox" "cat" "stat" "File: /bin" "/bin" "File: /usr/share" "/usr/share" "File: /tmp" "/tmp" "File: /run" "/run" "File: /var/tmp" "/var/tmp" "File: '/usr/bin/env'" "/usr/bin/env" "nested" "SYMLINK_READLINK_OK" "LONG_SYMLINK_READLINK_OK" "SYMLINK_LS_OK" "lrwxrwxrwx"; do
-	wait_for_fixed "$log" "$expected" "busybox directory regression missing" 45 160
-done
+wait_for_each_fixed "$log" "busybox directory regression missing" 45 160 \
+	"hello.txt" "secret.txt" "musl-hello" "busybox" "cat" "stat" \
+	"File: /bin" "/bin" "File: /usr/share" "/usr/share" \
+	"File: /tmp" "/tmp" "File: /run" "/run" "File: /var/tmp" \
+	"/var/tmp" "File: '/usr/bin/env'" "/usr/bin/env" "nested" \
+	SYMLINK_READLINK_OK LONG_SYMLINK_READLINK_OK SYMLINK_LS_OK lrwxrwxrwx
 require_no_fixed "$log" "can't stat '/bin'" "busybox directory stat failed" 160
 require_no_fixed "$log" "can't stat 'busybox'" "busybox directory stat failed" 160
 
@@ -439,9 +441,8 @@ wait_for_fixed "$log" "PROCFS_STILL_OK" "procfs translator did not survive neste
 wait_for_fixed "$log" "PROC_SELF_CMDLINE_CALLER_OK" "procfs self cmdline did not resolve caller" 45 180
 wait_for_fixed "$log" "PROC_ARGV_CMDLINE_OK" "procfs cmdline did not expose argv bytes" 45 180
 
-for expected in DEV_NULL_CHAR_OK DEV_ZERO_CHAR_OK DEV_CONSOLE_CHAR_OK; do
-	wait_for_fixed "$log" "$expected" "devfs character-device regression missing" 45 180
-done
+wait_for_each_fixed "$log" "devfs character-device regression missing" 45 180 \
+	DEV_NULL_CHAR_OK DEV_ZERO_CHAR_OK DEV_CONSOLE_CHAR_OK
 
 check_exact_markers_file "$log" "$script_dir/test-shell-exact-markers.txt" \
 	"shell regression missing" 75 220
@@ -450,21 +451,19 @@ check_fixed_markers_file "$log" "$script_dir/test-shell-content-markers.txt" \
 check_fixed_markers_file "$log" "$script_dir/test-shell-provisional-markers.txt" \
 	"provisional shell marker missing" 45 220
 wait_for_fixed "$log" "STATFS_DF_OK" "busybox df did not complete through statfs/fstatfs" 45 220
-for expected in "TMP_APPEND_ONE" "TMP_APPEND_TWO" "TMP_LONG_READDIR_PAYLOAD" "TMP_NAME_MAX_PAYLOAD" "TMP_NAME255_PAYLOAD" "PATHMAX2_TMP_PAYLOAD" "UNION_ROOT_BASE_PAYLOAD" "UNION_ROOT_APPEND_PAYLOAD" "UNION_ROOT_LONG_PAYLOAD" "UNION_NAME_MAX_PAYLOAD"; do
-	wait_for_fixed_count "$log" "$expected" 2 "append payload missing from file output" 45 220
-done
+wait_for_each_fixed_count "$log" 2 "append payload missing from file output" 45 220 \
+	TMP_APPEND_ONE TMP_APPEND_TWO TMP_LONG_READDIR_PAYLOAD TMP_NAME_MAX_PAYLOAD \
+	TMP_NAME255_PAYLOAD PATHMAX2_TMP_PAYLOAD UNION_ROOT_BASE_PAYLOAD \
+	UNION_ROOT_APPEND_PAYLOAD UNION_ROOT_LONG_PAYLOAD UNION_NAME_MAX_PAYLOAD
 wait_for_fixed "$log" "DYN_HELLO_OK" "dynamic musl hello did not complete" 45 220
 wait_for_fixed "$log" "EXECBIG_OK" "large Linux executable did not complete" 45 220
 wait_for_fixed "$log" "READBIG_OK" "large Linux read did not complete" 45 220
-for expected in "cpu  " "/bin/sh" "PROC_SHELL_PPID_OK" "direct_delivered " "direct_handoff "; do
-	wait_for_fixed "$log" "$expected" "procfs content regression missing" 45 220
-done
-for expected in "direct_delivered [1-9][0-9]*" "direct_handoff [1-9][0-9]*"; do
-	wait_for_regex "$log" "$expected" "IPC fast path counter did not increase" 45 220
-done
-for expected in "cpu[0-9][0-9]* sends [1-9][0-9]*"; do
-	wait_for_regex "$log" "$expected" "IPC per-CPU counter did not increase" 45 220
-done
+wait_for_each_fixed "$log" "procfs content regression missing" 45 220 \
+	"cpu  " "/bin/sh" PROC_SHELL_PPID_OK "direct_delivered " "direct_handoff "
+wait_for_each_regex "$log" "IPC fast path counter did not increase" 45 220 \
+	"direct_delivered [1-9][0-9]*" "direct_handoff [1-9][0-9]*"
+wait_for_each_regex "$log" "IPC per-CPU counter did not increase" 45 220 \
+	"cpu[0-9][0-9]* sends [1-9][0-9]*"
 require_no_fixed "$log" "top:" "busybox top reported an error" 220
 
 wait_for_fixed "$log" "BUSYBOX_ARGV_OK" "busybox argv regression command did not complete" 45 160
@@ -543,9 +542,8 @@ EOF_ROOT
 
 wait_for_fixed "$log" "uid=0(root)" "root login did not report uid 0" 45 180
 
-for expected in "HOME=/root" "USER=root" "LOGNAME=root"; do
-	wait_for_fixed "$log" "$expected" "root login environment missing" 45 180
-done
+wait_for_each_fixed "$log" "root login environment missing" 45 180 \
+	"HOME=/root" "USER=root" "LOGNAME=root"
 
 wait_for_fixed "$log" "ROOT_SECRET_OK" "root login could not read /secret.txt" 45 180
 send_script <<'EOF_ROOT_UNION'
@@ -561,12 +559,14 @@ busybox mount -t tmpfs tmpfs /.lower || echo UNION_LOWER_REPLACE_BUSY_OK
 busybox mount -t tmpfs tmpfs /.upper || echo UNION_UPPER_REPLACE_BUSY_OK
 busybox cat /hello.txt && echo UNION_PINNED_ROUTES_STILL_OK
 EOF_ROOT_UNION
-for expected in UNION_LOWER_PARENT_CREATE_OK UNION_LOWER_PARENT_UPPER_OK UNION_LOWER_COPYUP_APPEND_OK UNION_LOWER_COPYUP_UPPER_OK UNION_LOWER_UMOUNT_BUSY_OK UNION_UPPER_UMOUNT_BUSY_OK UNION_LOWER_REPLACE_BUSY_OK UNION_UPPER_REPLACE_BUSY_OK UNION_PINNED_ROUTES_STILL_OK; do
-	wait_for_fixed "$log" "$expected" "root unionfs lower-parent regression missing" 45 220
-done
-for expected in UNION_LOWER_PARENT_CREATE_PAYLOAD UNION_LOWER_COPYUP_APPEND_PAYLOAD; do
-	wait_for_fixed_count "$log" "$expected" 2 "root unionfs lower-parent payload missing" 45 220
-done
+wait_for_each_fixed "$log" "root unionfs lower-parent regression missing" 45 220 \
+	UNION_LOWER_PARENT_CREATE_OK UNION_LOWER_PARENT_UPPER_OK \
+	UNION_LOWER_COPYUP_APPEND_OK UNION_LOWER_COPYUP_UPPER_OK \
+	UNION_LOWER_UMOUNT_BUSY_OK UNION_UPPER_UMOUNT_BUSY_OK \
+	UNION_LOWER_REPLACE_BUSY_OK UNION_UPPER_REPLACE_BUSY_OK \
+	UNION_PINNED_ROUTES_STILL_OK
+wait_for_each_fixed_count "$log" 2 "root unionfs lower-parent payload missing" 45 220 \
+	UNION_LOWER_PARENT_CREATE_PAYLOAD UNION_LOWER_COPYUP_APPEND_PAYLOAD
 send_script <<'EOF_ROOT_CHOWN'
 busybox chown 0:0 /tmp/bunix-write.txt
 busybox stat -c "%u:%g" /tmp/bunix-write.txt
@@ -585,7 +585,7 @@ busybox id
 env
 exit
 EOF_LONG_LOGIN
-for expected in "uid=0(root)" "USER=administrator_with_long_name" "LOGNAME=administrator_with_long_name"; do
-	wait_for_fixed "$log" "$expected" "long login regression missing" 45 180
-done
+wait_for_each_fixed "$log" "long login regression missing" 45 180 \
+	"uid=0(root)" "USER=administrator_with_long_name" \
+	"LOGNAME=administrator_with_long_name"
 echo "shell regression ok"

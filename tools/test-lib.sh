@@ -170,3 +170,40 @@ check_exact_markers_file() {
 
 	check_exact_markers "$log" "$label" "$limit" "$tail_lines" < "$markers"
 }
+
+wait_for_each_fixed() {
+	log=$1
+	label=$2
+	limit=${3:-45}
+	tail_lines=${4:-160}
+	shift 4
+
+	for expected in "$@"; do
+		wait_for_fixed "$log" "$expected" "$label" "$limit" "$tail_lines"
+	done
+}
+
+wait_for_each_regex() {
+	log=$1
+	label=$2
+	limit=${3:-45}
+	tail_lines=${4:-160}
+	shift 4
+
+	for expected in "$@"; do
+		wait_for_regex "$log" "$expected" "$label" "$limit" "$tail_lines"
+	done
+}
+
+wait_for_each_fixed_count() {
+	log=$1
+	min_count=$2
+	label=$3
+	limit=${4:-45}
+	tail_lines=${5:-160}
+	shift 5
+
+	for expected in "$@"; do
+		wait_for_fixed_count "$log" "$expected" "$min_count" "$label" "$limit" "$tail_lines"
+	done
+}
