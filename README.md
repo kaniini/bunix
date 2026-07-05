@@ -213,7 +213,9 @@ Linux `execve` dynamically copies argv and envp strings within the current
 into the new task image instead of using tiny fixed argv/env arrays. Linux
 `execve` accepts executable paths up to the 4096-byte Linux `PATH_MAX` budget,
 and `getcwd` returns cwd strings through shared-buffer transport instead of the
-inline IPC word path.
+inline IPC word path. Linux `write(2)` chunks user buffers through the current
+4 KiB kernel-to-server transport, so larger application writes no longer fail
+just because they cross the transport boundary.
 Proc's native executable registry and bootstrap's `/etc/execs` and
 `/etc/spawns` parsing use the same runtime path budget, so native task spawns
 can exercise long VFS paths as well. Buffer-backed proc spawn requests and the

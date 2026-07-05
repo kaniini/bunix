@@ -1404,6 +1404,36 @@ static u64 linux_write_one(struct ipc_port *linux, struct ipc_port *reply_port,
 					  user_buffer, len, TASK_RIGHT_RECV);
 }
 
+static u64 linux_write_chunked(struct ipc_port *linux,
+			       struct ipc_port *reply_port,
+			       u64 fd, u64 user_buffer, u64 len)
+{
+	u64 total = 0;
+
+	if (user_buffer == 0) {
+		return (u64)-LINUX_EINVAL;
+	}
+	while (total < len) {
+		const u64 chunk = min_u64(len - total,
+					  LINUX_MAX_SYSCALL_BUFFER);
+		const u64 wrote = linux_write_one(linux, reply_port, fd,
+						  user_buffer + total,
+						  chunk);
+
+		if ((i64)wrote < 0) {
+			return total != 0 ? total : wrote;
+		}
+		if (wrote == 0) {
+			return total;
+		}
+		total += wrote;
+		if (wrote != chunk) {
+			return total;
+		}
+	}
+	return total;
+}
+
 static struct shared_buffer *linux_path_buffer_from_user(const char *path,
 							 u64 min_size,
 							 u64 *path_len)
@@ -3247,10 +3277,8 @@ poll_again:
 						  TASK_RIGHT_SEND, arg0, 0, 0);
 	}
 	case LINUX_SYSCALL_WRITE: {
-		if (arg1 == 0 || arg2 > LINUX_MAX_SYSCALL_BUFFER) {
-			return (u64)-LINUX_EINVAL;
-		}
-		return linux_write_one(linux, reply_port, arg0, arg1, arg2);
+		return linux_write_chunked(linux, reply_port, arg0, arg1,
+					   arg2);
 	}
 	case LINUX_SYSCALL_PIPE:
 	case LINUX_SYSCALL_PIPE2: {
