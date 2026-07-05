@@ -585,11 +585,16 @@ static int linux_timespec_to_ns(u64 vaddr, u64 *ns)
 	u64 timespec[2];
 	const u64 nsec_per_sec = 1000000000ull;
 
-	if (vaddr == 0 || ns == 0 ||
-	    read_current_user(vaddr, timespec, sizeof(timespec)) != 0 ||
-	    timespec[1] >= nsec_per_sec ||
+	if (ns == 0) {
+		return -LINUX_EINVAL;
+	}
+	if (vaddr == 0 ||
+	    read_current_user(vaddr, timespec, sizeof(timespec)) != 0) {
+		return -LINUX_EFAULT;
+	}
+	if (timespec[1] >= nsec_per_sec ||
 	    timespec[0] > (~0ull - timespec[1]) / nsec_per_sec) {
-		return -1;
+		return -LINUX_EINVAL;
 	}
 
 	*ns = timespec[0] * nsec_per_sec + timespec[1];
@@ -599,15 +604,16 @@ static int linux_timespec_to_ns(u64 vaddr, u64 *ns)
 static u64 linux_sleep_relative(u64 request, u64 remainder)
 {
 	u64 ns;
+	const int rc = linux_timespec_to_ns(request, &ns);
 
-	if (linux_timespec_to_ns(request, &ns) != 0) {
-		return (u64)-LINUX_EINVAL;
+	if (rc != 0) {
+		return (u64)rc;
 	}
 	if (remainder != 0) {
 		u64 zero[2] = { 0, 0 };
 
 		if (write_current_user(remainder, zero, sizeof(zero)) != 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 	}
 	thread_sleep_ns(ns);
@@ -618,9 +624,10 @@ static u64 linux_sleep_absolute(u64 request)
 {
 	u64 target;
 	const u64 now = timer_monotonic_ns();
+	const int rc = linux_timespec_to_ns(request, &target);
 
-	if (linux_timespec_to_ns(request, &target) != 0) {
-		return (u64)-LINUX_EINVAL;
+	if (rc != 0) {
+		return (u64)rc;
 	}
 	if (target > now) {
 		thread_sleep_ns(target - now);
@@ -1207,7 +1214,7 @@ static u64 linux_forward_input_buffer(struct ipc_port *linux,
 
 	buffer = buffer_create(len == 0 ? 1 : len);
 	if (buffer == 0) {
-		return (u64)-LINUX_EINVAL;
+		return (u64)-LINUX_ENOMEM;
 	}
 	if (len != 0) {
 		flags = spin_lock_irqsave(&syscall_copy_lock);
@@ -1215,7 +1222,7 @@ static u64 linux_forward_input_buffer(struct ipc_port *linux,
 		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
 			spin_unlock_irqrestore(&syscall_copy_lock, flags);
 			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		spin_unlock_irqrestore(&syscall_copy_lock, flags);
 	}
@@ -1380,8 +1387,8 @@ static u64 linux_write_chunked(struct ipc_port *linux,
 {
 	u64 total = 0;
 
-	if (user_buffer == 0) {
-		return (u64)-LINUX_EINVAL;
+	if (user_buffer == 0 && len != 0) {
+		return (u64)-LINUX_EFAULT;
 	}
 	while (total < len) {
 		const u64 chunk = min_u64(len - total,
@@ -1406,15 +1413,23 @@ static u64 linux_write_chunked(struct ipc_port *linux,
 
 static struct shared_buffer *linux_path_buffer_from_user(const char *path,
 							 u64 min_size,
-							 u64 *path_len)
+							 u64 *path_len,
+							 u64 *error)
 {
 	struct shared_buffer *buffer;
 	u64 len;
 	u64 size;
 
-	if (path == 0 || path_len == 0 ||
-	    copy_cstr_from_user((char *)syscall_copy_buffer, path,
+	if (path_len == 0 || error == 0) {
+		return 0;
+	}
+	if (path == 0) {
+		*error = (u64)-LINUX_EFAULT;
+		return 0;
+	}
+	if (copy_cstr_from_user((char *)syscall_copy_buffer, path,
 				LINUX_MAX_SYSCALL_BUFFER) != 0) {
+		*error = (u64)-LINUX_EFAULT;
 		return 0;
 	}
 	len = str_len((const char *)syscall_copy_buffer) + 1;
@@ -1423,6 +1438,7 @@ static struct shared_buffer *linux_path_buffer_from_user(const char *path,
 	if (buffer == 0 ||
 	    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
 		buffer_release(buffer);
+		*error = (u64)-LINUX_ENOMEM;
 		return 0;
 	}
 	*path_len = len;
@@ -1440,10 +1456,12 @@ static u64 linux_forward_path(struct ipc_port *linux,
 {
 	struct shared_buffer *buffer;
 	u64 len = 0;
+	u64 error = 0;
 
-	buffer = linux_path_buffer_from_user(path, min_buffer_size, &len);
+	buffer = linux_path_buffer_from_user(path, min_buffer_size, &len,
+					     &error);
 	if (buffer == 0) {
-		return (u64)-LINUX_EINVAL;
+		return error;
 	}
 	if (path_len_word < 4) {
 		request->words[path_len_word] = len;
@@ -1469,9 +1487,6 @@ static u64 linux_forward_path_words(struct ipc_port *linux,
 				    u64 word2,
 				    u64 word3)
 {
-	if (path == 0) {
-		return (u64)-LINUX_EINVAL;
-	}
 	request->type = type;
 	request->words[0] = word0;
 	request->words[1] = 0;
@@ -1489,13 +1504,15 @@ static struct shared_buffer *linux_forward_path_buffer(
 {
 	struct shared_buffer *buffer;
 	u64 len = 0;
+	u64 error = 0;
 
 	if (result == 0) {
 		return 0;
 	}
-	buffer = linux_path_buffer_from_user(path, min_buffer_size, &len);
+	buffer = linux_path_buffer_from_user(path, min_buffer_size, &len,
+					     &error);
 	if (buffer == 0) {
-		*result = (u64)-LINUX_EINVAL;
+		*result = error;
 		return 0;
 	}
 	if (path_len_word < 4) {
@@ -1579,7 +1596,7 @@ static u64 linux_forward_output_buffer(struct ipc_port *linux,
 
 	buffer = buffer_create(size == 0 ? 1 : size);
 	if (buffer == 0) {
-		return (u64)-LINUX_EINVAL;
+		return (u64)-LINUX_ENOMEM;
 	}
 	request->cap_type = IPC_CAP_BUFFER;
 	request->cap_rights = cap_rights;
@@ -1591,7 +1608,7 @@ static u64 linux_forward_output_buffer(struct ipc_port *linux,
 	if ((i64)reply.words[0] > 0 &&
 	    buffer_read(buffer, 0, user_out, reply.words[0]) != 0) {
 		buffer_release(buffer);
-		return (u64)-LINUX_EINVAL;
+		return (u64)-LINUX_EFAULT;
 	}
 	buffer_release(buffer);
 	return reply.words[0];
@@ -1630,7 +1647,7 @@ static u64 linux_forward_fixed_output_buffer(struct ipc_port *linux,
 
 	buffer = buffer_create(size == 0 ? 1 : size);
 	if (buffer == 0) {
-		return (u64)-LINUX_EINVAL;
+		return (u64)-LINUX_ENOMEM;
 	}
 	request->cap_type = IPC_CAP_BUFFER;
 	request->cap_rights = TASK_RIGHT_SEND;
@@ -1644,7 +1661,7 @@ static u64 linux_forward_fixed_output_buffer(struct ipc_port *linux,
 	     (copy_on_positive && (i64)result > 0)) &&
 	    buffer_read(buffer, 0, user_out, size) != 0) {
 		buffer_release(buffer);
-		return (u64)-LINUX_EINVAL;
+		return (u64)-LINUX_EFAULT;
 	}
 	buffer_release(buffer);
 	return result;
@@ -1685,7 +1702,7 @@ static u64 linux_forward_two_u32_out(struct ipc_port *linux,
 	values[0] = (u32)reply.words[1];
 	values[1] = (u32)reply.words[2];
 	return write_current_user(user_out, values, sizeof(values)) == 0 ?
-	       reply.words[0] : (u64)-LINUX_EINVAL;
+	       reply.words[0] : (u64)-LINUX_EFAULT;
 }
 
 static u64 linux_forward_groups_out(struct task *task, struct ipc_port *linux,
@@ -1704,7 +1721,7 @@ static u64 linux_forward_groups_out(struct task *task, struct ipc_port *linux,
 		size = count * sizeof(u32);
 		buffer = buffer_create(size);
 		if (buffer == 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_ENOMEM;
 		}
 		request->cap_type = IPC_CAP_BUFFER;
 		request->cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP;
@@ -3041,7 +3058,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			if (write_current_user(arg1, syscall_copy_buffer,
 					       nread) != 0) {
 				spin_unlock_irqrestore(&syscall_copy_lock, flags);
-				return (u64)-LINUX_EINVAL;
+				return (u64)-LINUX_EFAULT;
 			}
 			spin_unlock_irqrestore(&syscall_copy_lock, flags);
 			return nread;
@@ -3059,7 +3076,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 		if (arg1 != 0 &&
 		    read_current_user(arg1, &handler, sizeof(handler)) != 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		request.type = LINUX_SYSCALL_RT_SIGACTION;
 		request.words[0] = arg0;
@@ -3080,7 +3097,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			mem_copy(action, (const u8 *)&reply.words[1],
 				 sizeof(reply.words[1]));
 			if (write_current_user(arg2, action, sizeof(action)) != 0) {
-				return (u64)-LINUX_EINVAL;
+				return (u64)-LINUX_EFAULT;
 			}
 		}
 		return 0;
@@ -3094,7 +3111,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 		if (arg1 != 0 &&
 		    read_current_user(arg1, &set, sizeof(set)) != 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		request.type = LINUX_SYSCALL_RT_SIGPROCMASK;
 		request.words[0] = how;
@@ -3111,7 +3128,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		if (arg2 != 0 &&
 		    write_current_user(arg2, &reply.words[1],
 				       sizeof(reply.words[1])) != 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		return 0;
 	}
@@ -3122,7 +3139,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 		if (read_current_user(arg0, &set, sizeof(set)) != 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		request.type = LINUX_SYSCALL_RT_SIGTIMEDWAIT;
 		request.words[0] = set;
@@ -3205,7 +3222,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 
 			if (arg0 == 0 ||
 			    read_current_user(arg0, &value, sizeof(value)) != 0) {
-				return (u64)-LINUX_EINVAL;
+				return (u64)-LINUX_EFAULT;
 			}
 			return value != (u32)arg2 ? (u64)-LINUX_EAGAIN : 0;
 		}
@@ -3244,7 +3261,7 @@ poll_again:
 			short revents = 0;
 
 			if (read_current_user(addr, &pollfd, sizeof(pollfd)) != 0) {
-				return (u64)-LINUX_EINVAL;
+				return (u64)-LINUX_EFAULT;
 			}
 			revents = linux_poll_revents(pollfd.fd, pollfd.events,
 						     suppress_pollin);
@@ -3253,7 +3270,7 @@ poll_again:
 			}
 			if (write_current_user(addr + 6, &revents,
 					       sizeof(revents)) != 0) {
-				return (u64)-LINUX_EINVAL;
+				return (u64)-LINUX_EFAULT;
 			}
 		}
 		if (ready == 0 && timeout_ns != 0 &&
@@ -3277,7 +3294,7 @@ poll_again:
 		for (u64 i = 0; i < arg2; i++) {
 			if (read_current_user(arg1 + i * sizeof(iov), &iov,
 					      sizeof(iov)) != 0) {
-				return (u64)-LINUX_EINVAL;
+				return (u64)-LINUX_EFAULT;
 			}
 			if (iov.base == 0 && iov.len != 0) {
 				return (u64)-LINUX_EINVAL;
@@ -3326,8 +3343,8 @@ poll_again:
 		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
 				LINUX_MAX_SYSCALL_BUFFER : arg2;
 
-		if (arg1 == 0) {
-			return (u64)-LINUX_EINVAL;
+		if (arg1 == 0 && len != 0) {
+			return (u64)-LINUX_EFAULT;
 		}
 		return linux_forward_output_words(linux, reply_port, &request,
 						  LINUX_SYSCALL_READ,
@@ -3341,7 +3358,8 @@ poll_again:
 				LINUX_MAX_SYSCALL_BUFFER : arg2;
 
 		if (arg1 == 0 || arg2 == 0) {
-			return (u64)-LINUX_EINVAL;
+			return arg1 == 0 ? (u64)-LINUX_EFAULT :
+			       (u64)-LINUX_EINVAL;
 		}
 		return linux_forward_output_words(linux, reply_port, &request,
 						  LINUX_SYSCALL_GETDENTS64,
@@ -3355,7 +3373,7 @@ poll_again:
 	case LINUX_SYSCALL_PIPE:
 	case LINUX_SYSCALL_PIPE2: {
 		if (arg0 == 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		request.type = number == LINUX_SYSCALL_PIPE ?
 			       LINUX_SYSCALL_PIPE : LINUX_SYSCALL_PIPE2;
@@ -3368,7 +3386,7 @@ poll_again:
 	}
 	case LINUX_SYSCALL_UNAME: {
 		if (arg0 == 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		return linux_forward_fixed_output_words(
 			linux, reply_port, &request, LINUX_SYSCALL_UNAME,
@@ -3377,7 +3395,7 @@ poll_again:
 	}
 	case LINUX_SYSCALL_SYSINFO: {
 		if (arg0 == 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		return linux_forward_fixed_output_words(
 			linux, reply_port, &request, LINUX_SYSCALL_SYSINFO,
@@ -3386,7 +3404,7 @@ poll_again:
 	}
 	case LINUX_SYSCALL_FSTATFS: {
 		if (arg1 == 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		return linux_forward_fixed_output_words(
 			linux, reply_port, &request, LINUX_SYSCALL_FSTATFS,
@@ -3395,7 +3413,7 @@ poll_again:
 	}
 	case LINUX_SYSCALL_CLOCK_GETTIME: {
 		if (arg1 == 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		return linux_forward_fixed_output_words(
 			linux, reply_port, &request, LINUX_SYSCALL_CLOCK_GETTIME,
@@ -3428,7 +3446,8 @@ poll_again:
 				LINUX_MAX_SOCKADDR : arg2;
 
 		if (arg1 == 0 || len == 0) {
-			return (u64)-LINUX_EINVAL;
+			return arg1 == 0 ? (u64)-LINUX_EFAULT :
+			       (u64)-LINUX_EINVAL;
 		}
 		request.type = LINUX_SYSCALL_CONNECT;
 		request.words[0] = arg0;
@@ -3443,7 +3462,7 @@ poll_again:
 				LINUX_MAX_SYSCALL_BUFFER : arg2;
 
 		if (arg1 == 0 && len != 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		request.type = LINUX_SYSCALL_SENDTO;
 		request.words[0] = arg0;
@@ -3458,7 +3477,7 @@ poll_again:
 				LINUX_MAX_SYSCALL_BUFFER : arg2;
 
 		if (arg1 == 0 && len != 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 
 		return linux_forward_output_words(linux, reply_port, &request,
@@ -3468,8 +3487,10 @@ poll_again:
 						  arg0, arg3, 0);
 	}
 	case LINUX_SYSCALL_GETRANDOM: {
-		if (arg0 == 0 || arg1 > LINUX_MAX_SYSCALL_BUFFER) {
-			return (u64)-LINUX_EINVAL;
+		if ((arg0 == 0 && arg1 != 0) ||
+		    arg1 > LINUX_MAX_SYSCALL_BUFFER) {
+			return arg0 == 0 ? (u64)-LINUX_EFAULT :
+			       (u64)-LINUX_EINVAL;
 		}
 		return linux_forward_output_words(linux, reply_port, &request,
 						  LINUX_SYSCALL_GETRANDOM,
@@ -3482,7 +3503,8 @@ poll_again:
 		u64 size;
 
 		if (arg0 == 0 || arg1 == 0) {
-			return (u64)-LINUX_EINVAL;
+			return arg0 == 0 ? (u64)-LINUX_EFAULT :
+			       (u64)-LINUX_EINVAL;
 		}
 		size = min_u64(arg1, LINUX_EXEC_MAX_PATH);
 		return linux_forward_output_words(linux, reply_port, &request,
@@ -3492,9 +3514,6 @@ poll_again:
 						  arg1, 0, 0);
 	}
 	case LINUX_SYSCALL_CHDIR: {
-		if (arg0 == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
 		request.type = LINUX_SYSCALL_CHDIR;
 		request.words[0] = 0;
 		request.words[1] = 0;
@@ -3539,7 +3558,7 @@ poll_again:
 			if (buffer != 0) {
 				buffer_release(buffer);
 			}
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_ENOMEM;
 		}
 
 		request.type = LINUX_SYSCALL_SETGROUPS;
@@ -3569,11 +3588,11 @@ poll_again:
 			return (u64)-LINUX_ENOTTY;
 		}
 		if (arg2 == 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		if (arg1 == LINUX_TIOCSPGRP &&
 		    read_current_user(arg2, &value, sizeof(value)) != 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		if (arg1 == LINUX_TCGETS) {
 			output_size = LINUX_TERMIOS_SIZE;
@@ -3589,7 +3608,7 @@ poll_again:
 		if (output_size != 0) {
 			buffer = buffer_create(output_size);
 			if (buffer == 0) {
-				return (u64)-LINUX_EINVAL;
+				return (u64)-LINUX_ENOMEM;
 			}
 			if ((arg1 == LINUX_TCSETS ||
 			     arg1 == LINUX_TCSETSW ||
@@ -3597,7 +3616,7 @@ poll_again:
 			    read_current_user(arg2, syscall_copy_buffer,
 					      output_size) != 0) {
 				buffer_release(buffer);
-				return (u64)-LINUX_EINVAL;
+				return (u64)-LINUX_EFAULT;
 			}
 			if ((arg1 == LINUX_TCSETS ||
 			     arg1 == LINUX_TCSETSW ||
@@ -3605,7 +3624,7 @@ poll_again:
 			    buffer_write(buffer, 0, syscall_copy_buffer,
 					 output_size) != 0) {
 				buffer_release(buffer);
-				return (u64)-LINUX_EINVAL;
+				return (u64)-LINUX_ENOMEM;
 			}
 		}
 
@@ -3633,7 +3652,7 @@ poll_again:
 		    arg1 != LINUX_TCSETSF &&
 		    buffer_read(buffer, 0, (void *)arg2, output_size) != 0) {
 			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		if (buffer != 0) {
 			buffer_release(buffer);
@@ -3659,7 +3678,7 @@ poll_again:
 	}
 	case LINUX_SYSCALL_FSTAT: {
 		if (arg1 == 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		return linux_forward_fixed_output_words(
 			linux, reply_port, &request, LINUX_SYSCALL_FSTAT,
@@ -3783,7 +3802,8 @@ poll_again:
 
 		if (path == 0 || out == 0 || out_size == 0 ||
 		    out_size > LINUX_MAX_SYSCALL_BUFFER) {
-			return (u64)-LINUX_EINVAL;
+			return path == 0 || out == 0 ? (u64)-LINUX_EFAULT :
+			       (u64)-LINUX_EINVAL;
 		}
 		request.type = LINUX_SYSCALL_READLINKAT;
 		request.words[0] = dirfd;
@@ -3801,7 +3821,7 @@ poll_again:
 		if ((long)result >= 0 &&
 		    buffer_read(buffer, 0, out, result) != 0) {
 			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		buffer_release(buffer);
 		return result;
@@ -3822,7 +3842,7 @@ poll_again:
 		u64 result;
 
 		if (path == 0 || stat_addr == 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		request.type = LINUX_SYSCALL_NEWFSTATAT;
 		request.words[0] = dirfd;
@@ -3835,7 +3855,7 @@ poll_again:
 		    linux_write_stat_user(stat_addr, reply.words[1],
 					  reply.words[2],
 					  reply.words[3]) != 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		return result;
 	}
@@ -3845,7 +3865,7 @@ poll_again:
 		u64 result;
 
 		if (path == 0 || arg1 == 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		request.type = LINUX_SYSCALL_STATFS;
 		request.words[0] = 0;
@@ -3865,7 +3885,7 @@ poll_again:
 		    buffer_read(buffer, 0, (void *)arg1,
 				LINUX_STATFS_SIZE) != 0) {
 			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		buffer_release(buffer);
 		return result;
@@ -3877,7 +3897,7 @@ poll_again:
 		u64 result;
 
 		if (path == 0 || statx_addr == 0) {
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		request.type = LINUX_SYSCALL_STATX;
 		request.words[0] = arg0;
@@ -3897,7 +3917,7 @@ poll_again:
 		    buffer_read(buffer, 0, (void *)statx_addr,
 				LINUX_STATX_SIZE) != 0) {
 			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
+			return (u64)-LINUX_EFAULT;
 		}
 		buffer_release(buffer);
 		return result;
