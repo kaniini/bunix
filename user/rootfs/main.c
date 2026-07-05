@@ -28,7 +28,7 @@ struct rootfs_disk_entry {
 
 struct rootfs_entry {
 	struct bunix_tree_node node;
-	char path[ROOTFS_MAX_PATH];
+	char *path;
 	u64 offset;
 	u64 size;
 	unsigned int uid;
@@ -110,6 +110,24 @@ static int set_path(char *target, const char *path)
 	}
 	target[i] = '\0';
 	return 0;
+}
+
+static char *dup_path(const char *path)
+{
+	const u64 len = str_len(path);
+	char *copy;
+
+	if (len == 0 || len >= ROOTFS_MAX_PATH || path[0] != '/') {
+		return 0;
+	}
+	copy = (char *)bunix_alloc(len + 1);
+	if (copy == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i <= len; i++) {
+		copy[i] = path[i];
+	}
+	return copy;
 }
 
 static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
@@ -304,7 +322,6 @@ static int rootfs_mount(void)
 	};
 	struct bunix_msg reply;
 	struct rootfs_header header;
-	struct rootfs_disk_entry *disk_entries;
 
 	if (bunix_ipc_call(block_service, &request, &reply) != 0 ||
 	    reply.words[0] != 0 ||
@@ -318,33 +335,35 @@ static int rootfs_mount(void)
 	}
 	root_entries = (struct rootfs_entry *)
 		bunix_calloc(header.entries, sizeof(root_entries[0]));
-	disk_entries = (struct rootfs_disk_entry *)
-		bunix_calloc(header.entries, sizeof(disk_entries[0]));
-	if (root_entries == 0 || disk_entries == 0 ||
-	    block_read_bytes(sizeof(header), (unsigned char *)disk_entries,
-			     (u64)header.entries *
-			     sizeof(disk_entries[0])) != 0) {
+	if (root_entries == 0) {
 		return -1;
 	}
 	for (u64 i = 0; i < header.entries; i++) {
-		for (u64 j = 0; j < ROOTFS_MAX_PATH; j++) {
-			root_entries[i].path[j] = disk_entries[i].path[j];
+		struct rootfs_disk_entry disk_entry;
+		const u64 disk_offset = sizeof(header) +
+					i * sizeof(disk_entry);
+
+		if (block_read_bytes(disk_offset, (unsigned char *)&disk_entry,
+				     sizeof(disk_entry)) != 0) {
+			return -1;
 		}
-		root_entries[i].offset = disk_entries[i].offset;
-		root_entries[i].size = disk_entries[i].size;
-		root_entries[i].uid = disk_entries[i].uid;
-		root_entries[i].gid = disk_entries[i].gid;
-		root_entries[i].mode = disk_entries[i].mode;
-		root_entries[i].type = disk_entries[i].type;
+		root_entries[i].path = dup_path(disk_entry.path);
+		root_entries[i].offset = disk_entry.offset;
+		root_entries[i].size = disk_entry.size;
+		root_entries[i].uid = disk_entry.uid;
+		root_entries[i].gid = disk_entry.gid;
+		root_entries[i].mode = disk_entry.mode;
+		root_entries[i].type = disk_entry.type;
+		if (root_entries[i].path == 0) {
+			return -1;
+		}
 		if (bunix_tree_insert_node(&rootfs_by_path,
 					   &root_entries[i].node,
 					   root_entries[i].path,
 					   (u64)&root_entries[i]) != 0) {
-			bunix_free(disk_entries);
 			return -1;
 		}
 	}
-	bunix_free(disk_entries);
 	root_entry_count = header.entries;
 	return 0;
 }
