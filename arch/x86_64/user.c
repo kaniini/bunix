@@ -182,9 +182,9 @@ enum {
 	LINUX_MAX_SOCKADDR = 128,
 	LINUX_EXEC_MAX_IMAGE = 2 * 1024 * 1024,
 	LINUX_EXEC_MAX_PATH = 128,
-	LINUX_EXEC_MAX_ARGS = 8,
-	LINUX_EXEC_MAX_ENVS = 16,
-	LINUX_EXEC_MAX_ARG = 64,
+	LINUX_EXEC_MAX_STRINGS = 256,
+	LINUX_EXEC_MAX_STRING = 4096,
+	LINUX_EXEC_MAX_STRING_BYTES = 49152,
 	LINUX_EXEC_MAX_PHDRS = 16,
 	LINUX_MAX_GROUPS = 64,
 	LINUX_EXEC_DYN_LOAD_BIAS = 0x400000,
@@ -315,8 +315,9 @@ struct elf64_dyn {
 struct linux_exec_args {
 	u64 argc;
 	u64 envc;
-	char values[LINUX_EXEC_MAX_ARGS][LINUX_EXEC_MAX_ARG];
-	char env_values[LINUX_EXEC_MAX_ENVS][LINUX_EXEC_MAX_ARG];
+	u64 bytes;
+	char **argv;
+	char **envp;
 };
 
 struct linux_vfork_wait {
@@ -1732,6 +1733,69 @@ static int linux_exec_map_segment(struct task *task, const u8 *image,
 	return 0;
 }
 
+static char *linux_copy_cstr_dynamic(const char *src, u64 max_len, u64 *len_out)
+{
+	u64 len = 0;
+	char *copy;
+
+	if (src == 0 || max_len == 0 || len_out == 0) {
+		return 0;
+	}
+
+	for (;;) {
+		char c = '\0';
+
+		if (len >= max_len ||
+		    vm_read_user(task_vm_space(task_current()), (u64)src + len,
+				 &c, 1) != 0) {
+			return 0;
+		}
+		len++;
+		if (c == '\0') {
+			break;
+		}
+	}
+
+	copy = (char *)slab_alloc(len);
+	if (copy == 0) {
+		return 0;
+	}
+	if (copy_cstr_from_user(copy, src, len) != 0) {
+		slab_free(copy);
+		return 0;
+	}
+	*len_out = len;
+	return copy;
+}
+
+static void linux_exec_args_free(struct linux_exec_args *args)
+{
+	if (args == 0) {
+		return;
+	}
+	if (args->argv != 0) {
+		for (u64 i = 0; i < args->argc; i++) {
+			if (args->argv[i] != 0) {
+				slab_free(args->argv[i]);
+			}
+		}
+		slab_free(args->argv);
+	}
+	if (args->envp != 0) {
+		for (u64 i = 0; i < args->envc; i++) {
+			if (args->envp[i] != 0) {
+				slab_free(args->envp[i]);
+			}
+		}
+		slab_free(args->envp);
+	}
+	args->argc = 0;
+	args->envc = 0;
+	args->bytes = 0;
+	args->argv = 0;
+	args->envp = 0;
+}
+
 static int linux_exec_collect_args(const char *path, u64 user_argv,
 				   struct linux_exec_args *args)
 {
@@ -1741,25 +1805,41 @@ static int linux_exec_collect_args(const char *path, u64 user_argv,
 
 	args->argc = 0;
 	args->envc = 0;
-	for (u64 i = 0; i < LINUX_EXEC_MAX_ARGS; i++) {
-		args->values[i][0] = '\0';
-	}
-	for (u64 i = 0; i < LINUX_EXEC_MAX_ENVS; i++) {
-		args->env_values[i][0] = '\0';
-	}
+	args->bytes = 0;
+	args->argv = 0;
+	args->envp = 0;
 
 	if (user_argv == 0) {
-		if (str_len(path) >= LINUX_EXEC_MAX_ARG) {
+		const u64 len = str_len(path) + 1;
+
+		if (len > LINUX_EXEC_MAX_STRING ||
+		    len > LINUX_EXEC_MAX_STRING_BYTES) {
 			return -1;
 		}
-		mem_copy((u8 *)args->values[0], (const u8 *)path,
-			 str_len(path) + 1);
+		args->argv = (char **)slab_zalloc(sizeof(char *));
+		if (args->argv == 0) {
+			return -1;
+		}
+		args->argv[0] = (char *)slab_alloc(len);
+		if (args->argv[0] == 0) {
+			return -1;
+		}
+		mem_copy((u8 *)args->argv[0], (const u8 *)path, len);
 		args->argc = 1;
+		args->bytes = len;
 		return 0;
 	}
 
-	for (u64 i = 0; i < LINUX_EXEC_MAX_ARGS; i++) {
+	args->argv = (char **)slab_zalloc(LINUX_EXEC_MAX_STRINGS *
+					  sizeof(char *));
+	if (args->argv == 0) {
+		return -1;
+	}
+
+	for (u64 i = 0; i < LINUX_EXEC_MAX_STRINGS; i++) {
 		u64 arg_ptr = 0;
+		char *copy;
+		u64 len = 0;
 
 		if (read_current_user(user_argv + i * sizeof(arg_ptr),
 				      &arg_ptr, sizeof(arg_ptr)) != 0) {
@@ -1768,15 +1848,21 @@ static int linux_exec_collect_args(const char *path, u64 user_argv,
 		if (arg_ptr == 0) {
 			break;
 		}
-		if (copy_cstr_from_user(args->values[i],
-					(const char *)arg_ptr,
-					LINUX_EXEC_MAX_ARG) != 0) {
+		copy = linux_copy_cstr_dynamic((const char *)arg_ptr,
+					       LINUX_EXEC_MAX_STRING, &len);
+		if (copy == 0 ||
+		    args->bytes + len > LINUX_EXEC_MAX_STRING_BYTES) {
+			if (copy != 0) {
+				slab_free(copy);
+			}
 			return -1;
 		}
+		args->argv[i] = copy;
 		args->argc++;
+		args->bytes += len;
 	}
 
-	if (args->argc == LINUX_EXEC_MAX_ARGS) {
+	if (args->argc == LINUX_EXEC_MAX_STRINGS) {
 		u64 next_arg = 0;
 
 		if (read_current_user(user_argv + args->argc * sizeof(next_arg),
@@ -1787,12 +1873,19 @@ static int linux_exec_collect_args(const char *path, u64 user_argv,
 	}
 
 	if (args->argc == 0) {
-		if (str_len(path) >= LINUX_EXEC_MAX_ARG) {
+		const u64 len = str_len(path) + 1;
+
+		if (len > LINUX_EXEC_MAX_STRING ||
+		    args->bytes + len > LINUX_EXEC_MAX_STRING_BYTES) {
 			return -1;
 		}
-		mem_copy((u8 *)args->values[0], (const u8 *)path,
-			 str_len(path) + 1);
+		args->argv[0] = (char *)slab_alloc(len);
+		if (args->argv[0] == 0) {
+			return -1;
+		}
+		mem_copy((u8 *)args->argv[0], (const u8 *)path, len);
 		args->argc = 1;
+		args->bytes += len;
 	}
 
 	return 0;
@@ -1804,14 +1897,18 @@ static int linux_exec_collect_env(u64 user_envp, struct linux_exec_args *args)
 		return -1;
 	}
 	args->envc = 0;
-	for (u64 i = 0; i < LINUX_EXEC_MAX_ENVS; i++) {
-		args->env_values[i][0] = '\0';
-	}
 	if (user_envp == 0) {
 		return 0;
 	}
-	for (u64 i = 0; i < LINUX_EXEC_MAX_ENVS; i++) {
+	args->envp = (char **)slab_zalloc(LINUX_EXEC_MAX_STRINGS *
+					  sizeof(char *));
+	if (args->envp == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < LINUX_EXEC_MAX_STRINGS; i++) {
 		u64 env_ptr = 0;
+		char *copy;
+		u64 len = 0;
 
 		if (read_current_user(user_envp + i * sizeof(env_ptr),
 				      &env_ptr, sizeof(env_ptr)) != 0) {
@@ -1820,12 +1917,18 @@ static int linux_exec_collect_env(u64 user_envp, struct linux_exec_args *args)
 		if (env_ptr == 0) {
 			return 0;
 		}
-		if (copy_cstr_from_user(args->env_values[i],
-					(const char *)env_ptr,
-					LINUX_EXEC_MAX_ARG) != 0) {
+		copy = linux_copy_cstr_dynamic((const char *)env_ptr,
+					       LINUX_EXEC_MAX_STRING, &len);
+		if (copy == 0 ||
+		    args->bytes + len > LINUX_EXEC_MAX_STRING_BYTES) {
+			if (copy != 0) {
+				slab_free(copy);
+			}
 			return -1;
 		}
+		args->envp[i] = copy;
 		args->envc++;
+		args->bytes += len;
 	}
 	{
 		u64 next_env = 0;
@@ -1844,45 +1947,54 @@ static int linux_exec_build_stack(const char *path,
 				  const struct elf64_ehdr *ehdr,
 				  u64 load_bias, u64 program_entry,
 				  u64 interpreter_base,
-				  u8 *stack_page, u64 *new_sp)
+				  u8 *stack_image, u64 stack_size,
+				  u64 *new_sp)
 {
-	u64 argv_addrs[LINUX_EXEC_MAX_ARGS];
-	u64 env_addrs[LINUX_EXEC_MAX_ENVS];
 	struct elf64_phdr aux_phdrs[LINUX_EXEC_MAX_PHDRS];
 	const u64 aux_pairs = interpreter_base == 0 ? 15 : 16;
-	u64 sp = VM_PAGE_SIZE;
+	const u64 stack_base = LINUX_EXEC_STACK_TOP - stack_size;
+	u64 *argv_addrs;
+	u64 *env_addrs = 0;
+	u64 sp = stack_size;
+	int result = -1;
 
-	mem_zero(stack_page, VM_PAGE_SIZE);
-	if (path == 0 || args == 0 || ehdr == 0 || args->argc == 0 ||
-	    args->argc > LINUX_EXEC_MAX_ARGS ||
-	    args->envc > LINUX_EXEC_MAX_ENVS ||
+	if (path == 0 || args == 0 || ehdr == 0 || stack_image == 0 ||
+	    new_sp == 0 || stack_size == 0 || args->argc == 0 ||
+	    args->argc > LINUX_EXEC_MAX_STRINGS ||
+	    args->envc > LINUX_EXEC_MAX_STRINGS ||
 	    ehdr->phnum > LINUX_EXEC_MAX_PHDRS) {
 		return -1;
 	}
 
+	argv_addrs = (u64 *)slab_alloc(args->argc * sizeof(u64));
+	env_addrs = args->envc == 0 ? 0 :
+		(u64 *)slab_alloc(args->envc * sizeof(u64));
+	if (argv_addrs == 0 || (args->envc != 0 && env_addrs == 0)) {
+		goto out;
+	}
+	mem_zero(stack_image, stack_size);
+
 	for (u64 i = args->argc; i > 0; i--) {
 		const u64 index = i - 1;
-		const u64 len = str_len(args->values[index]) + 1;
+		const u64 len = str_len(args->argv[index]) + 1;
 
-		if (len > LINUX_EXEC_MAX_ARG || sp < len) {
-			return -1;
+		if (len > LINUX_EXEC_MAX_STRING || sp < len) {
+			goto out;
 		}
 		sp -= len;
-		mem_copy(stack_page + sp, (const u8 *)args->values[index],
-			 len);
-		argv_addrs[index] = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
+		mem_copy(stack_image + sp, (const u8 *)args->argv[index], len);
+		argv_addrs[index] = stack_base + sp;
 	}
 	for (u64 i = args->envc; i > 0; i--) {
 		const u64 index = i - 1;
-		const u64 len = str_len(args->env_values[index]) + 1;
+		const u64 len = str_len(args->envp[index]) + 1;
 
-		if (len > LINUX_EXEC_MAX_ARG || sp < len) {
-			return -1;
+		if (len > LINUX_EXEC_MAX_STRING || sp < len) {
+			goto out;
 		}
 		sp -= len;
-		mem_copy(stack_page + sp,
-			 (const u8 *)args->env_values[index], len);
-		env_addrs[index] = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
+		mem_copy(stack_image + sp, (const u8 *)args->envp[index], len);
+		env_addrs[index] = stack_base + sp;
 	}
 
 	const u64 execfn = argv_addrs[0];
@@ -1893,15 +2005,15 @@ static int linux_exec_build_stack(const char *path,
 
 	sp = align_down(sp, 16);
 	if (sp < sizeof(random_bytes)) {
-		return -1;
+		goto out;
 	}
 	sp -= sizeof(random_bytes);
-	mem_copy(stack_page + sp, random_bytes, sizeof(random_bytes));
-	const u64 random_addr = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
+	mem_copy(stack_image + sp, random_bytes, sizeof(random_bytes));
+	const u64 random_addr = stack_base + sp;
 
 	const u64 phdr_bytes = ehdr->phnum * sizeof(aux_phdrs[0]);
 	if (sp < phdr_bytes) {
-		return -1;
+		goto out;
 	}
 	for (u64 i = 0; i < ehdr->phnum; i++) {
 		const struct elf64_phdr *phdr =
@@ -1914,8 +2026,8 @@ static int linux_exec_build_stack(const char *path,
 		aux_phdrs[i].paddr += load_bias;
 	}
 	sp = align_down(sp - phdr_bytes, 8);
-	mem_copy(stack_page + sp, (const u8 *)aux_phdrs, phdr_bytes);
-	const u64 copied_phdr_addr = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
+	mem_copy(stack_image + sp, (const u8 *)aux_phdrs, phdr_bytes);
+	const u64 copied_phdr_addr = stack_base + sp;
 	const u64 phdr_addr = interpreter_base != 0 ?
 			       load_bias + ehdr->phoff : copied_phdr_addr;
 
@@ -1923,10 +2035,10 @@ static int linux_exec_build_stack(const char *path,
 	const u64 words = 1 + args->argc + 1 + args->envc + 1 +
 			  aux_pairs * 2;
 	if (sp < words * sizeof(u64)) {
-		return -1;
+		goto out;
 	}
 	sp -= words * sizeof(u64);
-	u64 *stack_words = (u64 *)(stack_page + sp);
+	u64 *stack_words = (u64 *)(stack_image + sp);
 	u64 word = 0;
 
 	stack_words[word++] = args->argc;
@@ -1971,8 +2083,13 @@ static int linux_exec_build_stack(const char *path,
 	stack_words[word++] = LINUX_AT_NULL;
 	stack_words[word++] = 0;
 
-	*new_sp = LINUX_EXEC_STACK_TOP - VM_PAGE_SIZE + sp;
-	return 0;
+	*new_sp = stack_base + sp;
+	result = 0;
+
+out:
+	slab_free(argv_addrs);
+	slab_free(env_addrs);
+	return result;
 }
 
 static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
@@ -1990,8 +2107,8 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	u64 interp_size = 0;
 	const struct elf64_ehdr *ehdr;
 	const struct elf64_ehdr *interp_ehdr = 0;
-	u8 stack_page[VM_PAGE_SIZE];
-	u8 *image;
+	u8 *stack_image = 0;
+	u8 *image = 0;
 	u8 *interp_image = 0;
 	char interp_path[LINUX_EXEC_MAX_PATH];
 	u64 new_sp = 0;
@@ -2002,22 +2119,28 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	const u64 stack_base =
 		LINUX_EXEC_STACK_TOP - LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE;
 	int read_result;
+	const u64 stack_size = LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE;
 
 	if (copy_cstr_from_user(path, user_path, sizeof(path)) != 0 ||
-	    str_len(path) >= sizeof(path) ||
-	    linux_exec_collect_args(path, frame->arg1, &args) != 0 ||
+	    str_len(path) >= sizeof(path)) {
+		return (u64)-LINUX_EINVAL;
+	}
+	if (linux_exec_collect_args(path, frame->arg1, &args) != 0 ||
 	    linux_exec_collect_env(frame->arg2, &args) != 0) {
+		linux_exec_args_free(&args);
 		return (u64)-LINUX_EINVAL;
 	}
 
 	read_result = linux_vfs_read_file(task, path, &image,
 					  LINUX_EXEC_MAX_IMAGE, &image_size);
 	if (read_result != 0) {
+		linux_exec_args_free(&args);
 		return read_result == -2 ? (u64)-LINUX_ENOMEM :
 		       (u64)-LINUX_EINVAL;
 	}
 	if (linux_exec_validate(image, image_size, &ehdr) != 0) {
 		slab_free(image);
+		linux_exec_args_free(&args);
 		return (u64)-LINUX_EINVAL;
 	}
 
@@ -2030,6 +2153,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 						 sizeof(interp_path));
 	if (interp < 0) {
 		slab_free(image);
+		linux_exec_args_free(&args);
 		return (u64)-LINUX_EINVAL;
 	}
 	if (interp > 0) {
@@ -2039,6 +2163,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 						  &interp_size);
 		if (read_result != 0) {
 			slab_free(image);
+			linux_exec_args_free(&args);
 			return read_result == -2 ? (u64)-LINUX_ENOMEM :
 			       (u64)-LINUX_EINVAL;
 		}
@@ -2046,30 +2171,44 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 					&interp_ehdr) != 0) {
 			slab_free(interp_image);
 			slab_free(image);
+			linux_exec_args_free(&args);
 			return (u64)-LINUX_EINVAL;
 		}
 		interp_bias = interp_ehdr->type == ELF_TYPE_DYN ?
 			      LINUX_EXEC_INTERP_LOAD_BIAS : 0;
 		entry = interp_ehdr->entry + interp_bias;
 	}
+	stack_image = (u8 *)slab_alloc(stack_size);
+	if (stack_image == 0) {
+		if (interp_image != 0) {
+			slab_free(interp_image);
+		}
+		slab_free(image);
+		linux_exec_args_free(&args);
+		return (u64)-LINUX_ENOMEM;
+	}
 	if ((interp_image == 0 &&
 	     linux_exec_apply_relative_relocations(image, ehdr, image_size,
 						  load_bias) != 0) ||
 	    linux_exec_build_stack(path, &args, ehdr, load_bias, program_entry,
-				   interp_bias,
-				   stack_page, &new_sp) != 0) {
+				   interp_bias, stack_image, stack_size,
+				   &new_sp) != 0) {
+		slab_free(stack_image);
 		if (interp_image != 0) {
 			slab_free(interp_image);
 		}
 		slab_free(image);
+		linux_exec_args_free(&args);
 		return (u64)-LINUX_EINVAL;
 	}
 
 	if (linux_exec_unmap_current(task) != 0) {
+		slab_free(stack_image);
 		if (interp_image != 0) {
 			slab_free(interp_image);
 		}
 		slab_free(image);
+		linux_exec_args_free(&args);
 		return (u64)-LINUX_EINVAL;
 	}
 
@@ -2081,10 +2220,12 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 
 		if (phdr->type == ELF_PH_LOAD &&
 		    linux_exec_map_segment(task, image, phdr, load_bias) != 0) {
+			slab_free(stack_image);
 			if (interp_image != 0) {
 				slab_free(interp_image);
 			}
 			slab_free(image);
+			linux_exec_args_free(&args);
 			return (u64)-LINUX_ENOMEM;
 		}
 	}
@@ -2098,29 +2239,35 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			if (phdr->type == ELF_PH_LOAD &&
 			    linux_exec_map_segment(task, interp_image, phdr,
 						   interp_bias) != 0) {
+				slab_free(stack_image);
 				slab_free(interp_image);
 				slab_free(image);
+				linux_exec_args_free(&args);
 				return (u64)-LINUX_ENOMEM;
 			}
 		}
 	}
 
 	if (vm_alloc_user_range(task_vm_space(task), stack_base,
-				LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE, 1) != 0 ||
+				stack_size, 1) != 0 ||
 	    task_add_vm_mapping(task, stack_base,
-				LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE,
+				stack_size,
 				TASK_VM_PROT_READ | TASK_VM_PROT_WRITE,
 				TASK_VM_MAP_PRIVATE | TASK_VM_MAP_ANONYMOUS,
 				TASK_VM_REGION_STACK, TASK_VM_OBJECT_ANON,
 				0, 0) != 0 ||
-		    vm_write_user(task_vm_space(task), LINUX_EXEC_STACK_TOP -
-				  VM_PAGE_SIZE, stack_page, VM_PAGE_SIZE) != 0) {
+	    vm_write_user(task_vm_space(task), stack_base, stack_image,
+			  stack_size) != 0) {
+		slab_free(stack_image);
 		if (interp_image != 0) {
 			slab_free(interp_image);
 		}
 		slab_free(image);
+		linux_exec_args_free(&args);
 		return (u64)-LINUX_ENOMEM;
 	}
+	slab_free(stack_image);
+	stack_image = 0;
 
 	frame->user_rip = entry;
 	frame->user_rsp = new_sp;
@@ -2130,6 +2277,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			slab_free(interp_image);
 		}
 		slab_free(image);
+		linux_exec_args_free(&args);
 		return exec_result;
 	}
 	linux_proc_set_cmdline(task, exec_result, path);
@@ -2141,6 +2289,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		slab_free(interp_image);
 	}
 	slab_free(image);
+	linux_exec_args_free(&args);
 	return 0;
 }
 
