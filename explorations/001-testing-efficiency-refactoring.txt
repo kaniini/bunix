@@ -69,12 +69,14 @@ Plan:
    - `tools/shell-tests/tmpfs-basic-linux-tests.sh` owns basic tmpfs and `/run`
      writes, truncate/unlink behavior, bundled Linux regression binaries,
      proc tools, mount listing, basic mkdir checks, and large exec coverage.
+   - `tools/shell-tests/path-limits-statfs.sh` owns deep tmpfs path coverage,
+     Linux path limit/errno tests, and the `df`/statfs smoke check.
 
    Needs:
 
    - Extract the remaining user-phase batches:
-     `path-limits-statfs`, `union-root-user`, `tmpfs-extended`,
-     `large-io-mount`, and `interactive-tty`.
+     `union-root-user`, `tmpfs-extended`, `large-io-mount`, and
+     `interactive-tty`.
    - Extract the root-phase batches:
      `root-login-union`, `root-tmpfs-chown`, `long-login`, and
      `root-mount-soak`.

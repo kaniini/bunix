@@ -17,6 +17,7 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$script_dir/shell-tests/exec-argv-pipe.sh"
 . "$script_dir/shell-tests/rootfs-vfs-proc-dev.sh"
 . "$script_dir/shell-tests/tmpfs-basic-linux-tests.sh"
+. "$script_dir/shell-tests/path-limits-statfs.sh"
 BUNIX_COLLECT_FAILURES=1
 BUNIX_FAILURE_DIR=$failure_dir
 BUNIX_QEMU_LOG=$qemu_log
@@ -142,34 +143,7 @@ run_login_smoke
 run_exec_argv_pipe
 run_rootfs_vfs_proc_dev
 run_tmpfs_basic_linux_tests
-send_script <<'EOF_USER_SMOKE'
-LONG_TMP=/tmp/bunix-pathmax2
-busybox mkdir "$LONG_TMP"
-LONG_TMP=$LONG_TMP/segment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-busybox mkdir "$LONG_TMP"
-LONG_TMP=$LONG_TMP/segment-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-busybox mkdir "$LONG_TMP"
-LONG_TMP=$LONG_TMP/segment-cccccccccccccccccccccccccccccccc
-busybox mkdir "$LONG_TMP"
-LONG_TMP=$LONG_TMP/segment-dddddddddddddddddddddddddddddddd
-busybox mkdir "$LONG_TMP"
-LONG_TMP=$LONG_TMP/segment-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-busybox mkdir "$LONG_TMP"
-LONG_TMP=$LONG_TMP/segment-ffffffffffffffffffffffffffffffff
-busybox mkdir "$LONG_TMP" && echo PATHMAX2_TMP_MKDIR_OK
-echo PATHMAX2_TMP_PAYLOAD > "$LONG_TMP/file.txt"
-busybox cat "$LONG_TMP/file.txt" && echo PATHMAX2_TMP_FILE_OK
-cd "$LONG_TMP" && echo PATHMAX2_TMP_CHDIR_OK
-pwd
-cd /
-/bin/pathmaxtest
-/bin/patherrtest
-EOF_USER_SMOKE
-wait_for_fixed "$log" "linux pathmax ok" "linux pathmax regression failed" 75 220
-wait_for_fixed "$log" "linux patherr ok" "empty Linux path errno regression failed" 45 220
-send_script <<'EOF_USER_SMOKE'
-busybox df / /tmp /proc >/dev/null && echo STATFS_DF_OK
-EOF_USER_SMOKE
+run_path_limits_statfs
 send_script <<'EOF_UNION_RENAME'
 busybox cat /hello.txt && echo UNION_ROOT_LOWER_OK
 busybox mv /rename-lower.txt /rename-upper.txt && echo UNION_LOWER_RENAME_CREATE_OK
@@ -305,7 +279,7 @@ check_fixed_markers_file "$log" "$script_dir/test-shell-content-markers.txt" \
 	"shell content regression missing" 45 220
 check_fixed_markers_file "$log" "$script_dir/test-shell-provisional-markers.txt" \
 	"provisional shell marker missing" 45 220
-wait_for_fixed "$log" "STATFS_DF_OK" "busybox df did not complete through statfs/fstatfs" 45 220
+check_path_limits_statfs
 wait_for_each_fixed_count "$log" 2 "append payload missing from file output" 45 220 \
 	TMP_APPEND_ONE TMP_APPEND_TWO TMP_LONG_READDIR_PAYLOAD TMP_NAME_MAX_PAYLOAD \
 	TMP_NAME255_PAYLOAD PATHMAX2_TMP_PAYLOAD UNION_ROOT_BASE_PAYLOAD \
