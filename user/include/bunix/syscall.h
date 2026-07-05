@@ -56,6 +56,7 @@ enum {
 	BUNIX_PROTO_USER = ('U') | ('S' << 8) | ('E' << 16) | ('R' << 24),
 	BUNIX_PROTO_TMPFS = ('T') | ('M' << 8) | ('P' << 16) | ('F' << 24),
 	BUNIX_PROTO_UNIONFS = ('U') | ('N' << 8) | ('I' << 16) | ('O' << 24),
+	BUNIX_PROCFS_MOUNT_NOTIFY = 1,
 	BUNIX_NAMES_REGISTER = 1,
 	BUNIX_NAMES_RESOLVE = 2,
 	BUNIX_NAMES_CREATE_NS = 3,

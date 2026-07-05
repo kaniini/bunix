@@ -42,6 +42,7 @@ struct vfs_mount {
 	struct bunix_tree_node node;
 	char *path;
 	u64 service;
+	u64 fstype;
 };
 
 struct vfs_open {
@@ -894,7 +895,7 @@ static int forward_remote_handle(struct vfs_open *open,
 	return 0;
 }
 
-static long mount_translator(const char *path, u64 service)
+static long mount_translator(const char *path, u64 service, u64 fstype)
 {
 	struct vfs_mount *mount;
 
@@ -905,6 +906,7 @@ static long mount_translator(const char *path, u64 service)
 	mount = (struct vfs_mount *)bunix_tree_get(&mounts, path);
 	if (mount != 0) {
 		mount->service = service;
+		mount->fstype = fstype;
 		return 0;
 	}
 
@@ -918,6 +920,7 @@ static long mount_translator(const char *path, u64 service)
 		return -1;
 	}
 	mount->service = service;
+	mount->fstype = fstype;
 	if (bunix_tree_insert_node(&mounts, &mount->node, mount->path,
 				   (u64)mount) != 0) {
 		bunix_free(mount->path);
@@ -925,6 +928,34 @@ static long mount_translator(const char *path, u64 service)
 		return -1;
 	}
 	return 0;
+}
+
+static void notify_procfs_mount(const char *path, u64 fstype)
+{
+	struct vfs_mount *procfs =
+		(struct vfs_mount *)bunix_tree_get(&mounts, "/proc");
+	const u64 path_len = str_len(path) + 1;
+	const long buffer = bunix_buffer_create(path_len);
+	struct bunix_msg message = {
+		.protocol = BUNIX_PROTO_PROCFS,
+		.type = BUNIX_PROCFS_MOUNT_NOTIFY,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = buffer < 0 ? 0 : (u64)buffer,
+		.words = { path_len, fstype, 0, 0 },
+	};
+
+	if (procfs == 0 || procfs->service == 0 || buffer < 0) {
+		if (buffer >= 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return;
+	}
+	if (bunix_buffer_write((u64)buffer, 0, path, path_len) == 0) {
+		(void)bunix_ipc_send(procfs->service, &message);
+	}
+	bunix_handle_close((u64)buffer);
 }
 
 static void vfs_open_path(struct bunix_msg *message, struct bunix_msg *reply,
@@ -1532,11 +1563,13 @@ int main(void)
 			unpack_path(path, &message.words[0]);
 			if (message.cap == 0 ||
 			    (message.cap_rights & BUNIX_RIGHT_SEND) == 0 ||
-			    mount_translator(path, message.cap) != 0) {
+			    mount_translator(path, message.cap,
+					     message.words[2]) != 0) {
 				reply.words[0] = (u64)-1;
 			} else {
 				reply.words[0] = 0;
 				message.cap = 0;
+				notify_procfs_mount(path, message.words[2]);
 				bunix_console_log("vfs: mounted translator\n", 24);
 			}
 			break;

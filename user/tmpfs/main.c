@@ -615,7 +615,7 @@ static long mount_path(u64 vfs, const char *path)
 		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 		.reply = 0,
 		.cap = BUNIX_HANDLE_SELF,
-		.words = { 0, 0, 0, 0 },
+		.words = { 0, 0, BUNIX_SERVICE_TMPFS, 0 },
 	};
 	struct bunix_msg reply;
 

@@ -1,5 +1,6 @@
 #include <bunix/libbunix.h>
 #include <bunix/id_table.h>
+#include <bunix/tree.h>
 
 enum {
 	PROCFS_HANDLE_NAMES = 3,
@@ -27,8 +28,15 @@ enum {
 };
 
 static struct bunix_id_table open_files;
+static struct bunix_tree mounts;
 static char text[PROCFS_MAX_TEXT];
 static u64 proc_handle;
+
+struct procfs_mount {
+	struct bunix_tree_node node;
+	char *path;
+	u64 fstype;
+};
 
 struct proc_info {
 	u64 pid;
@@ -102,6 +110,20 @@ static u64 str_len(const char *text)
 		len++;
 	}
 	return len;
+}
+
+static char *str_dup(const char *text)
+{
+	const u64 len = str_len(text);
+	char *copy = (char *)bunix_alloc(len + 1);
+
+	if (copy == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i <= len; i++) {
+		copy[i] = text[i];
+	}
+	return copy;
 }
 
 static int path_has_prefix(const char *path, const char *prefix)
@@ -336,7 +358,7 @@ static long mount_procfs(void)
 		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 		.reply = 0,
 		.cap = BUNIX_HANDLE_SELF,
-		.words = { 0, 0, 0, 0 },
+		.words = { 0, 0, BUNIX_SERVICE_PROCFS, 0 },
 	};
 	struct bunix_msg reply;
 
@@ -677,16 +699,88 @@ static u64 build_cpuinfo(void)
 	return len;
 }
 
+static const char *mount_fstype_name(u64 fstype)
+{
+	if (fstype == BUNIX_SERVICE_PROCFS) {
+		return "proc";
+	}
+	if (fstype == BUNIX_SERVICE_TMPFS) {
+		return "tmpfs";
+	}
+	if (fstype == BUNIX_SERVICE_UNIONFS) {
+		return "unionfs";
+	}
+	return "rootfs";
+}
+
+static int mount_cache_insert(const char *path, u64 fstype)
+{
+	struct procfs_mount *mount;
+
+	if (path == 0 || path[0] != '/') {
+		return -1;
+	}
+	mount = (struct procfs_mount *)bunix_tree_get(&mounts, path);
+	if (mount != 0) {
+		mount->fstype = fstype;
+		return 0;
+	}
+	mount = (struct procfs_mount *)bunix_calloc(1, sizeof(*mount));
+	if (mount == 0) {
+		return -1;
+	}
+	mount->path = str_dup(path);
+	if (mount->path == 0) {
+		bunix_free(mount);
+		return -1;
+	}
+	mount->fstype = fstype;
+	if (bunix_tree_insert_node(&mounts, &mount->node, mount->path,
+				   (u64)mount) != 0) {
+		bunix_free(mount->path);
+		bunix_free(mount);
+		return -1;
+	}
+	return 0;
+}
+
+static void handle_mount_notify(const struct bunix_msg *message)
+{
+	char path[PROCFS_MAX_PATH];
+
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    message->words[0] == 0 ||
+	    message->words[0] > sizeof(path) ||
+	    bunix_buffer_read(message->cap, 0, path, message->words[0]) != 0) {
+		return;
+	}
+	path[sizeof(path) - 1] = '\0';
+	(void)mount_cache_insert(path, message->words[1]);
+}
+
 static u64 build_mounts(void)
 {
 	u64 len = 0;
 
-	append_str(&len, "rootfs / rootfs ro 0 0\n");
-	append_str(&len, "proc /proc proc rw 0 0\n");
-	append_str(&len, "tmpfs /tmp tmpfs rw 0 0\n");
-	append_str(&len, "tmpfs /run tmpfs rw 0 0\n");
-	append_str(&len, "tmpfs /var/tmp tmpfs rw 0 0\n");
-	append_str(&len, "unionfs /mnt/union unionfs rw 0 0\n");
+	for (struct bunix_tree_node *node = bunix_tree_first_node(&mounts);
+	     node != 0; node = bunix_tree_next_node(node)) {
+		const struct procfs_mount *mount =
+			(const struct procfs_mount *)node->value;
+		const char *fstype;
+
+		if (mount == 0) {
+			continue;
+		}
+		fstype = mount_fstype_name(mount->fstype);
+		append_str(&len, fstype);
+		append_str(&len, " ");
+		append_str(&len, mount->path);
+		append_str(&len, " ");
+		append_str(&len, fstype);
+		append_str(&len, mount->fstype == 0 ? " ro 0 0\n" :
+			   " rw 0 0\n");
+	}
 	return len;
 }
 
@@ -1071,6 +1165,10 @@ int main(void)
 
 	bunix_console_log(online, sizeof(online) - 1);
 	bunix_id_table_init(&open_files);
+	bunix_tree_init(&mounts);
+	if (mount_cache_insert("/", 0) != 0) {
+		return 1;
+	}
 	if (register_service(BUNIX_SERVICE_PROCFS, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
 	}
@@ -1089,8 +1187,21 @@ int main(void)
 			.words = { 0, 0, 0, 0 },
 		};
 
-		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
-		    message.protocol != BUNIX_PROTO_VFS) {
+		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0) {
+			continue;
+		}
+		if (message.protocol == BUNIX_PROTO_PROCFS &&
+		    message.type == BUNIX_PROCFS_MOUNT_NOTIFY) {
+			handle_mount_notify(&message);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			continue;
+		}
+		if (message.protocol != BUNIX_PROTO_VFS) {
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
 			continue;
 		}
 

@@ -552,6 +552,7 @@ static int vfs_mount_path(const char *path)
 		.type = BUNIX_VFS_MOUNT,
 		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 		.cap = BUNIX_HANDLE_SELF,
+		.words = { 0, 0, BUNIX_SERVICE_UNIONFS, 0 },
 	};
 	struct bunix_msg reply;
 
