@@ -193,6 +193,8 @@ enum {
 	LINUX_ARCH_SET_FS = 0x1002,
 	LINUX_FUTEX_WAIT = 0,
 	LINUX_FUTEX_WAKE = 1,
+	LINUX_F_GETLK = 5,
+	LINUX_F_UNLCK = 2,
 	LINUX_TCGETS = 0x5401,
 	LINUX_TCSETS = 0x5402,
 	LINUX_TCSETSW = 0x5403,
@@ -4014,6 +4016,20 @@ poll_again:
 		return (u64)-LINUX_ENOSYS;
 	}
 	request.reply_port = reply_port;
+	if (number == LINUX_SYSCALL_FCNTL && arg1 == LINUX_F_GETLK) {
+		u16 lock_type = LINUX_F_UNLCK;
+		const u64 result = linux_forward_words(linux, reply_port, number,
+						       arg0, arg1, arg2);
+
+		if ((i64)result < 0) {
+			return result;
+		}
+		if (arg2 == 0 ||
+		    write_current_user(arg2, &lock_type, sizeof(lock_type)) != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		return result;
+	}
 	if (linux_syscall_forwards_scalar(number)) {
 		return linux_forward_words(linux, reply_port, number,
 					   arg0, arg1, arg2);

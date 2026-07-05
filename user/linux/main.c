@@ -154,6 +154,9 @@ enum {
 	LINUX_F_SETFD = 2,
 	LINUX_F_GETFL = 3,
 	LINUX_F_SETFL = 4,
+	LINUX_F_GETLK = 5,
+	LINUX_F_SETLK = 6,
+	LINUX_F_SETLKW = 7,
 	LINUX_F_DUPFD_CLOEXEC = 1030,
 	LINUX_UTMP_RECORD_SIZE = 400,
 };
@@ -4475,6 +4478,13 @@ static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 				return -LINUX_EMFILE;
 			}
 		}
+	}
+	if (cmd == LINUX_F_SETLK || cmd == LINUX_F_SETLKW ||
+	    cmd == LINUX_F_GETLK) {
+		if (arg == 0) {
+			return -LINUX_EFAULT;
+		}
+		return 0;
 	}
 
 	return -LINUX_EINVAL;
