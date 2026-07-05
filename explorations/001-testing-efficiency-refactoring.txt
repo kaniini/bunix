@@ -1,0 +1,220 @@
+Project plan: shard and accelerate the QEMU regression loop
+
+Context carried forward:
+
+- `make test-command` exists for focused command runs:
+
+  BUNIX_CMD='/bin/pathmaxtest' make test-command
+  BUNIX_CMD='busybox stat /hello.txt' make test-command
+
+- `make audit-linux-syscalls` reports Linux syscall enum/dispatch/server
+  coverage, fallback sites, and heuristic marker hints.
+- `KERNEL_CMDLINE='log=debug strace=structured' ...` enables structured
+  `linux-strace key=value` lines.
+- Test failures from `test-command` and `test-shell` preserve artifacts under
+  `build/failures/<timestamp>-<pid>/`.
+- `/bin/sysracetest` is in the rootfs and catches SMP-sensitive Linux syscall
+  forwarding races across path, symlink/readlink, rename/link, and execve argv/env
+  paths.
+
+Milestone: shard and accelerate the QEMU regression loop
+
+Goal:
+
+- Turn the current monolithic `make test-shell` regression into smaller, named,
+  independently runnable slices that still compose into the same full coverage
+  gate.
+- Preserve the full login/BusyBox confidence path, but make day-to-day debugging
+  targetable: VFS, procfs, tmpfs, unionfs, signals/jobs, multiuser, syscall
+  stress, and root-only mount behavior should each be runnable without editing
+  `tools/test-shell.sh`.
+- Keep artifact collection and structured tracing working for every shard.
+
+Plan:
+
+1. Define shard names and canonical order [DONE]
+   Establish the initial shard list and execution order before moving code. Use
+   names that map directly to debugging intent and current script boundaries:
+   `login-smoke`, `exec-argv-pipe`, `rootfs-vfs-proc-dev`,
+   `tmpfs-basic-linux-tests`, `path-limits-statfs`, `union-root-user`,
+   `tmpfs-extended`, `large-io-mount`, `interactive-tty`,
+   `root-login-union`, `root-tmpfs-chown`, `long-login`, and
+   `root-mount-soak`. Document which shards run as the login user and which
+   require root.
+
+   Result:
+
+   - `tools/shell-shards.tsv` defines the canonical order, user/root phase, SMP,
+     memory, timeout, cost, clean-boot preference, and description for each
+     planned shell shard.
+   - `make list-shell-shards` prints the shard manifest for review and later
+     parallel scheduling.
+
+2. Extract shell command batches into files
+   Move large heredoc blocks out of `tools/test-shell.sh` into
+   `tools/shell-tests/*.sh` with matching marker files. The harness should run
+   one or more named batches in order. Keep these batches POSIX shell and
+   readable; do not turn them into an opaque mini-framework.
+
+   Progress:
+
+   - `tools/shell-tests/login-smoke.sh` owns the login smoke command batch and
+     checks for login identity, environment, uname, access, stty, sleep,
+     process group probes, and Ctrl-C interruption.
+
+   Needs:
+
+   - Extract the remaining user-phase batches:
+     `exec-argv-pipe`, `rootfs-vfs-proc-dev`, `tmpfs-basic-linux-tests`,
+     `path-limits-statfs`, `union-root-user`, `tmpfs-extended`,
+     `large-io-mount`, and `interactive-tty`.
+   - Extract the root-phase batches:
+     `root-login-union`, `root-tmpfs-chown`, `long-login`, and
+     `root-mount-soak`.
+   - Move broad marker files into shard-owned marker files as the batches are
+     split.
+
+3. Add `make test-shell-part`
+   Support targeted shard runs:
+
+   BUNIX_SHELL_PART=vfs make test-shell-part
+   BUNIX_SHELL_PART=procfs,tmpfs make test-shell-part
+
+   This should boot once, log in, run only the requested batches, check only
+   their markers, and preserve the same failure artifact bundle.
+
+4. Keep `make test-shell` as the full composed gate
+   Make the existing target run every shard in canonical order, so CI/full
+   validation does not lose coverage. Avoid increasing boot count for the full
+   suite unless a shard explicitly needs a clean boot.
+
+5. Add root-phase shards
+   Move root-only checks, including mount/umount race soaking, into a root shard
+   that logs in as root only when requested or when running the full suite.
+
+6. Add shard-level timing and summaries
+   Emit concise timing lines:
+
+   test-shell-part name=vfs status=ok seconds=12
+
+   This will show where the slow path is and make regressions in test runtime
+   visible.
+
+7. Add marker diagnostics per shard
+   Marker failures should report the shard name, marker source file, missing
+   marker, and artifact path immediately. This should apply to fixed markers,
+   exact markers, regex markers, and ad hoc wait helpers.
+
+8. Add artifact metadata for shards
+   Failure bundles should include the selected shard list, current shard name,
+   marker file, command batch, serial/QEMU logs, strace tail, and git commit.
+
+9. Add a fast default smoke target
+   Provide `make test-smoke` for the first pre-commit gate. It should run boot
+   markers, login, a minimal VFS/procfs sanity pass, and `/bin/sysracetest`.
+
+Milestone: parallelize test execution across many QEMU/KVM VMs
+
+Goal:
+
+- Make the sharded tests schedulable across a many-core host, with enough
+  isolation that several dozen QEMU/KVM instances can run at once without
+  corrupting shared build outputs, ESP contents, serial logs, or failure bundles.
+- Keep the developer interface simple: `make test-parallel` should run the fast
+  parallel gate, while knobs should allow selecting shard sets, VM count,
+  timeout policy, and stop-on-first-failure behavior. SMP policy belongs to
+  shard metadata, not to the global runner.
+- Preserve deterministic artifact collection and a concise final summary.
+
+Plan:
+
+10. Separate immutable build artifacts from per-VM runtime state
+   Build the kernel, modules, rootfs image, and generated GRUB configs once.
+   Each VM worker should get its own runtime directory containing an ESP copy,
+   serial pipe/logs, QEMU log, temporary files, and failure artifact output.
+   Source/build artifacts should be read-only during VM execution; per-worker
+   state must live outside shared build products.
+
+11. Add a parallel test runner
+   Add a host-side scheduler, likely `tools/test-parallel.sh`, that consumes a
+   shard list and launches independent `test-shell-part` or `test-command`
+   workers up to a configurable concurrency limit:
+
+   BUNIX_TEST_JOBS=32 make test-parallel
+   BUNIX_TEST_JOBS=16 BUNIX_TEST_SET=vfs,procfs,sysrace make test-parallel
+
+12. Add make targets for parallel gates
+   Add targets with clear roles:
+
+   - `make test-smoke-parallel` for boot/login/sysrace/basic VFS checks.
+   - `make test-shell-parallel` for all shell shards.
+   - `make test-parallel` as the normal composed parallel gate.
+   - Keep `make test` and `make test-shell` available as serial reference
+     gates.
+
+13. Pick conservative parallel defaults
+   Choose defaults that are useful on a Threadripper-class machine but safe on
+   smaller hosts. Base `BUNIX_TEST_JOBS` on host CPU count, cap it until QEMU
+   memory pressure is measured, and document how to override it.
+
+14. Add shard resource metadata
+   Each shard should declare its own VM resources: vCPU count, memory, timeout,
+   expected cost, and whether it requires a clean boot. SMP-sensitive shards such
+   as scheduler, IPC, and `sysrace` can request `SMP=2` or higher, while simple
+   filesystem shards can request `SMP=1` for throughput.
+
+15. Make QEMU worker resources configurable
+   Support runner-level knobs:
+
+   - `BUNIX_TEST_JOBS` for number of concurrent VMs.
+   - Optional `BUNIX_VM_SMP_OVERRIDE` to force vCPU count for debugging.
+   - Optional `BUNIX_VM_MEMORY_OVERRIDE` to force RAM for debugging.
+   - Optional `BUNIX_QEMU_TIMEOUT_OVERRIDE` to force timeouts for debugging.
+   - Optional CPU affinity later if host scheduling gets noisy.
+
+16. Add isolated artifact and summary output
+   Each worker should write under a unique directory such as:
+
+   build/test-runs/<run-id>/<shard>/
+
+   The top-level summary should include shard name, status, seconds, artifact
+   path, and failing marker/reason. A failed parallel run should preserve every
+   failed shard bundle, not just the first failure.
+
+17. Add stop policy and retry policy
+   Support:
+
+   - Run all shards and summarize all failures.
+   - Stop scheduling new shards on first failure while allowing active VMs to
+     finish or be killed cleanly.
+   - Optional `BUNIX_TEST_RETRIES=1` for suspected timing flakes, with both
+     attempts preserved.
+
+18. Schedule using shard cost metadata
+   Use each shard's declared cost and timeout to launch long shards first and
+   pack short shards around them, which matters once the suite has many shards.
+
+19. Add host sanity checks
+   Before launching dozens of VMs, check:
+
+   - KVM availability.
+   - OVMF path readability.
+   - Enough file descriptors for serial pipes/logs.
+   - Enough disk space for artifacts.
+   - Requested VM count is not obviously incompatible with RAM.
+
+20. Add parallel artifact pruning
+   Add a safe helper for old run directories:
+
+   make test-prune-artifacts
+
+   Keep the newest N runs or runs with failures by default.
+
+21. Improve 'make test' parallelism
+   Build on the earlier sharding changes by collapsing make test
+   into pure shards + running them in parallel.
+
+Plan maintenance:
+
+- Keep old completed milestone details out of this file unless they provide
+  useful context for the active plan.
