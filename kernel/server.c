@@ -60,9 +60,6 @@ struct fork_start {
 	struct arch_syscall_frame frame;
 };
 
-static char task_names[64][32];
-static u32 task_name_count;
-
 enum {
 	SERVER_PROTO_LINUX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
 	SERVER_LINUX_TTY_INPUT = 1003,
@@ -303,28 +300,6 @@ static u64 max_u64(u64 left, u64 right)
 	return left > right ? left : right;
 }
 
-static const char *copy_task_name(const char *name)
-{
-	if (name == 0 || task_name_count >= sizeof(task_names) / sizeof(task_names[0])) {
-		return 0;
-	}
-
-	char *dst = task_names[task_name_count];
-	u64 i = 0;
-
-	for (; i < sizeof(task_names[0]) - 1 && name[i] != '\0'; i++) {
-		dst[i] = name[i];
-	}
-
-	dst[i] = '\0';
-	if (i == 0 || name[i] != '\0') {
-		return 0;
-	}
-
-	task_name_count++;
-	return dst;
-}
-
 static void task_entry_thread(void *arg)
 {
 	struct task_start *start = (struct task_start *)arg;
@@ -413,22 +388,22 @@ u64 server_task_create(struct task *parent, const char *name)
 		USER_STACK_PAGES = 16,
 	};
 
-	const char *task_name = copy_task_name(name);
-	if (parent == 0 || task_name == 0) {
+	if (parent == 0 || name == 0) {
 		return (u64)-1;
 	}
 
-	struct vm_space *space = vm_server_bootstrap_space(task_name);
+	struct vm_space *space = vm_server_bootstrap_space(name);
 	if (space == 0) {
 		return (u64)-1;
 	}
 
-	struct task *task = task_create(task_name, space);
+	struct task *task = task_create(name, space);
 	if (task == 0) {
 		return (u64)-1;
 	}
+	const char *task_label = task_name(task);
 
-	struct ipc_port *service_port = ipc_port_create_private(task_name);
+	struct ipc_port *service_port = ipc_port_create_private(task_label);
 	if (task_grant_port(task, service_port,
 			    TASK_RIGHT_SEND | TASK_RIGHT_RECV |
 			    TASK_RIGHT_DUP) == 0) {
@@ -439,7 +414,7 @@ u64 server_task_create(struct task *parent, const char *name)
 		const u64 vaddr = USER_STACK_TOP - (page + 1) * VM_PAGE_SIZE;
 		if (vm_alloc_user_page(space, vaddr, 1).addr == 0) {
 			console_printf("kernel: failed to map stack for %s\n",
-				       task_name);
+				       task_label);
 			return (u64)-1;
 		}
 	}
@@ -452,11 +427,11 @@ u64 server_task_create(struct task *parent, const char *name)
 	if (vm_write_user(space, USER_STACK_TOP - sizeof(argc), &argc,
 			  sizeof(argc)) != 0) {
 		console_printf("kernel: failed to seed stack for %s\n",
-			       task_name);
+			       task_label);
 		return (u64)-1;
 	}
 
-	name_service_register(task_name, NAME_SERVICE_TASK, task_id(task));
+	name_service_register(task_label, NAME_SERVICE_TASK, task_id(task));
 	return task_grant_task(parent, task, TASK_RIGHT_SEND | TASK_RIGHT_DUP);
 }
 

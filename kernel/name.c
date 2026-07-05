@@ -4,6 +4,10 @@
 #include "spinlock.h"
 #include "tree.h"
 
+enum {
+	NAME_MAX = 64,
+};
+
 struct name_entry {
 	struct tree_node name_node;
 	struct u64_tree_node id_node;
@@ -17,6 +21,30 @@ static struct tree names_by_name;
 static struct u64_tree names_by_id;
 static u64 next_name_id = 1;
 static struct spinlock name_lock = SPINLOCK_INIT("name");
+
+static char *name_copy(const char *name)
+{
+	u64 len = 0;
+	char *copy;
+
+	if (name == 0) {
+		return 0;
+	}
+	while (len < NAME_MAX && name[len] != '\0') {
+		len++;
+	}
+	if (len == 0 || len == NAME_MAX) {
+		return 0;
+	}
+	copy = (char *)slab_alloc(len + 1);
+	if (copy == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i <= len; i++) {
+		copy[i] = name[i];
+	}
+	return copy;
+}
 
 void name_service_init(void)
 {
@@ -52,11 +80,17 @@ u64 name_service_register(const char *name, enum name_service_kind kind,
 		console_printf("names: alloc failed for %s\n", name);
 		return 0;
 	}
+	entry->name = name_copy(name);
+	if (entry->name == 0) {
+		slab_free(entry);
+		spin_unlock_irqrestore(&name_lock, flags);
+		console_printf("names: name copy failed for %s\n", name);
+		return 0;
+	}
 	entry->id = next_name_id++;
 	if (entry->id == 0) {
 		entry->id = next_name_id++;
 	}
-	entry->name = name;
 	entry->kind = kind;
 	entry->object = object;
 	if (tree_insert_node(&names_by_name, &entry->name_node, entry->name,
@@ -75,6 +109,7 @@ u64 name_service_register(const char *name, enum name_service_kind kind,
 	if (entry->id_node.value != 0) {
 		u64_tree_remove_node(&names_by_id, &entry->id_node);
 	}
+	slab_free((void *)entry->name);
 	slab_free(entry);
 	spin_unlock_irqrestore(&name_lock, flags);
 	console_printf("names: register failed for %s\n", name);

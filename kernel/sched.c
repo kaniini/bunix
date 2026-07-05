@@ -16,6 +16,7 @@ enum {
 	INITIAL_TASK_VM_REGIONS = 32,
 	KERNEL_STACK_SIZE = 32768,
 	SCHED_QUANTUM_TICKS = 5,
+	TASK_NAME_MAX = 64,
 };
 
 enum task_handle_type {
@@ -108,6 +109,7 @@ static struct spinlock sleep_lock = SPINLOCK_INIT("sched-sleep");
 static int task_handle_retain(enum task_handle_type type, void *object);
 static void task_handle_release(enum task_handle_type type, void *object);
 static void task_release(struct task *task);
+static char *task_name_copy(const char *name);
 
 static void mem_copy(void *dst, const void *src, u64 len)
 {
@@ -453,17 +455,24 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 		return 0;
 	}
 
+	char *owned_name = task_name_copy(name);
+	if (owned_name == 0) {
+		console_printf("sched: refusing task with invalid name\n");
+		return 0;
+	}
+
 	const u64 flags = spin_lock_irqsave(&task_table_lock);
 	struct task *task = slab_zalloc(sizeof(*task));
 
 	if (task == 0) {
 		spin_unlock_irqrestore(&task_table_lock, flags);
+		slab_free(owned_name);
 		console_printf("sched: task alloc failed for %s\n", name);
 		return 0;
 	}
 
 	task->pid = next_pid++;
-	task->name = name;
+	task->name = owned_name;
 	task->next = tasks;
 	task->ref_count = 1;
 	task->dead = 0;
@@ -485,9 +494,33 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	spinlock_init(&task->lock, "task");
 	tasks = task;
 	console_printf("sched: task pid=%u name=%s vm=%u\n",
-		       task->pid, name, task->vm_space->id);
+		       task->pid, owned_name, task->vm_space->id);
 	spin_unlock_irqrestore(&task_table_lock, flags);
 	return task;
+}
+
+static char *task_name_copy(const char *name)
+{
+	u64 len = 0;
+	char *copy;
+
+	if (name == 0) {
+		return 0;
+	}
+	while (len < TASK_NAME_MAX && name[len] != '\0') {
+		len++;
+	}
+	if (len == 0 || len == TASK_NAME_MAX) {
+		return 0;
+	}
+	copy = (char *)slab_alloc(len + 1);
+	if (copy == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i <= len; i++) {
+		copy[i] = name[i];
+	}
+	return copy;
 }
 
 struct vm_space *task_vm_space(struct task *task)
@@ -1093,6 +1126,7 @@ static void task_teardown(struct task *task)
 	vm_rpc_destroy_space(space);
 	task_remove_from_list(task);
 	console_printf("sched: task pid=%u name=%s destroyed\n", pid, name);
+	slab_free((void *)name);
 }
 
 static void task_release(struct task *task)
