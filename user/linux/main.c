@@ -2234,6 +2234,9 @@ static long linux_vfs_error(u64 status)
 	if (status == BUNIX_VFS_ERR_XDEV) {
 		return -LINUX_EXDEV;
 	}
+	if (status == BUNIX_VFS_ERR_INVAL) {
+		return -LINUX_EINVAL;
+	}
 	return -LINUX_ENOENT;
 }
 
