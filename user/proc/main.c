@@ -70,7 +70,6 @@ struct proc_exec_entry {
 	struct bunix_tree_node node;
 	char path[PROC_EXEC_PATH_MAX];
 	char task_name[PROC_TASK_NAME_MAX];
-	const char *log_line;
 	int linux;
 };
 
@@ -132,13 +131,6 @@ static unsigned char segment_buffer[PROC_SEGMENT_MAX];
 static unsigned char init_stack[PROC_INIT_STACK_MAX];
 static const char proc_online[] = "proc: online\n";
 static const char proc_ready[] = "proc: ready\n";
-static const char proc_exec[] = "proc: exec /bin/first\n";
-static const char proc_exec_generic[] = "proc: exec\n";
-static const char proc_exec_linux[] = "proc: exec /bin/lxtest\n";
-static const char proc_exec_musl[] = "proc: exec /bin/musl-hello\n";
-static const char proc_exec_shell[] = "proc: exec /bin/sh\n";
-static const char proc_exec_login[] = "proc: exec /bin/login\n";
-static const char proc_exec_init[] = "proc: exec /sbin/init\n";
 static const char proc_register_failed[] = "proc: register failed\n";
 
 static long register_service(u64 service, u64 handle)
@@ -249,36 +241,8 @@ static const char *task_name_for_path(const char *path)
 	return entry != 0 ? entry->task_name : "process";
 }
 
-static const char *log_line_for_path(const char *path)
-{
-	const struct proc_exec_entry *entry = exec_entry_for_path(path);
-
-	return entry != 0 && entry->log_line != 0 ? entry->log_line :
-	       proc_exec_generic;
-}
-
-static const char *log_line_for_kind(u64 kind)
-{
-	switch (kind) {
-	case BUNIX_PROC_EXEC_LOG_LINUX:
-		return proc_exec_linux;
-	case BUNIX_PROC_EXEC_LOG_MUSL:
-		return proc_exec_musl;
-	case BUNIX_PROC_EXEC_LOG_SHELL:
-		return proc_exec_shell;
-	case BUNIX_PROC_EXEC_LOG_LOGIN:
-		return proc_exec_login;
-	case BUNIX_PROC_EXEC_LOG_INIT:
-		return proc_exec_init;
-	case BUNIX_PROC_EXEC_LOG_FIRST:
-		return proc_exec;
-	default:
-		return 0;
-	}
-}
-
 static int exec_registry_add(const char *path, const char *task_name,
-			     int linux, const char *log_line)
+			     int linux)
 {
 	struct proc_exec_entry *entry;
 
@@ -297,7 +261,6 @@ static int exec_registry_add(const char *path, const char *task_name,
 		return -1;
 	}
 	entry->linux = linux;
-	entry->log_line = log_line;
 	if (bunix_tree_insert_node(&exec_registry, &entry->node, entry->path,
 				   (u64)entry) != 0) {
 		bunix_free(entry);
@@ -336,8 +299,7 @@ static int register_exec_from_message(const struct bunix_msg *message)
 			     sizeof(task_name)) != 0) {
 		return -1;
 	}
-	return exec_registry_add(path, task_name, message->words[2] != 0,
-				 log_line_for_kind(message->words[3]));
+	return exec_registry_add(path, task_name, message->words[2] != 0);
 }
 
 static u64 str_len(const char *text)
@@ -378,6 +340,27 @@ static void log_pid_line(const char *prefix, u64 pid)
 		line[cursor++] = prefix[i];
 	}
 	append_dec(line, &cursor, pid);
+	if (cursor < sizeof(line)) {
+		line[cursor++] = '\n';
+	}
+	bunix_console_log(line, cursor);
+}
+
+static void log_exec_line(const char *path)
+{
+	const char prefix[] = "proc: exec ";
+	char line[PROC_EXEC_PATH_MAX + sizeof(prefix) + 1];
+	u64 cursor = 0;
+
+	for (u64 i = 0; prefix[i] != '\0' && cursor < sizeof(line); i++) {
+		line[cursor++] = prefix[i];
+	}
+	if (path != 0) {
+		for (u64 i = 0; path[i] != '\0' && cursor + 1 < sizeof(line);
+		     i++) {
+			line[cursor++] = path[i];
+		}
+	}
 	if (cursor < sizeof(line)) {
 		line[cursor++] = '\n';
 	}
@@ -1476,11 +1459,9 @@ int main(void)
 					  (flags & PROC_SPAWN_SET_LOGIN) != 0,
 					  session_id,
 					  &pid) == 0) {
-				const char *log_line = log_line_for_path(path);
-
 				reply.words[0] = 0;
 				reply.words[1] = pid;
-				bunix_console_log(log_line, str_len(log_line));
+				log_exec_line(path);
 				log_pid_line("proc: spawned pid=", pid);
 			} else {
 				reply.words[0] = (u64)-1;

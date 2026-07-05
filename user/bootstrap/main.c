@@ -129,8 +129,7 @@ static u64 str_len(const char *text)
 }
 
 static long proc_register_exec(u64 proc, const char *path,
-			       const char *task_name, u64 linux,
-			       u64 log_kind)
+			       const char *task_name, u64 linux)
 {
 	const u64 path_len = str_len(path) + 1;
 	const u64 task_len = str_len(task_name) + 1;
@@ -142,7 +141,7 @@ static long proc_register_exec(u64 proc, const char *path,
 		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
 		.reply = 0,
 		.cap = buffer > 0 ? (u64)buffer : 0,
-		.words = { path_len, task_len, linux, log_kind },
+		.words = { path_len, task_len, linux, 0 },
 	};
 	struct bunix_msg reply;
 
@@ -165,7 +164,6 @@ struct boot_exec {
 	const char *path;
 	const char *task_name;
 	u64 linux;
-	u64 log_kind;
 };
 
 struct boot_path {
@@ -188,25 +186,21 @@ struct boot_spawn {
 static long register_proc_execs(u64 proc)
 {
 	const struct boot_exec execs[] = {
-		{ "/bin/first", "first", 0, BUNIX_PROC_EXEC_LOG_FIRST },
-		{ "/bin/lxtest", "lxtest", 1, BUNIX_PROC_EXEC_LOG_LINUX },
-		{ "/bin/musl-hello", "musl-hello", 1,
-		  BUNIX_PROC_EXEC_LOG_MUSL },
-		{ "/bin/fputest", "fputest", 1,
-		  BUNIX_PROC_EXEC_LOG_DEFAULT },
-		{ "/bin/sh", "busybox", 1, BUNIX_PROC_EXEC_LOG_SHELL },
-		{ "/bin/busybox", "busybox", 1,
-		  BUNIX_PROC_EXEC_LOG_DEFAULT },
-		{ "/bin/login", "login", 1, BUNIX_PROC_EXEC_LOG_LOGIN },
-		{ "/sbin/init", "busybox", 1, BUNIX_PROC_EXEC_LOG_INIT },
-		{ "/bin/ipcstress", "ipcstress", 0,
-		  BUNIX_PROC_EXEC_LOG_DEFAULT },
+		{ "/bin/first", "first", 0 },
+		{ "/bin/lxtest", "lxtest", 1 },
+		{ "/bin/musl-hello", "musl-hello", 1 },
+		{ "/bin/fputest", "fputest", 1 },
+		{ "/bin/sh", "busybox", 1 },
+		{ "/bin/busybox", "busybox", 1 },
+		{ "/bin/login", "login", 1 },
+		{ "/sbin/init", "busybox", 1 },
+		{ "/bin/ipcstress", "ipcstress", 0 },
 	};
 
 	for (u64 i = 0; i < sizeof(execs) / sizeof(execs[0]); i++) {
 		if (proc_register_exec(proc, execs[i].path,
-				       execs[i].task_name, execs[i].linux,
-				       execs[i].log_kind) != 0) {
+				       execs[i].task_name,
+				       execs[i].linux) != 0) {
 			return -1;
 		}
 	}
