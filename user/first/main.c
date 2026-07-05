@@ -8,7 +8,7 @@ enum {
 	AT_PAGESZ = 6,
 	AT_ENTRY = 9,
 	AT_EXECFN = 31,
-	LARGE_BUFFER_SIZE = 128 * 1024,
+	LARGE_BUFFER_SIZE = 1024 * 1024 + 4096,
 };
 
 struct startup_aux {

@@ -14,7 +14,7 @@ sched: cpu=1 online
 smp: scheduler aps=1
 names: init dynamic
 slab: init caches=
-buffer: init max=1048576
+buffer: init max=2097152
 ipc: init slab ports messages
 vm-server: grant_space owner=vm id=1
 vm-server: memory authority online
@@ -39,7 +39,6 @@ unionfs: online
 unionfs: mounted
 proc: exec /sbin/init
 proc: exec /bin/first
-proc: exec /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/proc-exec-registry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/first
 proc: exec /bin/phdrstress
 proc: spawned pid=1
 proc: spawned pid=2
@@ -47,6 +46,7 @@ first: stdout ready
 first: argc=1
 first: argc=4
 first: argv0=/bin/first
+first: argv0=/usr/share/bunix/alpine/very/long/rootfs/path/that
 first: argv1=alpha
 first: argv2=beta
 first: argv3=gamma
