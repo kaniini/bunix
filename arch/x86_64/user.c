@@ -1773,6 +1773,7 @@ static struct shared_buffer *linux_path_buffer_from_user(const char *path,
 							 u64 *error)
 {
 	struct shared_buffer *buffer;
+	char *copy;
 	u64 len;
 	u64 size;
 	int rc;
@@ -1784,21 +1785,28 @@ static struct shared_buffer *linux_path_buffer_from_user(const char *path,
 		*error = (u64)-LINUX_EFAULT;
 		return 0;
 	}
-	rc = copy_cstr_from_user_errno((char *)syscall_copy_buffer, path,
-				       LINUX_MAX_SYSCALL_BUFFER);
-	if (rc != 0) {
-		*error = (u64)rc;
-		return 0;
-	}
-	len = str_len((const char *)syscall_copy_buffer) + 1;
-	size = min_size > len ? min_size : len;
-	buffer = buffer_create(size == 0 ? 1 : size);
-	if (buffer == 0 ||
-	    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
-		buffer_release(buffer);
+	copy = (char *)slab_alloc(LINUX_MAX_SYSCALL_BUFFER);
+	if (copy == 0) {
 		*error = (u64)-LINUX_ENOMEM;
 		return 0;
 	}
+	rc = copy_cstr_from_user_errno(copy, path, LINUX_MAX_SYSCALL_BUFFER);
+	if (rc != 0) {
+		slab_free(copy);
+		*error = (u64)rc;
+		return 0;
+	}
+	len = str_len(copy) + 1;
+	size = min_size > len ? min_size : len;
+	buffer = buffer_create(size == 0 ? 1 : size);
+	if (buffer == 0 ||
+	    buffer_write(buffer, 0, copy, len) != 0) {
+		buffer_release(buffer);
+		slab_free(copy);
+		*error = (u64)-LINUX_ENOMEM;
+		return 0;
+	}
+	slab_free(copy);
 	*path_len = len;
 	return buffer;
 }

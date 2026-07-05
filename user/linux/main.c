@@ -2653,11 +2653,15 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 					      base_handle, path,
 					      process->bunix_task |
 					      (((mode & ~process->umask) & 0777) << 32),
-					      &reply) != 0 ||
-		    reply.words[0] != 0 ||
-		    linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER,
+					      &reply) != 0) {
+			return -LINUX_EIO;
+		}
+		if (reply.words[0] != 0) {
+			return linux_vfs_error(reply.words[0]);
+		}
+		if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER,
 					base_handle, path, &reply) != 0) {
-			return -LINUX_ENOENT;
+			return -LINUX_EIO;
 		}
 	}
 	if (reply.words[0] != 0) {
@@ -3679,7 +3683,10 @@ static long linux_statx(struct linux_process *process, u64 dirfd,
 	}
 	const long result = linux_newfstatat(
 		process, dirfd, path_len, path_buffer,
-		flags & LINUX_AT_SYMLINK_NOFOLLOW ? 1 : 0, &meta);
+		flags & (LINUX_AT_SYMLINK_NOFOLLOW |
+			 LINUX_AT_NO_AUTOMOUNT |
+			 LINUX_AT_EMPTY_PATH),
+		&meta);
 	if (result != 0) {
 		return result;
 	}

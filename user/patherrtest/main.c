@@ -4,7 +4,13 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
+
+enum {
+	LINUX_STATX_BASIC_STATS = 0x7ff,
+	LINUX_STATX_BUFFER_SIZE = 256,
+};
 
 static int expect_enoent(const char *name, int result)
 {
@@ -29,6 +35,7 @@ static int expect_errno(const char *name, int result, int expected)
 int main(void)
 {
 	struct stat st;
+	unsigned char statx_buf[LINUX_STATX_BUFFER_SIZE];
 	char link_buf[16];
 	int fd;
 
@@ -79,6 +86,16 @@ int main(void)
 	if (fstatat(fd, "", &st, AT_EMPTY_PATH) != 0 || st.st_size != 15) {
 		printf("linux patherr fstatat-empty errno=%d size=%llu\n",
 		       errno, (unsigned long long)st.st_size);
+		close(fd);
+		return 1;
+	}
+	for (unsigned int i = 0; i < sizeof(statx_buf); i++) {
+		statx_buf[i] = 0;
+	}
+	errno = 0;
+	if (syscall(SYS_statx, fd, "", AT_EMPTY_PATH,
+		    LINUX_STATX_BASIC_STATS, statx_buf) != 0) {
+		printf("linux patherr statx-empty errno=%d\n", errno);
 		close(fd);
 		return 1;
 	}

@@ -47,27 +47,39 @@ static int write_payload(const char *path)
 
 	fd = open(file, O_CREAT | O_TRUNC | O_WRONLY, 0644);
 	if (fd < 0) {
+		perror("pathmaxtest open-create");
 		return -1;
 	}
 	if (write(fd, payload, sizeof(payload)) != (ssize_t)sizeof(payload)) {
+		perror("pathmaxtest write");
 		close(fd);
 		return -1;
 	}
 	if (close(fd) != 0) {
+		perror("pathmaxtest close-write");
 		return -1;
 	}
 
-	if (stat(file, &st) != 0 || st.st_size != (off_t)sizeof(payload)) {
+	if (stat(file, &st) != 0) {
+		perror("pathmaxtest stat");
+		return -1;
+	}
+	if (st.st_size != (off_t)sizeof(payload)) {
+		printf("pathmaxtest stat size=%lld expected=%llu\n",
+		       (long long)st.st_size,
+		       (unsigned long long)sizeof(payload));
 		return -1;
 	}
 
 	fd = open(file, O_RDONLY);
 	if (fd < 0) {
+		perror("pathmaxtest open-read");
 		return -1;
 	}
 	n = read(fd, buf, sizeof(buf));
 	if (close(fd) != 0 || n != (ssize_t)sizeof(buf) ||
 	    memcmp(buf, payload, sizeof(payload)) != 0) {
+		perror("pathmaxtest read");
 		return -1;
 	}
 
