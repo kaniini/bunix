@@ -326,13 +326,14 @@ struct linux_exec_args {
 struct linux_vfork_wait {
 	u32 child_task;
 	u32 done;
+	struct linux_vfork_wait *next;
 };
 
 static u8 syscall_copy_buffer[LINUX_MAX_SYSCALL_BUFFER];
 static u8 console_input_buffer[LINUX_MAX_SYSCALL_BUFFER];
 static struct spinlock syscall_copy_lock = SPINLOCK_INIT("syscall-copy");
 static struct spinlock linux_vfork_lock = SPINLOCK_INIT("linux-vfork");
-static struct linux_vfork_wait linux_vfork_waiters[32];
+static struct linux_vfork_wait *linux_vfork_waiters;
 static int str_eq(const char *left, const char *right);
 struct user_ipc_message {
 	u32 protocol;
@@ -1272,18 +1273,18 @@ static int linux_syscall_forwards_scalar(u64 number)
 
 static struct linux_vfork_wait *linux_vfork_begin(u32 child_task)
 {
-	const u64 flags = spin_lock_irqsave(&linux_vfork_lock);
-	struct linux_vfork_wait *waiter = 0;
+	struct linux_vfork_wait *waiter =
+		(struct linux_vfork_wait *)slab_zalloc(sizeof(*waiter));
 
-	for (u64 i = 0; i < sizeof(linux_vfork_waiters) /
-	     sizeof(linux_vfork_waiters[0]); i++) {
-		if (linux_vfork_waiters[i].child_task == 0) {
-			linux_vfork_waiters[i].child_task = child_task;
-			linux_vfork_waiters[i].done = 0;
-			waiter = &linux_vfork_waiters[i];
-			break;
-		}
+	if (waiter == 0) {
+		return 0;
 	}
+	waiter->child_task = child_task;
+	waiter->done = 0;
+
+	const u64 flags = spin_lock_irqsave(&linux_vfork_lock);
+	waiter->next = linux_vfork_waiters;
+	linux_vfork_waiters = waiter;
 
 	spin_unlock_irqrestore(&linux_vfork_lock, flags);
 	return waiter;
@@ -1296,9 +1297,17 @@ static void linux_vfork_cancel(struct linux_vfork_wait *waiter)
 	}
 
 	const u64 flags = spin_lock_irqsave(&linux_vfork_lock);
-	waiter->child_task = 0;
-	waiter->done = 0;
+	struct linux_vfork_wait **slot = &linux_vfork_waiters;
+
+	while (*slot != 0) {
+		if (*slot == waiter) {
+			*slot = waiter->next;
+			break;
+		}
+		slot = &(*slot)->next;
+	}
 	spin_unlock_irqrestore(&linux_vfork_lock, flags);
+	slab_free(waiter);
 }
 
 static int linux_vfork_is_done(struct linux_vfork_wait *waiter)
@@ -1323,10 +1332,10 @@ static void linux_vfork_complete_task(u32 child_task)
 {
 	const u64 flags = spin_lock_irqsave(&linux_vfork_lock);
 
-	for (u64 i = 0; i < sizeof(linux_vfork_waiters) /
-	     sizeof(linux_vfork_waiters[0]); i++) {
-		if (linux_vfork_waiters[i].child_task == child_task) {
-			linux_vfork_waiters[i].done = 1;
+	for (struct linux_vfork_wait *waiter = linux_vfork_waiters;
+	     waiter != 0; waiter = waiter->next) {
+		if (waiter->child_task == child_task) {
+			waiter->done = 1;
 			break;
 		}
 	}
@@ -4814,6 +4823,9 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 	const i64 number = (i64)frame->number;
 
 	if (task_is_killing(current) && number != SYSCALL_EXIT) {
+		if (task_uses_linux_personality(current)) {
+			linux_vfork_complete_task(task_id(current));
+		}
 		__asm__ volatile ("sti");
 		thread_exit();
 	}
