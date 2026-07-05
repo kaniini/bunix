@@ -68,6 +68,7 @@ enum {
 	LINUX_ECHOK = 0000040,
 	LINUX_MAX_WRITE = 4096,
 	LINUX_MAX_PATH = 256,
+	LINUX_SYSINFO_SIZE = 112,
 	LINUX_UTSNAME_SIZE = 65 * 6,
 	LINUX_STAT_SIZE = 144,
 	LINUX_STATX_SIZE = 256,
@@ -3524,6 +3525,23 @@ static long linux_uname(u64 buffer)
 	       -LINUX_EINVAL;
 }
 
+static long linux_sysinfo(u64 buffer)
+{
+	char info[LINUX_SYSINFO_SIZE];
+
+	if (buffer == 0) {
+		return -LINUX_EINVAL;
+	}
+	zero_bytes(info, sizeof(info));
+	store_u64(info, 0, bunix_timer_ticks() / 1000000000ull);
+	store_u64(info, 32, 128ull * 1024ull * 1024ull);
+	store_u64(info, 40, 64ull * 1024ull * 1024ull);
+	store_u16(info, 80, 1);
+	store_u32(info, 104, 1);
+	return bunix_buffer_write(buffer, 0, info, sizeof(info)) == 0 ? 0 :
+	       -LINUX_EINVAL;
+}
+
 static void linux_close_process_fds(struct linux_process *process)
 {
 	if (process == 0) {
@@ -3995,6 +4013,12 @@ int main(void)
 			break;
 		case BUNIX_LINUX_UNAME:
 			reply.words[0] = (u64)linux_uname(message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_SYSINFO:
+			reply.words[0] = (u64)linux_sysinfo(message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

@@ -194,6 +194,7 @@ enum {
 	LINUX_STAT_SIZE = 144,
 	LINUX_STATX_SIZE = 256,
 	LINUX_WAIT_STATUS_SIZE = 4,
+	LINUX_SYSINFO_SIZE = 112,
 	LINUX_UTSNAME_SIZE = 65 * 6,
 	LINUX_S_IFDIR = 0040000,
 	LINUX_S_IFLNK = 0120000,
@@ -2783,42 +2784,6 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return (u64)-LINUX_EINVAL;
 		}
 	}
-	case LINUX_SYSCALL_SYSINFO: {
-		u8 info[112];
-		u64 value;
-		u16 procs;
-		u32 mem_unit;
-
-		if (arg0 == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-
-		mem_zero(info, sizeof(info));
-		value = timer_monotonic_ns() / 1000000000ull;
-		mem_copy(info + 0, (const u8 *)&value, sizeof(value));
-		value = 0;
-		mem_copy(info + 8, (const u8 *)&value, sizeof(value));
-		mem_copy(info + 16, (const u8 *)&value, sizeof(value));
-		mem_copy(info + 24, (const u8 *)&value, sizeof(value));
-		value = 128ull * 1024ull * 1024ull;
-		mem_copy(info + 32, (const u8 *)&value, sizeof(value));
-		value = 64ull * 1024ull * 1024ull;
-		mem_copy(info + 40, (const u8 *)&value, sizeof(value));
-		value = 0;
-		mem_copy(info + 48, (const u8 *)&value, sizeof(value));
-		mem_copy(info + 56, (const u8 *)&value, sizeof(value));
-		mem_copy(info + 64, (const u8 *)&value, sizeof(value));
-		mem_copy(info + 72, (const u8 *)&value, sizeof(value));
-		procs = 1;
-		mem_copy(info + 80, (const u8 *)&procs, sizeof(procs));
-		value = 0;
-		mem_copy(info + 88, (const u8 *)&value, sizeof(value));
-		mem_copy(info + 96, (const u8 *)&value, sizeof(value));
-		mem_unit = 1;
-		mem_copy(info + 104, (const u8 *)&mem_unit, sizeof(mem_unit));
-		return write_current_user(arg0, info, sizeof(info)) == 0 ?
-		       0 : (u64)-LINUX_EINVAL;
-	}
 	case LINUX_SYSCALL_SET_ROBUST_LIST:
 		return 0;
 	case LINUX_SYSCALL_RT_SIGACTION: {
@@ -3191,6 +3156,15 @@ poll_again:
 		return linux_forward_fixed_output_words(
 			linux, reply_port, &request, LINUX_SYSCALL_UNAME,
 			(void *)arg0, LINUX_UTSNAME_SIZE, 1, 0,
+			0, 0, 0, 0);
+	}
+	case LINUX_SYSCALL_SYSINFO: {
+		if (arg0 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		return linux_forward_fixed_output_words(
+			linux, reply_port, &request, LINUX_SYSCALL_SYSINFO,
+			(void *)arg0, LINUX_SYSINFO_SIZE, 1, 0,
 			0, 0, 0, 0);
 	}
 	case LINUX_SYSCALL_CONNECT: {
