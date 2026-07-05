@@ -83,6 +83,7 @@ ROOTFS_BUSYBOX_LINKS := \
 	--symlink /bin/sleep /bin/busybox \
 	--symlink /bin/ls /bin/busybox \
 	--symlink /bin/mount /bin/busybox \
+	--symlink /bin/umount /bin/busybox \
 	--symlink /bin/free /bin/busybox \
 	--symlink /bin/df /bin/busybox \
 	--symlink /bin/ps /bin/busybox \

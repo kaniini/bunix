@@ -10,6 +10,8 @@ enum {
 	LINUX_EAGAIN = 11,
 	LINUX_EACCES = 13,
 	LINUX_EFAULT = 14,
+	LINUX_EBUSY = 16,
+	LINUX_ENODEV = 19,
 	LINUX_ENOTDIR = 20,
 	LINUX_EISDIR = 21,
 	LINUX_EINVAL = 22,
@@ -202,6 +204,10 @@ static u64 next_pid = 1;
 static u64 foreground_pgid = 1;
 static u64 user_service;
 static u64 utmpfs_service;
+static u64 procfs_service;
+static u64 tmpfs_service;
+static u64 devfs_service;
+static u64 unionfs_service;
 
 static u64 resolve_service(u64 service, unsigned int rights);
 static void linux_process_reset(struct linux_process *process);
@@ -231,6 +237,14 @@ static u64 linux_utmpfs_service(void)
 	}
 
 	return utmpfs_service;
+}
+
+static u64 linux_cached_service(u64 service, u64 *cache)
+{
+	if (*cache == 0) {
+		*cache = resolve_service(service, BUNIX_RIGHT_SEND);
+	}
+	return *cache;
 }
 
 static long linux_user_process_register(u64 bunix_task)
@@ -2888,6 +2902,106 @@ static long linux_statfs(struct linux_process *process, u64 path_len,
 	return linux_statfs_write(path_buffer);
 }
 
+static long linux_mount_path_command(u64 service, unsigned int protocol,
+				     unsigned int type, const char *target)
+{
+	struct bunix_msg reply;
+
+	if (service == 0 ||
+	    bunix_ipc_call_path(service, protocol, type, target, 0, 0, 0,
+				&reply) != 0) {
+		return -LINUX_ENODEV;
+	}
+	return reply.words[0] == 0 ? 0 : -LINUX_EBUSY;
+}
+
+static long linux_vfs_unmount(const char *target)
+{
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call_path(LINUX_HANDLE_VFS, BUNIX_PROTO_VFS,
+				BUNIX_VFS_UNMOUNT_BUFFER, target, 0, 0, 0,
+				&reply) != 0) {
+		return -LINUX_ENOSYS;
+	}
+	return reply.words[0] == 0 ? 0 : -LINUX_ENOENT;
+}
+
+static long linux_mount(struct linux_process *process, u64 target_len,
+			u64 fstype_len, u64 flags, u64 buffer)
+{
+	char target[LINUX_MAX_PATH];
+	char full_target[LINUX_MAX_PATH];
+	char fstype[64];
+
+	(void)flags;
+	if (target_len == 0 || target_len > sizeof(target) ||
+	    fstype_len == 0 || fstype_len > sizeof(fstype)) {
+		return -LINUX_EINVAL;
+	}
+	if (buffer == 0 ||
+	    bunix_buffer_read(buffer, 0, target, target_len) != 0 ||
+	    bunix_buffer_read(buffer, target_len, fstype, fstype_len) != 0) {
+		return -LINUX_EFAULT;
+	}
+	if (target[target_len - 1] != '\0' ||
+	    fstype[fstype_len - 1] != '\0') {
+		return -LINUX_EINVAL;
+	}
+	if (target[0] == '\0' || fstype[0] == '\0' ||
+	    path_normalize(process->cwd, target, full_target) != 0) {
+		return -LINUX_EINVAL;
+	}
+	if (string_equal(fstype, "proc") || string_equal(fstype, "procfs")) {
+		return linux_mount_path_command(
+			linux_cached_service(BUNIX_SERVICE_PROCFS,
+					     &procfs_service),
+			BUNIX_PROTO_PROCFS, BUNIX_PROCFS_MOUNT_PATH,
+			full_target);
+	}
+	if (string_equal(fstype, "tmpfs")) {
+		return linux_mount_path_command(
+			linux_cached_service(BUNIX_SERVICE_TMPFS,
+					     &tmpfs_service),
+			BUNIX_PROTO_TMPFS, BUNIX_TMPFS_MOUNT_ROOT,
+			full_target);
+	}
+	if (string_equal(fstype, "devtmpfs") || string_equal(fstype, "devfs")) {
+		return linux_mount_path_command(
+			linux_cached_service(BUNIX_SERVICE_DEVFS,
+					     &devfs_service),
+			BUNIX_PROTO_DEVFS, BUNIX_DEVFS_MOUNT_PATH,
+			full_target);
+	}
+	if (string_equal(fstype, "unionfs")) {
+		return linux_mount_path_command(
+			linux_cached_service(BUNIX_SERVICE_UNIONFS,
+					     &unionfs_service),
+			BUNIX_PROTO_UNIONFS, BUNIX_UNIONFS_MOUNT_PATH,
+			full_target);
+	}
+	return -LINUX_ENODEV;
+}
+
+static long linux_umount2(struct linux_process *process, u64 flags,
+			  u64 path_len, u64 path_buffer)
+{
+	char path[LINUX_MAX_PATH];
+	char full_path[LINUX_MAX_PATH];
+	long path_result;
+
+	(void)flags;
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
+	}
+	if (path_normalize(process->cwd, path, full_path) != 0) {
+		return -LINUX_EINVAL;
+	}
+	return linux_vfs_unmount(full_path);
+}
+
 static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 {
 	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
@@ -4271,6 +4385,25 @@ int main(void)
 			reply.words[0] = (u64)linux_rmdir(process,
 							  message.words[1],
 							  message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_MOUNT:
+			reply.words[0] = (u64)linux_mount(process,
+							  message.words[0],
+							  message.words[1],
+							  message.words[2],
+							  message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_UMOUNT2:
+			reply.words[0] = (u64)linux_umount2(process,
+							    message.words[0],
+							    message.words[1],
+							    message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

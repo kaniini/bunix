@@ -759,6 +759,22 @@ static int mount_cache_insert(const char *path, u64 fstype)
 	return 0;
 }
 
+static void mount_cache_remove(const char *path)
+{
+	struct procfs_mount *mount;
+
+	if (path == 0 || path[0] != '/' || str_eq(path, "/")) {
+		return;
+	}
+	mount = (struct procfs_mount *)bunix_tree_get(&mounts, path);
+	if (mount == 0) {
+		return;
+	}
+	bunix_tree_remove_node(&mounts, &mount->node);
+	bunix_free(mount->path);
+	bunix_free(mount);
+}
+
 static void handle_mount_notify(const struct bunix_msg *message)
 {
 	char path[PROCFS_MAX_PATH];
@@ -772,6 +788,21 @@ static void handle_mount_notify(const struct bunix_msg *message)
 	}
 	path[sizeof(path) - 1] = '\0';
 	(void)mount_cache_insert(path, message->words[1]);
+}
+
+static void handle_unmount_notify(const struct bunix_msg *message)
+{
+	char path[PROCFS_MAX_PATH];
+
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    message->words[0] == 0 ||
+	    message->words[0] > sizeof(path) ||
+	    bunix_buffer_read(message->cap, 0, path, message->words[0]) != 0) {
+		return;
+	}
+	path[sizeof(path) - 1] = '\0';
+	mount_cache_remove(path);
 }
 
 static u64 build_mounts(void)
@@ -1230,6 +1261,14 @@ int main(void)
 		if (message.protocol == BUNIX_PROTO_PROCFS &&
 		    message.type == BUNIX_PROCFS_MOUNT_NOTIFY) {
 			handle_mount_notify(&message);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			continue;
+		}
+		if (message.protocol == BUNIX_PROTO_PROCFS &&
+		    message.type == BUNIX_PROCFS_UNMOUNT_NOTIFY) {
+			handle_unmount_notify(&message);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

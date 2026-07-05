@@ -102,6 +102,33 @@ static void stat_device(struct bunix_msg *reply, u64 device)
 	reply->words[3] = 0;
 }
 
+static long read_generated_device(u64 device, u64 buffer, u64 len)
+{
+	char data[256];
+	u64 done = 0;
+
+	while (done < len) {
+		u64 chunk = len - done;
+
+		if (chunk > sizeof(data)) {
+			chunk = sizeof(data);
+		}
+		for (u64 i = 0; i < chunk; i++) {
+			data[i] = 0;
+			if (device == DEVFS_RANDOM) {
+				random_state =
+					random_state * 6364136223846793005ull + 1;
+				data[i] = (char)(random_state >> 56);
+			}
+		}
+		if (bunix_buffer_write(buffer, done, data, chunk) != 0) {
+			return -1;
+		}
+		done += chunk;
+	}
+	return 0;
+}
+
 static u64 mount_devfs(u64 vfs, const char *path)
 {
 	struct bunix_msg reply;
@@ -267,23 +294,13 @@ int main(void)
 				reply.words[1] = 0;
 				break;
 			}
-			for (u64 i = 0; i < message.words[2]; i++) {
-				char c = 0;
-
-				if (device == DEVFS_RANDOM) {
-					random_state =
-						random_state * 6364136223846793005ull + 1;
-					c = (char)(random_state >> 56);
-				}
-				if (bunix_buffer_write(message.cap, i, &c, 1) != 0) {
-					reply.words[0] = (u64)-1;
-					break;
-				}
-			}
-			if (reply.words[0] == 0) {
-				reply.words[1] = message.words[2];
-			}
-			break;
+				reply.words[0] =
+					read_generated_device(device, message.cap,
+							      message.words[2]) == 0 ?
+					0 : (u64)-1;
+				reply.words[1] = reply.words[0] == 0 ?
+						 message.words[2] : 0;
+				break;
 		case BUNIX_VFS_WRITE_FILE_BUFFER:
 			device = message.words[0];
 			reply.words[0] = device == DEVFS_NULL ||

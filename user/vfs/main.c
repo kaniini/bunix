@@ -893,7 +893,24 @@ static long mount_translator(const char *path, u64 service, u64 fstype)
 	return 0;
 }
 
-static void notify_procfs_mount(const char *path, u64 fstype)
+static long unmount_translator(const char *path)
+{
+	struct vfs_mount *mount;
+
+	if (path == 0 || path[0] != '/' || path_eq(path, "/")) {
+		return -1;
+	}
+	mount = (struct vfs_mount *)bunix_tree_get(&mounts, path);
+	if (mount == 0) {
+		return -1;
+	}
+	bunix_tree_remove_node(&mounts, &mount->node);
+	bunix_free(mount->path);
+	bunix_free(mount);
+	return 0;
+}
+
+static void notify_procfs_mount_event(const char *path, u64 type, u64 fstype)
 {
 	struct vfs_mount *procfs =
 		(struct vfs_mount *)bunix_tree_get(&mounts, "/proc");
@@ -901,7 +918,7 @@ static void notify_procfs_mount(const char *path, u64 fstype)
 	const long buffer = bunix_buffer_create(path_len);
 	struct bunix_msg message = {
 		.protocol = BUNIX_PROTO_PROCFS,
-		.type = BUNIX_PROCFS_MOUNT_NOTIFY,
+		.type = type,
 		.sender = 0,
 		.cap_rights = BUNIX_RIGHT_RECV,
 		.reply = 0,
@@ -919,6 +936,16 @@ static void notify_procfs_mount(const char *path, u64 fstype)
 		(void)bunix_ipc_send(procfs->service, &message);
 	}
 	bunix_handle_close((u64)buffer);
+}
+
+static void notify_procfs_mount(const char *path, u64 fstype)
+{
+	notify_procfs_mount_event(path, BUNIX_PROCFS_MOUNT_NOTIFY, fstype);
+}
+
+static void notify_procfs_unmount(const char *path)
+{
+	notify_procfs_mount_event(path, BUNIX_PROCFS_UNMOUNT_NOTIFY, 0);
 }
 
 static void vfs_open_path(struct bunix_msg *message, struct bunix_msg *reply,
@@ -1469,7 +1496,20 @@ int main(void)
 					bunix_console_log("vfs: mounted translator\n", 24);
 				}
 				break;
-		}
+			}
+			case BUNIX_VFS_UNMOUNT_BUFFER: {
+				char path[VFS_MAX_PATH];
+
+				if (bunix_read_path_cap(&message, path,
+							sizeof(path)) != 0 ||
+				    unmount_translator(path) != 0) {
+					reply.words[0] = (u64)-1;
+				} else {
+					reply.words[0] = 0;
+					notify_procfs_unmount(path);
+				}
+				break;
+			}
 		default:
 			reply.words[0] = (u64)-1;
 			break;
