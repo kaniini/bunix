@@ -1577,6 +1577,24 @@ static u64 linux_forward_fixed_output_buffer(struct ipc_port *linux,
 	return result;
 }
 
+static u64 linux_forward_fixed_output_words(struct ipc_port *linux,
+					    struct ipc_port *reply_port,
+					    struct ipc_message *request,
+					    u32 type, void *user_out,
+					    u64 size, int copy_on_zero,
+					    int copy_on_positive, u64 word0,
+					    u64 word1, u64 word2, u64 word3)
+{
+	request->type = type;
+	request->words[0] = word0;
+	request->words[1] = word1;
+	request->words[2] = word2;
+	request->words[3] = word3;
+	return linux_forward_fixed_output_buffer(linux, reply_port, request,
+						 user_out, size, copy_on_zero,
+						 copy_on_positive);
+}
+
 static u64 linux_forward_two_u32_out(struct ipc_port *linux,
 				     struct ipc_port *reply_port,
 				     struct ipc_message *request,
@@ -3416,16 +3434,17 @@ poll_again:
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_WAIT4: {
+		if (arg1 != 0) {
+			return linux_forward_fixed_output_words(
+				linux, reply_port, &request, LINUX_SYSCALL_WAIT4,
+				(void *)arg1, LINUX_WAIT_STATUS_SIZE, 0, 1,
+				arg0, arg2, 0, 0);
+		}
 		request.type = LINUX_SYSCALL_WAIT4;
 		request.words[0] = arg0;
 		request.words[1] = arg2;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		if (arg1 != 0) {
-			return linux_forward_fixed_output_buffer(
-				linux, reply_port, &request, (void *)arg1,
-				LINUX_WAIT_STATUS_SIZE, 0, 1);
-		}
 		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			return (u64)-LINUX_ENOSYS;
 		}
@@ -3435,16 +3454,10 @@ poll_again:
 		if (arg1 == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
-		request.type = LINUX_SYSCALL_FSTAT;
-		request.words[0] = arg0;
-		request.words[1] = LINUX_STAT_SIZE;
-		request.words[2] = 0;
-		request.words[3] = 0;
-		return linux_forward_fixed_output_buffer(linux, reply_port,
-							 &request,
-							 (void *)arg1,
-							 LINUX_STAT_SIZE, 1,
-							 0);
+		return linux_forward_fixed_output_words(
+			linux, reply_port, &request, LINUX_SYSCALL_FSTAT,
+			(void *)arg1, LINUX_STAT_SIZE, 1, 0, arg0,
+			LINUX_STAT_SIZE, 0, 0);
 	}
 	case LINUX_SYSCALL_OPEN:
 	case LINUX_SYSCALL_OPENAT: {
