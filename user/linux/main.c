@@ -192,6 +192,7 @@ static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
 static void pack_path(u64 *words, const char *path);
+static void unpack_path(char *path, u64 word0, u64 word1);
 static long alloc_fd(struct linux_process *process, u64 kind, u64 handle,
 		     u64 size);
 
@@ -464,7 +465,7 @@ static void notify_proc_register_linux(u64 linux_pid, u64 bunix_task,
 	}
 }
 
-static long linux_exec_init(void)
+static long linux_exec_init(u64 path_word0, u64 path_word1)
 {
 	const u64 proc = resolve_service(BUNIX_SERVICE_PROC, BUNIX_RIGHT_SEND);
 	struct bunix_msg request = {
@@ -476,11 +477,16 @@ static long linux_exec_init(void)
 		.cap = 0,
 		.words = { 0, 0, 0, 0 },
 	};
+	char path[16];
 
 	if (proc == 0) {
 		return -LINUX_ESRCH;
 	}
-	pack_path(&request.words[0], "/sbin/init");
+	unpack_path(path, path_word0, path_word1);
+	if (path[0] != '/') {
+		return -LINUX_EINVAL;
+	}
+	pack_path(&request.words[0], path);
 	return bunix_ipc_send(proc, &request) == 0 ? 0 : -LINUX_ESRCH;
 }
 
@@ -3611,7 +3617,8 @@ int main(void)
 			continue;
 		}
 		if (message.type == BUNIX_LINUX_EXEC_INIT) {
-			reply.words[0] = (u64)linux_exec_init();
+			reply.words[0] = (u64)linux_exec_init(message.words[0],
+							     message.words[1]);
 			if (message.reply != 0) {
 				bunix_ipc_send(message.reply, &reply);
 			}

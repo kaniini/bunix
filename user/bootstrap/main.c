@@ -256,7 +256,7 @@ static void sleep_ns(u64 time, u64 ns)
 	}
 }
 
-static long spawn_linux_init(u64 linux)
+static long spawn_linux_init(u64 linux, const char *path)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_LINUX,
@@ -269,6 +269,7 @@ static long spawn_linux_init(u64 linux)
 	};
 	struct bunix_msg reply;
 
+	pack_path(&request.words[0], path);
 	if (linux == 0 ||
 	    bunix_ipc_call(linux, &request, &reply) != 0 ||
 	    reply.words[0] != 0) {
@@ -470,7 +471,7 @@ int main(void)
 	const char ipcstress_done[] = "bootstrap: ipcstress exited\n";
 	const char linux_spawned[] = "bootstrap: linux process spawned\n";
 	const char linux_done[] = "bootstrap: linux process exited\n";
-	const char linux_init_exec[] = "bootstrap: linux /sbin/init exec\n";
+	const char linux_init_exec[] = "bootstrap: linux init exec\n";
 	const char musl_spawned[] = "bootstrap: musl process spawned\n";
 	const char musl_done[] = "bootstrap: musl process exited\n";
 
@@ -500,7 +501,7 @@ int main(void)
 		return 1;
 	}
 
-	if (spawn_linux_init(linux) != 0) {
+	if (spawn_linux_init(linux, "/sbin/init") != 0) {
 		return 1;
 	}
 	bunix_console_log(linux_init_exec, sizeof(linux_init_exec) - 1);

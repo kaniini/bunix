@@ -444,7 +444,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "bootstrap: names ready" $(BUILD_DIR)/serial.log
 	grep -F "bootstrap: fs namespace" $(BUILD_DIR)/serial.log
 	grep -F "bootstrap: fs ready" $(BUILD_DIR)/serial.log
-	grep -F "bootstrap: linux /sbin/init exec" $(BUILD_DIR)/serial.log
+	grep -F "bootstrap: linux init exec" $(BUILD_DIR)/serial.log
 	grep -F "login: " $(BUILD_DIR)/serial.log
 	grep -F "rootfs: module" $(BUILD_DIR)/serial.log
 	grep -F "bootstrap: bad cap denied" $(BUILD_DIR)/serial.log
