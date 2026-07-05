@@ -186,18 +186,6 @@ static int read_path_buffer(u64 buffer, u64 offset, u64 len, char *path)
 	return 0;
 }
 
-static void pack_path(u64 *words, const char *path)
-{
-	words[0] = 0;
-	words[1] = 0;
-	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
-	}
-}
-
 static u64 get_proc_handle(void)
 {
 	if (proc_handle == 0) {
@@ -308,20 +296,7 @@ static int proc_cmdline(u64 pid, char *out, u64 out_size)
 	if (buffer > 0) {
 		bunix_handle_close((u64)buffer);
 	}
-	if (proc_call(BUNIX_PROC_CMDLINE, pid, &reply) != 0) {
-		return -1;
-	}
-	len = reply.words[1];
-	if (len >= out_size) {
-		len = out_size - 1;
-	}
-	for (u64 i = 0; i < len && i < 16; i++) {
-		const u64 slot = 2 + (i / 8);
-		const u64 shift = (i % 8) * 8;
-
-		out[i] = (char)((reply.words[slot] >> shift) & 0xff);
-	}
-	return 0;
+	return -1;
 }
 
 static int proc_details(u64 pid, struct proc_details *details)
@@ -1208,7 +1183,7 @@ static void readlink_buffer_reply(const struct bunix_msg *message,
 	reply->words[0] = 0;
 	reply->words[1] = target_len;
 	if (out_cap == 0) {
-		pack_path(&reply->words[2], target);
+		reply->words[0] = (u64)-1;
 		return;
 	}
 	if (message->cap == 0 ||

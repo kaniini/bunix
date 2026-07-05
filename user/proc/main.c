@@ -63,7 +63,6 @@ struct process {
 	u64 status;
 	u64 exited;
 	u64 waiter;
-	u64 cmd_words[2];
 	u64 cmd_len;
 	char *cmdline;
 };
@@ -184,19 +183,6 @@ static u64 resolve_service(u64 service, unsigned int rights)
 	return reply.cap;
 }
 
-static void pack_path(u64 *words, const char *path)
-{
-	words[0] = 0;
-	words[1] = 0;
-
-	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
-	}
-}
-
 static char *string_dup_len(const char *text, u64 len)
 {
 	char *copy;
@@ -232,31 +218,7 @@ static int process_set_cmdline(struct process *process, const char *cmdline,
 	}
 	process->cmdline = copy;
 	process->cmd_len = cmd_len;
-	pack_path(process->cmd_words, copy);
 	return 0;
-}
-
-static int process_set_cmdline_from_words(struct process *process,
-					  u64 cmd_left, u64 cmd_right,
-					  u64 cmd_len)
-{
-	char text[17];
-	u64 len = cmd_len;
-
-	for (u64 i = 0; i < sizeof(text); i++) {
-		text[i] = '\0';
-	}
-	for (u64 i = 0; i < 8; i++) {
-		text[i] = (char)((cmd_left >> (i * 8)) & 0xff);
-		text[i + 8] = (char)((cmd_right >> (i * 8)) & 0xff);
-	}
-	if (len > 16) {
-		len = 16;
-	}
-	while (len > 0 && text[len - 1] == '\0') {
-		len--;
-	}
-	return process_set_cmdline(process, text, len);
 }
 
 static int process_set_cmdline_from_buffer(struct process *process, u64 buffer,
@@ -1562,8 +1524,6 @@ static void process_reset(struct process *process)
 	process->status = 0;
 	process->exited = 0;
 	process->waiter = 0;
-	process->cmd_words[0] = 0;
-	process->cmd_words[1] = 0;
 	process->cmd_len = 0;
 	if (process->cmdline != 0) {
 		bunix_free(process->cmdline);
@@ -1716,8 +1676,7 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 }
 
 static long register_linux_child_process(u64 linux_pid, u64 task_id, u64 ppid,
-					 u64 cmd_left, u64 cmd_right,
-					 u64 cmd_len, u64 *pid)
+					 u64 *pid)
 {
 	struct process *process;
 	struct process *parent = 0;
@@ -1747,8 +1706,7 @@ static long register_linux_child_process(u64 linux_pid, u64 task_id, u64 ppid,
 	process->status = 0;
 	process->exited = 0;
 	process->waiter = 0;
-	if (process_set_cmdline_from_words(process, cmd_left, cmd_right,
-					   cmd_len) != 0) {
+	if (process_set_cmdline(process, "/bin/process", 12) != 0) {
 		bunix_free(process);
 		return -1;
 	}
@@ -1937,19 +1895,6 @@ int main(void)
 			}
 			break;
 		}
-		case BUNIX_PROC_CMDLINE: {
-			struct process *process = process_find(message.words[0]);
-
-			if (process == 0) {
-				reply.words[0] = (u64)-1;
-			} else {
-				reply.words[0] = 0;
-				reply.words[1] = process->cmd_len;
-				reply.words[2] = process->cmd_words[0];
-				reply.words[3] = process->cmd_words[1];
-			}
-			break;
-		}
 		case BUNIX_PROC_CMDLINE_BUFFER: {
 			struct process *process = process_find(message.words[0]);
 			const u64 buffer = message.cap;
@@ -1995,35 +1940,6 @@ int main(void)
 			}
 			break;
 		}
-		case BUNIX_PROC_SET_CMDLINE: {
-			struct process *process =
-				process_find_linux_pid(message.words[0]);
-
-			if (process == 0) {
-				if (linux_exit_pending(message.words[0])) {
-					reply.words[0] = 0;
-					reply.words[1] = 0;
-				} else {
-					u64 pid = 0;
-
-					reply.words[0] =
-						(u64)register_linux_child_process(message.words[0],
-										  message.words[1],
-										  0,
-										  message.words[2],
-										  message.words[3],
-										  16,
-										  &pid);
-					reply.words[1] = pid;
-				}
-			} else {
-				process->cmd_words[0] = message.words[2];
-				process->cmd_words[1] = message.words[3];
-				process->cmd_len = 16;
-				reply.words[0] = 0;
-			}
-			break;
-		}
 		case BUNIX_PROC_SET_CMDLINE_BUFFER: {
 			struct process *process =
 				process_find_linux_pid(message.words[0]);
@@ -2037,16 +1953,11 @@ int main(void)
 					u64 pid = 0;
 
 					reply.words[0] =
-						(u64)register_linux_child_process(message.words[0],
-										  message.words[1],
-										  0,
-										  0,
-										  0,
-										  0,
-										  &pid);
+						(u64)register_linux_child_process(
+							message.words[0],
+							message.words[1], 0, &pid);
 					reply.words[1] = pid;
-					process = pid == 0 ? 0 :
-						  process_find(pid);
+					process = pid == 0 ? 0 : process_find(pid);
 					if (reply.words[0] == 0 &&
 					    process != 0 &&
 					    process_set_cmdline_from_buffer(process,
@@ -2074,8 +1985,6 @@ int main(void)
 				(u64)register_linux_child_process(message.words[0],
 								  message.words[1],
 								  message.words[2],
-								  message.words[3],
-								  0, 0,
 								  &pid);
 			reply.words[1] = pid;
 			break;

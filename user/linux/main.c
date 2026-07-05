@@ -218,7 +218,6 @@ static void linux_process_reset(struct linux_process *process);
 static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
-static void pack_path(u64 *words, const char *path);
 static u64 string_len(const char *text);
 static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
 				u64 path_cap);
@@ -602,19 +601,6 @@ static void store_u64(char *buffer, u64 offset, u64 value)
 {
 	for (u64 i = 0; i < 8; i++) {
 		buffer[offset + i] = (char)((value >> (i * 8)) & 0xff);
-	}
-}
-
-static void pack_path(u64 *words, const char *path)
-{
-	words[0] = 0;
-	words[1] = 0;
-
-	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
 	}
 }
 
@@ -3472,7 +3458,6 @@ static long linux_getcwd(struct linux_process *process, u64 size,
 			 u64 buffer, u64 *word0, u64 *word1)
 {
 	const u64 len = string_len(process->cwd) + 1;
-	u64 words[2];
 
 	if (size < len) {
 		return -LINUX_ERANGE;
@@ -3483,13 +3468,9 @@ static long linux_getcwd(struct linux_process *process, u64 size,
 		}
 		return (long)len;
 	}
-	if (len > BUNIX_IPC_DATA_BYTES || word0 == 0 || word1 == 0) {
-		return -LINUX_EINVAL;
-	}
-	pack_path(words, process->cwd);
-	*word0 = words[0];
-	*word1 = words[1];
-	return (long)len;
+	(void)word0;
+	(void)word1;
+	return -LINUX_EFAULT;
 }
 
 static long linux_chdir(struct linux_process *process, u64 path_len,
