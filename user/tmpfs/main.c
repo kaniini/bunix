@@ -1113,6 +1113,10 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
+			if (path_is_root(path) || file_find(path) != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_EXIST;
+				break;
+			}
 			file = parent_file_for_path(path);
 			if (!task_can_access(message.words[3] & 0xffffffff,
 					     file, 03)) {

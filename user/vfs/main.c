@@ -1138,10 +1138,20 @@ static void vfs_mutate_path(struct bunix_msg *message, struct bunix_msg *reply,
 			    const char *path)
 {
 	struct vfs_mount *mount = mount_for_path(path);
+	const struct rootfs_entry *entry;
 
 	if (mount != 0) {
 		(void)forward_mount_buffer_path(mount, message, reply, path);
 		return;
+	}
+	if (message->type == BUNIX_VFS_CREATE_BUFFER ||
+	    message->type == BUNIX_VFS_MKNOD_BUFFER ||
+	    message->type == BUNIX_VFS_MKDIR_BUFFER) {
+		entry = rootfs_resolve_ref(root_block, path, 0);
+		if (entry != 0) {
+			reply->words[0] = BUNIX_VFS_ERR_EXIST;
+			return;
+		}
 	}
 	reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 }

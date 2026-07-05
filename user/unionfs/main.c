@@ -546,6 +546,25 @@ static int lower_is_directory(const char *relative)
 	       (reply.words[2] >> 32) == BUNIX_VFS_TYPE_DIRECTORY;
 }
 
+static int visible_path_exists(const char *relative)
+{
+	char upper[UNIONFS_MAX_PATH];
+	struct bunix_msg reply;
+
+	if (compose_upper_path(relative, upper) == 0 &&
+	    service_path_call(upper_service, BUNIX_VFS_STAT_PATH_META_BUFFER,
+			      upper, 0, 0, &reply) == 0 &&
+	    reply.words[0] == 0) {
+		return 1;
+	}
+	if (whiteout_exists(relative)) {
+		return 0;
+	}
+	return lower_path_call(BUNIX_VFS_STAT_PATH_META_BUFFER, relative, 0,
+			       0, &reply) == 0 &&
+	       reply.words[0] == 0;
+}
+
 static int relative_parent_path(const char *path, char *parent)
 {
 	u64 last = 0;
@@ -1189,12 +1208,23 @@ static void reply_mutate(struct bunix_msg *message, struct bunix_msg *reply,
 
 	if (mounted_relative_path(path, relative) != 0 ||
 	    compose_upper_path(relative, upper) != 0 ||
-	    compose_lower_path(relative, lower) != 0 ||
-	    ((message->type == BUNIX_VFS_CREATE_BUFFER ||
-	      message->type == BUNIX_VFS_MKNOD_BUFFER ||
-	      message->type == BUNIX_VFS_MKDIR_BUFFER) &&
-	     materialize_upper_parent(relative, message->words[3]) != 0) ||
-	    service_path_call(upper_service, message->type, upper,
+	    compose_lower_path(relative, lower) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (message->type == BUNIX_VFS_CREATE_BUFFER ||
+	    message->type == BUNIX_VFS_MKNOD_BUFFER ||
+	    message->type == BUNIX_VFS_MKDIR_BUFFER) {
+		if (visible_path_exists(relative)) {
+			reply->words[0] = BUNIX_VFS_ERR_EXIST;
+			return;
+		}
+		if (materialize_upper_parent(relative, message->words[3]) != 0) {
+			reply->words[0] = (u64)-1;
+			return;
+		}
+	}
+	if (service_path_call(upper_service, message->type, upper,
 			      message->words[3], 0, reply) != 0) {
 		reply->words[0] = (u64)-1;
 		return;
