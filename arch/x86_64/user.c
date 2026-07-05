@@ -186,6 +186,7 @@ enum {
 	LINUX_EXEC_MAX_ENVS = 16,
 	LINUX_EXEC_MAX_ARG = 64,
 	LINUX_EXEC_MAX_PHDRS = 16,
+	LINUX_MAX_GROUPS = 64,
 	LINUX_EXEC_DYN_LOAD_BIAS = 0x400000,
 	LINUX_EXEC_INTERP_LOAD_BIAS = 0x600000,
 	LINUX_EXEC_STACK_TOP = 0x800000,
@@ -1559,22 +1560,46 @@ static u64 linux_forward_groups_out(struct task *task, struct ipc_port *linux,
 				    struct ipc_message *request,
 				    u64 count, u64 user_out)
 {
+	struct shared_buffer *buffer = 0;
 	struct ipc_message reply;
-	u32 groups[2];
+	u64 size;
 
+	if (count > LINUX_MAX_GROUPS) {
+		return (u64)-LINUX_EINVAL;
+	}
+	if (count != 0) {
+		size = count * sizeof(u32);
+		buffer = buffer_create(size);
+		if (buffer == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		request->cap_type = IPC_CAP_BUFFER;
+		request->cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP;
+		request->cap_object = buffer;
+	}
 	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		if (buffer != 0) {
+			buffer_release(buffer);
+		}
 		return (u64)-LINUX_ENOSYS;
 	}
 	if ((i64)reply.words[0] > 0 && count != 0) {
-		if (reply.words[0] > 2) {
+		if (reply.words[0] > count ||
+		    reply.words[0] > LINUX_MAX_GROUPS) {
+			buffer_release(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
-		groups[0] = (u32)reply.words[1];
-		groups[1] = (u32)reply.words[2];
-		if (vm_write_user(task_vm_space(task), user_out, groups,
-				  reply.words[0] * sizeof(groups[0])) != 0) {
+		if (buffer_read(buffer, 0, syscall_copy_buffer,
+				reply.words[0] * sizeof(u32)) != 0 ||
+		    vm_write_user(task_vm_space(task), user_out,
+				  syscall_copy_buffer,
+				  reply.words[0] * sizeof(u32)) != 0) {
+			buffer_release(buffer);
 			return (u64)-LINUX_EFAULT;
 		}
+	}
+	if (buffer != 0) {
+		buffer_release(buffer);
 	}
 	return reply.words[0];
 }
@@ -3237,25 +3262,42 @@ poll_again:
 		return linux_forward_groups_out(task, linux, reply_port,
 						&request, arg0, arg1);
 	case LINUX_SYSCALL_SETGROUPS: {
-		u32 groups[2] = { 0, 0 };
+		struct shared_buffer *buffer;
+		struct ipc_message reply;
+		const u64 size = arg0 * sizeof(u32);
 
-		if (arg0 > 2) {
+		if (arg0 > LINUX_MAX_GROUPS ||
+		    size > LINUX_MAX_SYSCALL_BUFFER) {
 			return (u64)-LINUX_EINVAL;
 		}
 		if (arg0 != 0 &&
-		    vm_read_user(task_vm_space(task), arg1, groups,
-				 arg0 * sizeof(groups[0])) != 0) {
+		    vm_read_user(task_vm_space(task), arg1, syscall_copy_buffer,
+				 size) != 0) {
 			return (u64)-LINUX_EFAULT;
+		}
+		buffer = buffer_create(size == 0 ? 1 : size);
+		if (buffer == 0 ||
+		    (size != 0 &&
+		     buffer_write(buffer, 0, syscall_copy_buffer, size) != 0)) {
+			if (buffer != 0) {
+				buffer_release(buffer);
+			}
+			return (u64)-LINUX_EINVAL;
 		}
 
 		request.type = LINUX_SYSCALL_SETGROUPS;
 		request.words[0] = arg0;
-		request.words[1] = groups[0];
-		request.words[2] = groups[1];
+		request.words[1] = 0;
+		request.words[2] = 0;
 		request.words[3] = 0;
+		request.cap_type = IPC_CAP_BUFFER;
+		request.cap_rights = TASK_RIGHT_RECV | TASK_RIGHT_DUP;
+		request.cap_object = buffer;
 		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+			buffer_release(buffer);
 			return (u64)-LINUX_ENOSYS;
 		}
+		buffer_release(buffer);
 		return reply.words[0];
 	}
 	case LINUX_SYSCALL_IOCTL: {

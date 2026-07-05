@@ -225,6 +225,51 @@ static long credential_group_append(u64 **groups, u64 *count, u64 *capacity,
 	return 0;
 }
 
+static long groups_write_buffer(u64 buffer, const u64 *groups, u64 count)
+{
+	unsigned int gid;
+
+	if (buffer == 0 || (groups == 0 && count != 0)) {
+		return -1;
+	}
+	for (u64 i = 0; i < count; i++) {
+		gid = (unsigned int)groups[i];
+		if (bunix_buffer_write(buffer, i * sizeof(gid),
+				       &gid, sizeof(gid)) != 0) {
+			return -1;
+		}
+	}
+	return 0;
+}
+
+static long groups_read_buffer(u64 buffer, u64 count, u64 **groups_out)
+{
+	u64 *groups;
+	unsigned int gid;
+
+	if (groups_out == 0 || (buffer == 0 && count != 0)) {
+		return -1;
+	}
+	*groups_out = 0;
+	if (count == 0) {
+		return 0;
+	}
+	groups = (u64 *)bunix_alloc(count * sizeof(*groups));
+	if (groups == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < count; i++) {
+		if (bunix_buffer_read(buffer, i * sizeof(gid),
+				      &gid, sizeof(gid)) != 0) {
+			bunix_free(groups);
+			return -1;
+		}
+		groups[i] = gid;
+	}
+	*groups_out = groups;
+	return 0;
+}
+
 static void credential_clear(struct user_credential *credential)
 {
 	if (credential == 0) {
@@ -524,19 +569,22 @@ static int group_line_has_member(const char *text, u64 start, u64 end,
 	return 0;
 }
 
-static long login_groups_lookup(const char *name, u64 name_len,
-				u64 primary_gid, struct bunix_msg *reply)
+static long login_groups_collect(const char *name, u64 name_len,
+				 u64 primary_gid, u64 **groups_out,
+				 u64 *count_out)
 {
 	u64 len = 0;
 	u64 count = 0;
 	u64 capacity = 0;
 	u64 *groups = 0;
 
-	if (reply == 0 ||
+	if (groups_out == 0 || count_out == 0 ||
 	    read_account_file("/etc/group", account_buffer,
 			      sizeof(account_buffer), &len) != 0) {
 		return -1;
 	}
+	*groups_out = 0;
+	*count_out = 0;
 	for (u64 cursor = 0; cursor < len;) {
 		const u64 line = cursor;
 		u64 field;
@@ -569,9 +617,50 @@ static long login_groups_lookup(const char *name, u64 name_len,
 		}
 		cursor = members_end < len ? members_end + 1 : members_end;
 	}
+	*groups_out = groups;
+	*count_out = count;
+	return 0;
+}
+
+static long login_groups_lookup(const char *name, u64 name_len,
+				u64 primary_gid, struct bunix_msg *reply)
+{
+	u64 count = 0;
+	u64 *groups = 0;
+
+	if (reply == 0 ||
+	    login_groups_collect(name, name_len, primary_gid,
+				 &groups, &count) != 0) {
+		return -1;
+	}
 	reply->words[1] = count < USER_WIRE_GROUPS ? count : USER_WIRE_GROUPS;
 	reply->words[2] = count > 0 ? groups[0] : 0;
 	reply->words[3] = count > 1 ? groups[1] : 0;
+	if (groups != 0) {
+		bunix_free(groups);
+	}
+	return 0;
+}
+
+static long login_groups_lookup_buffer(const char *name, u64 name_len,
+				       u64 primary_gid, u64 buffer,
+				       struct bunix_msg *reply)
+{
+	u64 count = 0;
+	u64 *groups = 0;
+
+	if (reply == 0 ||
+	    login_groups_collect(name, name_len, primary_gid,
+				 &groups, &count) != 0) {
+		return -1;
+	}
+	if (groups_write_buffer(buffer, groups, count) != 0) {
+		if (groups != 0) {
+			bunix_free(groups);
+		}
+		return -1;
+	}
+	reply->words[1] = count;
 	if (groups != 0) {
 		bunix_free(groups);
 	}
@@ -699,6 +788,26 @@ static long credential_getgroups(u64 task, u64 max_groups,
 	return 0;
 }
 
+static long credential_getgroups_buffer(u64 task, u64 max_groups,
+					u64 buffer, struct bunix_msg *reply)
+{
+	struct user_credential *credential = credential_find(task);
+
+	if (credential == 0 || reply == 0) {
+		return -1;
+	}
+	if (max_groups != 0 && max_groups < credential->group_count) {
+		return -1;
+	}
+	if (max_groups != 0 &&
+	    groups_write_buffer(buffer, credential->groups,
+				credential->group_count) != 0) {
+		return -1;
+	}
+	reply->words[1] = credential->group_count;
+	return 0;
+}
+
 static int credential_can_mutate(const struct user_credential *credential)
 {
 	return credential != 0 && credential->euid == 0;
@@ -756,6 +865,25 @@ static long credential_setgroups(u64 task, u64 group_count, u64 group0,
 	}
 
 	return credential_groups_set(credential, group_count, groups);
+}
+
+static long credential_setgroups_buffer(u64 task, u64 group_count, u64 buffer)
+{
+	struct user_credential *credential = credential_find(task);
+	u64 *groups = 0;
+	long result;
+
+	if (!credential_can_mutate(credential)) {
+		return -1;
+	}
+	if (groups_read_buffer(buffer, group_count, &groups) != 0) {
+		return -1;
+	}
+	result = credential_groups_set(credential, group_count, groups);
+	if (groups != 0) {
+		bunix_free(groups);
+	}
+	return result;
 }
 
 static long credential_has_group(u64 task, u64 gid, u64 *has_group)
@@ -1065,6 +1193,15 @@ int main(void)
 								   message.words[1],
 								   &reply);
 			break;
+		case BUNIX_USER_GETGROUPS_BUFFER:
+			reply.words[0] =
+				(message.cap_rights & BUNIX_RIGHT_SEND) != 0 ?
+				(u64)credential_getgroups_buffer(message.words[0],
+								 message.words[1],
+								 message.cap,
+								 &reply) :
+				(u64)-1;
+			break;
 		case BUNIX_USER_SETRESUID:
 			reply.words[0] = (u64)credential_setresuid(message.words[0],
 								   message.words[1],
@@ -1082,6 +1219,14 @@ int main(void)
 								   message.words[1],
 								   message.words[2],
 								   message.words[3]);
+			break;
+		case BUNIX_USER_SETGROUPS_BUFFER:
+			reply.words[0] =
+				(message.cap_rights & BUNIX_RIGHT_RECV) != 0 ?
+				(u64)credential_setgroups_buffer(message.words[0],
+								 message.words[1],
+								 message.cap) :
+				(u64)-1;
 			break;
 		case BUNIX_USER_HAS_GROUP:
 			reply.words[0] = (u64)credential_has_group(message.words[0],
@@ -1116,6 +1261,21 @@ int main(void)
 								  text_len(name),
 								  message.words[2],
 								  &reply);
+			break;
+		}
+		case BUNIX_USER_LOGIN_GROUPS_BUFFER: {
+			char name[USER_NAME_MAX];
+
+			unpack_text(name, sizeof(name), message.words[0],
+				    message.words[1]);
+			reply.words[0] =
+				(message.cap_rights & BUNIX_RIGHT_SEND) != 0 ?
+				(u64)login_groups_lookup_buffer(name,
+								text_len(name),
+								message.words[2],
+								message.cap,
+								&reply) :
+				(u64)-1;
 			break;
 		}
 		case BUNIX_USER_SESSION_BEGIN:

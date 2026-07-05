@@ -1613,6 +1613,32 @@ static long linux_user_groups(struct linux_process *process, u64 max_groups,
 	return (long)reply.words[1];
 }
 
+static long linux_user_groups_buffer(struct linux_process *process,
+				     u64 max_groups, u64 buffer)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_GETGROUPS_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = buffer,
+		.words = { 0, max_groups, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (process == 0 || linux_user_service() == 0) {
+		return -LINUX_ESRCH;
+	}
+
+	request.words[0] = process->bunix_task;
+	if (bunix_ipc_call(user_service, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_EINVAL;
+	}
+	return (long)reply.words[1];
+}
+
 static long linux_user_setres(struct linux_process *process, u64 type,
 			      u64 real, u64 effective, u64 saved)
 {
@@ -1655,6 +1681,31 @@ static long linux_user_setgroups(struct linux_process *process, u64 count,
 	if (count > 2) {
 		return -LINUX_EINVAL;
 	}
+	if (process == 0 || linux_user_service() == 0) {
+		return -LINUX_ESRCH;
+	}
+
+	request.words[0] = process->bunix_task;
+	if (bunix_ipc_call(user_service, &request, &reply) != 0) {
+		return -LINUX_EINVAL;
+	}
+	return reply.words[0] == 0 ? 0 : -LINUX_EPERM;
+}
+
+static long linux_user_setgroups_buffer(struct linux_process *process,
+					u64 count, u64 buffer)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_SETGROUPS_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = buffer,
+		.words = { 0, count, 0, 0 },
+	};
+	struct bunix_msg reply;
+
 	if (process == 0 || linux_user_service() == 0) {
 		return -LINUX_ESRCH;
 	}
@@ -3605,10 +3656,18 @@ int main(void)
 								    message.type);
 			break;
 		case BUNIX_LINUX_GETGROUPS:
-			reply.words[0] = (u64)linux_user_groups(process,
-								message.words[0],
-								&reply.words[1],
-								&reply.words[2]);
+			if (message.cap != 0) {
+				reply.words[0] =
+					(u64)linux_user_groups_buffer(process,
+								      message.words[0],
+								      message.cap);
+			} else {
+				reply.words[0] =
+					(u64)linux_user_groups(process,
+							       message.words[0],
+							       &reply.words[1],
+							       &reply.words[2]);
+			}
 			break;
 		case BUNIX_LINUX_SETUID:
 			reply.words[0] = (u64)linux_user_setres(process,
@@ -3639,10 +3698,18 @@ int main(void)
 								message.words[2]);
 			break;
 		case BUNIX_LINUX_SETGROUPS:
-			reply.words[0] = (u64)linux_user_setgroups(process,
-								   message.words[0],
-								   message.words[1],
-								   message.words[2]);
+			if (message.cap != 0) {
+				reply.words[0] =
+					(u64)linux_user_setgroups_buffer(process,
+									 message.words[0],
+									 message.cap);
+			} else {
+				reply.words[0] =
+					(u64)linux_user_setgroups(process,
+								  message.words[0],
+								  message.words[1],
+								  message.words[2]);
+			}
 			break;
 		case BUNIX_LINUX_REBOOT:
 			reply.words[0] = 0;
