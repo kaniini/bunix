@@ -118,6 +118,26 @@ static void pack_path(u64 *words, const char *path)
 	}
 }
 
+static long tmpfs_mount_root(u64 tmpfs, const char *path)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_TMPFS,
+		.type = BUNIX_TMPFS_MOUNT_ROOT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	pack_path(&request.words[0], path);
+	if (bunix_ipc_call(tmpfs, &request, &reply) != 0) {
+		return -1;
+	}
+	return reply.words[0] == 0 ? 0 : -1;
+}
+
 static void sleep_ns(u64 time, u64 ns)
 {
 	struct bunix_msg request = {
@@ -246,9 +266,25 @@ int main(void)
 	}
 	bunix_launch_module_with_caps("tmpfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
-	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_TMPFS,
-				      BUNIX_RIGHT_SEND) == 0) {
-		return 1;
+	{
+		const char *tmpfs_roots[] = {
+			"/tmp",
+			"/run",
+			"/var/tmp",
+		};
+		u64 tmpfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						      BUNIX_SERVICE_TMPFS,
+						      BUNIX_RIGHT_SEND);
+
+		if (tmpfs == 0) {
+			return 1;
+		}
+		for (u64 i = 0; i < sizeof(tmpfs_roots) /
+		     sizeof(tmpfs_roots[0]); i++) {
+			if (tmpfs_mount_root(tmpfs, tmpfs_roots[i]) != 0) {
+				return 1;
+			}
+		}
 	}
 	bunix_launch_module_with_caps("devfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
