@@ -126,21 +126,154 @@ sleep 3
 exec 3>"$pipe.in"
 login_user kaniini bunix "~ $ "
 
-printf 'uptime\nbusybox uptime\nbusybox uname\nbusybox uname -r\nbusybox stty -a\nbusybox id\nenv\n/usr/bin/env >/dev/null && echo USR_ENV_OK\nbusybox test -x /bin/sh && echo ACCESS_X_OK\nbusybox test -r /hello.txt && echo ACCESS_R_OK\nbusybox test ! -r /secret.txt && echo ACCESS_DENY_OK\ncd ~\npwd\ncd /\nbusybox kill -0 $$ && echo KILL_ZERO_OK\nbusybox kill -0 -$$ && echo KILL_PGRP_OK\ntrap "" INT\nbusybox kill -INT $$\necho SIGINT_IGNORE_OK\ntrap - INT\nbusybox sleep 1 && echo BUSYBOX_SLEEP_OK\nsleep 1 && echo DIRECT_SLEEP_OK\nbusybox sleep 5\n\003echo SLEEP_CTRL_C_OK\nbusybox echo PIPE_OK | busybox cat\nbusybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK\nbusybox cat /usr/share/bunix/nested/hello.txt && echo NESTED_CAT_OK\nbusybox cat /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/hello.txt && echo LONG_ROOTFS_PATH_OK\n/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/linux-execve-path-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/dyn-hello && echo LONG_EXEC_PATH_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_OK\nbusybox echo BUSYBOX_ARGV_OK\n' >&3
-printf 'busybox sh -c "test \"\\$13\" = m && echo BUSYBOX_MANY_ARGV_OK" _ a b c d e f g h i j k l m\nBUNIX_LONG_ENV=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 busybox sh -c "test \"\\$BUNIX_LONG_ENV\" = abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 && echo BUSYBOX_LONG_ENV_OK"\n' >&3
-printf 'set --\ni=1\nwhile [ "$i" -le 300 ]; do set -- "$@" "x$i"; i=$((i + 1)); done\nbusybox sh -c '"'"'test "$300" = x300 && echo BUSYBOX_ARGV300_OK'"'"' _ "$@"\ni=1\nwhile [ "$i" -le 300 ]; do eval "BUNIX_EXEC_ENV_$i=x$i; export BUNIX_EXEC_ENV_$i"; i=$((i + 1)); done\nbusybox sh -c '"'"'test "$BUNIX_EXEC_ENV_300" = x300 && echo BUSYBOX_ENV300_OK'"'"'\n' >&3
-printf 'busybox stat /hello.txt\nbusybox stat /usr/share\nbusybox stat /tmp\nbusybox stat /run\nbusybox stat /var/tmp\nbusybox stat /usr/bin/env\nbusybox ls /\nbusybox ls /bin\nbusybox readlink /bin/cat && echo SYMLINK_READLINK_OK\nbusybox readlink /usr/share/bunix/long-target-link | busybox grep "/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/hello.txt" && echo LONG_SYMLINK_READLINK_OK\nbusybox ls -l /bin/cat && echo SYMLINK_LS_OK\nbusybox ls /usr/share/bunix/nested\nbusybox stat /bin\ncd /tmp\npwd\ncd /usr/share/bunix/nested\npwd\nbusybox ls .\nbusybox cat ../nested/./hello.txt && echo VFS_DOTDOT_OK\ncd /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components\ntest "$(pwd)" = "/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components" && echo LONG_GETCWD_OK\ncd /\nbusybox cat //usr///share/bunix/nested/hello.txt && echo VFS_SLASH_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_STILL_OK\nbusybox cat /proc/self/status && echo PROC_STATUS_OK\nbusybox ls /proc/self/fd && echo PROC_FD_OK\nbusybox readlink /proc/self/exe && echo PROC_EXE_OK\nbusybox cat /proc/stat && echo PROC_STAT_OK\nbusybox cat /proc/ipc && echo PROC_IPC_OK\nbusybox cat /proc/filesystems && echo PROC_FILESYSTEMS_OK\nbusybox cat /proc/cpuinfo && echo PROC_CPUINFO_OK\nbusybox cat /proc/self/cmdline && echo PROC_CMDLINE_OK\nbusybox stat /dev/zero && echo DEV_ZERO_STAT_OK\nbusybox stat /dev/urandom && echo DEV_URANDOM_STAT_OK\nbusybox test -r /dev/zero && echo DEV_ZERO_ACCESS_OK\nbusybox head -c 4 /dev/zero >/dev/null && echo DEV_ZERO_READ_OK\nbusybox head -c 4 /dev/urandom >/dev/null && echo DEV_URANDOM_READ_OK\necho TMP_WRITE_OK > /tmp/bunix-write.txt\nbusybox sh -c "set -C; echo TMP_EXCL_BAD > /tmp/bunix-write.txt" || echo TMP_EXCL_DENY_OK\nbusybox cat /tmp/bunix-write.txt | busybox grep TMP_WRITE_OK && echo TMP_EXCL_PRESERVE_OK\nbusybox cat /tmp/bunix-write.txt && echo TMP_CAT_OK\nbusybox stat /tmp/bunix-write.txt && echo TMP_STAT_OK\necho TMP_APPEND_ONE > /tmp/bunix-append.txt\necho TMP_APPEND_TWO >> /tmp/bunix-append.txt\nbusybox cat /tmp/bunix-append.txt && echo TMP_APPEND_CAT_OK\nbusybox sh -c "echo RUN_WRITE_OK > /run/bunix-run.txt"\nbusybox cat /run/bunix-run.txt && echo RUN_CAT_OK\necho TRUNCATE_PAYLOAD > /tmp/bunix-trunc.txt\nbusybox truncate -s 4 /tmp/bunix-trunc.txt && echo TRUNCATE_OK\nbusybox cat /tmp/bunix-trunc.txt && echo TRUNCATE_CAT_OK\nbusybox rm /tmp/bunix-trunc.txt && echo UNLINK_OK\nbusybox test ! -e /tmp/bunix-trunc.txt && echo UNLINK_GONE_OK\n/bin/getdentstest && echo GETDENTS64_OK\n/bin/vforkstress && echo VFORKSTRESS_OK\nbusybox test ! -e /lib/ld.so && echo MUSL_LDSO_CANONICAL_OK\n/bin/dyn-hello && echo DYN_HELLO_OK\nbusybox top -b -n 1 >/dev/null && echo PROC_TOP_OK\nbusybox ps && echo PROC_PS_OK\nbusybox free && echo PROC_FREE_OK\nbusybox mount && echo PROC_MOUNT_OK\n' >&3
-printf '/bin/iovtest && echo IOVTEST_OK\n/bin/fchmodattest\n/bin/waitpgidtest\n/bin/execlongtest\n/bin/auxidtest\n/bin/fcntllocktest\n' >&3
-printf 'busybox mkdir -p /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_EXISTING_ROOT_OK\nbusybox test -d /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_NESTED_OK\nbusybox mkdir /tmp || echo TMP_MKDIR_EXISTING_ROOT_DENY_OK\nbusybox mkdir -p /union-mkdir-p/a/b && echo UNION_MKDIR_P_ROOT_OK\nbusybox test -d /union-mkdir-p/a/b && echo UNION_MKDIR_P_CHILD_OK\nbusybox mkdir /usr || echo UNION_MKDIR_EXISTING_LOWER_DENY_OK\n' >&3
-printf 'busybox grep "PPid:\t1" /proc/$$/status && echo PROC_SHELL_PPID_OK\n' >&3
-printf '/bin/cat /proc/self/cmdline | busybox grep -a /bin/cat && echo PROC_SELF_CMDLINE_CALLER_OK\n' >&3
-printf 'busybox sh -c '"'"'/bin/cat /proc/$$/cmdline | busybox grep -a PROC_ARGV_SENTINEL && echo PROC_ARGV_CMDLINE_OK'"'"' PROC_ARGV_SENTINEL\n' >&3
-printf 'busybox test -c /dev/null && echo DEV_NULL_CHAR_OK\nbusybox test -c /dev/zero && echo DEV_ZERO_CHAR_OK\nbusybox test -c /dev/console && echo DEV_CONSOLE_CHAR_OK\n' >&3
-printf '/bin/execbig && echo EXECBIG_OK\n' >&3
-printf 'busybox sh -c '"'"'i=0; while [ "$i" -lt 300 ]; do printf a; i=$((i + 1)); done; echo DEV_CONSOLE_BIG_END'"'"' > /dev/console && echo DEV_CONSOLE_BIG_WRITE_OK\n' >&3
-printf 'LONG_TMP=/tmp/bunix-pathmax2\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-cccccccccccccccccccccccccccccccc\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-dddddddddddddddddddddddddddddddd\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-ffffffffffffffffffffffffffffffff\nbusybox mkdir "$LONG_TMP" && echo PATHMAX2_TMP_MKDIR_OK\necho PATHMAX2_TMP_PAYLOAD > "$LONG_TMP/file.txt"\nbusybox cat "$LONG_TMP/file.txt" && echo PATHMAX2_TMP_FILE_OK\ncd "$LONG_TMP" && echo PATHMAX2_TMP_CHDIR_OK\npwd\ncd /\n/bin/pathmaxtest\n' >&3
+send_script <<'EOF_USER_SMOKE'
+uptime
+busybox uptime
+busybox uname
+busybox uname -r
+busybox stty -a
+busybox id
+env
+/usr/bin/env >/dev/null && echo USR_ENV_OK
+busybox test -x /bin/sh && echo ACCESS_X_OK
+busybox test -r /hello.txt && echo ACCESS_R_OK
+busybox test ! -r /secret.txt && echo ACCESS_DENY_OK
+cd ~
+pwd
+cd /
+busybox kill -0 $$ && echo KILL_ZERO_OK
+busybox kill -0 -$$ && echo KILL_PGRP_OK
+trap "" INT
+busybox kill -INT $$
+echo SIGINT_IGNORE_OK
+trap - INT
+busybox sleep 1 && echo BUSYBOX_SLEEP_OK
+sleep 1 && echo DIRECT_SLEEP_OK
+busybox sleep 5
+EOF_USER_SMOKE
+send_bytes '\003echo SLEEP_CTRL_C_OK\n'
+send_script <<'EOF_USER_SMOKE'
+busybox echo PIPE_OK | busybox cat
+busybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK
+busybox cat /usr/share/bunix/nested/hello.txt && echo NESTED_CAT_OK
+busybox cat /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/hello.txt && echo LONG_ROOTFS_PATH_OK
+/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/linux-execve-path-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/dyn-hello && echo LONG_EXEC_PATH_OK
+busybox cat /proc/kthreads >/dev/null && echo PROCFS_OK
+busybox echo BUSYBOX_ARGV_OK
+busybox sh -c "test \"\$13\" = m && echo BUSYBOX_MANY_ARGV_OK" _ a b c d e f g h i j k l m
+BUNIX_LONG_ENV=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 busybox sh -c "test \"\$BUNIX_LONG_ENV\" = abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 && echo BUSYBOX_LONG_ENV_OK"
+set --
+i=1
+while [ "$i" -le 300 ]; do set -- "$@" "x$i"; i=$((i + 1)); done
+busybox sh -c 'test "$300" = x300 && echo BUSYBOX_ARGV300_OK' _ "$@"
+i=1
+while [ "$i" -le 300 ]; do eval "BUNIX_EXEC_ENV_$i=x$i; export BUNIX_EXEC_ENV_$i"; i=$((i + 1)); done
+busybox sh -c 'test "$BUNIX_EXEC_ENV_300" = x300 && echo BUSYBOX_ENV300_OK'
+busybox stat /hello.txt
+busybox stat /usr/share
+busybox stat /tmp
+busybox stat /run
+busybox stat /var/tmp
+busybox stat /usr/bin/env
+busybox ls /
+busybox ls /bin
+busybox readlink /bin/cat && echo SYMLINK_READLINK_OK
+busybox readlink /usr/share/bunix/long-target-link | busybox grep "/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/hello.txt" && echo LONG_SYMLINK_READLINK_OK
+busybox ls -l /bin/cat && echo SYMLINK_LS_OK
+busybox ls /usr/share/bunix/nested
+busybox stat /bin
+cd /tmp
+pwd
+cd /usr/share/bunix/nested
+pwd
+busybox ls .
+busybox cat ../nested/./hello.txt && echo VFS_DOTDOT_OK
+cd /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components
+test "$(pwd)" = "/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components" && echo LONG_GETCWD_OK
+cd /
+busybox cat //usr///share/bunix/nested/hello.txt && echo VFS_SLASH_OK
+busybox cat /proc/kthreads >/dev/null && echo PROCFS_STILL_OK
+busybox cat /proc/self/status && echo PROC_STATUS_OK
+busybox ls /proc/self/fd && echo PROC_FD_OK
+busybox readlink /proc/self/exe && echo PROC_EXE_OK
+busybox cat /proc/stat && echo PROC_STAT_OK
+busybox cat /proc/ipc && echo PROC_IPC_OK
+busybox cat /proc/filesystems && echo PROC_FILESYSTEMS_OK
+busybox cat /proc/cpuinfo && echo PROC_CPUINFO_OK
+busybox cat /proc/self/cmdline && echo PROC_CMDLINE_OK
+busybox stat /dev/zero && echo DEV_ZERO_STAT_OK
+busybox stat /dev/urandom && echo DEV_URANDOM_STAT_OK
+busybox test -r /dev/zero && echo DEV_ZERO_ACCESS_OK
+busybox head -c 4 /dev/zero >/dev/null && echo DEV_ZERO_READ_OK
+busybox head -c 4 /dev/urandom >/dev/null && echo DEV_URANDOM_READ_OK
+echo TMP_WRITE_OK > /tmp/bunix-write.txt
+busybox sh -c "set -C; echo TMP_EXCL_BAD > /tmp/bunix-write.txt" || echo TMP_EXCL_DENY_OK
+busybox cat /tmp/bunix-write.txt | busybox grep TMP_WRITE_OK && echo TMP_EXCL_PRESERVE_OK
+busybox cat /tmp/bunix-write.txt && echo TMP_CAT_OK
+busybox stat /tmp/bunix-write.txt && echo TMP_STAT_OK
+echo TMP_APPEND_ONE > /tmp/bunix-append.txt
+echo TMP_APPEND_TWO >> /tmp/bunix-append.txt
+busybox cat /tmp/bunix-append.txt && echo TMP_APPEND_CAT_OK
+busybox sh -c "echo RUN_WRITE_OK > /run/bunix-run.txt"
+busybox cat /run/bunix-run.txt && echo RUN_CAT_OK
+echo TRUNCATE_PAYLOAD > /tmp/bunix-trunc.txt
+busybox truncate -s 4 /tmp/bunix-trunc.txt && echo TRUNCATE_OK
+busybox cat /tmp/bunix-trunc.txt && echo TRUNCATE_CAT_OK
+busybox rm /tmp/bunix-trunc.txt && echo UNLINK_OK
+busybox test ! -e /tmp/bunix-trunc.txt && echo UNLINK_GONE_OK
+/bin/getdentstest && echo GETDENTS64_OK
+/bin/vforkstress && echo VFORKSTRESS_OK
+busybox test ! -e /lib/ld.so && echo MUSL_LDSO_CANONICAL_OK
+/bin/dyn-hello && echo DYN_HELLO_OK
+busybox top -b -n 1 >/dev/null && echo PROC_TOP_OK
+busybox ps && echo PROC_PS_OK
+busybox free && echo PROC_FREE_OK
+busybox mount && echo PROC_MOUNT_OK
+/bin/iovtest && echo IOVTEST_OK
+/bin/fchmodattest
+/bin/waitpgidtest
+/bin/execlongtest
+/bin/auxidtest
+/bin/fcntllocktest
+busybox mkdir -p /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_EXISTING_ROOT_OK
+busybox test -d /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_NESTED_OK
+busybox mkdir /tmp || echo TMP_MKDIR_EXISTING_ROOT_DENY_OK
+busybox mkdir -p /union-mkdir-p/a/b && echo UNION_MKDIR_P_ROOT_OK
+busybox test -d /union-mkdir-p/a/b && echo UNION_MKDIR_P_CHILD_OK
+busybox mkdir /usr || echo UNION_MKDIR_EXISTING_LOWER_DENY_OK
+busybox grep "PPid:	1" /proc/$$/status && echo PROC_SHELL_PPID_OK
+/bin/cat /proc/self/cmdline | busybox grep -a /bin/cat && echo PROC_SELF_CMDLINE_CALLER_OK
+busybox sh -c '/bin/cat /proc/$$/cmdline | busybox grep -a PROC_ARGV_SENTINEL && echo PROC_ARGV_CMDLINE_OK' PROC_ARGV_SENTINEL
+busybox test -c /dev/null && echo DEV_NULL_CHAR_OK
+busybox test -c /dev/zero && echo DEV_ZERO_CHAR_OK
+busybox test -c /dev/console && echo DEV_CONSOLE_CHAR_OK
+/bin/execbig && echo EXECBIG_OK
+busybox sh -c 'i=0; while [ "$i" -lt 300 ]; do printf a; i=$((i + 1)); done; echo DEV_CONSOLE_BIG_END' > /dev/console && echo DEV_CONSOLE_BIG_WRITE_OK
+LONG_TMP=/tmp/bunix-pathmax2
+busybox mkdir "$LONG_TMP"
+LONG_TMP=$LONG_TMP/segment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+busybox mkdir "$LONG_TMP"
+LONG_TMP=$LONG_TMP/segment-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+busybox mkdir "$LONG_TMP"
+LONG_TMP=$LONG_TMP/segment-cccccccccccccccccccccccccccccccc
+busybox mkdir "$LONG_TMP"
+LONG_TMP=$LONG_TMP/segment-dddddddddddddddddddddddddddddddd
+busybox mkdir "$LONG_TMP"
+LONG_TMP=$LONG_TMP/segment-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+busybox mkdir "$LONG_TMP"
+LONG_TMP=$LONG_TMP/segment-ffffffffffffffffffffffffffffffff
+busybox mkdir "$LONG_TMP" && echo PATHMAX2_TMP_MKDIR_OK
+echo PATHMAX2_TMP_PAYLOAD > "$LONG_TMP/file.txt"
+busybox cat "$LONG_TMP/file.txt" && echo PATHMAX2_TMP_FILE_OK
+cd "$LONG_TMP" && echo PATHMAX2_TMP_CHDIR_OK
+pwd
+cd /
+/bin/pathmaxtest
+EOF_USER_SMOKE
 wait_for_fixed "$log" "linux pathmax ok" "linux pathmax regression failed" 75 220
-printf 'busybox df / /tmp /proc >/dev/null && echo STATFS_DF_OK\n' >&3
+send_script <<'EOF_USER_SMOKE'
+busybox df / /tmp /proc >/dev/null && echo STATFS_DF_OK
+EOF_USER_SMOKE
 printf 'busybox cat /hello.txt && echo UNION_ROOT_LOWER_OK\nbusybox mv /rename-lower.txt /rename-upper.txt && echo UNION_LOWER_RENAME_CREATE_OK\nbusybox cat /rename-upper.txt | busybox grep "nested rootfs file" && echo UNION_LOWER_RENAME_READ_OK\nbusybox test ! -e /rename-lower.txt && echo UNION_LOWER_RENAME_OLD_GONE_OK\nbusybox test -e /.upper/rename-upper.txt && echo UNION_LOWER_RENAME_UPPER_OK\n' >&3
 wait_for_fixed "$log" "UNION_LOWER_RENAME_UPPER_OK" "unionfs lower rename commands did not drain" 45 220
 printf 'busybox ln /hello.txt /hello-hard.txt && echo UNION_LOWER_HARDLINK_CREATE_OK\nbusybox cat /hello-hard.txt | busybox grep "rootfs: module" && echo UNION_LOWER_HARDLINK_READ_OK\nbusybox test -e /.upper/hello.txt && busybox test -e /.upper/hello-hard.txt && echo UNION_LOWER_HARDLINK_COPYUP_OK\necho UNION_ROOT_BASE_PAYLOAD > /created.txt\necho UNION_ROOT_APPEND_PAYLOAD >> /created.txt\nbusybox cat /created.txt && echo UNION_ROOT_APPEND_CAT_OK\nbusybox cat /.upper/created.txt && echo UNION_ROOT_UPPER_BACKING_OK\nUNION_LONG_NAME=bunix-union-root-name-longer-than-sixteen.txt\necho UNION_ROOT_LONG_PAYLOAD > "/$UNION_LONG_NAME"\nbusybox ls / | busybox grep "$UNION_LONG_NAME" && echo UNION_ROOT_LONG_READDIR_OK\nbusybox cat "/$UNION_LONG_NAME" && echo UNION_ROOT_LONG_CAT_OK\nUNION_NAME_MAX=bunix-union-name-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt\necho UNION_NAME_MAX_PAYLOAD > "/$UNION_NAME_MAX"\nbusybox ls / | busybox grep "$UNION_NAME_MAX" && echo UNION_NAME_MAX_READDIR_OK\nbusybox cat "/$UNION_NAME_MAX" && echo UNION_NAME_MAX_CAT_OK\nbusybox ls / | busybox grep created.txt && echo UNION_ROOT_READDIR_UPPER_OK\nbusybox ls / | busybox grep secret.txt && echo UNION_ROOT_READDIR_LOWER_OK\nbusybox rm /created.txt && echo UNION_ROOT_UNLINK_UPPER_OK\nbusybox test ! -e /created.txt && echo UNION_ROOT_UNLINK_UPPER_GONE_OK\nbusybox cat /hello.txt && echo UNION_ROOT_LOWER_STILL_OK\n' >&3
