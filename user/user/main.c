@@ -156,6 +156,18 @@ static int str_eq_len(const char *left, u64 left_len,
 	return 1;
 }
 
+static void pack_text(u64 *words, const char *text)
+{
+	words[0] = 0;
+	words[1] = 0;
+	for (u64 i = 0; i < 16 && text[i] != '\0'; i++) {
+		const u64 slot = i / 8;
+		const u64 shift = (i % 8) * 8;
+
+		words[slot] |= ((u64)(unsigned char)text[i]) << shift;
+	}
+}
+
 static u64 parse_uint(const char *text, u64 len, u64 *cursor)
 {
 	u64 value = 0;
@@ -296,6 +308,51 @@ static long account_lookup_uid(u64 uid, struct user_account *account)
 			(void)name_end;
 			account->uid = uid;
 			account->found = 1;
+			return 0;
+		}
+	}
+
+	return -1;
+}
+
+static long account_name_for_uid(u64 uid, struct bunix_msg *reply)
+{
+	u64 len = 0;
+
+	if (reply == 0 ||
+	    read_account_file("/etc/passwd", account_buffer,
+			      sizeof(account_buffer), &len) != 0) {
+		return -1;
+	}
+
+	for (u64 cursor = 0; cursor < len;) {
+		const u64 line = cursor;
+		const u64 name_end = field_end(account_buffer, len, cursor, ':');
+		u64 field;
+		u64 parsed_uid;
+
+		cursor = name_end;
+		if (cursor >= len || account_buffer[cursor] != ':') {
+			cursor = field_end(account_buffer, len, line, '\n') + 1;
+			continue;
+		}
+		cursor++;
+		field = field_end(account_buffer, len, cursor, ':');
+		cursor = field < len ? field + 1 : field;
+		parsed_uid = parse_uint(account_buffer, len, &cursor);
+		cursor = field_end(account_buffer, len, cursor, '\n') + 1;
+
+		if (parsed_uid == uid && name_end > line) {
+			char name[USER_NAME_MAX];
+			u64 out = 0;
+
+			while (line + out < name_end &&
+			       out + 1 < sizeof(name)) {
+				name[out] = account_buffer[line + out];
+				out++;
+			}
+			name[out] = '\0';
+			pack_text(&reply->words[1], name);
 			return 0;
 		}
 	}
@@ -998,6 +1055,10 @@ int main(void)
 		case BUNIX_USER_SESSION_AT:
 			reply.words[0] = (u64)session_at(message.words[0],
 							 &reply);
+			break;
+		case BUNIX_USER_NAME_FOR_UID:
+			reply.words[0] = (u64)account_name_for_uid(message.words[0],
+								   &reply);
 			break;
 		default:
 			reply.words[0] = (u64)-1;

@@ -393,6 +393,42 @@ static long linux_user_session_at(u64 index, u64 *session_id, u64 *uid,
 	return 0;
 }
 
+static long linux_user_name_for_uid(u64 uid, char *name, u64 name_len)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_NAME_FOR_UID,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { uid, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = linux_user_service();
+
+	if (name == 0 || name_len == 0) {
+		return -LINUX_EINVAL;
+	}
+	name[0] = '\0';
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_ESRCH;
+	}
+	for (u64 i = 0; i + 1 < name_len && i < 16; i++) {
+		const u64 word = i < 8 ? reply.words[1] : reply.words[2];
+		const u64 shift = (i % 8) * 8;
+
+		name[i] = (char)((word >> shift) & 0xff);
+		if (name[i] == '\0') {
+			return 0;
+		}
+	}
+	name[name_len - 1] = '\0';
+	return 0;
+}
+
 static void linux_process_init_links(struct linux_process *process)
 {
 	process->parent = 0;
@@ -681,35 +717,29 @@ static void copy_literal(char *dst, u64 dst_len, const char *src)
 	}
 }
 
-static const char *user_name_for_uid(u64 uid)
-{
-	if (uid == 0) {
-		return "root";
-	}
-	if (uid == 1000) {
-		return "kaniini";
-	}
-	return "user";
-}
-
 static void build_utmp_record(char *record, u64 index)
 {
 	u64 session_id = 0;
 	u64 uid = 0;
 	u64 tty = 0;
 	u64 foreground = 0;
+	char user_name[16];
 
 	zero_bytes(record, LINUX_UTMP_RECORD_SIZE);
 	if (linux_user_session_at(index, &session_id, &uid,
 				  &tty, &foreground) != 0) {
 		return;
 	}
+	if (linux_user_name_for_uid(uid, user_name, sizeof(user_name)) != 0 ||
+	    user_name[0] == '\0') {
+		copy_literal(user_name, sizeof(user_name), "user");
+	}
 
 	store_u16(record, 0, LINUX_UTMP_USER_PROCESS);
 	store_u32(record, 4, (unsigned int)foreground);
 	copy_literal(record + 8, 32, tty == 1 ? "ttyS0" : "tty");
 	copy_literal(record + 40, 4, tty == 1 ? "S0" : "tt");
-	copy_literal(record + 44, 32, user_name_for_uid(uid));
+	copy_literal(record + 44, 32, user_name);
 	store_u32(record, 336, (unsigned int)session_id);
 }
 
