@@ -129,6 +129,29 @@ static long read_generated_device(u64 device, u64 buffer, u64 len)
 	return 0;
 }
 
+static long write_console_device(u64 buffer, u64 len)
+{
+	char data[256];
+	u64 done = 0;
+
+	if (buffer == 0) {
+		return -1;
+	}
+	while (done < len) {
+		u64 chunk = len - done;
+
+		if (chunk > sizeof(data)) {
+			chunk = sizeof(data);
+		}
+		if (bunix_buffer_read(buffer, done, data, chunk) != 0) {
+			return -1;
+		}
+		bunix_console_write(data, chunk);
+		done += chunk;
+	}
+	return 0;
+}
+
 static u64 mount_devfs(u64 vfs, const char *path)
 {
 	struct bunix_msg reply;
@@ -311,14 +334,11 @@ int main(void)
 			if ((device == DEVFS_TTY || device == DEVFS_CONSOLE) &&
 			    reply.words[0] == 0 &&
 			    message.cap != 0 &&
-			    (message.cap_rights & BUNIX_RIGHT_RECV) != 0 &&
-			    message.words[2] <= 256) {
-				char data[256];
-
-				if (bunix_buffer_read(message.cap, 0, data,
-						      message.words[2]) == 0) {
-					bunix_console_write(data, message.words[2]);
-				}
+			    (message.cap_rights & BUNIX_RIGHT_RECV) != 0) {
+				reply.words[0] =
+					write_console_device(message.cap,
+							     message.words[2]) == 0 ?
+					0 : (u64)-1;
 			}
 			reply.words[1] = reply.words[0] == 0 ? message.words[2] : 0;
 			break;

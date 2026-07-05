@@ -1473,6 +1473,47 @@ static u64 linux_read_chunked(struct ipc_port *linux,
 	return total;
 }
 
+static u64 linux_getrandom_chunked(struct ipc_port *linux,
+				   struct ipc_port *reply_port,
+				   u64 user_buffer, u64 len)
+{
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = LINUX_SYSCALL_GETRANDOM,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = 0,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	u64 total = 0;
+
+	if (user_buffer == 0 && len != 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	while (total < len) {
+		const u64 chunk = min_u64(len - total,
+					  LINUX_MAX_SYSCALL_BUFFER);
+		const u64 nread = linux_forward_output_words(
+			linux, reply_port, &request, LINUX_SYSCALL_GETRANDOM,
+			(void *)(user_buffer + total), chunk,
+			TASK_RIGHT_SEND, 0, 0, 0);
+
+		if ((i64)nread < 0) {
+			return total != 0 ? total : nread;
+		}
+		if (nread == 0) {
+			return total;
+		}
+		total += nread;
+		if (nread != chunk) {
+			return total;
+		}
+	}
+	return total;
+}
+
 static struct shared_buffer *linux_path_buffer_from_user(const char *path,
 							 u64 min_size,
 							 u64 *path_len,
@@ -1667,10 +1708,24 @@ static u64 linux_forward_output_buffer(struct ipc_port *linux,
 		buffer_release(buffer);
 		return (u64)-LINUX_ENOSYS;
 	}
-	if ((i64)reply.words[0] > 0 &&
-	    buffer_read(buffer, 0, user_out, reply.words[0]) != 0) {
-		buffer_release(buffer);
-		return (u64)-LINUX_EFAULT;
+	if ((i64)reply.words[0] > 0) {
+		u64 flags;
+
+		if (reply.words[0] > size ||
+		    reply.words[0] > LINUX_MAX_SYSCALL_BUFFER) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
+		flags = spin_lock_irqsave(&syscall_copy_lock);
+		if (buffer_read(buffer, 0, syscall_copy_buffer,
+				reply.words[0]) != 0 ||
+		    write_current_user((u64)user_out, syscall_copy_buffer,
+				       reply.words[0]) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
 	}
 	buffer_release(buffer);
 	return reply.words[0];
@@ -1719,11 +1774,23 @@ static u64 linux_forward_fixed_output_buffer(struct ipc_port *linux,
 		return (u64)-LINUX_ENOSYS;
 	}
 	result = reply.words[0];
-	if (((copy_on_zero && result == 0) ||
-	     (copy_on_positive && (i64)result > 0)) &&
-	    buffer_read(buffer, 0, user_out, size) != 0) {
-		buffer_release(buffer);
-		return (u64)-LINUX_EFAULT;
+	if ((copy_on_zero && result == 0) ||
+	    (copy_on_positive && (i64)result > 0)) {
+		u64 flags;
+
+		if (size > LINUX_MAX_SYSCALL_BUFFER) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
+		flags = spin_lock_irqsave(&syscall_copy_lock);
+		if (buffer_read(buffer, 0, syscall_copy_buffer, size) != 0 ||
+		    write_current_user((u64)user_out, syscall_copy_buffer,
+				       size) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
+		spin_unlock_irqrestore(&syscall_copy_lock, flags);
 	}
 	buffer_release(buffer);
 	return result;
@@ -3537,15 +3604,7 @@ poll_again:
 						  arg0, arg3, 0);
 	}
 	case LINUX_SYSCALL_GETRANDOM: {
-		if ((arg0 == 0 && arg1 != 0) ||
-		    arg1 > LINUX_MAX_SYSCALL_BUFFER) {
-			return arg0 == 0 ? (u64)-LINUX_EFAULT :
-			       (u64)-LINUX_EINVAL;
-		}
-		return linux_forward_output_words(linux, reply_port, &request,
-						  LINUX_SYSCALL_GETRANDOM,
-						  (void *)arg0, arg1,
-						  TASK_RIGHT_SEND, 0, 0, 0);
+		return linux_getrandom_chunked(linux, reply_port, arg0, arg1);
 	}
 	case LINUX_SYSCALL_SENDFILE:
 		return (u64)-LINUX_EINVAL;

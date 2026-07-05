@@ -6,6 +6,7 @@ enum {
 	LINUX_HANDLE_NAMES = 4,
 	LINUX_EPERM = 1,
 	LINUX_ENOENT = 2,
+	LINUX_EIO = 5,
 	LINUX_EBADF = 9,
 	LINUX_EAGAIN = 11,
 	LINUX_EACCES = 13,
@@ -18,6 +19,7 @@ enum {
 	LINUX_EMFILE = 24,
 	LINUX_ESPIPE = 29,
 	LINUX_EPIPE = 32,
+	LINUX_ERANGE = 34,
 	LINUX_ENAMETOOLONG = 36,
 	LINUX_ENOSYS = 38,
 	LINUX_EAFNOSUPPORT = 97,
@@ -1039,7 +1041,7 @@ static long linux_pipe_read_available(struct linux_pipe *pipe, u64 len,
 	pipe->start = (pipe->start + nread) % LINUX_PIPE_CAPACITY;
 	pipe->len -= nread;
 	if (bunix_buffer_write(buffer, 0, write_buffer, nread) != 0) {
-		return -LINUX_EINVAL;
+		return -LINUX_EFAULT;
 	}
 	return (long)nread;
 }
@@ -3248,6 +3250,7 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 {
 	char out[LINUX_MAX_WRITE];
 	u64 written = 0;
+	const u64 out_len = len > sizeof(out) ? sizeof(out) : len;
 	const long name_buffer = bunix_buffer_create(LINUX_MAX_PATH);
 
 	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
@@ -3262,14 +3265,14 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 		}
 		return -LINUX_ENOTDIR;
 	}
-	if (buffer == 0 || len > sizeof(out) || name_buffer <= 0) {
+	if (buffer == 0 || len == 0 || name_buffer <= 0) {
 		if (name_buffer > 0) {
 			bunix_handle_close((u64)name_buffer);
 		}
-		return -LINUX_EINVAL;
+		return buffer == 0 ? -LINUX_EFAULT : -LINUX_EINVAL;
 	}
 
-	while (written < len) {
+	while (written < out_len) {
 		char name[LINUX_MAX_PATH];
 		u64 type;
 		u64 next_offset;
@@ -3308,7 +3311,7 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 		}
 
 		reclen = linux_dirent_reclen(name);
-		if (written + reclen > len) {
+		if (written + reclen > out_len) {
 			break;
 		}
 		for (u64 i = 0; i < reclen; i++) {
@@ -3339,7 +3342,7 @@ static long linux_getcwd(struct linux_process *process, u64 size,
 	u64 words[2];
 
 	if (size < len) {
-		return -LINUX_EINVAL;
+		return -LINUX_ERANGE;
 	}
 	if (buffer != 0) {
 		if (bunix_buffer_write(buffer, 0, process->cwd, len) != 0) {
@@ -3575,9 +3578,11 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 
 	request.words[0] = process->fds[fd].handle;
 	request.words[1] = process->fds[fd].offset;
-	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		return -LINUX_EINVAL;
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
 	}
 
 	process->fds[fd].offset += reply.words[1];
@@ -3599,7 +3604,7 @@ static long linux_mmap_read(struct linux_process *process, u64 fd, u64 offset,
 	struct bunix_msg reply;
 
 	if (buffer == 0 || len > LINUX_MAX_WRITE) {
-		return -LINUX_EINVAL;
+		return buffer == 0 ? -LINUX_EFAULT : -LINUX_EINVAL;
 	}
 	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_FILE) {
@@ -3614,9 +3619,11 @@ static long linux_mmap_read(struct linux_process *process, u64 fd, u64 offset,
 
 	request.words[0] = process->fds[fd].handle;
 	request.words[2] = len;
-	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		return -LINUX_EINVAL;
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
 	}
 	return (long)reply.words[1];
 }
@@ -3990,15 +3997,23 @@ static long linux_getrandom(u64 len, u64 buffer)
 {
 	u64 done = 0;
 
-	if (buffer == 0 || len > LINUX_MAX_WRITE) {
-		return buffer == 0 ? -LINUX_EFAULT : -LINUX_EINVAL;
+	if (buffer == 0 && len != 0) {
+		return -LINUX_EFAULT;
 	}
 	while (done < len) {
-		write_buffer[done] = (char)(0xa5u ^ (unsigned char)done);
-		done++;
+		const u64 chunk = len - done > sizeof(write_buffer) ?
+				  sizeof(write_buffer) : len - done;
+
+		for (u64 i = 0; i < chunk; i++) {
+			write_buffer[i] = (char)(0xa5u ^
+						 (unsigned char)(done + i));
+		}
+		if (bunix_buffer_write(buffer, done, write_buffer, chunk) != 0) {
+			return done != 0 ? (long)done : (long)-LINUX_EFAULT;
+		}
+		done += chunk;
 	}
-	return bunix_buffer_write(buffer, 0, write_buffer, len) == 0 ?
-	       (long)len : (long)-LINUX_EFAULT;
+	return (long)len;
 }
 
 static long linux_clock_gettime(u64 buffer)

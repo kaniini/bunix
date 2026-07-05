@@ -21,6 +21,22 @@ _start:
 	cmpq $4096, %rax
 	jg close_fail
 
+	movq $318, %rax
+	leaq getrandom_buffer(%rip), %rdi
+	movq $70000, %rsi
+	xorq %rdx, %rdx
+	syscall
+	cmpq $70000, %rax
+	jne close_fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq getrandom_message(%rip), %rsi
+	movq $getrandom_message_end - getrandom_message, %rdx
+	syscall
+	cmpq $getrandom_message_end - getrandom_message, %rax
+	jne close_fail
+
 	movq $3, %rax
 	movq %r12, %rdi
 	syscall
@@ -64,6 +80,9 @@ root_path:
 ok_message:
 	.ascii "linux getdents64 checks ok\n"
 ok_message_end:
+getrandom_message:
+	.ascii "linux getrandom checks ok\n"
+getrandom_message_end:
 fail_message:
 	.ascii "linux getdents64 checks failed\n"
 fail_message_end:
@@ -71,3 +90,5 @@ fail_message_end:
 .section .bss, "aw"
 getdents_buffer:
 	.skip 8192
+getrandom_buffer:
+	.skip 70000
