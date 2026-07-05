@@ -4,7 +4,14 @@ The current exploration is: 001-testing-efficiency-refactoring.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.
+
 An exploration is considered complete when all tasks are completed.
+
+When an exploration is considered complete:
+ - Move the exploration from ./explorations/ to ./explorations/completed/.
+ - Move to the next unfinished exploration and update this file.
+
+The goal is considered achieved when no further explorations are completed.
 
 Update task list with needs.
 
