@@ -424,6 +424,37 @@ fork_child:
 	cmpq $openat_message_end - openat_message, %rax
 	jne fail
 
+	movq $257, %rax
+	movq $-100, %rdi
+	leaq root_path(%rip), %rsi
+	movq $00200000, %rdx
+	syscall
+	testq %rax, %rax
+	js fail
+	movq %rax, %r12
+
+	movq $217, %rax
+	movq %r12, %rdi
+	leaq getdents_buffer(%rip), %rsi
+	movq $8192, %rdx
+	syscall
+	testq %rax, %rax
+	jle fail
+
+	movq $3, %rax
+	movq %r12, %rdi
+	syscall
+	testq %rax, %rax
+	jne fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq getdents_message(%rip), %rsi
+	movq $getdents_message_end - getdents_message, %rdx
+	syscall
+	cmpq $getdents_message_end - getdents_message, %rax
+	jne fail
+
 	movl $2, group_buffer(%rip)
 	movl $3, group_buffer + 4(%rip)
 	movq $116, %rax
@@ -588,11 +619,16 @@ munmap_message_end:
 openat_message:
 	.ascii "linux openat dirfd checks ok\n"
 openat_message_end:
+getdents_message:
+	.ascii "linux getdents64 checks ok\n"
+getdents_message_end:
 fail_message:
 	.ascii "linux return checks failed\n"
 fail_message_end:
 hello_path:
 	.asciz "/hello.txt"
+root_path:
+	.asciz "/"
 nested_dir_path:
 	.asciz "/usr/share/bunix/nested"
 nested_leaf_path:
@@ -615,3 +651,5 @@ wait_status:
 	.skip 4
 group_buffer:
 	.skip 8
+getdents_buffer:
+	.skip 8192

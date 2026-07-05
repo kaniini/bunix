@@ -254,6 +254,10 @@ allocation, and `munmap` removes, trims, or splits VM region records. Linux
 `fork` is built on a saved syscall frame plus task VM region cloning.
 Page-table teardown now clears unmapped pages and returns their frames to the
 PMM; copy-on-write is still future work.
+Linux syscall forwarding uses bounded shared buffers internally. Large
+`write(2)` calls are chunked, and large `getdents64(2)` user buffers are
+handled as short directory reads instead of being rejected; `/bin/getdentstest`
+keeps that path covered by the shell regression.
 
 The kernel loads each module's `PT_LOAD` segments into private frames mapped in
 the target task's VM space, allocates private stack pages, enters ring 3 with

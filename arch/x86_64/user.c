@@ -3268,12 +3268,15 @@ poll_again:
 						  arg0, 0, 0);
 	}
 	case LINUX_SYSCALL_GETDENTS64: {
-		if (arg1 == 0 || arg2 == 0 || arg2 > LINUX_MAX_SYSCALL_BUFFER) {
+		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
+				LINUX_MAX_SYSCALL_BUFFER : arg2;
+
+		if (arg1 == 0 || arg2 == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
 		return linux_forward_output_words(linux, reply_port, &request,
 						  LINUX_SYSCALL_GETDENTS64,
-						  (void *)arg1, arg2,
+						  (void *)arg1, len,
 						  TASK_RIGHT_SEND, arg0, 0, 0);
 	}
 	case LINUX_SYSCALL_WRITE: {
