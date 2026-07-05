@@ -99,7 +99,7 @@ create_next:
 	leaq large_getdents_buffer(%rip), %rsi
 	movq $131072, %rdx
 	syscall
-	cmpq $65536, %rax
+	testq %rax, %rax
 	jle close_fail
 
 	movq $3, %rax
@@ -167,7 +167,7 @@ fail_message_end:
 
 .section .data, "aw"
 create_path:
-	.ascii "/tmp/getdents-large/gd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-"
+	.ascii "/tmp/getdents-large/gd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-"
 create_digits:
 	.asciz "0000"
 

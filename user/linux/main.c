@@ -271,6 +271,7 @@ static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
 static u64 string_len(const char *text);
+static long linux_check_name_max(const char *path);
 static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
 				u64 path_cap);
 static long alloc_fd(struct linux_process *process, u64 kind, u64 handle,
@@ -814,6 +815,26 @@ static int linux_process_set_cwd(struct linux_process *process,
 	return 0;
 }
 
+static long linux_check_name_max(const char *path)
+{
+	u64 component_len = 0;
+
+	if (path == 0) {
+		return -LINUX_EFAULT;
+	}
+	for (u64 i = 0; path[i] != '\0'; i++) {
+		if (path[i] == '/') {
+			component_len = 0;
+			continue;
+		}
+		component_len++;
+		if (component_len > LINUX_NAME_MAX) {
+			return -LINUX_ENAMETOOLONG;
+		}
+	}
+	return 0;
+}
+
 static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
 				u64 path_cap)
 {
@@ -832,7 +853,7 @@ static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
 	if (path[path_len - 1] != '\0') {
 		return -LINUX_ENAMETOOLONG;
 	}
-	return 0;
+	return linux_check_name_max(path);
 }
 
 static long path_normalize(const char *cwd, const char *input, char *out)
@@ -865,6 +886,9 @@ static long path_normalize(const char *cwd, const char *input, char *out)
 			in++;
 		}
 		while (input[in] != '\0' && input[in] != '/') {
+			if (comp_len >= LINUX_NAME_MAX) {
+				return -LINUX_ENAMETOOLONG;
+			}
 			if (comp_len + 1 >= sizeof(component)) {
 				return -LINUX_ENAMETOOLONG;
 			}
@@ -2952,6 +2976,7 @@ static long linux_symlinkat(struct linux_process *process, u64 dirfd,
 	};
 	u64 base_handle;
 	long base_result;
+	long name_result;
 
 	if (target_len == 0 || path_len == 0 ||
 	    target_len > sizeof(target) || path_len > sizeof(path) ||
@@ -2964,6 +2989,10 @@ static long linux_symlinkat(struct linux_process *process, u64 dirfd,
 	    path[path_len - 1] != '\0' ||
 	    target[0] == '\0' || path[0] == '\0') {
 		return -LINUX_ENOENT;
+	}
+	name_result = linux_check_name_max(path);
+	if (name_result != 0) {
+		return name_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
@@ -2992,6 +3021,7 @@ static long linux_renameat2(struct linux_process *process, u64 olddirfd,
 	u64 old_base;
 	u64 new_base;
 	long base_result;
+	long name_result;
 
 	if ((flags & ~LINUX_RENAME_NOREPLACE) != 0) {
 		return linux_einval(__func__, __LINE__);
@@ -3007,6 +3037,14 @@ static long linux_renameat2(struct linux_process *process, u64 olddirfd,
 	    new_path[new_len - 1] != '\0' ||
 	    old_path[0] == '\0' || new_path[0] == '\0') {
 		return -LINUX_ENOENT;
+	}
+	name_result = linux_check_name_max(old_path);
+	if (name_result != 0) {
+		return name_result;
+	}
+	name_result = linux_check_name_max(new_path);
+	if (name_result != 0) {
+		return name_result;
 	}
 	base_result = linux_dirfd_base_handle(process, olddirfd, old_path,
 					      &old_base);
@@ -3040,6 +3078,7 @@ static long linux_linkat(struct linux_process *process, u64 olddirfd,
 	u64 old_base;
 	u64 new_base;
 	long base_result;
+	long name_result;
 
 	if (flags != 0) {
 		return linux_einval(__func__, __LINE__);
@@ -3055,6 +3094,14 @@ static long linux_linkat(struct linux_process *process, u64 olddirfd,
 	    new_path[new_len - 1] != '\0' ||
 	    old_path[0] == '\0' || new_path[0] == '\0') {
 		return -LINUX_ENOENT;
+	}
+	name_result = linux_check_name_max(old_path);
+	if (name_result != 0) {
+		return name_result;
+	}
+	name_result = linux_check_name_max(new_path);
+	if (name_result != 0) {
+		return name_result;
 	}
 	base_result = linux_dirfd_base_handle(process, olddirfd, old_path,
 					      &old_base);
