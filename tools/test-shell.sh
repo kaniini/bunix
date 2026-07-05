@@ -102,7 +102,7 @@ printf 'busybox sh -c '"'"'/bin/cat /proc/$$/cmdline | busybox grep -a PROC_ARGV
 printf 'busybox test -c /dev/null && echo DEV_NULL_CHAR_OK\nbusybox test -c /dev/zero && echo DEV_ZERO_CHAR_OK\nbusybox test -c /dev/console && echo DEV_CONSOLE_CHAR_OK\n' >&3
 printf '/bin/execbig && echo EXECBIG_OK\n' >&3
 printf 'busybox sh -c '"'"'i=0; while [ "$i" -lt 300 ]; do printf a; i=$((i + 1)); done; echo DEV_CONSOLE_BIG_END'"'"' > /dev/console && echo DEV_CONSOLE_BIG_WRITE_OK\n' >&3
-printf 'LONG_TMP=/tmp/bunix-pathmax2\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-cccccccccccccccccccccccccccccccc\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-dddddddddddddddddddddddddddddddd\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-ffffffffffffffffffffffffffffffff\nbusybox mkdir "$LONG_TMP" && echo PATHMAX2_TMP_MKDIR_OK\necho PATHMAX2_TMP_PAYLOAD > "$LONG_TMP/file.txt"\nbusybox cat "$LONG_TMP/file.txt" && echo PATHMAX2_TMP_FILE_OK\ncd "$LONG_TMP" && echo PATHMAX2_TMP_CHDIR_OK\npwd\ncd /\n' >&3
+printf 'LONG_TMP=/tmp/bunix-pathmax2\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-cccccccccccccccccccccccccccccccc\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-dddddddddddddddddddddddddddddddd\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-ffffffffffffffffffffffffffffffff\nbusybox mkdir "$LONG_TMP" && echo PATHMAX2_TMP_MKDIR_OK\necho PATHMAX2_TMP_PAYLOAD > "$LONG_TMP/file.txt"\nbusybox cat "$LONG_TMP/file.txt" && echo PATHMAX2_TMP_FILE_OK\ncd "$LONG_TMP" && echo PATHMAX2_TMP_CHDIR_OK\npwd\ncd /\n/bin/pathmaxtest\n' >&3
 printf 'busybox df / /tmp /proc >/dev/null && echo STATFS_DF_OK\n' >&3
 printf 'busybox cat /hello.txt && echo UNION_ROOT_LOWER_OK\nbusybox mv /rename-lower.txt /rename-upper.txt && echo UNION_LOWER_RENAME_CREATE_OK\nbusybox cat /rename-upper.txt | busybox grep "nested rootfs file" && echo UNION_LOWER_RENAME_READ_OK\nbusybox test ! -e /rename-lower.txt && echo UNION_LOWER_RENAME_OLD_GONE_OK\nbusybox test -e /.upper/rename-upper.txt && echo UNION_LOWER_RENAME_UPPER_OK\n' >&3
 wait_for_fixed "$log" "UNION_LOWER_RENAME_UPPER_OK" "unionfs lower rename commands did not drain" 45 220
@@ -190,6 +190,7 @@ TMP_APPEND_CAT_OK
 PATHMAX2_TMP_MKDIR_OK
 PATHMAX2_TMP_FILE_OK
 PATHMAX2_TMP_CHDIR_OK
+linux pathmax ok
 TMP_MKDIR_P_EXISTING_ROOT_OK
 TMP_MKDIR_P_NESTED_OK
 TMP_MKDIR_EXISTING_ROOT_DENY_OK
