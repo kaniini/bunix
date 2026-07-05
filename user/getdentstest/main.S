@@ -50,7 +50,7 @@ _start:
 	testq %rax, %rax
 	jne fail
 
-	movq $700, %r13
+	movq $260, %r13
 create_loop:
 	movq $257, %rax
 	movq $-100, %rdi
@@ -167,7 +167,7 @@ fail_message_end:
 
 .section .data, "aw"
 create_path:
-	.ascii "/tmp/getdents-large/gd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-"
+	.ascii "/tmp/getdents-large/gd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-"
 create_digits:
 	.asciz "0000"
 

@@ -75,6 +75,7 @@ enum {
 	LINUX_ECHOK = 0000040,
 	LINUX_MAX_WRITE = 65536,
 	LINUX_MAX_PATH = 4096,
+	LINUX_NAME_MAX = 255,
 	LINUX_TIMEVAL_SIZE = 16,
 	LINUX_TIMESPEC_SIZE = 16,
 	LINUX_TIME_T_SIZE = 8,
@@ -2892,7 +2893,7 @@ static long linux_statfs_write(u64 statfs_buffer)
 	store_u64(statfs, 32, LINUX_STATFS_FREE_BLOCKS);
 	store_u64(statfs, 40, 65536);
 	store_u64(statfs, 48, 32768);
-	store_u32(statfs, 64, LINUX_MAX_PATH - 1);
+	store_u32(statfs, 64, LINUX_NAME_MAX);
 	store_u64(statfs, 72, LINUX_STATFS_BLOCK_SIZE);
 	return bunix_buffer_write(statfs_buffer, 0, statfs, sizeof(statfs)) == 0 ?
 	       0 : -LINUX_EFAULT;

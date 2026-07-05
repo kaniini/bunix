@@ -657,12 +657,6 @@ static void forward_open_handle(struct bunix_msg *message,
 		} else {
 			stat_entry(reply, entry);
 		}
-	} else if (message->type == BUNIX_VFS_STAT) {
-		reply->words[0] = 0;
-		reply->words[1] = open->kind == ROOTFS_OPEN_ROOT ?
-				  0 : entry->size;
-		reply->words[2] = open->kind == ROOTFS_OPEN_ROOT ?
-				  BUNIX_VFS_TYPE_DIRECTORY : entry->type;
 	} else if (message->type == BUNIX_VFS_READ_FILE_BUFFER &&
 		   open->kind == ROOTFS_OPEN_ENTRY &&
 		   entry->type == BUNIX_VFS_TYPE_REGULAR &&
@@ -758,7 +752,6 @@ int main(void)
 				reply_path_meta(&message, &reply, path);
 			}
 			break;
-		case BUNIX_VFS_STAT:
 		case BUNIX_VFS_STAT_META:
 		case BUNIX_VFS_READ_FILE_BUFFER:
 		case BUNIX_VFS_READDIR_BUFFER:

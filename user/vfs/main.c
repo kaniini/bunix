@@ -1320,24 +1320,6 @@ int main(void)
 			vfs_readlink_path(&message, &reply, path);
 			break;
 		}
-		case BUNIX_VFS_STAT: {
-			struct vfs_open *open = open_from_handle(message.words[0]);
-			const struct rootfs_entry *entry =
-				root_file_from_handle(message.words[0]);
-
-			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
-				(void)forward_remote_handle(open, &message, &reply);
-				break;
-			}
-			if (entry == 0) {
-				reply.words[0] = (u64)-1;
-			} else {
-				reply.words[0] = 0;
-				reply.words[1] = entry->size;
-				reply.words[2] = entry->type;
-			}
-			break;
-		}
 		case BUNIX_VFS_STAT_META: {
 			struct vfs_open *open = open_from_handle(message.words[0]);
 			const struct rootfs_entry *entry =

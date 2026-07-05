@@ -715,31 +715,6 @@ static long vfs_open(u64 vfs, const char *path, struct vfs_file *file)
 	return 0;
 }
 
-static long vfs_stat(u64 vfs, struct vfs_file *file)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_STAT,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { file != 0 ? file->handle : 0, 0, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	if (file == 0 ||
-	    bunix_ipc_call(vfs, &request, &reply) != 0 ||
-	    reply.words[0] != 0 ||
-	    reply.words[2] != BUNIX_VFS_TYPE_REGULAR) {
-		return -1;
-	}
-
-	file->size = reply.words[1];
-	file->type = reply.words[2];
-	return 0;
-}
-
 static void vfs_close(u64 vfs, u64 file)
 {
 	struct bunix_msg request = {
@@ -1320,13 +1295,6 @@ static long exec_path(u64 vfs, struct process *process,
 		bunix_handle_close((u64)io_buffer);
 		return -1;
 	}
-	if (vfs_stat(vfs, &file) != 0) {
-		bunix_console_log("proc: exec stat failed\n",
-				  sizeof("proc: exec stat failed\n") - 1);
-		vfs_close(vfs, file.handle);
-		bunix_handle_close((u64)io_buffer);
-		return -1;
-	}
 	if (vfs_read_file(vfs, file.handle, file.size, 0,
 			  (unsigned char *)&ehdr, sizeof(ehdr),
 			  (u64)io_buffer) != 0) {
@@ -1395,7 +1363,6 @@ static long exec_path(u64 vfs, struct process *process,
 	}
 	if (interp > 0) {
 		if (vfs_open(vfs, interp_path, &interp_file) != 0 ||
-		    vfs_stat(vfs, &interp_file) != 0 ||
 		    vfs_read_file(vfs, interp_file.handle, interp_file.size, 0,
 				  (unsigned char *)&interp_ehdr,
 				  sizeof(interp_ehdr), (u64)io_buffer) != 0 ||

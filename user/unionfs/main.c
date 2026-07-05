@@ -1275,10 +1275,6 @@ static void forward_open_handle(struct bunix_msg *message,
 			reply->words[0] = 0;
 		} else if (message->type == BUNIX_VFS_STAT_META) {
 			stat_root_dir(reply);
-		} else if (message->type == BUNIX_VFS_STAT) {
-			reply->words[0] = 0;
-			reply->words[1] = 0;
-			reply->words[2] = BUNIX_VFS_TYPE_DIRECTORY;
 		} else if (message->type == BUNIX_VFS_READDIR_BUFFER) {
 			readdir_merged(open, message, reply);
 		} else {
@@ -1291,7 +1287,6 @@ static void forward_open_handle(struct bunix_msg *message,
 			forget_open(open);
 			reply->words[0] = 0;
 		} else if (message->type == BUNIX_VFS_STAT_META ||
-			   message->type == BUNIX_VFS_STAT ||
 			   message->type == BUNIX_VFS_READ_FILE_BUFFER) {
 			message->words[0] = open->lower_handle;
 			if (bunix_ipc_call(open->lower_layer_service, message, reply) != 0) {
@@ -1432,7 +1427,6 @@ int main(void)
 				forward_open_handle(&message, &reply);
 			}
 			break;
-		case BUNIX_VFS_STAT:
 		case BUNIX_VFS_STAT_META:
 		case BUNIX_VFS_READ_FILE_BUFFER:
 		case BUNIX_VFS_WRITE_FILE_BUFFER:
