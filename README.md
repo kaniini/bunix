@@ -40,6 +40,8 @@ Useful test targets:
 - `make audit-linux-syscalls` reports Linux syscall enum coverage, arch
   dispatch forwarding, Linux-server cases, obvious fallback sites, and heuristic
   test marker hints.
+- `make list-shell-shards` prints the planned `test-shell` shard order and
+  per-shard phase/resource metadata used by the sharding work.
 - `KERNEL_CMDLINE='log=debug strace=structured' BUNIX_CMD='busybox true' make test-command`
   boots with machine-readable Linux syscall traces. Structured lines use stable
   `linux-strace key=value` fields for shell-friendly assertions.
