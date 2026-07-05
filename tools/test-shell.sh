@@ -243,6 +243,7 @@ busybox mount && echo PROC_MOUNT_OK
 /bin/execlongtest
 /bin/auxidtest
 /bin/fcntllocktest
+/bin/sysracetest
 busybox mkdir -p /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_EXISTING_ROOT_OK
 busybox test -d /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_NESTED_OK
 busybox mkdir /tmp || echo TMP_MKDIR_EXISTING_ROOT_DENY_OK
@@ -466,6 +467,7 @@ wait_for_each_fixed_count "$log" 2 "append payload missing from file output" 45 
 wait_for_fixed "$log" "DYN_HELLO_OK" "dynamic musl hello did not complete" 45 220
 wait_for_fixed "$log" "EXECBIG_OK" "large Linux executable did not complete" 45 220
 wait_for_fixed "$log" "READBIG_OK" "large Linux read did not complete" 45 220
+wait_for_fixed "$log" "sysrace ok" "Linux syscall race stress test did not complete" 75 220
 wait_for_each_fixed "$log" "procfs content regression missing" 45 220 \
 	"cpu  " "/bin/sh" PROC_SHELL_PPID_OK "direct_delivered " "direct_handoff "
 wait_for_each_regex "$log" "IPC fast path counter did not increase" 45 220 \

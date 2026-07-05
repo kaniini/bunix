@@ -1904,6 +1904,7 @@ static u64 linux_forward_symlinkat(struct ipc_port *linux,
 {
 	struct shared_buffer *buffer;
 	struct ipc_message reply;
+	char *copy;
 	u64 target_len;
 	u64 link_len;
 	u64 total_len;
@@ -1912,36 +1913,45 @@ static u64 linux_forward_symlinkat(struct ipc_port *linux,
 	if (target == 0 || linkpath == 0) {
 		return (u64)-LINUX_EFAULT;
 	}
-	rc = copy_cstr_from_user_errno((char *)syscall_copy_buffer, target,
-				       LINUX_MAX_SYSCALL_BUFFER);
+	copy = (char *)slab_alloc(LINUX_MAX_SYSCALL_BUFFER);
+	if (copy == 0) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	rc = copy_cstr_from_user_errno(copy, target, LINUX_MAX_SYSCALL_BUFFER);
 	if (rc != 0) {
+		slab_free(copy);
 		return (u64)rc;
 	}
-	target_len = str_len((const char *)syscall_copy_buffer) + 1;
+	target_len = str_len(copy) + 1;
 	if (target_len == 1) {
+		slab_free(copy);
 		return (u64)-LINUX_ENOENT;
 	}
 	if (target_len >= LINUX_MAX_SYSCALL_BUFFER) {
+		slab_free(copy);
 		return (u64)-LINUX_ENAMETOOLONG;
 	}
-	rc = copy_cstr_from_user_errno((char *)syscall_copy_buffer +
-				       target_len, linkpath,
+	rc = copy_cstr_from_user_errno(copy + target_len, linkpath,
 				       LINUX_MAX_SYSCALL_BUFFER -
 				       target_len);
 	if (rc != 0) {
+		slab_free(copy);
 		return (u64)rc;
 	}
-	link_len = str_len((const char *)syscall_copy_buffer + target_len) + 1;
+	link_len = str_len(copy + target_len) + 1;
 	if (link_len == 1) {
+		slab_free(copy);
 		return (u64)-LINUX_ENOENT;
 	}
 	total_len = target_len + link_len;
 	buffer = buffer_create(total_len);
 	if (buffer == 0 ||
-	    buffer_write(buffer, 0, syscall_copy_buffer, total_len) != 0) {
+	    buffer_write(buffer, 0, copy, total_len) != 0) {
+		slab_free(copy);
 		buffer_release(buffer);
 		return (u64)-LINUX_ENOMEM;
 	}
+	slab_free(copy);
 	request->type = LINUX_SYSCALL_SYMLINKAT;
 	request->words[0] = dirfd;
 	request->words[1] = target_len;
@@ -1967,6 +1977,7 @@ static u64 linux_forward_two_path_at(struct ipc_port *linux,
 {
 	struct shared_buffer *buffer;
 	struct ipc_message reply;
+	char *copy;
 	u64 old_len;
 	u64 new_len;
 	u64 total_len;
@@ -1975,40 +1986,50 @@ static u64 linux_forward_two_path_at(struct ipc_port *linux,
 	if (oldpath == 0 || newpath == 0) {
 		return (u64)-LINUX_EFAULT;
 	}
-	rc = copy_cstr_from_user_errno((char *)syscall_copy_buffer, oldpath,
-				       LINUX_MAX_SYSCALL_BUFFER);
+	copy = (char *)slab_alloc(LINUX_MAX_SYSCALL_BUFFER);
+	if (copy == 0) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	rc = copy_cstr_from_user_errno(copy, oldpath, LINUX_MAX_SYSCALL_BUFFER);
 	if (rc != 0) {
+		slab_free(copy);
 		return (u64)rc;
 	}
-	old_len = str_len((const char *)syscall_copy_buffer) + 1;
+	old_len = str_len(copy) + 1;
 	if (old_len == 1) {
+		slab_free(copy);
 		return (u64)-LINUX_ENOENT;
 	}
 	if (old_len >= LINUX_MAX_SYSCALL_BUFFER) {
+		slab_free(copy);
 		return (u64)-LINUX_ENAMETOOLONG;
 	}
-	rc = copy_cstr_from_user_errno((char *)syscall_copy_buffer + old_len,
-				       newpath, LINUX_MAX_SYSCALL_BUFFER -
-				       old_len);
+	rc = copy_cstr_from_user_errno(copy + old_len, newpath,
+				       LINUX_MAX_SYSCALL_BUFFER - old_len);
 	if (rc != 0) {
+		slab_free(copy);
 		return (u64)rc;
 	}
-	new_len = str_len((const char *)syscall_copy_buffer + old_len) + 1;
+	new_len = str_len(copy + old_len) + 1;
 	if (new_len == 1) {
+		slab_free(copy);
 		return (u64)-LINUX_ENOENT;
 	}
 	total_len = old_len + new_len;
 	if (total_len > LINUX_MAX_SYSCALL_BUFFER ||
 	    old_len > 0xffffffff || new_len > 0xffffffff ||
 	    flags > 0xffffffff) {
+		slab_free(copy);
 		return (u64)-LINUX_ENAMETOOLONG;
 	}
 	buffer = buffer_create(total_len);
 	if (buffer == 0 ||
-	    buffer_write(buffer, 0, syscall_copy_buffer, total_len) != 0) {
+	    buffer_write(buffer, 0, copy, total_len) != 0) {
+		slab_free(copy);
 		buffer_release(buffer);
 		return (u64)-LINUX_ENOMEM;
 	}
+	slab_free(copy);
 	request->type = type;
 	request->words[0] = olddirfd;
 	request->words[1] = newdirfd;
@@ -2045,6 +2066,7 @@ static u64 linux_forward_mount(struct ipc_port *linux,
 {
 	struct shared_buffer *buffer;
 	struct ipc_message reply;
+	char *copy;
 	u64 target_len;
 	u64 fstype_len;
 	u64 total_len;
@@ -2053,32 +2075,41 @@ static u64 linux_forward_mount(struct ipc_port *linux,
 	if (target == 0 || fstype == 0) {
 		return (u64)-LINUX_EFAULT;
 	}
-	rc = copy_cstr_from_user_errno((char *)syscall_copy_buffer, target,
-				       LINUX_MAX_SYSCALL_BUFFER);
+	copy = (char *)slab_alloc(LINUX_MAX_SYSCALL_BUFFER);
+	if (copy == 0) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	rc = copy_cstr_from_user_errno(copy, target, LINUX_MAX_SYSCALL_BUFFER);
 	if (rc != 0) {
+		slab_free(copy);
 		return (u64)rc;
 	}
-	target_len = str_len((const char *)syscall_copy_buffer) + 1;
+	target_len = str_len(copy) + 1;
 	if (target_len == 1 || target_len >= LINUX_MAX_SYSCALL_BUFFER) {
+		slab_free(copy);
 		return linux_einval_u64(__func__, __LINE__);
 	}
-	rc = copy_cstr_from_user_errno(
-		(char *)syscall_copy_buffer + target_len, fstype,
-		LINUX_MAX_SYSCALL_BUFFER - target_len);
+	rc = copy_cstr_from_user_errno(copy + target_len, fstype,
+				       LINUX_MAX_SYSCALL_BUFFER -
+				       target_len);
 	if (rc != 0) {
+		slab_free(copy);
 		return (u64)rc;
 	}
-	fstype_len = str_len((const char *)syscall_copy_buffer + target_len) + 1;
+	fstype_len = str_len(copy + target_len) + 1;
 	total_len = target_len + fstype_len;
 	if (fstype_len == 1 || total_len > LINUX_MAX_SYSCALL_BUFFER) {
+		slab_free(copy);
 		return linux_einval_u64(__func__, __LINE__);
 	}
 	buffer = buffer_create(total_len);
 	if (buffer == 0 ||
-	    buffer_write(buffer, 0, syscall_copy_buffer, total_len) != 0) {
+	    buffer_write(buffer, 0, copy, total_len) != 0) {
+		slab_free(copy);
 		buffer_release(buffer);
 		return (u64)-LINUX_ENOMEM;
 	}
+	slab_free(copy);
 	request->type = LINUX_SYSCALL_MOUNT;
 	request->words[0] = target_len;
 	request->words[1] = fstype_len;

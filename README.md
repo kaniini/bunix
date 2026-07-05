@@ -47,8 +47,10 @@ Useful test targets:
 The init, names, time, user, linux, proc, procfs, block, VFS, and ping servers
 are freestanding C ELF images loaded as Multiboot2 modules and entered in ring 3.
 The generated rootfs includes native smoke tests, Linux-syscall tests, login,
-BusyBox applet links, `/etc/passwd`, `/etc/shadow`, and small data files. Proc
-loads ELF images through VFS and owns Bunix process lifetime. The Linux
+BusyBox applet links, `/etc/passwd`, `/etc/shadow`, and small data files. The
+Linux-syscall tests include `/bin/sysracetest`, an SMP-oriented stress test for
+concurrent path, symlink/readlink, rename/link, and execve argument forwarding.
+Proc loads ELF images through VFS and owns Bunix process lifetime. The Linux
 personality server owns Linux PID/session/fd state and receives Linux syscalls
 as `LINX` protocol messages. The VM server remains kernel-hosted for the
 current performance-oriented design, but still exposes a VM IPC port for events

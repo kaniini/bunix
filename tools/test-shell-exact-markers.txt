@@ -85,6 +85,7 @@ linux waitpgid checks ok
 linux execlong ok
 linux auxid ok
 linux fcntl locks ok
+sysrace ok
 UNION_ROOT_LOWER_OK
 UNION_LOWER_RENAME_CREATE_OK
 UNION_LOWER_RENAME_READ_OK
