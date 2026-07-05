@@ -39,6 +39,9 @@ as `LINX` protocol messages. The VM server remains kernel-hosted for the
 current performance-oriented design, but still exposes a VM IPC port for events
 and the kernel exports low-level task memory primitives for allocation and range
 cloning.
+The host-side rootfs builder keeps the on-disk format simple but grows its entry
+table dynamically, so larger test images are no longer capped by the builder's
+initial table size.
 
 Userspace servers now have a small buddy allocator backed by native task
 allocation, and their object registries grow dynamically instead of using fixed
@@ -332,6 +335,9 @@ checks pipes and file reads, verifies login/session-visible `uptime`, checks
 denial for `/secret.txt`, and confirms that exiting the shell returns to the
 login prompt. It also checks writable-root unionfs behavior and live
 `/proc/mounts` output.
+
+`make test-rootfs-tool` is a host-side regression for the rootfs image builder;
+it creates more than 128 entries to verify the builder's dynamic entry table.
 
 The static PIE BusyBox path remains available as a compatibility regression:
 

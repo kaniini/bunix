@@ -7,7 +7,7 @@
 enum {
 	ROOTFS_MAGIC = 0x30534652,
 	ROOTFS_MAX_PATH = 128,
-	ROOTFS_MAX_ENTRIES = 128,
+	ROOTFS_INITIAL_ENTRIES = 128,
 	ROOTFS_TYPE_REGULAR = 1,
 	ROOTFS_TYPE_DIRECTORY = 2,
 	ROOTFS_TYPE_SYMLINK = 3,
@@ -28,11 +28,73 @@ struct rootfs_entry {
 	uint32_t type;
 };
 
-static int path_exists(const struct rootfs_entry *entries, size_t count,
+struct rootfs_entries {
+	struct rootfs_entry *items;
+	size_t count;
+	size_t capacity;
+};
+
+static int entries_init(struct rootfs_entries *entries)
+{
+	entries->items = calloc(ROOTFS_INITIAL_ENTRIES,
+				sizeof(entries->items[0]));
+	if (entries->items == NULL) {
+		fprintf(stderr, "mkrootfs: alloc entries: %s\n",
+			strerror(errno));
+		return -1;
+	}
+	entries->count = 0;
+	entries->capacity = ROOTFS_INITIAL_ENTRIES;
+	return 0;
+}
+
+static void entries_free(struct rootfs_entries *entries)
+{
+	free(entries->items);
+	entries->items = NULL;
+	entries->count = 0;
+	entries->capacity = 0;
+}
+
+static int entries_reserve_one(struct rootfs_entries *entries,
+			       const char *path)
+{
+	if (entries->count < entries->capacity) {
+		return 0;
+	}
+
+	const size_t next_capacity = entries->capacity == 0 ?
+				     ROOTFS_INITIAL_ENTRIES :
+				     entries->capacity * 2;
+	struct rootfs_entry *next =
+		realloc(entries->items, next_capacity * sizeof(next[0]));
+	if (next == NULL) {
+		fprintf(stderr, "mkrootfs: grow entries for %s: %s\n", path,
+			strerror(errno));
+		return -1;
+	}
+	memset(next + entries->capacity, 0,
+	       (next_capacity - entries->capacity) * sizeof(next[0]));
+	entries->items = next;
+	entries->capacity = next_capacity;
+	return 0;
+}
+
+static struct rootfs_entry *entries_append(struct rootfs_entries *entries,
+					   const char *path)
+{
+	if (entries_reserve_one(entries, path) != 0) {
+		return NULL;
+	}
+
+	return &entries->items[entries->count++];
+}
+
+static int path_exists(const struct rootfs_entries *entries,
 		       const char *path)
 {
-	for (size_t i = 0; i < count; i++) {
-		if (strcmp(entries[i].path, path) == 0) {
+	for (size_t i = 0; i < entries->count; i++) {
+		if (strcmp(entries->items[i].path, path) == 0) {
 			return 1;
 		}
 	}
@@ -40,27 +102,28 @@ static int path_exists(const struct rootfs_entry *entries, size_t count,
 	return 0;
 }
 
-static int add_directory(struct rootfs_entry *entries, size_t *count,
+static int add_directory(struct rootfs_entries *entries,
 			 const char *path)
 {
-	if (path_exists(entries, *count, path)) {
+	struct rootfs_entry *entry;
+
+	if (path_exists(entries, path)) {
 		return 0;
 	}
-	if (*count >= ROOTFS_MAX_ENTRIES) {
-		fprintf(stderr, "mkrootfs: too many entries adding %s\n", path);
+	entry = entries_append(entries, path);
+	if (entry == NULL) {
 		return -1;
 	}
 
-	strcpy(entries[*count].path, path);
-	entries[*count].uid = 0;
-	entries[*count].gid = 0;
-	entries[*count].mode = 0555;
-	entries[*count].type = ROOTFS_TYPE_DIRECTORY;
-	(*count)++;
+	strcpy(entry->path, path);
+	entry->uid = 0;
+	entry->gid = 0;
+	entry->mode = 0555;
+	entry->type = ROOTFS_TYPE_DIRECTORY;
 	return 0;
 }
 
-static int add_parent_directories(struct rootfs_entry *entries, size_t *count,
+static int add_parent_directories(struct rootfs_entries *entries,
 				  const char *path)
 {
 	char current[ROOTFS_MAX_PATH];
@@ -77,7 +140,7 @@ static int add_parent_directories(struct rootfs_entry *entries, size_t *count,
 			current[len] = '\0';
 			continue;
 		}
-		if (len > 1 && add_directory(entries, count, current) != 0) {
+		if (len > 1 && add_directory(entries, current) != 0) {
 			return -1;
 		}
 		if (len + 1 >= sizeof(current)) {
@@ -162,13 +225,15 @@ int main(int argc, char **argv)
 		.magic = ROOTFS_MAGIC,
 		.entries = 0,
 	};
-	struct rootfs_entry entries[ROOTFS_MAX_ENTRIES];
-	size_t entry_count = 0;
+	struct rootfs_entries entries;
+	int result = 1;
 
-	memset(entries, 0, sizeof(entries));
-	if (add_directory(entries, &entry_count, "/") != 0 ||
-	    add_directory(entries, &entry_count, "/dev") != 0) {
+	if (entries_init(&entries) != 0) {
 		return 1;
+	}
+	if (add_directory(&entries, "/") != 0 ||
+	    add_directory(&entries, "/dev") != 0) {
+		goto out;
 	}
 	for (int arg = 2; arg < argc;) {
 		const int is_symlink = strcmp(argv[arg], "--symlink") == 0;
@@ -181,7 +246,7 @@ int main(int argc, char **argv)
 		if (is_dir) {
 			if (arg + 1 >= argc) {
 				fprintf(stderr, "mkrootfs: incomplete dir\n");
-				return 1;
+				goto out;
 			}
 			path = argv[arg + 1];
 			file = NULL;
@@ -189,7 +254,7 @@ int main(int argc, char **argv)
 		} else if (is_symlink) {
 			if (arg + 2 >= argc) {
 				fprintf(stderr, "mkrootfs: incomplete symlink\n");
-				return 1;
+				goto out;
 			}
 			path = argv[arg + 1];
 			file = argv[arg + 2];
@@ -198,37 +263,29 @@ int main(int argc, char **argv)
 			if (arg + 1 >= argc) {
 				fprintf(stderr, "mkrootfs: missing file for %s\n",
 					argv[arg]);
-				return 1;
+				goto out;
 			}
 			path = argv[arg];
 			file = argv[arg + 1];
 			arg += 2;
 		}
 
-		if (entry_count >= ROOTFS_MAX_ENTRIES) {
-			fprintf(stderr, "mkrootfs: too many entries\n");
-			return 1;
-		}
 		if (strlen(path) >= ROOTFS_MAX_PATH) {
 			fprintf(stderr, "mkrootfs: path too long: %s\n", path);
-			return 1;
+			goto out;
 		}
 		if (path[0] != '/' ||
-		    (!is_dir && path_exists(entries, entry_count, path))) {
+		    (!is_dir && path_exists(&entries, path))) {
 			fprintf(stderr, "mkrootfs: invalid duplicate path: %s\n",
 				path);
-			return 1;
+			goto out;
 		}
-		if (add_parent_directories(entries, &entry_count, path) != 0) {
+		if (add_parent_directories(&entries, path) != 0) {
 			fprintf(stderr, "mkrootfs: add parents for %s\n", path);
-			return 1;
+			goto out;
 		}
-		if (is_dir && path_exists(entries, entry_count, path)) {
+		if (is_dir && path_exists(&entries, path)) {
 			continue;
-		}
-		if (entry_count >= ROOTFS_MAX_ENTRIES) {
-			fprintf(stderr, "mkrootfs: too many entries\n");
-			return 1;
 		}
 
 		if (is_dir) {
@@ -238,7 +295,7 @@ int main(int argc, char **argv)
 				fprintf(stderr,
 					"mkrootfs: symlink target too long: %s\n",
 					file);
-				return 1;
+				goto out;
 			}
 			size = (long)strlen(file);
 		} else {
@@ -246,45 +303,53 @@ int main(int argc, char **argv)
 			if (in == NULL) {
 				fprintf(stderr, "mkrootfs: open %s: %s\n",
 					file, strerror(errno));
-				return 1;
+				goto out;
 			}
 			size = file_size(in);
 			fclose(in);
 			if (size < 0) {
 				fprintf(stderr, "mkrootfs: size %s: %s\n",
 					file, strerror(errno));
-				return 1;
+				goto out;
 			}
 		}
 
-		strcpy(entries[entry_count].path, path);
-		entries[entry_count].size = (uint64_t)size;
-		entries[entry_count].uid = 0;
-		entries[entry_count].gid = 0;
-		entries[entry_count].mode = is_dir ? 0555 :
+		struct rootfs_entry *entry = entries_append(&entries, path);
+		if (entry == NULL) {
+			goto out;
+		}
+		strcpy(entry->path, path);
+		entry->size = (uint64_t)size;
+		entry->uid = 0;
+		entry->gid = 0;
+		entry->mode = is_dir ? 0555 :
 				  (is_symlink ? 0777 :
 				  (strncmp(path, "/bin/", 5) == 0 ?
 				   0555 : 0444));
 		if (strcmp(path, "/secret.txt") == 0) {
-			entries[entry_count].mode = 0400;
+			entry->mode = 0400;
 		}
 		if (strcmp(path, "/etc/shadow") == 0) {
-			entries[entry_count].mode = 0400;
+			entry->mode = 0400;
 		}
-		entries[entry_count].type = is_dir ? ROOTFS_TYPE_DIRECTORY :
-					     (is_symlink ?
-					      ROOTFS_TYPE_SYMLINK :
-					      ROOTFS_TYPE_REGULAR);
-		entry_count++;
+		entry->type = is_dir ? ROOTFS_TYPE_DIRECTORY :
+			      (is_symlink ?
+			       ROOTFS_TYPE_SYMLINK :
+			       ROOTFS_TYPE_REGULAR);
 	}
 
-	header.entries = (uint32_t)entry_count;
-	uint64_t offset = sizeof(header) + entry_count * sizeof(entries[0]);
-	for (size_t i = 0; i < entry_count; i++) {
-		if (entries[i].type == ROOTFS_TYPE_REGULAR ||
-		    entries[i].type == ROOTFS_TYPE_SYMLINK) {
-			entries[i].offset = offset;
-			offset += entries[i].size;
+	if (entries.count > UINT32_MAX) {
+		fprintf(stderr, "mkrootfs: too many entries for image\n");
+		goto out;
+	}
+	header.entries = (uint32_t)entries.count;
+	uint64_t offset = sizeof(header) +
+			  entries.count * sizeof(entries.items[0]);
+	for (size_t i = 0; i < entries.count; i++) {
+		if (entries.items[i].type == ROOTFS_TYPE_REGULAR ||
+		    entries.items[i].type == ROOTFS_TYPE_SYMLINK) {
+			entries.items[i].offset = offset;
+			offset += entries.items[i].size;
 		}
 	}
 
@@ -292,14 +357,15 @@ int main(int argc, char **argv)
 	if (out == NULL) {
 		fprintf(stderr, "mkrootfs: open %s: %s\n", out_path,
 			strerror(errno));
-		return 1;
+		goto out;
 	}
 
 	if (fwrite(&header, sizeof(header), 1, out) != 1 ||
-	    fwrite(entries, sizeof(entries[0]), entry_count, out) != entry_count) {
+	    fwrite(entries.items, sizeof(entries.items[0]), entries.count, out) !=
+	    entries.count) {
 		fprintf(stderr, "mkrootfs: write header: %s\n", strerror(errno));
 		fclose(out);
-		return 1;
+		goto out;
 	}
 
 	for (int arg = 2; arg < argc;) {
@@ -313,13 +379,13 @@ int main(int argc, char **argv)
 				       (const unsigned char *)target,
 				       strlen(target)) != 0) {
 				fclose(out);
-				return 1;
+				goto out;
 			}
 			arg += 3;
 		} else {
 			if (copy_file(out, argv[arg + 1]) != 0) {
 				fclose(out);
-				return 1;
+				goto out;
 			}
 			arg += 2;
 		}
@@ -328,8 +394,12 @@ int main(int argc, char **argv)
 	if (fclose(out) != 0) {
 		fprintf(stderr, "mkrootfs: close %s: %s\n", out_path,
 			strerror(errno));
-		return 1;
+		goto out;
 	}
 
-	return 0;
+	result = 0;
+
+out:
+	entries_free(&entries);
+	return result;
 }

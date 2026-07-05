@@ -159,7 +159,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-kernel run-iso test test-shell test-shell-static test-shell-dynamic iso esp check-tools
+.PHONY: all clean run run-kernel run-iso test test-shell test-shell-static test-shell-dynamic test-rootfs-tool iso esp check-tools
 
 all: $(KERNEL)
 
@@ -479,6 +479,9 @@ test-shell-dynamic:
 
 test-shell-static:
 	$(MAKE) -B test-shell BUSYBOX=$(BUSYBOX_STATIC)
+
+test-rootfs-tool: $(ROOTFS_TOOL)
+	sh tools/test-rootfs-tool.sh $(ROOTFS_TOOL)
 
 check-tools:
 	@command -v $(CC)
