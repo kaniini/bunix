@@ -1334,6 +1334,17 @@ static void linux_vfork_complete_task(u32 child_task)
 	spin_unlock_irqrestore(&linux_vfork_lock, flags);
 }
 
+static u64 linux_forward_output_words(struct ipc_port *linux,
+				      struct ipc_port *reply_port,
+				      struct ipc_message *request,
+				      u32 type,
+				      void *user_out,
+				      u64 size,
+				      u32 cap_rights,
+				      u64 word0,
+				      u64 word2,
+				      u64 word3);
+
 static u64 linux_exit_current(u64 status)
 {
 	struct ipc_port *linux = ipc_port_find("linux");
@@ -1402,6 +1413,60 @@ static u64 linux_write_chunked(struct ipc_port *linux,
 		}
 		total += wrote;
 		if (wrote != chunk) {
+			return total;
+		}
+	}
+	return total;
+}
+
+static u64 linux_read_one(struct ipc_port *linux, struct ipc_port *reply_port,
+			  u64 fd, u64 user_buffer, u64 len, u32 cap_rights)
+{
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = LINUX_SYSCALL_READ,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = 0,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+
+	if (len > LINUX_MAX_SYSCALL_BUFFER) {
+		return (u64)-LINUX_EINVAL;
+	}
+	return linux_forward_output_words(linux, reply_port, &request,
+					  LINUX_SYSCALL_READ,
+					  (void *)user_buffer, len,
+					  cap_rights, fd, 0, 0);
+}
+
+static u64 linux_read_chunked(struct ipc_port *linux,
+			      struct ipc_port *reply_port,
+			      u64 fd, u64 user_buffer, u64 len,
+			      u32 cap_rights)
+{
+	u64 total = 0;
+
+	if (user_buffer == 0 && len != 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	while (total < len) {
+		const u64 chunk = min_u64(len - total,
+					  LINUX_MAX_SYSCALL_BUFFER);
+		const u64 nread = linux_read_one(linux, reply_port, fd,
+						 user_buffer + total, chunk,
+						 cap_rights);
+
+		if ((i64)nread < 0) {
+			return total != 0 ? total : nread;
+		}
+		if (nread == 0) {
+			return total;
+		}
+		total += nread;
+		if (nread != chunk) {
 			return total;
 		}
 	}
@@ -3334,18 +3399,9 @@ poll_again:
 
 	switch (number) {
 	case LINUX_SYSCALL_READ: {
-		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
-				LINUX_MAX_SYSCALL_BUFFER : arg2;
-
-		if (arg1 == 0 && len != 0) {
-			return (u64)-LINUX_EFAULT;
-		}
-		return linux_forward_output_words(linux, reply_port, &request,
-						  LINUX_SYSCALL_READ,
-						  (void *)arg1, len,
-						  TASK_RIGHT_SEND |
-						  TASK_RIGHT_DUP,
-						  arg0, 0, 0);
+		return linux_read_chunked(linux, reply_port, arg0, arg1,
+					  arg2, TASK_RIGHT_SEND |
+					  TASK_RIGHT_DUP);
 	}
 	case LINUX_SYSCALL_GETDENTS64: {
 		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
@@ -3792,10 +3848,11 @@ poll_again:
 				     arg2 : arg3;
 		const u64 dirfd = number == LINUX_SYSCALL_READLINK ?
 				  (u64)-100 : arg0;
+		const u64 out_buffer_size = min_u64(out_size,
+						    LINUX_EXEC_MAX_PATH);
 		u64 result;
 
-		if (path == 0 || out == 0 || out_size == 0 ||
-		    out_size > LINUX_MAX_SYSCALL_BUFFER) {
+		if (path == 0 || out == 0 || out_size == 0) {
 			return path == 0 || out == 0 ? (u64)-LINUX_EFAULT :
 			       (u64)-LINUX_EINVAL;
 		}
@@ -3805,7 +3862,8 @@ poll_again:
 		request.words[2] = out_size;
 		request.words[3] = 0;
 		buffer = linux_forward_path_buffer(linux, reply_port, &request,
-						   &reply, path, out_size, 1,
+						   &reply, path,
+						   out_buffer_size, 1,
 						   TASK_RIGHT_RECV |
 						   TASK_RIGHT_SEND,
 						   &result);
