@@ -17,6 +17,8 @@ for i in $(seq 1 150); do
 	printf 'entry %s\n' "$i" > "$file"
 	args="$args /many/file-$i.txt $file"
 done
+long_path=/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/one-hundred-twenty-eight-byte/rootfs-entry-limit/with-extra-components/hello.txt
+args="$args $long_path $tmp/files/file-1.txt"
 
 # shellcheck disable=SC2086
 "$tool" "$image" $args --dir /empty --symlink /many/current /many/file-150.txt
