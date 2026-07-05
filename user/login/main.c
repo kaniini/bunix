@@ -15,7 +15,7 @@ enum {
 	LINUX_TCSETS = 0x5402,
 	LINUX_ECHO = 0000010,
 	LINUX_TERM_LFLAG = 12,
-	LOGIN_MAX_GROUPS = 16,
+	LOGIN_MAX_GROUPS = 64,
 };
 
 struct startup_aux {

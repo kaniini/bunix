@@ -136,6 +136,11 @@ if ! awk '{ sub(/\r$/, "") } /groups=1(\(wheel\))?,1000(\(kaniini\))?/ { found =
 	tail -n 120 "$log" >&2 || true
 	exit 1
 fi
+if ! awk '{ sub(/\r$/, "") } /2018(\(g18\))?/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
+	echo "busybox id did not report more than 16 supplementary groups" >&2
+	tail -n 120 "$log" >&2 || true
+	exit 1
+fi
 for expected in "HOME=/home/kaniini" "USER=kaniini" "LOGNAME=kaniini" "SHELL=/bin/sh" "PATH=/bin:/sbin:/usr/bin:/usr/sbin" "TERM=bunix"; do
 	i=0
 	while ! grep -F "$expected" "$log" >/dev/null 2>&1; do

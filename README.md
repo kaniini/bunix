@@ -217,7 +217,8 @@ can exercise long VFS paths as well.
 The login program now execs the shell with `HOME`, `USER`, `LOGNAME`, `SHELL`,
 `PATH`, and `TERM`, and changes into the account home directory before execing
 the shell. Command lookup, login environment inheritance, larger argv/env
-vectors, long executable paths, and home-directory startup are exercised by the
+vectors, long executable paths, more than 16 supplementary login groups, and
+home-directory startup are exercised by the
 shell regression.
 
 The current rootfs can run a statically linked musl hello program, a dynamic
