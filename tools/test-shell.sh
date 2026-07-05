@@ -14,6 +14,7 @@ failure_dir=${FAILURE_DIR:-build/failures}
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$script_dir/test-lib.sh"
 . "$script_dir/shell-tests/login-smoke.sh"
+. "$script_dir/shell-tests/exec-argv-pipe.sh"
 BUNIX_COLLECT_FAILURES=1
 BUNIX_FAILURE_DIR=$failure_dir
 BUNIX_QEMU_LOG=$qemu_log
@@ -136,23 +137,11 @@ exec 3>"$pipe.in"
 login_user kaniini bunix "~ $ "
 
 run_login_smoke
+run_exec_argv_pipe
 send_script <<'EOF_USER_SMOKE'
-busybox echo PIPE_OK | busybox cat
-busybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK
 busybox cat /usr/share/bunix/nested/hello.txt && echo NESTED_CAT_OK
 busybox cat /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/hello.txt && echo LONG_ROOTFS_PATH_OK
 /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/linux-execve-path-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/dyn-hello && echo LONG_EXEC_PATH_OK
-busybox cat /proc/kthreads >/dev/null && echo PROCFS_OK
-busybox echo BUSYBOX_ARGV_OK
-busybox sh -c "test \"\$13\" = m && echo BUSYBOX_MANY_ARGV_OK" _ a b c d e f g h i j k l m
-BUNIX_LONG_ENV=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 busybox sh -c "test \"\$BUNIX_LONG_ENV\" = abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 && echo BUSYBOX_LONG_ENV_OK"
-set --
-i=1
-while [ "$i" -le 300 ]; do set -- "$@" "x$i"; i=$((i + 1)); done
-busybox sh -c 'test "$300" = x300 && echo BUSYBOX_ARGV300_OK' _ "$@"
-i=1
-while [ "$i" -le 300 ]; do eval "BUNIX_EXEC_ENV_$i=x$i; export BUNIX_EXEC_ENV_$i"; i=$((i + 1)); done
-busybox sh -c 'test "$BUNIX_EXEC_ENV_300" = x300 && echo BUSYBOX_ENV300_OK'
 busybox stat /hello.txt
 busybox stat /usr/share
 busybox stat /tmp
@@ -438,14 +427,7 @@ wait_for_each_regex "$log" "IPC per-CPU counter did not increase" 45 220 \
 	"cpu[0-9][0-9]* sends [1-9][0-9]*"
 require_no_fixed "$log" "top:" "busybox top reported an error" 220
 
-wait_for_fixed "$log" "BUSYBOX_ARGV_OK" "busybox argv regression command did not complete" 45 160
-wait_for_fixed "$log" "BUSYBOX_MANY_ARGV_OK" "busybox many-argv regression command did not complete" 45 160
-wait_for_fixed "$log" "BUSYBOX_ARGV300_OK" "busybox large-argv regression command did not complete" 45 160
-wait_for_fixed "$log" "BUSYBOX_LONG_ENV_OK" "busybox long-env regression command did not complete" 45 160
-wait_for_fixed "$log" "BUSYBOX_ENV300_OK" "busybox large-env regression command did not complete" 45 160
-wait_for_fixed "$log" "PIPE_OK" "busybox echo pipe did not complete" 45 180
-wait_for_fixed "$log" "PIPE_FILE_OK" "busybox cat pipe did not complete" 45 180
-wait_for_fixed "$log" "PROCFS_OK" "procfs translator read did not complete" 45 180
+check_exec_argv_pipe
 
 send_script <<'EOF_SECRET_DENIED'
 busybox cat /secret.txt

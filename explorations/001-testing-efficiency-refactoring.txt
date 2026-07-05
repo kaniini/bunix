@@ -61,13 +61,15 @@ Plan:
    - `tools/shell-tests/login-smoke.sh` owns the login smoke command batch and
      checks for login identity, environment, uname, access, stty, sleep,
      process group probes, and Ctrl-C interruption.
+   - `tools/shell-tests/exec-argv-pipe.sh` owns pipe, initial procfs read, and
+     argv/env expansion checks, including large argv/env coverage.
 
    Needs:
 
    - Extract the remaining user-phase batches:
-     `exec-argv-pipe`, `rootfs-vfs-proc-dev`, `tmpfs-basic-linux-tests`,
-     `path-limits-statfs`, `union-root-user`, `tmpfs-extended`,
-     `large-io-mount`, and `interactive-tty`.
+     `rootfs-vfs-proc-dev`, `tmpfs-basic-linux-tests`, `path-limits-statfs`,
+     `union-root-user`, `tmpfs-extended`, `large-io-mount`, and
+     `interactive-tty`.
    - Extract the root-phase batches:
      `root-login-union`, `root-tmpfs-chown`, `long-login`, and
      `root-mount-soak`.
