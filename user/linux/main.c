@@ -105,6 +105,7 @@ enum {
 	LINUX_O_WRONLY = 1,
 	LINUX_O_RDWR = 2,
 	LINUX_O_CREAT = 0100,
+	LINUX_O_EXCL = 0200,
 	LINUX_O_TRUNC = 01000,
 	LINUX_O_APPEND = 02000,
 	LINUX_O_DIRECTORY = 00200000,
@@ -2503,6 +2504,23 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER, base_handle,
 				path, &reply) != 0) {
 		return -LINUX_ENOENT;
+	}
+	if (reply.words[0] == 0 &&
+	    (flags & (LINUX_O_CREAT | LINUX_O_EXCL)) ==
+		    (LINUX_O_CREAT | LINUX_O_EXCL)) {
+		struct bunix_msg close = {
+			.protocol = BUNIX_PROTO_VFS,
+			.type = BUNIX_VFS_CLOSE,
+			.sender = 0,
+			.cap_rights = 0,
+			.reply = 0,
+			.cap = 0,
+			.words = { reply.words[1], 0, 0, 0 },
+		};
+		struct bunix_msg ignored;
+
+		(void)bunix_ipc_call(LINUX_HANDLE_VFS, &close, &ignored);
+		return -LINUX_EEXIST;
 	}
 	if (reply.words[0] == BUNIX_VFS_ERR_NOENT &&
 	    (flags & LINUX_O_CREAT) != 0) {
