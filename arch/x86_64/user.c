@@ -1524,6 +1524,36 @@ static u64 linux_read_chunked(struct ipc_port *linux,
 	return total;
 }
 
+static u64 linux_getdents64_chunked(struct ipc_port *linux,
+				    struct ipc_port *reply_port,
+				    struct ipc_message *request, u64 fd,
+				    u64 user_buffer, u64 len)
+{
+	u64 total = 0;
+
+	if (user_buffer == 0 || len == 0) {
+		return user_buffer == 0 ? (u64)-LINUX_EFAULT :
+		       (u64)-LINUX_EINVAL;
+	}
+	while (total < len) {
+		const u64 chunk = min_u64(len - total,
+					  LINUX_MAX_SYSCALL_BUFFER);
+		const u64 nread = linux_forward_output_words(
+			linux, reply_port, request, LINUX_SYSCALL_GETDENTS64,
+			(void *)(user_buffer + total), chunk, TASK_RIGHT_SEND,
+			fd, 0, 0);
+
+		if ((i64)nread < 0) {
+			return total != 0 ? total : nread;
+		}
+		if (nread == 0) {
+			break;
+		}
+		total += nread;
+	}
+	return total;
+}
+
 static u64 linux_getrandom_chunked(struct ipc_port *linux,
 				   struct ipc_port *reply_port,
 				   u64 user_buffer, u64 len)
@@ -3646,17 +3676,8 @@ poll_again:
 					  TASK_RIGHT_DUP);
 	}
 	case LINUX_SYSCALL_GETDENTS64: {
-		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
-				LINUX_MAX_SYSCALL_BUFFER : arg2;
-
-		if (arg1 == 0 || arg2 == 0) {
-			return arg1 == 0 ? (u64)-LINUX_EFAULT :
-			       (u64)-LINUX_EINVAL;
-		}
-		return linux_forward_output_words(linux, reply_port, &request,
-						  LINUX_SYSCALL_GETDENTS64,
-						  (void *)arg1, len,
-						  TASK_RIGHT_SEND, arg0, 0, 0);
+		return linux_getdents64_chunked(linux, reply_port, &request,
+						arg0, arg1, arg2);
 	}
 	case LINUX_SYSCALL_WRITE: {
 		return linux_write_chunked(linux, reply_port, arg0, arg1,
@@ -4740,21 +4761,26 @@ static u64 native_sys_handle_close(const struct native_syscall_args *args)
 
 static u64 native_sys_boot_module_read(const struct native_syscall_args *args)
 {
+	u64 done = 0;
 	u64 flags;
 
 	if (args->arg1 == 0) {
 		return server_boot_module_size();
 	}
-	if (args->arg2 > LINUX_MAX_SYSCALL_BUFFER) {
-		return (u64)-1;
-	}
+
 	flags = spin_lock_irqsave(&syscall_copy_lock);
-	if (server_boot_module_read(args->arg0, syscall_copy_buffer,
-				    args->arg2) != 0 ||
-	    write_current_user(args->arg1, syscall_copy_buffer,
-			       args->arg2) != 0) {
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
-		return (u64)-1;
+	while (done < args->arg2) {
+		const u64 chunk = min_u64(args->arg2 - done,
+					  LINUX_MAX_SYSCALL_BUFFER);
+
+		if (server_boot_module_read(args->arg0 + done,
+					    syscall_copy_buffer, chunk) != 0 ||
+		    write_current_user(args->arg1 + done, syscall_copy_buffer,
+				       chunk) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			return (u64)-1;
+		}
+		done += chunk;
 	}
 	spin_unlock_irqrestore(&syscall_copy_lock, flags);
 	return 0;
