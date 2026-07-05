@@ -3542,6 +3542,21 @@ static long linux_sysinfo(u64 buffer)
 	       -LINUX_EINVAL;
 }
 
+static long linux_getrandom(u64 len, u64 buffer)
+{
+	u64 done = 0;
+
+	if (buffer == 0 || len > LINUX_MAX_WRITE) {
+		return -LINUX_EINVAL;
+	}
+	while (done < len) {
+		write_buffer[done] = (char)(0xa5u ^ (unsigned char)done);
+		done++;
+	}
+	return bunix_buffer_write(buffer, 0, write_buffer, len) == 0 ?
+	       (long)len : (long)-LINUX_EINVAL;
+}
+
 static void linux_close_process_fds(struct linux_process *process)
 {
 	if (process == 0) {
@@ -4019,6 +4034,13 @@ int main(void)
 			break;
 		case BUNIX_LINUX_SYSINFO:
 			reply.words[0] = (u64)linux_sysinfo(message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_GETRANDOM:
+			reply.words[0] = (u64)linux_getrandom(message.words[1],
+							     message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

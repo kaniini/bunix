@@ -2953,22 +2953,6 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			return linux_sleep_absolute(arg2);
 		}
 		return linux_sleep_relative(arg2, arg3);
-	case LINUX_SYSCALL_GETRANDOM: {
-		u64 done = 0;
-
-		if (arg0 == 0 || arg1 > LINUX_MAX_SYSCALL_BUFFER) {
-			return (u64)-LINUX_EINVAL;
-		}
-		while (done < arg1) {
-			const u8 value = (u8)(0xa5u ^ (u8)done);
-
-			if (write_current_user(arg0 + done, &value, 1) != 0) {
-				return (u64)-LINUX_EINVAL;
-			}
-			done++;
-		}
-		return arg1;
-	}
 	case LINUX_SYSCALL_PRLIMIT64:
 		if (arg3 != 0) {
 			u64 limit[2] = { 0x800000, 0x800000 };
@@ -3210,6 +3194,15 @@ poll_again:
 						  (void *)arg1, len,
 						  TASK_RIGHT_SEND,
 						  arg0, arg3, 0);
+	}
+	case LINUX_SYSCALL_GETRANDOM: {
+		if (arg0 == 0 || arg1 > LINUX_MAX_SYSCALL_BUFFER) {
+			return (u64)-LINUX_EINVAL;
+		}
+		return linux_forward_output_words(linux, reply_port, &request,
+						  LINUX_SYSCALL_GETRANDOM,
+						  (void *)arg0, arg1,
+						  TASK_RIGHT_SEND, 0, 0, 0);
 	}
 	case LINUX_SYSCALL_SENDFILE:
 		return (u64)-LINUX_EINVAL;
