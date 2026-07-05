@@ -81,6 +81,7 @@ printf '/bin/iovtest && echo IOVTEST_OK\n/bin/fchmodattest\n/bin/waitpgidtest\n/
 printf 'busybox mkdir -p /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_EXISTING_ROOT_OK\nbusybox test -d /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_NESTED_OK\nbusybox mkdir /tmp || echo TMP_MKDIR_EXISTING_ROOT_DENY_OK\nbusybox mkdir -p /union-mkdir-p/a/b && echo UNION_MKDIR_P_ROOT_OK\nbusybox test -d /union-mkdir-p/a/b && echo UNION_MKDIR_P_CHILD_OK\nbusybox mkdir /usr || echo UNION_MKDIR_EXISTING_LOWER_DENY_OK\n' >&3
 printf 'busybox grep "PPid:\t1" /proc/$$/status && echo PROC_SHELL_PPID_OK\n' >&3
 printf '/bin/cat /proc/self/cmdline | busybox grep -a /bin/cat && echo PROC_SELF_CMDLINE_CALLER_OK\n' >&3
+printf 'busybox sh -c '"'"'/bin/cat /proc/$$/cmdline | busybox grep -a PROC_ARGV_SENTINEL && echo PROC_ARGV_CMDLINE_OK'"'"' PROC_ARGV_SENTINEL\n' >&3
 printf 'busybox test -c /dev/null && echo DEV_NULL_CHAR_OK\nbusybox test -c /dev/zero && echo DEV_ZERO_CHAR_OK\nbusybox test -c /dev/console && echo DEV_CONSOLE_CHAR_OK\n' >&3
 printf '/bin/execbig && echo EXECBIG_OK\n' >&3
 printf 'busybox sh -c '"'"'i=0; while [ "$i" -lt 300 ]; do printf a; i=$((i + 1)); done; echo DEV_CONSOLE_BIG_END'"'"' > /dev/console && echo DEV_CONSOLE_BIG_WRITE_OK\n' >&3
@@ -390,6 +391,17 @@ while ! grep -F "PROC_SELF_CMDLINE_CALLER_OK" "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
 	if [ "$i" -gt 45 ]; then
 		echo "procfs self cmdline did not resolve caller" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+i=0
+while ! grep -F "PROC_ARGV_CMDLINE_OK" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "procfs cmdline did not expose argv bytes" >&2
 		tail -n 180 "$log" >&2 || true
 		exit 1
 	fi

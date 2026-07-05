@@ -210,6 +210,7 @@ enum {
 	LINUX_EXEC_MAX_STRING = 128 * 1024,
 	LINUX_EXEC_MAX_STRING_BYTES = 384 * 1024,
 	LINUX_MAX_GROUPS = 65536,
+	LINUX_PROC_CMDLINE_MAX = 4096,
 	LINUX_EXEC_DYN_LOAD_BIAS = 0x400000,
 	LINUX_EXEC_INTERP_LOAD_BIAS = 0x600000,
 	LINUX_EXEC_STACK_TOP = 0x800000,
@@ -2738,7 +2739,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			const char *user_path) __attribute__((noinline));
 static u64 linux_exec_process(struct task *task);
 static void linux_proc_set_cmdline(struct task *task, u64 linux_pid,
-				   const char *path);
+				   const struct linux_exec_args *args);
 
 static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			const char *user_path)
@@ -2946,7 +2947,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		linux_exec_args_free(&args);
 		return exec_result;
 	}
-	linux_proc_set_cmdline(task, exec_result, path);
+	linux_proc_set_cmdline(task, exec_result, &args);
 	linux_vfork_complete_task(task_id(task));
 	console_printf("linux: execve task=%u path=%s entry=%p stack=%p\n",
 		       task_id(task), path, (const void *)entry,
@@ -3008,12 +3009,12 @@ static u64 linux_exec_process(struct task *task)
 }
 
 static void linux_proc_set_cmdline(struct task *task, u64 linux_pid,
-				   const char *path)
+				   const struct linux_exec_args *args)
 {
 	struct ipc_port *proc = ipc_port_find("proc");
 	struct ipc_port *reply_port = task_reply_port(task);
 	struct shared_buffer *buffer;
-	u64 len;
+	u64 len = 0;
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_PROC,
 		.type = USER_PROC_SET_CMDLINE_BUFFER,
@@ -3026,17 +3027,35 @@ static void linux_proc_set_cmdline(struct task *task, u64 linux_pid,
 	};
 	struct ipc_message reply;
 
-	if (proc == 0 || reply_port == 0 || linux_pid == 0 || path == 0) {
+	if (proc == 0 || reply_port == 0 || linux_pid == 0 ||
+	    args == 0 || args->argc == 0) {
 		return;
 	}
-	len = str_len(path) + 1;
-	if (len == 0 || len > LINUX_EXEC_MAX_PATH) {
+	for (u64 i = 0; i < args->argc; i++) {
+		const u64 arg_len = str_len(args->argv[i]) + 1;
+
+		if (arg_len == 1 || len + arg_len < len ||
+		    len + arg_len > LINUX_PROC_CMDLINE_MAX) {
+			return;
+		}
+		len += arg_len;
+	}
+	if (len == 0) {
 		return;
 	}
 	buffer = buffer_create(len);
-	if (buffer == 0 || buffer_write(buffer, 0, path, len) != 0) {
+	if (buffer == 0) {
 		buffer_release(buffer);
 		return;
+	}
+	for (u64 i = 0, offset = 0; i < args->argc; i++) {
+		const u64 arg_len = str_len(args->argv[i]) + 1;
+
+		if (buffer_write(buffer, offset, args->argv[i], arg_len) != 0) {
+			buffer_release(buffer);
+			return;
+		}
+		offset += arg_len;
 	}
 	request.cap_object = buffer;
 	request.words[2] = len;

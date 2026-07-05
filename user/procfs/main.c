@@ -280,18 +280,19 @@ static int proc_at(u64 index, struct proc_info *info)
 	return 0;
 }
 
-static int proc_cmdline(u64 pid, char *out, u64 out_size)
+static int proc_cmdline_bytes(u64 pid, char *out, u64 out_size, u64 *len_out)
 {
 	struct bunix_msg reply;
 	u64 len;
 	long buffer;
 
-	if (out == 0 || out_size == 0) {
+	if (out == 0 || out_size == 0 || len_out == 0) {
 		return -1;
 	}
 	for (u64 i = 0; i < out_size; i++) {
 		out[i] = '\0';
 	}
+	*len_out = 0;
 	buffer = bunix_buffer_create(out_size);
 	if (buffer > 0 &&
 	    proc_call_buffer(BUNIX_PROC_CMDLINE_BUFFER, pid, 0, 0,
@@ -305,6 +306,7 @@ static int proc_cmdline(u64 pid, char *out, u64 out_size)
 			bunix_handle_close((u64)buffer);
 			return -1;
 		}
+		*len_out = len;
 		out[len] = '\0';
 		bunix_handle_close((u64)buffer);
 		return 0;
@@ -313,6 +315,13 @@ static int proc_cmdline(u64 pid, char *out, u64 out_size)
 		bunix_handle_close((u64)buffer);
 	}
 	return -1;
+}
+
+static int proc_cmdline(u64 pid, char *out, u64 out_size)
+{
+	u64 len = 0;
+
+	return proc_cmdline_bytes(pid, out, out_size, &len);
 }
 
 static int proc_details(u64 pid, struct proc_details *details)
@@ -567,6 +576,17 @@ static void append_str(u64 *len, const char *src)
 {
 	while (*src != '\0') {
 		append_char(len, *src++);
+	}
+}
+
+static void append_bytes(u64 *len, const char *src, u64 count)
+{
+	if (text_reserve(*len + count + 1) == 0) {
+		for (u64 i = 0; i < count; i++) {
+			text[*len + i] = src[i];
+		}
+		*len += count;
+		text[*len] = '\0';
 	}
 }
 
@@ -1076,9 +1096,18 @@ static u64 build_pid_status(u64 pid)
 static u64 build_pid_cmdline(u64 pid)
 {
 	u64 len = 0;
+	char cmdline[PROCFS_MAX_PATH];
+	u64 cmdline_len = 0;
 
-	append_str(&len, pid_cmdline(pid));
-	append_char(&len, '\0');
+	if (proc_cmdline_bytes(pid, cmdline, sizeof(cmdline),
+			       &cmdline_len) != 0 ||
+	    cmdline_len == 0) {
+		append_str(&len, pid_cmdline(pid));
+		append_char(&len, '\0');
+	} else {
+		append_bytes(&len, cmdline, cmdline_len);
+		append_char(&len, '\0');
+	}
 	return len;
 }
 
