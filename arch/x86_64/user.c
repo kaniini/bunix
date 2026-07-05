@@ -967,21 +967,19 @@ static int linux_mmap_file_into_task(struct task *task, struct ipc_port *linux,
 				     u64 len, u64 fd, u64 offset)
 {
 	struct shared_buffer *buffer;
-	u64 flags;
 
 	if (linux == 0 || reply_port == 0 || len == 0 ||
 	    (offset & (VM_PAGE_SIZE - 1)) != 0) {
 		return -1;
 	}
 
-	buffer = buffer_create(LINUX_MAX_SYSCALL_BUFFER);
+	buffer = buffer_create(LINUX_MAX_SHARED_BUFFER);
 	if (buffer == 0) {
 		return -1;
 	}
 
-	flags = spin_lock_irqsave(&syscall_copy_lock);
 	for (u64 done = 0; done < len;) {
-		const u64 chunk = min_u64(len - done, LINUX_MAX_SYSCALL_BUFFER);
+		const u64 chunk = min_u64(len - done, LINUX_MAX_SHARED_BUFFER);
 		struct ipc_message request = {
 			.protocol = USER_FOURCC_LINX,
 			.type = LINUX_SYSCALL_MMAP,
@@ -998,24 +996,30 @@ static int linux_mmap_file_into_task(struct task *task, struct ipc_port *linux,
 		    ipc_recv(reply_port, &reply) != 0 ||
 		    (i64)reply.words[0] < 0 ||
 		    reply.words[0] > chunk) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
 			buffer_release(buffer);
 			return -1;
 		}
 		if (reply.words[0] == 0) {
 			break;
 		}
-		if (buffer_read(buffer, 0, syscall_copy_buffer,
-				reply.words[0]) != 0 ||
-		    vm_write_user(task_vm_space(task), base + done,
-				  syscall_copy_buffer, reply.words[0]) != 0) {
+		for (u64 copied = 0; copied < reply.words[0];) {
+			const u64 copy = min_u64(reply.words[0] - copied,
+						 LINUX_MAX_SYSCALL_BUFFER);
+			const u64 flags = spin_lock_irqsave(&syscall_copy_lock);
+
+			if (buffer_read(buffer, copied, syscall_copy_buffer,
+					copy) != 0 ||
+			    vm_write_user(task_vm_space(task), base + done +
+					  copied, syscall_copy_buffer, copy) != 0) {
+				spin_unlock_irqrestore(&syscall_copy_lock, flags);
+				buffer_release(buffer);
+				return -1;
+			}
 			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			buffer_release(buffer);
-			return -1;
+			copied += copy;
 		}
 		done += reply.words[0];
 	}
-	spin_unlock_irqrestore(&syscall_copy_lock, flags);
 
 	buffer_release(buffer);
 	return 0;

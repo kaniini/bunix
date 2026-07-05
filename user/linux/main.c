@@ -78,6 +78,7 @@ enum {
 	LINUX_ECHOE = 0000020,
 	LINUX_ECHOK = 0000040,
 	LINUX_MAX_WRITE = 65536,
+	LINUX_MAX_MMAP_BUFFER = 1024 * 1024,
 	LINUX_MAX_DIRENT_BUFFER = 512 * 1024,
 	LINUX_MAX_PATH = 4096,
 	LINUX_NAME_MAX = 255,
@@ -4161,7 +4162,7 @@ static long linux_mmap_read(struct linux_process *process, u64 fd, u64 offset,
 	};
 	struct bunix_msg reply;
 
-	if (buffer == 0 || len > LINUX_MAX_WRITE) {
+	if (buffer == 0 || len > LINUX_MAX_MMAP_BUFFER) {
 		if (buffer == 0) {
 			return -LINUX_EFAULT;
 		}
