@@ -713,9 +713,7 @@ static int forward_mount_path(struct vfs_mount *mount, struct bunix_msg *message
 		reply->words[0] = (u64)-1;
 		return -1;
 	}
-	if ((message->type == BUNIX_VFS_OPEN ||
-	     message->type == BUNIX_VFS_OPEN_BUFFER) &&
-	    reply->words[0] == 0) {
+	if (message->type == BUNIX_VFS_OPEN_BUFFER && reply->words[0] == 0) {
 		const u64 remote_handle = reply->words[1];
 		const u64 local_handle =
 			open_remote_file(mount->service, remote_handle, path,
@@ -770,9 +768,6 @@ static int forward_mount_buffer_path(struct vfs_mount *mount,
 	forwarded.cap = (u64)buffer;
 	forwarded.cap_rights = BUNIX_RIGHT_RECV |
 			       (out_cap != 0 ? BUNIX_RIGHT_SEND : 0);
-	if (forwarded.type == BUNIX_VFS_OPEN) {
-		forwarded.type = BUNIX_VFS_OPEN_BUFFER;
-	}
 	forwarded.words[0] = cwd_len;
 	forwarded.words[1] = path_len;
 	forwarded.words[2] = 0;
@@ -871,100 +866,6 @@ static void vfs_open_path(struct bunix_msg *message,
 			  struct bunix_msg *reply,
 			  const char *path);
 
-static void close_open_handle(u64 handle)
-{
-	struct vfs_open *open = open_from_handle(handle);
-
-	if (open == 0) {
-		return;
-	}
-	if (open->kind == VFS_OPEN_REMOTE) {
-		struct bunix_msg close = {
-			.protocol = BUNIX_PROTO_VFS,
-			.type = BUNIX_VFS_CLOSE,
-			.words = { open->remote_handle, 0, 0, 0 },
-		};
-		struct bunix_msg ignored;
-
-		(void)bunix_ipc_call(open->service, &close, &ignored);
-	}
-	forget_open_file(handle);
-}
-
-static void read_file_handle_to_buffer(u64 handle,
-				       u64 offset,
-				       u64 len,
-				       u64 buffer,
-				       struct bunix_msg *reply)
-{
-	struct vfs_open *open = open_from_handle(handle);
-	const struct rootfs_entry *entry = root_file_from_handle(handle);
-	int read_len;
-
-	if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
-		struct bunix_msg read = {
-			.protocol = BUNIX_PROTO_VFS,
-			.type = BUNIX_VFS_READ_FILE_BUFFER,
-			.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
-			.cap = buffer,
-			.words = { handle, offset, len, 0 },
-		};
-
-		(void)forward_remote_handle(open, &read, reply);
-		return;
-	}
-	if (entry == 0 ||
-	    entry->type != BUNIX_VFS_TYPE_REGULAR ||
-	    buffer == 0) {
-		reply->words[0] = (u64)-1;
-		return;
-	}
-	if (offset >= entry->size) {
-		len = 0;
-	} else if (len > entry->size - offset) {
-		len = entry->size - offset;
-	}
-	if (len == 0) {
-		reply->words[0] = 0;
-		reply->words[1] = 0;
-		return;
-	}
-	read_len = block_read_buffer(root_block, entry->offset + offset,
-				     buffer, len);
-	if (read_len < 0) {
-		reply->words[0] = (u64)-1;
-		reply->words[1] = 0;
-	} else {
-		reply->words[0] = 0;
-		reply->words[1] = (u64)read_len;
-	}
-}
-
-static void read_path_to_buffer(const char *path,
-				u64 offset,
-				u64 len,
-				u64 buffer,
-				struct bunix_msg *reply)
-{
-	struct bunix_msg open_request = {
-		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_OPEN_BUFFER,
-		.words = { 0, 0, 0, 0 },
-	};
-	struct bunix_msg open_reply = {
-		.words = { (u64)-1, 0, 0, 0 },
-	};
-
-	vfs_open_path(&open_request, &open_reply, path);
-	if (open_reply.words[0] != 0) {
-		reply->words[0] = open_reply.words[0];
-		return;
-	}
-	read_file_handle_to_buffer(open_reply.words[1], offset, len, buffer,
-				   reply);
-	close_open_handle(open_reply.words[1]);
-}
-
 static long mount_translator(const char *path, u64 service, u64 fstype)
 {
 	struct vfs_mount *mount;
@@ -1038,8 +939,7 @@ static void vfs_open_path(struct bunix_msg *message, struct bunix_msg *reply,
 	if (mount != 0) {
 		struct bunix_msg forwarded = *message;
 
-		if (message->type == BUNIX_VFS_OPEN ||
-		    message->type == BUNIX_VFS_OPEN_BUFFER) {
+		if (message->type == BUNIX_VFS_OPEN_BUFFER) {
 			(void)forward_mount_buffer_path(mount, message, reply,
 							path);
 			return;
@@ -1239,65 +1139,6 @@ int main(void)
 
 		reply.type = message.type;
 		switch (message.type) {
-		case BUNIX_VFS_READ:
-			reply.words[0] = (u64)-1;
-			break;
-		case BUNIX_VFS_READ_PATH: {
-			char path[VFS_MAX_PATH];
-			const u64 offset = message.words[2];
-			u64 len = message.words[3];
-			const long buffer =
-				bunix_buffer_create(BUNIX_IPC_DATA_BYTES);
-			unsigned char data[BUNIX_IPC_DATA_BYTES];
-
-			unpack_path(path, &message.words[0]);
-			if (buffer < 0) {
-				reply.words[0] = (u64)-1;
-				break;
-			}
-			if (len > BUNIX_IPC_DATA_BYTES) {
-				len = BUNIX_IPC_DATA_BYTES;
-			}
-			read_path_to_buffer(path, offset, len, (u64)buffer,
-					    &reply);
-			if (reply.words[0] == 0 && reply.words[1] != 0 &&
-			    bunix_buffer_read((u64)buffer, 0, data,
-					      reply.words[1]) != 0) {
-				reply.words[0] = (u64)-1;
-				reply.words[1] = 0;
-			}
-			if (reply.words[0] == 0) {
-				pack_bytes(&reply.words[2], data,
-					   reply.words[1]);
-			}
-			bunix_handle_close((u64)buffer);
-			break;
-		}
-		case BUNIX_VFS_READ_PATH_BUFFER: {
-			char path[VFS_MAX_PATH];
-			const u64 offset = message.words[2];
-			u64 len = message.words[3];
-
-			unpack_path(path, &message.words[0]);
-
-			if (message.cap == 0 ||
-			    (message.cap_rights & (BUNIX_RIGHT_SEND |
-						   BUNIX_RIGHT_DUP)) !=
-			    (BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP)) {
-				reply.words[0] = (u64)-1;
-				break;
-			}
-			read_path_to_buffer(path, offset, len, message.cap,
-					    &reply);
-			break;
-		}
-		case BUNIX_VFS_OPEN: {
-			char path[VFS_MAX_PATH];
-
-			unpack_path(path, &message.words[0]);
-			vfs_open_path(&message, &reply, path);
-			break;
-		}
 		case BUNIX_VFS_OPEN_BUFFER: {
 			char cwd[VFS_MAX_PATH];
 			char input[VFS_MAX_PATH];
@@ -1317,13 +1158,6 @@ int main(void)
 				break;
 			}
 			vfs_open_path(&message, &reply, path);
-			break;
-		}
-		case BUNIX_VFS_STAT_PATH_META: {
-			char path[VFS_MAX_PATH];
-
-			unpack_path(path, &message.words[0]);
-			vfs_stat_path(&message, &reply, path);
 			break;
 		}
 		case BUNIX_VFS_STAT_PATH_META_BUFFER: {

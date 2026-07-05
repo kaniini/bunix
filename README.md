@@ -270,6 +270,9 @@ names, so Linux `getdents64(2)` can return names longer than the inline IPC word
 payload. The old packed 16-byte VFS directory-entry protocol has been removed;
 the shell regression creates and lists long filenames through both tmpfs and the
 writable union root to cover this path.
+VFS read, open, and path metadata lookups now use open handles plus
+shared-buffer transport through proc, Linux, VFS, and mounted translators; the
+old inline-word read/open/stat path operations have been removed.
 Linux `readlink(2)`/`readlinkat(2)` now use a buffer-backed VFS target window
 through VFS, unionfs, rootfs, and procfs, so symlink targets are no longer
 truncated to the inline IPC word payload.

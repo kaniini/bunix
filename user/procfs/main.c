@@ -1273,34 +1273,6 @@ int main(void)
 
 		reply.type = message.type;
 		switch (message.type) {
-		case BUNIX_VFS_OPEN:
-		case BUNIX_VFS_STAT_PATH_META: {
-			char path[PROCFS_MAX_PATH];
-			const u64 file = (unpack_path(path, &message.words[0]),
-					  file_for_path(path));
-
-			if (file == 0) {
-				reply.words[0] = BUNIX_VFS_ERR_NOENT;
-				break;
-			}
-			if (message.type == BUNIX_VFS_STAT_PATH_META) {
-				stat_reply(&reply, file);
-			} else {
-				const u64 handle = open_file(file);
-
-				if (handle == 0) {
-					reply.words[0] = (u64)-1;
-				} else {
-					reply.words[0] = 0;
-					reply.words[1] = handle;
-					reply.words[2] = file_size(file);
-					reply.words[3] = file_is_dir(file) ?
-						BUNIX_VFS_TYPE_DIRECTORY :
-						BUNIX_VFS_TYPE_REGULAR;
-				}
-			}
-			break;
-		}
 		case BUNIX_VFS_OPEN_BUFFER:
 		case BUNIX_VFS_STAT_PATH_META_BUFFER: {
 			char path[PROCFS_MAX_PATH];

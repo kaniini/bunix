@@ -96,16 +96,6 @@ static u64 resolve_service(u64 service, unsigned int rights)
 	return resolve_service_in_namespace(BUNIX_NAMES_ROOT, service, rights);
 }
 
-static void unpack_bytes(char *out, const u64 *words, u64 len)
-{
-	for (u64 i = 0; i < len; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		out[i] = (char)((words[slot] >> shift) & 0xff);
-	}
-}
-
 static void pack_path(u64 *words, const char *path)
 {
 	words[0] = 0;
@@ -291,34 +281,86 @@ struct boot_path_command {
 
 static long vfs_read_text(u64 vfs, const char *path, char *out, u64 out_size)
 {
-	const long buffer = bunix_buffer_create(out_size);
-	struct bunix_msg request = {
+	const char cwd[] = "/";
+	const u64 cwd_len = sizeof(cwd);
+	const u64 path_len = path != 0 ? str_len(path) + 1 : 0;
+	const long path_buffer = path_len != 0 ?
+				 bunix_buffer_create(cwd_len + path_len) : -1;
+	const long io_buffer = out_size != 0 ? bunix_buffer_create(out_size) :
+					       -1;
+	struct bunix_msg open_request = {
 		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_READ_PATH_BUFFER,
+		.type = BUNIX_VFS_OPEN_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = path_buffer > 0 ? (u64)path_buffer : 0,
+		.words = { cwd_len, path_len, 0, 0 },
+	};
+	struct bunix_msg read_request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_READ_FILE_BUFFER,
 		.sender = 0,
 		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 		.reply = 0,
-		.cap = buffer > 0 ? (u64)buffer : 0,
-		.words = { 0, 0, 0, out_size - 1 },
+		.cap = io_buffer > 0 ? (u64)io_buffer : 0,
+		.words = { 0, 0, out_size != 0 ? out_size - 1 : 0, 0 },
+	};
+	struct bunix_msg close_request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_CLOSE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
 	};
 	struct bunix_msg reply;
+	u64 read_len;
 
 	if (vfs == 0 || path == 0 || out == 0 || out_size == 0 ||
-	    out_size > BOOT_CONFIG_MAX || buffer <= 0) {
-		if (buffer > 0) {
-			bunix_handle_close((u64)buffer);
+	    out_size > BOOT_CONFIG_MAX || path_buffer <= 0 ||
+	    io_buffer <= 0 ||
+	    bunix_buffer_write((u64)path_buffer, 0, cwd, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)path_buffer, cwd_len, path,
+			       path_len) != 0) {
+		if (path_buffer > 0) {
+			bunix_handle_close((u64)path_buffer);
+		}
+		if (io_buffer > 0) {
+			bunix_handle_close((u64)io_buffer);
 		}
 		return -1;
 	}
-	pack_path(&request.words[0], path);
-	if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
-	    reply.words[0] != 0 || reply.words[1] >= out_size ||
-	    bunix_buffer_read((u64)buffer, 0, out, reply.words[1]) != 0) {
-		bunix_handle_close((u64)buffer);
+	if (bunix_ipc_call(vfs, &open_request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] == 0 ||
+	    reply.words[3] != BUNIX_VFS_TYPE_REGULAR) {
+		bunix_handle_close((u64)path_buffer);
+		bunix_handle_close((u64)io_buffer);
 		return -1;
 	}
-	out[reply.words[1]] = '\0';
-	bunix_handle_close((u64)buffer);
+	bunix_handle_close((u64)path_buffer);
+	read_request.words[0] = reply.words[1];
+	if (reply.words[2] < read_request.words[2]) {
+		read_request.words[2] = reply.words[2];
+	}
+	if (bunix_ipc_call(vfs, &read_request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] >= out_size ||
+	    bunix_buffer_read((u64)io_buffer, 0, out, reply.words[1]) != 0) {
+		close_request.words[0] = read_request.words[0];
+		(void)bunix_ipc_call(vfs, &close_request, &reply);
+		bunix_handle_close((u64)io_buffer);
+		return -1;
+	}
+	read_len = reply.words[1];
+	close_request.words[0] = read_request.words[0];
+	if (bunix_ipc_call(vfs, &close_request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		bunix_handle_close((u64)io_buffer);
+		return -1;
+	}
+	out[read_len] = '\0';
+	bunix_handle_close((u64)io_buffer);
 	return 0;
 }
 
@@ -748,14 +790,6 @@ int main(void)
 	const char names_ready[] = "bootstrap: names ready\n";
 	const char fs_namespace_ready[] = "bootstrap: fs namespace\n";
 	const char fs_ready[] = "bootstrap: fs ready\n";
-	struct bunix_msg vfs_request = {
-		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_READ_PATH,
-		.sender = 0,
-		.reply = 0,
-		.words = { 0, 0, 0, 16 },
-	};
-	struct bunix_msg vfs_reply;
 	char file[17];
 	u64 console;
 	u64 vm;
@@ -913,12 +947,8 @@ int main(void)
 	if (register_proc_execs(proc, vfs) != 0) {
 		return 1;
 	}
-	pack_path(&vfs_request.words[0], "/hello.txt");
-	if (bunix_ipc_call(vfs, &vfs_request, &vfs_reply) == 0 &&
-	    vfs_reply.words[0] == 0 && vfs_reply.words[1] <= 16) {
-		unpack_bytes(file, &vfs_reply.words[2], vfs_reply.words[1]);
-		file[vfs_reply.words[1]] = '\0';
-		bunix_console_log(file, vfs_reply.words[1]);
+	if (vfs_read_text(vfs, "/hello.txt", file, sizeof(file)) == 0) {
+		bunix_console_log(file, str_len(file));
 	}
 
 	const char linux_init_exec[] = "bootstrap: linux init exec\n";

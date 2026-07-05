@@ -222,7 +222,6 @@ enum {
 	USER_CONSOLE_WRITE = 1,
 	USER_CONSOLE_LOG = 2,
 	USER_CONSOLE_LOGS_TO_RING = 3,
-	USER_VFS_OPEN = 4,
 	USER_VFS_STAT = 5,
 	USER_VFS_READ_FILE_BUFFER = 6,
 	USER_VFS_CLOSE = 7,
@@ -541,18 +540,6 @@ static u64 str_len(const char *value)
 	return len;
 }
 
-static void pack_bytes(u64 *words, const u8 *data, u64 len)
-{
-	words[0] = 0;
-	words[1] = 0;
-	for (u64 i = 0; i < len && i < 16; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)data[i]) << shift;
-	}
-}
-
 static int read_current_user(u64 vaddr, void *dst, u64 len)
 {
 	return vm_read_user(task_vm_space(task_current()), vaddr, dst, len);
@@ -771,13 +758,15 @@ static int linux_vfs_read_file(struct task *task, const char *path,
 {
 	struct ipc_port *vfs = ipc_port_find("vfs");
 	struct ipc_port *reply_port = task_reply_port(task);
-	u64 packed[2];
 	struct ipc_message request;
 	struct ipc_message reply;
 	u64 file;
 	u64 size;
 	struct shared_buffer *buffer;
 	const u64 path_len = str_len(path) + 1;
+	const char cwd[] = "/";
+	const u64 cwd_len = sizeof(cwd);
+	struct shared_buffer *path_buffer;
 	u8 *image;
 
 	if (vfs == 0 || reply_port == 0 || path == 0 || image_out == 0 ||
@@ -786,58 +775,32 @@ static int linux_vfs_read_file(struct task *task, const char *path,
 	}
 	*image_out = 0;
 
-	if (path_len <= 16) {
-		pack_bytes(packed, (const u8 *)path, path_len);
-		request = (struct ipc_message){
-			.protocol = USER_FOURCC_VFS,
-			.type = USER_VFS_OPEN,
-			.sender = 0,
-			.cap_rights = 0,
-			.reply_port = reply_port,
-			.cap_type = IPC_CAP_NONE,
-			.cap_object = 0,
-			.words = { packed[0], packed[1], 0, 0 },
-		};
-	} else {
-		const char cwd[] = "/";
-		const u64 cwd_len = sizeof(cwd);
-		struct shared_buffer *path_buffer =
-			buffer_create(cwd_len + path_len);
-
-		if (path_buffer == 0 ||
-		    buffer_write(path_buffer, 0, cwd, cwd_len) != 0 ||
-		    buffer_write(path_buffer, cwd_len, path, path_len) != 0) {
-			buffer_release(path_buffer);
-			return -1;
-		}
-		request = (struct ipc_message){
-			.protocol = USER_FOURCC_VFS,
-			.type = USER_VFS_OPEN_BUFFER,
-			.sender = 0,
-			.cap_rights = TASK_RIGHT_RECV,
-			.reply_port = reply_port,
-			.cap_type = IPC_CAP_BUFFER,
-			.cap_object = path_buffer,
-			.words = { cwd_len, path_len, 0, 0 },
-		};
-		if (ipc_send(vfs, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0 ||
-		    reply.words[0] != 0 ||
-		    reply.words[3] != USER_VFS_TYPE_REGULAR) {
-			buffer_release(path_buffer);
-			return -1;
-		}
+	path_buffer = buffer_create(cwd_len + path_len);
+	if (path_buffer == 0 ||
+	    buffer_write(path_buffer, 0, cwd, cwd_len) != 0 ||
+	    buffer_write(path_buffer, cwd_len, path, path_len) != 0) {
 		buffer_release(path_buffer);
-		goto opened;
+		return -1;
 	}
+	request = (struct ipc_message){
+		.protocol = USER_FOURCC_VFS,
+		.type = USER_VFS_OPEN_BUFFER,
+		.sender = 0,
+		.cap_rights = TASK_RIGHT_RECV,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_BUFFER,
+		.cap_object = path_buffer,
+		.words = { cwd_len, path_len, 0, 0 },
+	};
 	if (ipc_send(vfs, &request) != 0 ||
 	    ipc_recv(reply_port, &reply) != 0 ||
 	    reply.words[0] != 0 ||
 	    reply.words[3] != USER_VFS_TYPE_REGULAR) {
+		buffer_release(path_buffer);
 		return -1;
 	}
+	buffer_release(path_buffer);
 
-opened:
 	file = reply.words[1];
 	size = reply.words[2];
 	if (size == 0 || size > image_cap) {

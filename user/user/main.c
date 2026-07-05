@@ -64,17 +64,14 @@ static u64 resolve_service(u64 service, unsigned int rights)
 	return reply.cap;
 }
 
-static void pack_path(u64 *words, const char *path)
+static u64 str_len(const char *text)
 {
-	words[0] = 0;
-	words[1] = 0;
+	u64 len = 0;
 
-	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
+	while (text[len] != '\0') {
+		len++;
 	}
+	return len;
 }
 
 static long register_service(u64 service)
@@ -338,38 +335,87 @@ static u64 field_end(const char *text, u64 len, u64 cursor, char sep)
 static long read_account_file(const char *path, char *buffer, u64 buffer_size,
 			      u64 *out_len)
 {
-	struct bunix_msg request = {
+	const char cwd[] = "/";
+	const u64 cwd_len = sizeof(cwd);
+	const u64 path_len = path != 0 ? str_len(path) + 1 : 0;
+	const long path_buffer = path_len != 0 ?
+				 bunix_buffer_create(cwd_len + path_len) : -1;
+	const long io_buffer = bunix_buffer_create(buffer_size);
+	struct bunix_msg open_request = {
 		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_READ_PATH_BUFFER,
+		.type = BUNIX_VFS_OPEN_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = path_buffer > 0 ? (u64)path_buffer : 0,
+		.words = { cwd_len, path_len, 0, 0 },
+	};
+	struct bunix_msg read_request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_READ_FILE_BUFFER,
 		.sender = 0,
 		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 		.reply = 0,
+		.cap = io_buffer > 0 ? (u64)io_buffer : 0,
+		.words = { 0, 0, buffer_size != 0 ? buffer_size - 1 : 0, 0 },
+	};
+	struct bunix_msg close_request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_CLOSE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
 		.cap = 0,
-		.words = { 0, 0, 0, buffer_size - 1 },
+		.words = { 0, 0, 0, 0 },
 	};
 	struct bunix_msg reply;
 	const u64 vfs = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
-	const long io_buffer = bunix_buffer_create(buffer_size);
+	u64 read_len;
 
-	if (vfs == 0 || io_buffer <= 0 || buffer == 0 || out_len == 0) {
+	if (vfs == 0 || path == 0 || path_buffer <= 0 || io_buffer <= 0 ||
+	    buffer == 0 || buffer_size == 0 || out_len == 0 ||
+	    bunix_buffer_write((u64)path_buffer, 0, cwd, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)path_buffer, cwd_len, path,
+			       path_len) != 0) {
+		if (path_buffer > 0) {
+			bunix_handle_close((u64)path_buffer);
+		}
 		if (io_buffer > 0) {
 			bunix_handle_close((u64)io_buffer);
 		}
 		return -1;
 	}
 
-	pack_path(&request.words[0], path);
-	request.cap = (u64)io_buffer;
-	if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
-	    reply.words[0] != 0 ||
-	    reply.words[1] >= buffer_size ||
-	    bunix_buffer_read((u64)io_buffer, 0, buffer,
-			      reply.words[1]) != 0) {
+	if (bunix_ipc_call(vfs, &open_request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] == 0 ||
+	    reply.words[3] != BUNIX_VFS_TYPE_REGULAR) {
+		bunix_handle_close((u64)path_buffer);
 		bunix_handle_close((u64)io_buffer);
 		return -1;
 	}
-	buffer[reply.words[1]] = '\0';
-	*out_len = reply.words[1];
+	bunix_handle_close((u64)path_buffer);
+	read_request.words[0] = reply.words[1];
+	if (reply.words[2] < read_request.words[2]) {
+		read_request.words[2] = reply.words[2];
+	}
+	if (bunix_ipc_call(vfs, &read_request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] >= buffer_size ||
+	    bunix_buffer_read((u64)io_buffer, 0, buffer,
+			      reply.words[1]) != 0) {
+		close_request.words[0] = read_request.words[0];
+		(void)bunix_ipc_call(vfs, &close_request, &reply);
+		bunix_handle_close((u64)io_buffer);
+		return -1;
+	}
+	read_len = reply.words[1];
+	close_request.words[0] = read_request.words[0];
+	if (bunix_ipc_call(vfs, &close_request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		bunix_handle_close((u64)io_buffer);
+		return -1;
+	}
+	buffer[read_len] = '\0';
+	*out_len = read_len;
 	bunix_handle_close((u64)io_buffer);
 	return 0;
 }

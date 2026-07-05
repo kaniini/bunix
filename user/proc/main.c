@@ -682,65 +682,43 @@ out:
 static long vfs_open(u64 vfs, const char *path, struct vfs_file *file)
 {
 	const u64 path_len = str_len(path) + 1;
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_OPEN,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { 0, 0, 0, 0 },
-	};
+	const char cwd[] = "/";
+	const u64 cwd_len = sizeof(cwd);
+	long path_buffer;
+	struct bunix_msg request;
 	struct bunix_msg reply;
 
 	if (file == 0) {
 		return -1;
 	}
-
-	if (path_len <= 16) {
-		pack_path(&request.words[0], path);
-	} else {
-		const char cwd[] = "/";
-		const u64 cwd_len = sizeof(cwd);
-		const long path_buffer = bunix_buffer_create(cwd_len + path_len);
-
-		if (path_buffer < 0 ||
-		    bunix_buffer_write((u64)path_buffer, 0, cwd,
-				       cwd_len) != 0 ||
-		    bunix_buffer_write((u64)path_buffer, cwd_len, path,
-				       path_len) != 0) {
-			if (path_buffer >= 0) {
-				bunix_handle_close((u64)path_buffer);
-			}
-			return -1;
-		}
-		request.type = BUNIX_VFS_OPEN_BUFFER;
-		request.cap_rights = BUNIX_RIGHT_RECV;
-		request.cap = (u64)path_buffer;
-		request.words[0] = cwd_len;
-		request.words[1] = path_len;
-		request.words[2] = 0;
-		request.words[3] = 0;
-		if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
-		    reply.words[0] != 0 ||
-		    reply.words[1] == 0 ||
-		    reply.words[3] != BUNIX_VFS_TYPE_REGULAR) {
+	path_buffer = bunix_buffer_create(cwd_len + path_len);
+	if (path_buffer <= 0 ||
+	    bunix_buffer_write((u64)path_buffer, 0, cwd, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)path_buffer, cwd_len, path, path_len) != 0) {
+		if (path_buffer > 0) {
 			bunix_handle_close((u64)path_buffer);
-			return -1;
 		}
-		bunix_handle_close((u64)path_buffer);
-		file->handle = reply.words[1];
-		file->size = reply.words[2];
-		file->type = reply.words[3];
-		return 0;
+		return -1;
 	}
+
+	request = (struct bunix_msg){
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_OPEN_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = (u64)path_buffer,
+		.words = { cwd_len, path_len, 0, 0 },
+	};
 
 	if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
 	    reply.words[0] != 0 ||
 	    reply.words[1] == 0 ||
 	    reply.words[3] != BUNIX_VFS_TYPE_REGULAR) {
+		bunix_handle_close((u64)path_buffer);
 		return -1;
 	}
+	bunix_handle_close((u64)path_buffer);
 
 	file->handle = reply.words[1];
 	file->size = reply.words[2];
