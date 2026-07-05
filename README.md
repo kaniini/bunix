@@ -29,6 +29,15 @@ hello from rootfs
 - `user/`: freestanding ring-3 servers and test/user programs.
 - `Makefile`: build, EFI ISO, and QEMU/KVM targets.
 
+Useful test targets:
+
+- `make test` boots to the normal marker set and checks early/server startup.
+- `make test-shell` runs the full scripted BusyBox login and filesystem smoke
+  test.
+- `BUNIX_CMD='/bin/pathmaxtest' make test-command` boots, logs in, runs one
+  command, and preserves serial/QEMU/strace artifacts under `build/failures/`
+  if the command fails.
+
 The init, names, time, user, linux, proc, procfs, block, VFS, and ping servers
 are freestanding C ELF images loaded as Multiboot2 modules and entered in ring 3.
 The generated rootfs includes native smoke tests, Linux-syscall tests, login,

@@ -198,7 +198,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-kernel run-iso test test-shell test-shell-static test-shell-dynamic test-rootfs-tool iso esp check-tools
+.PHONY: all clean run run-kernel run-iso test test-command test-shell test-shell-static test-shell-dynamic test-rootfs-tool iso esp check-tools
 
 all: $(KERNEL)
 
@@ -492,6 +492,10 @@ test: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot-m
 test-shell: $(EFI_BOOT_APP)
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		sh tools/test-shell.sh
+
+test-command: $(EFI_BOOT_APP)
+	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		sh tools/test-command.sh
 
 test-shell-dynamic:
 	$(MAKE) -B test-shell BUSYBOX=$(BUSYBOX_DYNAMIC)
