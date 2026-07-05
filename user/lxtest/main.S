@@ -340,6 +340,26 @@ fork_child:
 	cmpq $stat_message_end - stat_message, %rax
 	jne fail
 
+	movq $0, sendfile_offset(%rip)
+	movq $40, %rax
+	movq $1, %rdi
+	movq %r12, %rsi
+	leaq sendfile_offset(%rip), %rdx
+	movq $15, %r10
+	syscall
+	cmpq $15, %rax
+	jne fail
+	cmpq $15, sendfile_offset(%rip)
+	jne fail
+
+	movq $1, %rax
+	movq $1, %rdi
+	leaq sendfile_message(%rip), %rsi
+	movq $sendfile_message_end - sendfile_message, %rdx
+	syscall
+	cmpq $sendfile_message_end - sendfile_message, %rax
+	jne fail
+
 	xorq %rax, %rax
 	movq %r12, %rdi
 	leaq read_buffer(%rip), %rsi
@@ -553,6 +573,22 @@ fork_child:
 	cmpq $-13, %rax
 	jne fail
 
+	movq $59, %rax
+	movq $1, %rdi
+	xorq %rsi, %rsi
+	xorq %rdx, %rdx
+	syscall
+	cmpq $-14, %rax
+	jne fail
+
+	movq $59, %rax
+	leaq missing_exec_path(%rip), %rdi
+	xorq %rsi, %rsi
+	xorq %rdx, %rdx
+	syscall
+	cmpq $-2, %rax
+	jne fail
+
 	movq $1, %rax
 	movq $1, %rdi
 	leaq credential_mutation_message(%rip), %rsi
@@ -601,6 +637,9 @@ brk_message_end:
 stat_message:
 	.ascii "linux metadata checks ok\n"
 stat_message_end:
+sendfile_message:
+	.ascii "linux sendfile checks ok\n"
+sendfile_message_end:
 mmap_message:
 	.ascii "linux mmap checks ok\n"
 mmap_message_end:
@@ -637,6 +676,8 @@ secret_path:
 	.asciz "/secret.txt"
 exec_path:
 	.asciz "/bin/execok"
+missing_exec_path:
+	.asciz "/bin/no-such-exec"
 
 .section .bss, "aw"
 read_buffer:
@@ -650,6 +691,8 @@ statx_buffer:
 wait_status:
 	.skip 4
 group_buffer:
+	.skip 8
+sendfile_offset:
 	.skip 8
 getdents_buffer:
 	.skip 8192
