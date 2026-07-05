@@ -122,7 +122,6 @@ enum {
 	LINUX_DT_LNK = 10,
 	LINUX_DT_REG = 8,
 	LINUX_UTMP_RECORD_SIZE = 400,
-	LINUX_UTMP_USER_PROCESS = 7,
 };
 
 struct linux_fd {
@@ -177,7 +176,6 @@ static struct bunix_map process_by_task;
 static struct bunix_map process_by_pid;
 static struct bunix_id_table pipe_ids;
 static char write_buffer[LINUX_MAX_WRITE];
-static char utmp_buffer[LINUX_MAX_WRITE];
 static char tty_termios[LINUX_TERM_SIZE];
 static char tty_line[256];
 static u64 tty_line_offset;
@@ -186,6 +184,7 @@ static struct bunix_map file_refs;
 static u64 next_pid = 1;
 static u64 foreground_pgid = 1;
 static u64 user_service;
+static u64 utmpfs_service;
 
 static u64 resolve_service(u64 service, unsigned int rights);
 static void linux_process_reset(struct linux_process *process);
@@ -204,6 +203,16 @@ static u64 linux_user_service(void)
 	}
 
 	return user_service;
+}
+
+static u64 linux_utmpfs_service(void)
+{
+	if (utmpfs_service == 0) {
+		utmpfs_service = resolve_service(BUNIX_SERVICE_UTMPFS,
+						 BUNIX_RIGHT_SEND);
+	}
+
+	return utmpfs_service;
 }
 
 static long linux_user_process_register(u64 bunix_task)
@@ -332,99 +341,6 @@ static long linux_user_session_set_foreground(u64 session_id, u64 foreground)
 	    reply.words[0] != 0) {
 		return -LINUX_ESRCH;
 	}
-	return 0;
-}
-
-static u64 linux_user_session_count(void)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_USER,
-		.type = BUNIX_USER_SESSION_COUNT,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { 0, 0, 0, 0 },
-	};
-	struct bunix_msg reply;
-	const u64 user = linux_user_service();
-
-	if (user == 0 ||
-	    bunix_ipc_call(user, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		return 0;
-	}
-	return reply.words[1];
-}
-
-static long linux_user_session_at(u64 index, u64 *session_id, u64 *uid,
-				  u64 *tty, u64 *foreground)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_USER,
-		.type = BUNIX_USER_SESSION_AT,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { index, 0, 0, 0 },
-	};
-	struct bunix_msg reply;
-	const u64 user = linux_user_service();
-
-	if (user == 0 ||
-	    bunix_ipc_call(user, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		return -LINUX_ESRCH;
-	}
-	if (session_id != 0) {
-		*session_id = reply.words[1];
-	}
-	if (uid != 0) {
-		*uid = reply.words[2];
-	}
-	if (tty != 0) {
-		*tty = reply.words[3] >> 32;
-	}
-	if (foreground != 0) {
-		*foreground = reply.words[3] & 0xffffffff;
-	}
-	return 0;
-}
-
-static long linux_user_name_for_uid(u64 uid, char *name, u64 name_len)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_USER,
-		.type = BUNIX_USER_NAME_FOR_UID,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { uid, 0, 0, 0 },
-	};
-	struct bunix_msg reply;
-	const u64 user = linux_user_service();
-
-	if (name == 0 || name_len == 0) {
-		return -LINUX_EINVAL;
-	}
-	name[0] = '\0';
-	if (user == 0 ||
-	    bunix_ipc_call(user, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		return -LINUX_ESRCH;
-	}
-	for (u64 i = 0; i + 1 < name_len && i < 16; i++) {
-		const u64 word = i < 8 ? reply.words[1] : reply.words[2];
-		const u64 shift = (i % 8) * 8;
-
-		name[i] = (char)((word >> shift) & 0xff);
-		if (name[i] == '\0') {
-			return 0;
-		}
-	}
-	name[name_len - 1] = '\0';
 	return 0;
 }
 
@@ -659,40 +575,38 @@ static int linux_console_path(const char *path)
 	       string_equal(path, "/dev/console");
 }
 
-static void copy_literal(char *dst, u64 dst_len, const char *src)
+static long linux_utmpfs_getent(u64 index, char *record)
 {
-	for (u64 i = 0; i < dst_len; i++) {
-		dst[i] = src[i];
-		if (src[i] == '\0') {
-			return;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_UTMPFS,
+		.type = BUNIX_UTMPFS_GETENT,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = 0,
+		.words = { index, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 utmpfs = linux_utmpfs_service();
+	const long tmp = bunix_buffer_create(LINUX_UTMP_RECORD_SIZE);
+
+	if (record == 0 || utmpfs == 0 || tmp <= 0) {
+		if (tmp > 0) {
+			bunix_handle_close((u64)tmp);
 		}
-	}
-}
-
-static void build_utmp_record(char *record, u64 index)
-{
-	u64 session_id = 0;
-	u64 uid = 0;
-	u64 tty = 0;
-	u64 foreground = 0;
-	char user_name[16];
-
-	zero_bytes(record, LINUX_UTMP_RECORD_SIZE);
-	if (linux_user_session_at(index, &session_id, &uid,
-				  &tty, &foreground) != 0) {
-		return;
-	}
-	if (linux_user_name_for_uid(uid, user_name, sizeof(user_name)) != 0 ||
-	    user_name[0] == '\0') {
-		copy_literal(user_name, sizeof(user_name), "user");
+		return -LINUX_ENOENT;
 	}
 
-	store_u16(record, 0, LINUX_UTMP_USER_PROCESS);
-	store_u32(record, 4, (unsigned int)foreground);
-	copy_literal(record + 8, 32, tty == 1 ? "ttyS0" : "tty");
-	copy_literal(record + 40, 4, tty == 1 ? "S0" : "tt");
-	copy_literal(record + 44, 32, user_name);
-	store_u32(record, 336, (unsigned int)session_id);
+	request.cap = (u64)tmp;
+	if (bunix_ipc_call(utmpfs, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    bunix_buffer_read((u64)tmp, 0, record,
+			      LINUX_UTMP_RECORD_SIZE) != 0) {
+		bunix_handle_close((u64)tmp);
+		return -LINUX_ENOENT;
+	}
+	bunix_handle_close((u64)tmp);
+	return 0;
 }
 
 static long utmps_recv_response(struct linux_fd *fd, u64 len, u64 buffer)
@@ -706,28 +620,27 @@ static long utmps_recv_response(struct linux_fd *fd, u64 len, u64 buffer)
 		return 0;
 	}
 
-	zero_bytes(utmp_buffer, sizeof(utmp_buffer));
+	zero_bytes(write_buffer, sizeof(write_buffer));
 	if (fd->size == LINUX_UTMPS_REWIND) {
 		fd->offset = 0;
-		utmp_buffer[0] = 0;
+		write_buffer[0] = 0;
 	} else if (fd->size == LINUX_UTMPS_GETENT) {
-		if (fd->offset >= linux_user_session_count()) {
-			utmp_buffer[0] = LINUX_ENOENT;
-		} else {
-			utmp_buffer[0] = 0;
-			build_utmp_record(utmp_buffer + 1, fd->offset);
+		if (linux_utmpfs_getent(fd->offset, write_buffer + 1) == 0) {
+			write_buffer[0] = 0;
 			fd->offset++;
 			response_len = LINUX_UTMP_RECORD_SIZE + 1;
+		} else {
+			write_buffer[0] = LINUX_ENOENT;
 		}
 	} else {
-		utmp_buffer[0] = LINUX_EINVAL;
+		write_buffer[0] = LINUX_EINVAL;
 	}
 
 	fd->size = LINUX_UTMPS_NONE;
 	if (response_len > len) {
 		response_len = len;
 	}
-	if (bunix_buffer_write(buffer, 0, utmp_buffer, response_len) != 0) {
+	if (bunix_buffer_write(buffer, 0, write_buffer, response_len) != 0) {
 		return -LINUX_EINVAL;
 	}
 	return (long)response_len;

@@ -313,6 +313,21 @@ static long read_utmp(u64 user, u64 offset, u64 len, u64 buffer)
 	return (long)done;
 }
 
+static long getent_utmp(u64 user, u64 index, u64 buffer)
+{
+	u64 count = 0;
+	char record[UTMPFS_RECORD_SIZE];
+
+	if (buffer == 0 ||
+	    user_session_count(user, &count) != 0 ||
+	    index >= count) {
+		return -1;
+	}
+	build_record(user, record, index);
+	return bunix_buffer_write(buffer, 0, record,
+				  sizeof(record)) == 0 ? 0 : -1;
+}
+
 static void stat_utmp(struct bunix_msg *reply, u64 user)
 {
 	reply->words[0] = 0;
@@ -351,10 +366,28 @@ int main(void)
 		char path[UTMPFS_MAX_PATH];
 
 		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
-		    message.protocol != BUNIX_PROTO_VFS) {
+		    (message.protocol != BUNIX_PROTO_VFS &&
+		     message.protocol != BUNIX_PROTO_UTMPFS)) {
 			continue;
 		}
 		reply.type = message.type;
+
+		if (message.protocol == BUNIX_PROTO_UTMPFS) {
+			reply.protocol = BUNIX_PROTO_UTMPFS;
+			switch (message.type) {
+			case BUNIX_UTMPFS_GETENT:
+				reply.words[0] =
+					(message.cap_rights & BUNIX_RIGHT_SEND) != 0 &&
+					getent_utmp(user, message.words[0],
+						    message.cap) == 0 ? 0 : (u64)-1;
+				break;
+			default:
+				reply.words[0] = (u64)-1;
+				break;
+			}
+			bunix_ipc_send(message.reply, &reply);
+			continue;
+		}
 
 		switch (message.type) {
 		case BUNIX_VFS_OPEN_BUFFER:
