@@ -814,6 +814,51 @@ static int forward_remote_handle(struct vfs_open *open,
 		return -1;
 	}
 
+	if (message->type == BUNIX_VFS_READDIR_BUFFER) {
+		char name[VFS_MAX_PATH];
+		const u64 out_cap = message->words[3];
+		const u64 scratch_cap = out_cap > VFS_MAX_PATH ? VFS_MAX_PATH :
+					out_cap;
+		const long buffer = bunix_buffer_create(scratch_cap == 0 ? 1 :
+							scratch_cap);
+		struct bunix_msg forwarded = *message;
+		int result = 0;
+
+		if (message->cap == 0 ||
+		    (message->cap_rights & BUNIX_RIGHT_SEND) == 0 ||
+		    buffer <= 0) {
+			if (buffer > 0) {
+				bunix_handle_close((u64)buffer);
+			}
+			reply->words[0] = (u64)-1;
+			return -1;
+		}
+		forwarded.words[0] = open->remote_handle;
+		forwarded.words[2] = 0;
+		forwarded.words[3] = scratch_cap;
+		forwarded.cap = (u64)buffer;
+		forwarded.cap_rights = BUNIX_RIGHT_SEND;
+		if (bunix_ipc_call(open->service, &forwarded, reply) != 0) {
+			reply->words[0] = (u64)-1;
+			result = -1;
+		}
+		if (result == 0 && reply->words[0] == 0) {
+			const u64 written = reply->words[3];
+
+			if (written > scratch_cap ||
+			    (written != 0 &&
+			     (bunix_buffer_read((u64)buffer, 0, name,
+						written) != 0 ||
+			      bunix_buffer_write(message->cap, message->words[2],
+						 name, written) != 0))) {
+				reply->words[0] = (u64)-1;
+				result = -1;
+			}
+		}
+		bunix_handle_close((u64)buffer);
+		return result;
+	}
+
 	message->words[0] = open->remote_handle;
 	if (bunix_ipc_call(open->service, message, reply) != 0) {
 		reply->words[0] = (u64)-1;
