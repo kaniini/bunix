@@ -23,6 +23,8 @@ static u64 stdout_handle;
 static u64 stderr_handle;
 static u64 time_handle;
 static u64 proc_handle;
+static unsigned char large_src[8192];
+static unsigned char large_dst[8192];
 
 static void stdout_write(const char *text, u64 len)
 {
@@ -226,6 +228,43 @@ static void inspect_auxv(const struct startup_aux *aux)
 	}
 }
 
+static void test_large_buffer(void)
+{
+	const char ok[] = "first: large buffer ok\n";
+	const char fail[] = "first: large buffer failed\n";
+	const long buffer = bunix_buffer_create(sizeof(large_src));
+
+	if (buffer == -1) {
+		stdout_write(fail, sizeof(fail) - 1);
+		return;
+	}
+
+	for (u64 i = 0; i < sizeof(large_src); i++) {
+		large_src[i] = (unsigned char)((i * 17 + 3) & 0xff);
+		large_dst[i] = 0;
+	}
+
+	if (bunix_buffer_write((u64)buffer, 0, large_src, sizeof(large_src)) !=
+	    0 ||
+	    bunix_buffer_read((u64)buffer, 0, large_dst, sizeof(large_dst)) !=
+		    0) {
+		stdout_write(fail, sizeof(fail) - 1);
+		bunix_handle_close((u64)buffer);
+		return;
+	}
+
+	for (u64 i = 0; i < sizeof(large_src); i++) {
+		if (large_src[i] != large_dst[i]) {
+			stdout_write(fail, sizeof(fail) - 1);
+			bunix_handle_close((u64)buffer);
+			return;
+		}
+	}
+
+	stdout_write(ok, sizeof(ok) - 1);
+	bunix_handle_close((u64)buffer);
+}
+
 int main(int argc, char **argv, char **envp)
 {
 	const char started[] = "first: stdout ready\n";
@@ -264,6 +303,7 @@ int main(int argc, char **argv, char **envp)
 		}
 	}
 	inspect_auxv(&aux);
+	test_large_buffer();
 	stdout_write(exiting, sizeof(exiting) - 1);
 	proc_exit(0);
 

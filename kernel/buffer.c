@@ -4,7 +4,7 @@
 #include "spinlock.h"
 
 enum {
-	BUFFER_MAX_SIZE = 4096,
+	BUFFER_MAX_SIZE = 65536,
 };
 
 struct shared_buffer {
@@ -12,7 +12,7 @@ struct shared_buffer {
 	u64 size;
 	u32 ref_count;
 	struct spinlock lock;
-	u8 data[BUFFER_MAX_SIZE];
+	u8 *data;
 };
 
 static u64 next_buffer_id = 1;
@@ -27,7 +27,7 @@ static void mem_copy(u8 *dst, const u8 *src, u64 len)
 
 void buffer_init(void)
 {
-	console_printf("buffer: init slab size=%u\n", BUFFER_MAX_SIZE);
+	console_printf("buffer: init max=%u\n", BUFFER_MAX_SIZE);
 }
 
 struct shared_buffer *buffer_create(u64 size)
@@ -36,15 +36,22 @@ struct shared_buffer *buffer_create(u64 size)
 		return 0;
 	}
 
-	const u64 flags = spin_lock_irqsave(&buffer_table_lock);
-	struct shared_buffer *buffer = slab_alloc(sizeof(*buffer));
+	struct shared_buffer *buffer = slab_zalloc(sizeof(*buffer));
 
 	if (buffer == 0) {
-		spin_unlock_irqrestore(&buffer_table_lock, flags);
 		console_printf("buffer: alloc failed\n");
 		return 0;
 	}
 
+	buffer->data = slab_zalloc(size);
+	if (buffer->data == 0) {
+		slab_free(buffer);
+		console_printf("buffer: data alloc failed size=%u\n",
+			       (u32)size);
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&buffer_table_lock);
 	buffer->id = next_buffer_id++;
 	buffer->size = size;
 	buffer->ref_count = 1;
@@ -69,7 +76,10 @@ void buffer_destroy(struct shared_buffer *buffer)
 	}
 	buffer->id = 0;
 	buffer->size = 0;
+	u8 *data = buffer->data;
+	buffer->data = 0;
 	spin_unlock_irqrestore(&buffer_table_lock, flags);
+	slab_free(data);
 	slab_free(buffer);
 	console_printf("buffer: destroy\n");
 }
@@ -117,7 +127,8 @@ u64 buffer_size(const struct shared_buffer *buffer)
 
 int buffer_read(struct shared_buffer *buffer, u64 offset, void *dst, u64 len)
 {
-	if (buffer == 0 || dst == 0 || offset > buffer->size ||
+	if (buffer == 0 || buffer->data == 0 || dst == 0 ||
+	    offset > buffer->size ||
 	    len > buffer->size - offset) {
 		return -1;
 	}
@@ -133,7 +144,8 @@ int buffer_read(struct shared_buffer *buffer, u64 offset, void *dst, u64 len)
 int buffer_write(struct shared_buffer *buffer, u64 offset, const void *src,
 		 u64 len)
 {
-	if (buffer == 0 || src == 0 || offset > buffer->size ||
+	if (buffer == 0 || buffer->data == 0 || src == 0 ||
+	    offset > buffer->size ||
 	    len > buffer->size - offset) {
 		return -1;
 	}

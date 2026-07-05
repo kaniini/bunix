@@ -389,7 +389,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "smp: scheduler aps=1" $(BUILD_DIR)/serial.log
 	grep -F "names: init dynamic" $(BUILD_DIR)/serial.log
 	grep -F "slab: init caches=" $(BUILD_DIR)/serial.log
-	grep -F "buffer: init slab" $(BUILD_DIR)/serial.log
+	grep -F "buffer: init max=65536" $(BUILD_DIR)/serial.log
 	grep -F "ipc: init slab ports messages" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=vm id=1" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: memory authority online" $(BUILD_DIR)/serial.log
@@ -433,6 +433,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "first: aux stderr=2" $(BUILD_DIR)/serial.log
 	grep -F "first: aux time=3" $(BUILD_DIR)/serial.log
 	grep -F "first: aux proc=4" $(BUILD_DIR)/serial.log
+	grep -F "first: large buffer ok" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: online" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: registered" $(BUILD_DIR)/serial.log
 	grep -F "linux-server: openat" $(BUILD_DIR)/serial.log

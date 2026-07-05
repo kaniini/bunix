@@ -158,14 +158,17 @@ generic task create/map/grant/start operations used by proc's ELF loader.
 Native userspace can also allocate into its own task with `task_alloc(0, ...)`;
 the server-side buddy allocator builds on that to provide growable maps and
 object tables.
-Shared buffer capabilities provide bulk byte transport for servers. VFS exposes
-the exec-facing file operations proc needs now: open a named regular file,
-query its size/type, read positioned byte ranges through a shared buffer, and
-close the open object. Proc allocates a buffer, sends duplicate/write authority
-to VFS, VFS forwards write-only authority to block, block fills it from the
-rootfs module, and proc copies the bytes back through its read authority. Proc
-builds the initial exec stack with caller-supplied `argc`, `argv[]`, `envp[]`,
-and auxv entries for page size, entry point, program headers, and `AT_EXECFN`.
+Shared buffer capabilities provide bulk byte transport for servers. Kernel
+buffer metadata is separate from dynamically allocated byte storage, so buffers
+can grow beyond the syscall scratch page; native read/write syscalls chunk
+copies internally while preserving the handle API. VFS exposes the exec-facing
+file operations proc needs now: open a named regular file, query its size/type,
+read positioned byte ranges through a shared buffer, and close the open object.
+Proc allocates a buffer, sends duplicate/write authority to VFS, VFS forwards
+write-only authority to block, block fills it from the rootfs module, and proc
+copies the bytes back through its read authority. Proc builds the initial exec
+stack with caller-supplied `argc`, `argv[]`, `envp[]`, and auxv entries for page
+size, entry point, program headers, and `AT_EXECFN`.
 Bunix-private auxv entries publish startup service capabilities for stdout,
 stderr, time, and proc, so a process consumes delegated handles from its initial
 image instead of baking in ambient handle numbers. The kernel still has an

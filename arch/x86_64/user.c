@@ -4215,8 +4215,7 @@ static u64 native_sys_buffer_read(const struct native_syscall_args *sys_args)
 	u64 flags;
 
 	if (sys_args->arg0 == 0 ||
-	    read_current_user(sys_args->arg0, args, sizeof(args)) != 0 ||
-	    args[3] > LINUX_MAX_SYSCALL_BUFFER) {
+	    read_current_user(sys_args->arg0, args, sizeof(args)) != 0) {
 		return (u64)-1;
 	}
 
@@ -4227,11 +4226,18 @@ static u64 native_sys_buffer_read(const struct native_syscall_args *sys_args)
 		return (u64)-1;
 	}
 	flags = spin_lock_irqsave(&syscall_copy_lock);
-	if (buffer_read(buffer, args[1], syscall_copy_buffer,
-			args[3]) != 0 ||
-	    write_current_user(args[2], syscall_copy_buffer, args[3]) != 0) {
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
-		return (u64)-1;
+	for (u64 done = 0; done < args[3];) {
+		const u64 chunk =
+			min_u64(args[3] - done, LINUX_MAX_SYSCALL_BUFFER);
+
+		if (buffer_read(buffer, args[1] + done, syscall_copy_buffer,
+				chunk) != 0 ||
+		    write_current_user(args[2] + done, syscall_copy_buffer,
+				       chunk) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			return (u64)-1;
+		}
+		done += chunk;
 	}
 	spin_unlock_irqrestore(&syscall_copy_lock, flags);
 	return 0;
@@ -4244,16 +4250,10 @@ static u64 native_sys_buffer_write(const struct native_syscall_args *sys_args)
 	u64 result;
 
 	if (sys_args->arg0 == 0 ||
-	    read_current_user(sys_args->arg0, args, sizeof(args)) != 0 ||
-	    args[3] > LINUX_MAX_SYSCALL_BUFFER) {
+	    read_current_user(sys_args->arg0, args, sizeof(args)) != 0) {
 		return (u64)-1;
 	}
 	flags = spin_lock_irqsave(&syscall_copy_lock);
-	if (read_current_user(args[2], syscall_copy_buffer, args[3]) != 0) {
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
-		return (u64)-1;
-	}
-
 	struct shared_buffer *buffer =
 		task_buffer_from_handle(task_current(), args[0],
 					TASK_RIGHT_SEND);
@@ -4261,8 +4261,20 @@ static u64 native_sys_buffer_write(const struct native_syscall_args *sys_args)
 		spin_unlock_irqrestore(&syscall_copy_lock, flags);
 		return (u64)-1;
 	}
-	result = (u64)buffer_write(buffer, args[1],
-				   syscall_copy_buffer, args[3]);
+	result = 0;
+	for (u64 done = 0; done < args[3];) {
+		const u64 chunk =
+			min_u64(args[3] - done, LINUX_MAX_SYSCALL_BUFFER);
+
+		if (read_current_user(args[2] + done, syscall_copy_buffer,
+				      chunk) != 0 ||
+		    buffer_write(buffer, args[1] + done, syscall_copy_buffer,
+				 chunk) != 0) {
+			result = (u64)-1;
+			break;
+		}
+		done += chunk;
+	}
 	spin_unlock_irqrestore(&syscall_copy_lock, flags);
 	return result;
 }
