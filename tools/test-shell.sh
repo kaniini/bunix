@@ -5,6 +5,7 @@ qemu=${QEMU:-qemu-system-x86_64}
 ovmf=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE.fd}
 esp=${ESP_DIR:-build/esp}
 timeout_cmd=${TIMEOUT:-timeout}
+qemu_timeout=${QEMU_TIMEOUT:-180s}
 tmp=${TMPDIR:-/tmp}/bunix-shell-test.$$
 log=$tmp/serial.log
 qemu_log=$tmp/qemu.log
@@ -88,7 +89,7 @@ start_qemu() {
 	cat "$pipe.out" > "$log" &
 	cat_pid=$!
 
-	TMPDIR=$tmp $timeout_cmd 90s "$qemu" -enable-kvm -machine q35 -cpu host -m 128M \
+	TMPDIR=$tmp $timeout_cmd "$qemu_timeout" "$qemu" -enable-kvm -machine q35 -cpu host -m 128M \
 		-smp "${SMP:-2}" \
 		-drive if=pflash,format=raw,readonly=on,file="$ovmf" \
 		-drive format=raw,file=fat:rw:"$esp" \
@@ -138,6 +139,7 @@ printf 'busybox test -c /dev/null && echo DEV_NULL_CHAR_OK\nbusybox test -c /dev
 printf '/bin/execbig && echo EXECBIG_OK\n' >&3
 printf 'busybox sh -c '"'"'i=0; while [ "$i" -lt 300 ]; do printf a; i=$((i + 1)); done; echo DEV_CONSOLE_BIG_END'"'"' > /dev/console && echo DEV_CONSOLE_BIG_WRITE_OK\n' >&3
 printf 'LONG_TMP=/tmp/bunix-pathmax2\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-cccccccccccccccccccccccccccccccc\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-dddddddddddddddddddddddddddddddd\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-ffffffffffffffffffffffffffffffff\nbusybox mkdir "$LONG_TMP" && echo PATHMAX2_TMP_MKDIR_OK\necho PATHMAX2_TMP_PAYLOAD > "$LONG_TMP/file.txt"\nbusybox cat "$LONG_TMP/file.txt" && echo PATHMAX2_TMP_FILE_OK\ncd "$LONG_TMP" && echo PATHMAX2_TMP_CHDIR_OK\npwd\ncd /\n/bin/pathmaxtest\n' >&3
+wait_for_fixed "$log" "linux pathmax ok" "linux pathmax regression failed" 75 220
 printf 'busybox df / /tmp /proc >/dev/null && echo STATFS_DF_OK\n' >&3
 printf 'busybox cat /hello.txt && echo UNION_ROOT_LOWER_OK\nbusybox mv /rename-lower.txt /rename-upper.txt && echo UNION_LOWER_RENAME_CREATE_OK\nbusybox cat /rename-upper.txt | busybox grep "nested rootfs file" && echo UNION_LOWER_RENAME_READ_OK\nbusybox test ! -e /rename-lower.txt && echo UNION_LOWER_RENAME_OLD_GONE_OK\nbusybox test -e /.upper/rename-upper.txt && echo UNION_LOWER_RENAME_UPPER_OK\n' >&3
 wait_for_fixed "$log" "UNION_LOWER_RENAME_UPPER_OK" "unionfs lower rename commands did not drain" 45 220

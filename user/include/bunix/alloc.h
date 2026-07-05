@@ -19,6 +19,7 @@ struct bunix_alloc_block {
 };
 
 static struct bunix_alloc_block *bunix_alloc_free[BUNIX_ALLOC_ORDERS];
+static struct bunix_alloc_block *bunix_alloc_large_free;
 static u64 bunix_alloc_next = BUNIX_ALLOC_HEAP_BASE;
 
 static inline u64 bunix_alloc_align(u64 value, u64 align)
@@ -35,6 +36,26 @@ static inline u64 bunix_alloc_order_for(u64 size)
 					   16);
 
 	while (order < BUNIX_ALLOC_MAX_ORDER && block_size < need) {
+		order++;
+		block_size <<= 1;
+	}
+	return block_size >= need ? order : 0;
+}
+
+static inline u64 bunix_alloc_large_order_for(u64 size)
+{
+	u64 order = BUNIX_ALLOC_MAX_ORDER + 1;
+	u64 block_size = 1ull << order;
+	u64 need;
+
+	if (size > ((u64)-1) - sizeof(struct bunix_alloc_block)) {
+		return 0;
+	}
+	need = bunix_alloc_align(size + sizeof(struct bunix_alloc_block), 16);
+	if (need < size) {
+		return 0;
+	}
+	while (order < 63 && block_size < need) {
 		order++;
 		block_size <<= 1;
 	}
@@ -76,6 +97,32 @@ static inline void bunix_alloc_list_remove(struct bunix_alloc_block *block)
 	block->next = 0;
 }
 
+static inline void bunix_alloc_large_push(struct bunix_alloc_block *block)
+{
+	block->free = 1;
+	block->prev = 0;
+	block->next = bunix_alloc_large_free;
+	if (block->next != 0) {
+		block->next->prev = block;
+	}
+	bunix_alloc_large_free = block;
+}
+
+static inline void bunix_alloc_large_remove(struct bunix_alloc_block *block)
+{
+	if (block->prev != 0) {
+		block->prev->next = block->next;
+	} else {
+		bunix_alloc_large_free = block->next;
+	}
+	if (block->next != 0) {
+		block->next->prev = block->prev;
+	}
+	block->free = 0;
+	block->prev = 0;
+	block->next = 0;
+}
+
 static inline int bunix_alloc_add_arena(void)
 {
 	struct bunix_alloc_block *block;
@@ -91,13 +138,45 @@ static inline int bunix_alloc_add_arena(void)
 	return 0;
 }
 
+static inline void *bunix_alloc_large(u64 size)
+{
+	struct bunix_alloc_block *block;
+	const u64 order = bunix_alloc_large_order_for(size);
+	const u64 block_size = order == 0 ? 0 : 1ull << order;
+
+	if (order == 0) {
+		return 0;
+	}
+	for (block = bunix_alloc_large_free; block != 0; block = block->next) {
+		if (block->order >= order) {
+			bunix_alloc_large_remove(block);
+			block->free = 0;
+			return (void *)(block + 1);
+		}
+	}
+	bunix_alloc_next = bunix_alloc_align(bunix_alloc_next, block_size);
+	if (bunix_alloc_next > ((u64)-1) - block_size) {
+		return 0;
+	}
+	block = (struct bunix_alloc_block *)bunix_alloc_next;
+	if (bunix_task_alloc(0, (u64)block, block_size, 1) != 0) {
+		return 0;
+	}
+	bunix_alloc_next += block_size;
+	block->order = order;
+	block->free = 0;
+	block->prev = 0;
+	block->next = 0;
+	return (void *)(block + 1);
+}
+
 static inline void *bunix_alloc(u64 size)
 {
 	u64 order = bunix_alloc_order_for(size);
 	struct bunix_alloc_block *block = 0;
 
 	if (order == 0) {
-		return 0;
+		return bunix_alloc_large(size);
 	}
 
 	for (;;) {
@@ -139,6 +218,10 @@ static inline void bunix_free(void *ptr)
 	}
 
 	block = ((struct bunix_alloc_block *)ptr) - 1;
+	if (block->order > BUNIX_ALLOC_MAX_ORDER) {
+		bunix_alloc_large_push(block);
+		return;
+	}
 	while (block->order < BUNIX_ALLOC_MAX_ORDER) {
 		const u64 size = 1ull << block->order;
 		const u64 arena_offset = ((u64)block - BUNIX_ALLOC_HEAP_BASE) &

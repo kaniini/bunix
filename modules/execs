@@ -5,6 +5,7 @@
 /bin/musl-hello musl-hello 1
 /bin/fputest fputest 1
 /bin/phdrstress phdrstress 0
+/bin/alloctest alloctest 0
 /bin/sh busybox 1
 /bin/busybox busybox 1
 /bin/login login 1

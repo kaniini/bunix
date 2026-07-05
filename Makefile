@@ -38,6 +38,8 @@ VFS_MODULE := $(BUILD_DIR)/modules/vfs.server
 VFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/vfs/main.c.o
 FIRST_MODULE := $(BUILD_DIR)/modules/first.user
 FIRST_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/first/main.c.o
+ALLOCTEST_MODULE := $(BUILD_DIR)/modules/alloctest.user
+ALLOCTEST_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/alloctest/main.c.o
 IPCSTRESS_MODULE := $(BUILD_DIR)/modules/ipcstress.user
 IPCSTRESS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/ipcstress/main.c.o
 LOGIN_MODULE := $(BUILD_DIR)/modules/login.user
@@ -182,6 +184,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/block/main.c.o \
 	$(BUILD_DIR)/user/vfs/main.c.o \
 	$(BUILD_DIR)/user/first/main.c.o \
+	$(BUILD_DIR)/user/alloctest/main.c.o \
 	$(BUILD_DIR)/user/ipcstress/main.c.o \
 	$(BUILD_DIR)/user/login/main.c.o \
 	$(BUILD_DIR)/user/lxtest/main.S.o \
@@ -225,6 +228,10 @@ $(BUILD_DIR)/user/%.S.o: user/%.S
 $(BOOTSTRAP_MODULE): $(BOOTSTRAP_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(BOOTSTRAP_MODULE_OBJS)
+
+$(ALLOCTEST_MODULE): $(ALLOCTEST_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(ALLOCTEST_MODULE_OBJS)
 
 $(CONSOLE_MODULE): $(CONSOLE_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
@@ -383,9 +390,9 @@ $(ROOTFS_TOOL): tools/mkrootfs.c
 	mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror $< -o $@
 
-$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(FIRST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(VFORKSTRESS_MODULE) $(EXECOK_MODULE) $(READBIG_MODULE) $(MMAPBIG_MODULE) $(MMAPHUGE_MODULE) $(EXECBIG_MODULE) $(PHDRSTRESS_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(IOVTEST_MODULE) $(FCHMODATTEST_MODULE) $(WAITPGIDTEST_MODULE) $(EXECLONGTEST_MODULE) $(AUXIDTEST_MODULE) $(PATHMAXTEST_MODULE) $(FCNTLLOCKTEST_MODULE) $(BUSYBOX) $(MUSL_LDSO)
+$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(FIRST_MODULE) $(ALLOCTEST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(VFORKSTRESS_MODULE) $(EXECOK_MODULE) $(READBIG_MODULE) $(MMAPBIG_MODULE) $(MMAPHUGE_MODULE) $(EXECBIG_MODULE) $(PHDRSTRESS_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(IOVTEST_MODULE) $(FCHMODATTEST_MODULE) $(WAITPGIDTEST_MODULE) $(EXECLONGTEST_MODULE) $(AUXIDTEST_MODULE) $(PATHMAXTEST_MODULE) $(FCNTLLOCKTEST_MODULE) $(BUSYBOX) $(MUSL_LDSO)
 	mkdir -p $(dir $@)
-	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /rename-lower.txt $(ROOTFS_NESTED) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) $(ROOTFS_LONG_PATH) $(ROOTFS_NESTED) $(ROOTFS_LONG_EXEC_PATH) $(DYN_HELLO_MODULE) $(ROOTFS_LONG_PROC_EXEC_PATH) $(FIRST_MODULE) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /etc/group $(ROOTFS_GROUP) /etc/inittab $(ROOTFS_INITTAB) /etc/execs $(ROOTFS_EXECS) /etc/spawns $(ROOTFS_SPAWNS) /lib/ld-musl-x86_64.so.1 $(MUSL_LDSO) /bin/first $(FIRST_MODULE) /bin/ipcstress $(IPCSTRESS_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/getdentstest $(GETDENTSTEST_MODULE) /bin/vforkstress $(VFORKSTRESS_MODULE) /bin/execok $(EXECOK_MODULE) /bin/readbig $(READBIG_MODULE) /bin/mmapbig $(MMAPBIG_MODULE) /bin/mmaphuge $(MMAPHUGE_MODULE) /bin/execbig $(EXECBIG_MODULE) /bin/phdrstress $(PHDRSTRESS_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/dyn-hello $(DYN_HELLO_MODULE) /bin/fputest $(FPUTEST_MODULE) /bin/iovtest $(IOVTEST_MODULE) /bin/fchmodattest $(FCHMODATTEST_MODULE) /bin/waitpgidtest $(WAITPGIDTEST_MODULE) /bin/execlongtest $(EXECLONGTEST_MODULE) /bin/auxidtest $(AUXIDTEST_MODULE) /bin/pathmaxtest $(PATHMAXTEST_MODULE) /bin/fcntllocktest $(FCNTLLOCKTEST_MODULE) /bin/busybox $(BUSYBOX) --dir /home/kaniini --dir /root --dir /tmp --dir /run --dir /mnt --dir /sys --dir /var/tmp --dir /var/run --symlink $(ROOTFS_LONG_SYMLINK) $(ROOTFS_LONG_PATH) --symlink /lib/libc.musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1 $(ROOTFS_BUSYBOX_LINKS)
+	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /rename-lower.txt $(ROOTFS_NESTED) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) $(ROOTFS_LONG_PATH) $(ROOTFS_NESTED) $(ROOTFS_LONG_EXEC_PATH) $(DYN_HELLO_MODULE) $(ROOTFS_LONG_PROC_EXEC_PATH) $(FIRST_MODULE) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /etc/group $(ROOTFS_GROUP) /etc/inittab $(ROOTFS_INITTAB) /etc/execs $(ROOTFS_EXECS) /etc/spawns $(ROOTFS_SPAWNS) /lib/ld-musl-x86_64.so.1 $(MUSL_LDSO) /bin/first $(FIRST_MODULE) /bin/alloctest $(ALLOCTEST_MODULE) /bin/ipcstress $(IPCSTRESS_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/getdentstest $(GETDENTSTEST_MODULE) /bin/vforkstress $(VFORKSTRESS_MODULE) /bin/execok $(EXECOK_MODULE) /bin/readbig $(READBIG_MODULE) /bin/mmapbig $(MMAPBIG_MODULE) /bin/mmaphuge $(MMAPHUGE_MODULE) /bin/execbig $(EXECBIG_MODULE) /bin/phdrstress $(PHDRSTRESS_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/dyn-hello $(DYN_HELLO_MODULE) /bin/fputest $(FPUTEST_MODULE) /bin/iovtest $(IOVTEST_MODULE) /bin/fchmodattest $(FCHMODATTEST_MODULE) /bin/waitpgidtest $(WAITPGIDTEST_MODULE) /bin/execlongtest $(EXECLONGTEST_MODULE) /bin/auxidtest $(AUXIDTEST_MODULE) /bin/pathmaxtest $(PATHMAXTEST_MODULE) /bin/fcntllocktest $(FCNTLLOCKTEST_MODULE) /bin/busybox $(BUSYBOX) --dir /home/kaniini --dir /root --dir /tmp --dir /run --dir /mnt --dir /sys --dir /var/tmp --dir /var/run --symlink $(ROOTFS_LONG_SYMLINK) $(ROOTFS_LONG_PATH) --symlink /lib/libc.musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1 $(ROOTFS_BUSYBOX_LINKS)
 
 $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
