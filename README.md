@@ -207,11 +207,13 @@ kernel tears down the backing task thread; `wait4` can block on a child and
 returns the child PID with a Linux wait status.
 Linux `execve` dynamically copies argv and envp strings within the current
 64 KiB exec stack budget, builds the full replacement stack image, and writes it
-into the new task image instead of using tiny fixed argv/env arrays. The login
-program now execs the shell with `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, and
-`TERM`, and changes into the account home directory before execing the shell.
-Command lookup, login environment inheritance, larger argv/env vectors, and
-home-directory startup are exercised by the shell regression.
+into the new task image instead of using tiny fixed argv/env arrays. Linux
+`execve` accepts executable paths up to the current 256-byte VFS path budget.
+The login program now execs the shell with `HOME`, `USER`, `LOGNAME`, `SHELL`,
+`PATH`, and `TERM`, and changes into the account home directory before execing
+the shell. Command lookup, login environment inheritance, larger argv/env
+vectors, long executable paths, and home-directory startup are exercised by the
+shell regression.
 
 The current rootfs can run a statically linked musl hello program, a dynamic
 musl hello program, and a dynamically linked BusyBox shell through `/bin/login`.
