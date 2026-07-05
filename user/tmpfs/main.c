@@ -5,7 +5,6 @@
 enum {
 	TMPFS_HANDLE_NAMES = 3,
 	TMPFS_MAX_PATH = 4096,
-	TMPFS_MAX_NAME = 64,
 	TMPFS_OPEN_DIR = 1,
 	TMPFS_OPEN_FILE = 2,
 };
@@ -432,6 +431,7 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 static u64 open_dir(const char *path)
 {
 	struct tmpfs_open *open;
+	const u64 start = next_open_id;
 
 	open = (struct tmpfs_open *)bunix_calloc(1, sizeof(*open));
 	if (open == 0) {
@@ -441,13 +441,18 @@ static u64 open_dir(const char *path)
 	for (u64 i = 0; i <= str_len(path); i++) {
 		open->path[i] = path[i];
 	}
-	for (u64 tries = 0; tries < 1024; tries++) {
+	for (;;) {
 		const u64 id = next_open_id++;
+		int wrapped;
 
 		if (next_open_id == 0) {
 			next_open_id = 1;
 		}
+		wrapped = next_open_id == start;
 		if (bunix_u64_tree_get(&open_files, id) != 0) {
+			if (wrapped) {
+				break;
+			}
 			continue;
 		}
 		open->id = id;
@@ -466,6 +471,7 @@ static u64 open_dir(const char *path)
 static u64 open_file(struct tmpfs_file *file)
 {
 	struct tmpfs_open *open;
+	const u64 start = next_open_id;
 
 	if (file == 0 || file->deleted) {
 		return 0;
@@ -477,13 +483,18 @@ static u64 open_file(struct tmpfs_file *file)
 	open->kind = TMPFS_OPEN_FILE;
 	open->file = file;
 	file->refs++;
-	for (u64 tries = 0; tries < 1024; tries++) {
+	for (;;) {
 		const u64 id = next_open_id++;
+		int wrapped;
 
 		if (next_open_id == 0) {
 			next_open_id = 1;
 		}
+		wrapped = next_open_id == start;
 		if (bunix_u64_tree_get(&open_files, id) != 0) {
+			if (wrapped) {
+				break;
+			}
 			continue;
 		}
 		open->id = id;

@@ -79,11 +79,41 @@ printf '/bin/execbig && echo EXECBIG_OK\n' >&3
 printf 'busybox sh -c '"'"'i=0; while [ "$i" -lt 300 ]; do printf a; i=$((i + 1)); done; echo DEV_CONSOLE_BIG_END'"'"' > /dev/console && echo DEV_CONSOLE_BIG_WRITE_OK\n' >&3
 printf 'LONG_TMP=/tmp/bunix-pathmax2\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-cccccccccccccccccccccccccccccccc\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-dddddddddddddddddddddddddddddddd\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nbusybox mkdir "$LONG_TMP"\nLONG_TMP=$LONG_TMP/segment-ffffffffffffffffffffffffffffffff\nbusybox mkdir "$LONG_TMP" && echo PATHMAX2_TMP_MKDIR_OK\necho PATHMAX2_TMP_PAYLOAD > "$LONG_TMP/file.txt"\nbusybox cat "$LONG_TMP/file.txt" && echo PATHMAX2_TMP_FILE_OK\ncd "$LONG_TMP" && echo PATHMAX2_TMP_CHDIR_OK\npwd\ncd /\n' >&3
 printf 'busybox df / /tmp /proc >/dev/null && echo STATFS_DF_OK\n' >&3
-printf 'busybox cat /hello.txt && echo UNION_ROOT_LOWER_OK\necho UNION_ROOT_BASE_PAYLOAD > /created.txt\necho UNION_ROOT_APPEND_PAYLOAD >> /created.txt\nbusybox cat /created.txt && echo UNION_ROOT_APPEND_CAT_OK\nbusybox cat /.upper/created.txt && echo UNION_ROOT_UPPER_BACKING_OK\nUNION_LONG_NAME=bunix-union-root-name-longer-than-sixteen.txt\necho UNION_ROOT_LONG_PAYLOAD > "/$UNION_LONG_NAME"\nbusybox ls / | busybox grep "$UNION_LONG_NAME" && echo UNION_ROOT_LONG_READDIR_OK\nbusybox cat "/$UNION_LONG_NAME" && echo UNION_ROOT_LONG_CAT_OK\nbusybox ls / | busybox grep created.txt && echo UNION_ROOT_READDIR_UPPER_OK\nbusybox ls / | busybox grep secret.txt && echo UNION_ROOT_READDIR_LOWER_OK\nbusybox rm /created.txt && echo UNION_ROOT_UNLINK_UPPER_OK\nbusybox test ! -e /created.txt && echo UNION_ROOT_UNLINK_UPPER_GONE_OK\nbusybox cat /hello.txt && echo UNION_ROOT_LOWER_STILL_OK\n' >&3
-printf 'busybox stat -c "%%u:%%g %%a" /tmp/bunix-write.txt\nbusybox mkdir /tmp/bunix-dir && echo TMP_MKDIR_OK\nbusybox test -d /tmp/bunix-dir && echo TMP_MKDIR_STAT_OK\nLONG_TMP_NAME=bunix-readdir-name-longer-than-sixteen.txt\necho TMP_LONG_READDIR_PAYLOAD > "/tmp/$LONG_TMP_NAME"\nbusybox ls /tmp | busybox grep "$LONG_TMP_NAME" && echo TMP_LONG_READDIR_OK\nbusybox cat "/tmp/$LONG_TMP_NAME" && echo TMP_LONG_NAME_CAT_OK\nbusybox mkdir /tmp/bunix-rmdir\nbusybox rmdir /tmp/bunix-rmdir\nbusybox test ! -e /tmp/bunix-rmdir && echo RMDIR_OK\nbusybox chmod 700 /tmp/bunix-write.txt && echo TMP_CHMOD_OK\nbusybox stat -c "%%a" /tmp/bunix-write.txt\nbusybox chown root:root /tmp/bunix-write.txt || echo TMP_CHOWN_DENY_OK\n' >&3
+printf 'busybox cat /hello.txt && echo UNION_ROOT_LOWER_OK\necho UNION_ROOT_BASE_PAYLOAD > /created.txt\necho UNION_ROOT_APPEND_PAYLOAD >> /created.txt\nbusybox cat /created.txt && echo UNION_ROOT_APPEND_CAT_OK\nbusybox cat /.upper/created.txt && echo UNION_ROOT_UPPER_BACKING_OK\nUNION_LONG_NAME=bunix-union-root-name-longer-than-sixteen.txt\necho UNION_ROOT_LONG_PAYLOAD > "/$UNION_LONG_NAME"\nbusybox ls / | busybox grep "$UNION_LONG_NAME" && echo UNION_ROOT_LONG_READDIR_OK\nbusybox cat "/$UNION_LONG_NAME" && echo UNION_ROOT_LONG_CAT_OK\nUNION_NAME_MAX=bunix-union-name-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt\necho UNION_NAME_MAX_PAYLOAD > "/$UNION_NAME_MAX"\nbusybox ls / | busybox grep "$UNION_NAME_MAX" && echo UNION_NAME_MAX_READDIR_OK\nbusybox cat "/$UNION_NAME_MAX" && echo UNION_NAME_MAX_CAT_OK\nbusybox ls / | busybox grep created.txt && echo UNION_ROOT_READDIR_UPPER_OK\nbusybox ls / | busybox grep secret.txt && echo UNION_ROOT_READDIR_LOWER_OK\nbusybox rm /created.txt && echo UNION_ROOT_UNLINK_UPPER_OK\nbusybox test ! -e /created.txt && echo UNION_ROOT_UNLINK_UPPER_GONE_OK\nbusybox cat /hello.txt && echo UNION_ROOT_LOWER_STILL_OK\n' >&3
+printf 'busybox stat -c "%%u:%%g %%a" /tmp/bunix-write.txt\nbusybox mkdir /tmp/bunix-dir && echo TMP_MKDIR_OK\nbusybox test -d /tmp/bunix-dir && echo TMP_MKDIR_STAT_OK\nLONG_TMP_NAME=bunix-readdir-name-longer-than-sixteen.txt\necho TMP_LONG_READDIR_PAYLOAD > "/tmp/$LONG_TMP_NAME"\nbusybox ls /tmp | busybox grep "$LONG_TMP_NAME" && echo TMP_LONG_READDIR_OK\nbusybox cat "/tmp/$LONG_TMP_NAME" && echo TMP_LONG_NAME_CAT_OK\n' >&3
+i=0
+while ! grep -F "TMP_LONG_NAME_CAT_OK" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "tmpfs baseline long-name commands did not drain" >&2
+		tail -n 220 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+printf 'TMP_NAME_MAX=bunix-tmp-name-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt\necho TMP_NAME_MAX_PAYLOAD > "/tmp/$TMP_NAME_MAX"\nbusybox ls /tmp | busybox grep "$TMP_NAME_MAX" && echo TMP_NAME_MAX_READDIR_OK\nbusybox cat "/tmp/$TMP_NAME_MAX" && echo TMP_NAME_MAX_CAT_OK\nbusybox mkdir /tmp/bunix-rmdir\nbusybox rmdir /tmp/bunix-rmdir\nbusybox test ! -e /tmp/bunix-rmdir && echo RMDIR_OK\nbusybox chmod 700 /tmp/bunix-write.txt && echo TMP_CHMOD_OK\nbusybox stat -c "%%a" /tmp/bunix-write.txt\nbusybox chown root:root /tmp/bunix-write.txt || echo TMP_CHOWN_DENY_OK\n' >&3
+i=0
+while ! grep -F "TMP_CHOWN_DENY_OK" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "tmpfs extended long-name commands did not drain" >&2
+		tail -n 220 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
 printf 'busybox head -c 8192 /dev/zero > /tmp/linux-big-write.bin\nbusybox test "$(busybox stat -c "%%s" /tmp/linux-big-write.bin)" = "8192" && echo LINUX_BIG_WRITE_OK\n' >&3
 printf '/bin/readbig && echo READBIG_OK\n' >&3
-sleep 1
+i=0
+while ! grep -F "READBIG_OK" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "pre-mount shell commands did not drain" >&2
+		tail -n 220 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
 printf 'mount -t tmpfs tmpfs /mnt&&echo MNT_OK\necho MNT_PAYLOAD>/mnt/linux-mount.txt\ncat /mnt/linux-mount.txt&&echo MNT_CAT\nmount|busybox grep /mnt&&echo MNT_LIST\numount /mnt&&echo UMNT_OK\nmount|busybox grep /mnt||echo UMNT_GONE\ntest ! -e /mnt/linux-mount.txt&&echo UMNT_HIDE\n' >&3
 
 i=0
@@ -324,7 +354,7 @@ while ! grep -F "PROCFS_STILL_OK" "$log" >/dev/null 2>&1; do
 	sleep 1
 done
 
-for expected in "PROC_STATUS_OK" "PROC_FD_OK" "PROC_EXE_OK" "/bin/sh" "PROC_STAT_OK" "PROC_IPC_OK" "nodev" "PROC_FILESYSTEMS_OK" "Bunix virtual CPU" "PROC_CPUINFO_OK" "PROC_CMDLINE_OK" "DEV_ZERO_STAT_OK" "DEV_URANDOM_STAT_OK" "DEV_ZERO_ACCESS_OK" "DEV_ZERO_READ_OK" "DEV_URANDOM_READ_OK" "DEV_CONSOLE_BIG_END" "DEV_CONSOLE_BIG_WRITE_OK" "TMP_WRITE_OK" "TMP_CAT_OK" "TMP_STAT_OK" "TMP_APPEND_CAT_OK" "PATHMAX2_TMP_MKDIR_OK" "PATHMAX2_TMP_FILE_OK" "PATHMAX2_TMP_CHDIR_OK" "1000:1000 644" "TMP_MKDIR_OK" "TMP_MKDIR_STAT_OK" "TMP_LONG_READDIR_OK" "TMP_LONG_NAME_CAT_OK" "RMDIR_OK" "TMP_CHMOD_OK" "700" "TMP_CHOWN_DENY_OK" "LINUX_BIG_WRITE_OK" "linux readbig ok" "READBIG_OK" "RUN_WRITE_OK" "RUN_CAT_OK" "TRUNCATE_OK" "TRUN" "TRUNCATE_CAT_OK" "UNLINK_OK" "UNLINK_GONE_OK" "GETDENTS64_OK" "linux vforkstress ok" "VFORKSTRESS_OK" "linux getdents64 checks ok" "linux getrandom checks ok" "linux readlinkbig ok" "UNION_ROOT_LOWER_OK" "UNION_ROOT_APPEND_CAT_OK" "UNION_ROOT_UPPER_BACKING_OK" "UNION_ROOT_LONG_READDIR_OK" "UNION_ROOT_LONG_CAT_OK" "UNION_ROOT_READDIR_UPPER_OK" "UNION_ROOT_READDIR_LOWER_OK" "UNION_ROOT_UNLINK_UPPER_OK" "UNION_ROOT_UNLINK_UPPER_GONE_OK" "UNION_ROOT_LOWER_STILL_OK" "MUSL_LDSO_CANONICAL_OK" "DYN_HELLO_OK" "linux exec child ok" "EXECBIG_OK" "PROC_TOP_OK" "PROC_PS_OK" "PROC_FREE_OK" "unionfs on / type unionfs (rw)" "rootfs on /.lower type rootfs (rw)" "tmpfs on /.upper type tmpfs (rw)" "tmpfs on /run type tmpfs (rw)" "tmpfs on /tmp type tmpfs (rw)" "tmpfs on /var/tmp type tmpfs (rw)" "PROC_MOUNT_OK" "MNT_OK" "MNT_PAYLOAD" "MNT_CAT" "MNT_LIST" "UMNT_OK" "UMNT_GONE" "UMNT_HIDE"; do
+for expected in "PROC_STATUS_OK" "PROC_FD_OK" "PROC_EXE_OK" "/bin/sh" "PROC_STAT_OK" "PROC_IPC_OK" "nodev" "PROC_FILESYSTEMS_OK" "Bunix virtual CPU" "PROC_CPUINFO_OK" "PROC_CMDLINE_OK" "DEV_ZERO_STAT_OK" "DEV_URANDOM_STAT_OK" "DEV_ZERO_ACCESS_OK" "DEV_ZERO_READ_OK" "DEV_URANDOM_READ_OK" "DEV_CONSOLE_BIG_END" "DEV_CONSOLE_BIG_WRITE_OK" "TMP_WRITE_OK" "TMP_CAT_OK" "TMP_STAT_OK" "TMP_APPEND_CAT_OK" "PATHMAX2_TMP_MKDIR_OK" "PATHMAX2_TMP_FILE_OK" "PATHMAX2_TMP_CHDIR_OK" "1000:1000 644" "TMP_MKDIR_OK" "TMP_MKDIR_STAT_OK" "TMP_LONG_READDIR_OK" "TMP_LONG_NAME_CAT_OK" "TMP_NAME_MAX_READDIR_OK" "TMP_NAME_MAX_CAT_OK" "RMDIR_OK" "TMP_CHMOD_OK" "700" "TMP_CHOWN_DENY_OK" "LINUX_BIG_WRITE_OK" "linux readbig ok" "READBIG_OK" "RUN_WRITE_OK" "RUN_CAT_OK" "TRUNCATE_OK" "TRUN" "TRUNCATE_CAT_OK" "UNLINK_OK" "UNLINK_GONE_OK" "GETDENTS64_OK" "linux vforkstress ok" "VFORKSTRESS_OK" "linux getdents64 checks ok" "linux getrandom checks ok" "linux readlinkbig ok" "UNION_ROOT_LOWER_OK" "UNION_ROOT_APPEND_CAT_OK" "UNION_ROOT_UPPER_BACKING_OK" "UNION_ROOT_LONG_READDIR_OK" "UNION_ROOT_LONG_CAT_OK" "UNION_NAME_MAX_READDIR_OK" "UNION_NAME_MAX_CAT_OK" "UNION_ROOT_READDIR_UPPER_OK" "UNION_ROOT_READDIR_LOWER_OK" "UNION_ROOT_UNLINK_UPPER_OK" "UNION_ROOT_UNLINK_UPPER_GONE_OK" "UNION_ROOT_LOWER_STILL_OK" "MUSL_LDSO_CANONICAL_OK" "DYN_HELLO_OK" "linux exec child ok" "EXECBIG_OK" "PROC_TOP_OK" "PROC_PS_OK" "PROC_FREE_OK" "unionfs on / type unionfs (rw)" "rootfs on /.lower type rootfs (rw)" "tmpfs on /.upper type tmpfs (rw)" "tmpfs on /run type tmpfs (rw)" "tmpfs on /tmp type tmpfs (rw)" "tmpfs on /var/tmp type tmpfs (rw)" "PROC_MOUNT_OK" "MNT_OK" "MNT_PAYLOAD" "MNT_CAT" "MNT_LIST" "UMNT_OK" "UMNT_GONE" "UMNT_HIDE"; do
 	i=0
 	while ! grep -F "$expected" "$log" >/dev/null 2>&1; do
 		i=$((i + 1))
@@ -346,7 +376,7 @@ while ! grep -F "STATFS_DF_OK" "$log" >/dev/null 2>&1; do
 	fi
 	sleep 1
 done
-for expected in "TMP_APPEND_ONE" "TMP_APPEND_TWO" "TMP_LONG_READDIR_PAYLOAD" "PATHMAX2_TMP_PAYLOAD" "UNION_ROOT_BASE_PAYLOAD" "UNION_ROOT_APPEND_PAYLOAD" "UNION_ROOT_LONG_PAYLOAD"; do
+for expected in "TMP_APPEND_ONE" "TMP_APPEND_TWO" "TMP_LONG_READDIR_PAYLOAD" "TMP_NAME_MAX_PAYLOAD" "PATHMAX2_TMP_PAYLOAD" "UNION_ROOT_BASE_PAYLOAD" "UNION_ROOT_APPEND_PAYLOAD" "UNION_ROOT_LONG_PAYLOAD" "UNION_NAME_MAX_PAYLOAD"; do
 	i=0
 	while [ "$(grep -aF -c "$expected" "$log" 2>/dev/null || true)" -lt 2 ]; do
 		i=$((i + 1))

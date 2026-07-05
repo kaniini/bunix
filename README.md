@@ -273,8 +273,9 @@ keeps that path covered by the shell regression.
 VFS, rootfs, tmpfs, unionfs, procfs, and devfs use buffer-backed directory entry
 names, so Linux `getdents64(2)` can return names longer than the inline IPC word
 payload. The old packed 16-byte VFS directory-entry protocol has been removed;
-the shell regression creates and lists long filenames through both tmpfs and the
-writable union root to cover this path.
+the shell regression creates and lists filenames longer than the old inline IPC
+word payload and longer than the stale 64-byte tmpfs name limit through both
+tmpfs and the writable union root to cover this path.
 VFS read, open, and path metadata lookups now use open handles plus
 shared-buffer transport through proc, Linux, VFS, and mounted translators; the
 old inline-word read/open/stat path operations have been removed.

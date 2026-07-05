@@ -755,14 +755,14 @@ static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
 	return 0;
 }
 
-static int path_normalize(const char *cwd, const char *input, char *out)
+static long path_normalize(const char *cwd, const char *input, char *out)
 {
 	char temp[LINUX_MAX_PATH];
 	u64 pos = 0;
 	u64 in = 0;
 
 	if (input == 0 || input[0] == '\0') {
-		return -1;
+		return -LINUX_EINVAL;
 	}
 	if (input[0] == '/') {
 		temp[pos++] = '/';
@@ -786,7 +786,7 @@ static int path_normalize(const char *cwd, const char *input, char *out)
 		}
 		while (input[in] != '\0' && input[in] != '/') {
 			if (comp_len + 1 >= sizeof(component)) {
-				return -1;
+				return -LINUX_ENAMETOOLONG;
 			}
 			component[comp_len++] = input[in++];
 		}
@@ -811,12 +811,12 @@ static int path_normalize(const char *cwd, const char *input, char *out)
 		}
 		if (pos > 1) {
 			if (pos + 1 >= sizeof(temp)) {
-				return -1;
+				return -LINUX_ENAMETOOLONG;
 			}
 			temp[pos++] = '/';
 		}
 		if (pos + comp_len >= sizeof(temp)) {
-			return -1;
+			return -LINUX_ENAMETOOLONG;
 		}
 		for (u64 i = 0; i < comp_len; i++) {
 			temp[pos++] = component[i];
@@ -2364,14 +2364,16 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	u64 base_handle;
 	long base_result;
 	long path_result;
+	long normalize_result;
 
 	path_result = linux_read_path_arg(path_buffer, path_len, path,
 					  sizeof(path));
 	if (path_result != 0) {
 		return path_result;
 	}
-	if (path_normalize(process->cwd, path, full_path) != 0) {
-		return -LINUX_EINVAL;
+	normalize_result = path_normalize(process->cwd, path, full_path);
+	if (normalize_result != 0) {
+		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
@@ -2500,6 +2502,7 @@ static long linux_unlinkat(struct linux_process *process, u64 dirfd,
 	u64 base_handle;
 	long base_result;
 	long path_result;
+	long normalize_result;
 
 	if (flags != 0) {
 		return -LINUX_EINVAL;
@@ -2509,8 +2512,9 @@ static long linux_unlinkat(struct linux_process *process, u64 dirfd,
 	if (path_result != 0) {
 		return path_result;
 	}
-	if (path_normalize(process->cwd, path, full_path) != 0) {
-		return -LINUX_EINVAL;
+	normalize_result = path_normalize(process->cwd, path, full_path);
+	if (normalize_result != 0) {
+		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
@@ -2540,14 +2544,16 @@ static long linux_rmdir(struct linux_process *process, u64 path_len,
 	u64 base_handle;
 	long base_result;
 	long path_result;
+	long normalize_result;
 
 	path_result = linux_read_path_arg(path_buffer, path_len, path,
 					  sizeof(path));
 	if (path_result != 0) {
 		return path_result;
 	}
-	if (path_normalize(process->cwd, path, full_path) != 0) {
-		return -LINUX_EINVAL;
+	normalize_result = path_normalize(process->cwd, path, full_path);
+	if (normalize_result != 0) {
+		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, LINUX_AT_FDCWD, path,
 					      &base_handle);
@@ -2576,6 +2582,7 @@ static long linux_truncate(struct linux_process *process, u64 dirfd,
 	long fd;
 	long result;
 	long path_result;
+	long normalize_result;
 
 	if ((length >> 63) != 0) {
 		return -LINUX_EINVAL;
@@ -2585,8 +2592,9 @@ static long linux_truncate(struct linux_process *process, u64 dirfd,
 	if (path_result != 0) {
 		return path_result;
 	}
-	if (path_normalize(process->cwd, path, full_path) != 0) {
-		return -LINUX_EINVAL;
+	normalize_result = path_normalize(process->cwd, path, full_path);
+	if (normalize_result != 0) {
+		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
@@ -2613,14 +2621,16 @@ static long linux_mkdirat(struct linux_process *process, u64 dirfd,
 	u64 base_handle;
 	long base_result;
 	long path_result;
+	long normalize_result;
 
 	path_result = linux_read_path_arg(path_buffer, path_len, path,
 					  sizeof(path));
 	if (path_result != 0) {
 		return path_result;
 	}
-	if (path_normalize(process->cwd, path, full_path) != 0) {
-		return -LINUX_EINVAL;
+	normalize_result = path_normalize(process->cwd, path, full_path);
+	if (normalize_result != 0) {
+		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
@@ -2651,6 +2661,7 @@ static long linux_chmodat(struct linux_process *process, u64 dirfd,
 	u64 base_handle;
 	long base_result;
 	long path_result;
+	long normalize_result;
 
 	if ((flags & ~LINUX_AT_SYMLINK_NOFOLLOW) != 0) {
 		return -LINUX_EINVAL;
@@ -2660,8 +2671,9 @@ static long linux_chmodat(struct linux_process *process, u64 dirfd,
 	if (path_result != 0) {
 		return path_result;
 	}
-	if (path_normalize(process->cwd, path, full_path) != 0) {
-		return -LINUX_EINVAL;
+	normalize_result = path_normalize(process->cwd, path, full_path);
+	if (normalize_result != 0) {
+		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
@@ -2758,6 +2770,7 @@ static long linux_chownat(struct linux_process *process, u64 dirfd,
 	long fd;
 	long result;
 	long path_result;
+	long normalize_result;
 
 	if ((flags & ~LINUX_AT_SYMLINK_NOFOLLOW) != 0) {
 		return -LINUX_EINVAL;
@@ -2767,8 +2780,9 @@ static long linux_chownat(struct linux_process *process, u64 dirfd,
 	if (path_result != 0) {
 		return path_result;
 	}
-	if (path_normalize(process->cwd, path, full_path) != 0) {
-		return -LINUX_EINVAL;
+	normalize_result = path_normalize(process->cwd, path, full_path);
+	if (normalize_result != 0) {
+		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
@@ -2951,6 +2965,7 @@ static long linux_mount(struct linux_process *process, u64 target_len,
 	char target[LINUX_MAX_PATH];
 	char full_target[LINUX_MAX_PATH];
 	char fstype[64];
+	long normalize_result;
 
 	(void)flags;
 	if (target_len == 0 || target_len > sizeof(target) ||
@@ -2966,9 +2981,12 @@ static long linux_mount(struct linux_process *process, u64 target_len,
 	    fstype[fstype_len - 1] != '\0') {
 		return -LINUX_EINVAL;
 	}
-	if (target[0] == '\0' || fstype[0] == '\0' ||
-	    path_normalize(process->cwd, target, full_target) != 0) {
+	if (target[0] == '\0' || fstype[0] == '\0') {
 		return -LINUX_EINVAL;
+	}
+	normalize_result = path_normalize(process->cwd, target, full_target);
+	if (normalize_result != 0) {
+		return normalize_result;
 	}
 	if (string_equal(fstype, "proc") || string_equal(fstype, "procfs")) {
 		return linux_mount_path_command(
@@ -3007,6 +3025,7 @@ static long linux_umount2(struct linux_process *process, u64 flags,
 	char path[LINUX_MAX_PATH];
 	char full_path[LINUX_MAX_PATH];
 	long path_result;
+	long normalize_result;
 
 	(void)flags;
 	path_result = linux_read_path_arg(path_buffer, path_len, path,
@@ -3014,8 +3033,9 @@ static long linux_umount2(struct linux_process *process, u64 flags,
 	if (path_result != 0) {
 		return path_result;
 	}
-	if (path_normalize(process->cwd, path, full_path) != 0) {
-		return -LINUX_EINVAL;
+	normalize_result = path_normalize(process->cwd, path, full_path);
+	if (normalize_result != 0) {
+		return normalize_result;
 	}
 	return linux_vfs_unmount(full_path);
 }
@@ -3369,15 +3389,19 @@ static long linux_chdir(struct linux_process *process, u64 path_len,
 	u64 old_handle;
 	long base_result;
 	long path_result;
+	long normalize_result;
 
 	path_result = linux_read_path_arg(path_buffer, path_len, path,
 					  sizeof(path));
 	if (path_result != 0) {
 		return path_result;
 	}
-	if (path[0] == '\0' ||
-	    path_normalize(process->cwd, path, full_path) != 0) {
+	if (path[0] == '\0') {
 		return -LINUX_EINVAL;
+	}
+	normalize_result = path_normalize(process->cwd, path, full_path);
+	if (normalize_result != 0) {
+		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, LINUX_AT_FDCWD, path,
 					      &base_handle);
