@@ -132,6 +132,7 @@ enum {
 	LINUX_SOCKET_UNIX_STREAM = 1,
 	LINUX_SOCKET_UTMPD = 2,
 	LINUX_DT_FIFO = 1,
+	LINUX_DT_CHR = 2,
 	LINUX_DT_REG = 8,
 	LINUX_DT_DIR = 4,
 	LINUX_DT_LNK = 10,
@@ -2294,6 +2295,9 @@ static u64 linux_mode_for_type(u64 type, u64 mode)
 	if (type == BUNIX_VFS_TYPE_FIFO) {
 		return LINUX_S_IFIFO | mode;
 	}
+	if (type == BUNIX_VFS_TYPE_CHARACTER) {
+		return LINUX_S_IFCHR | mode;
+	}
 	return LINUX_S_IFREG | mode;
 }
 
@@ -3861,7 +3865,9 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 				   (type == BUNIX_VFS_TYPE_SYMLINK ?
 				    LINUX_DT_LNK :
 				    (type == BUNIX_VFS_TYPE_FIFO ?
-				     LINUX_DT_FIFO : LINUX_DT_REG)), name);
+				     LINUX_DT_FIFO :
+				     (type == BUNIX_VFS_TYPE_CHARACTER ?
+				      LINUX_DT_CHR : LINUX_DT_REG))), name);
 		written += reclen;
 		process->fds[fd].offset = next_offset;
 	}

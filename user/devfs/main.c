@@ -97,7 +97,7 @@ static void stat_device(struct bunix_msg *reply, u64 device)
 	reply->words[1] = 0;
 	reply->words[2] = device == DEVFS_DIR ?
 			  (((u64)BUNIX_VFS_TYPE_DIRECTORY << 32) | 0555) :
-			  (LINUX_S_IFCHR |
+			  (((u64)BUNIX_VFS_TYPE_CHARACTER << 32) |
 			   (device == DEVFS_CONSOLE ? 0600 : 0666));
 	reply->words[3] = 0;
 }
@@ -283,7 +283,7 @@ int main(void)
 						 (u64)-1 : 0;
 				reply.words[3] = device == DEVFS_DIR ?
 						 BUNIX_VFS_TYPE_DIRECTORY :
-						 BUNIX_VFS_TYPE_REGULAR;
+						 BUNIX_VFS_TYPE_CHARACTER;
 				break;
 		case BUNIX_VFS_STAT_PATH_META_BUFFER:
 		case BUNIX_VFS_ACCESS_BUFFER:
@@ -363,7 +363,7 @@ int main(void)
 			}
 			reply.words[0] = 0;
 			reply.words[1] = (message.words[1] + 1) |
-					 ((u64)BUNIX_VFS_TYPE_REGULAR << 32);
+					 ((u64)BUNIX_VFS_TYPE_CHARACTER << 32);
 			reply.words[2] = str_len(entries[message.words[1]]);
 			reply.words[3] = reply.words[2];
 			if (reply.words[3] > message.words[3]) {
