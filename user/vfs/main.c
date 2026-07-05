@@ -1737,14 +1737,18 @@ int main(void)
 				mount = mount_for_path(path);
 				if (mount == 0 || mount->service == 0) {
 					reply.words[0] = BUNIX_VFS_ERR_NOENT;
-				} else {
-					reply.words[0] = 0;
-					reply.cap = mount->service;
-					reply.cap_rights = BUNIX_RIGHT_SEND |
-							   BUNIX_RIGHT_DUP;
-				}
-				break;
+			} else {
+				reply.words[0] = 0;
+				reply.cap = mount->service;
+				reply.cap_rights = BUNIX_RIGHT_SEND |
+						   BUNIX_RIGHT_DUP;
+				reply.words[1] = mount->fstype;
+				reply.words[2] =
+					mount->fstype == BUNIX_SERVICE_UNIONFS ?
+					BUNIX_VFS_ROUTE_FLAG_RECURSIVE : 0;
 			}
+			break;
+		}
 			case BUNIX_VFS_UNMOUNT_BUFFER: {
 				char path[VFS_MAX_PATH];
 

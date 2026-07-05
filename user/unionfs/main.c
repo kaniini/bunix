@@ -660,7 +660,7 @@ static int vfs_mount_path(const char *path)
 	       reply.words[0] == 0 ? 0 : -1;
 }
 
-static u64 vfs_resolve_mount_service(const char *path)
+static u64 vfs_resolve_layer_route(const char *path)
 {
 	struct bunix_msg reply;
 
@@ -668,7 +668,9 @@ static u64 vfs_resolve_mount_service(const char *path)
 	    bunix_ipc_call_path(vfs_service, BUNIX_PROTO_VFS,
 				BUNIX_VFS_RESOLVE_MOUNT_BUFFER, path,
 				0, 0, 0, &reply) != 0 ||
-	    reply.words[0] != 0) {
+	    reply.words[0] != 0 ||
+	    reply.words[1] == BUNIX_SERVICE_UNIONFS ||
+	    (reply.words[2] & BUNIX_VFS_ROUTE_FLAG_RECURSIVE) != 0) {
 		return 0;
 	}
 	return reply.cap;
@@ -701,7 +703,7 @@ static int unionfs_set_upper_path(const char *path)
 		unionfs_upper_path[0] = '\0';
 		return -1;
 	}
-	service = vfs_resolve_mount_service(unionfs_upper_path);
+	service = vfs_resolve_layer_route(unionfs_upper_path);
 	if (service == 0) {
 		unionfs_upper_path[0] = '\0';
 		return -1;
@@ -731,7 +733,7 @@ static int unionfs_set_lower_path(const char *path)
 		unionfs_lower_path[0] = '\0';
 		return -1;
 	}
-	service = vfs_resolve_mount_service(unionfs_lower_path);
+	service = vfs_resolve_layer_route(unionfs_lower_path);
 	if (service == 0) {
 		unionfs_lower_path[0] = '\0';
 		return -1;
