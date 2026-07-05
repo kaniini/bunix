@@ -631,10 +631,6 @@ struct linux_virtual_path {
 static const struct linux_virtual_path virtual_paths[] = {
 	{ "/dev/tty", LINUX_FD_CONSOLE, LINUX_S_IFCHR | 0600 },
 	{ "/dev/console", LINUX_FD_CONSOLE, LINUX_S_IFCHR | 0600 },
-	{ "/dev/null", LINUX_FD_NULL, LINUX_S_IFCHR | 0666 },
-	{ "/dev/zero", LINUX_FD_ZERO, LINUX_S_IFCHR | 0666 },
-	{ "/dev/random", LINUX_FD_RANDOM, LINUX_S_IFCHR | 0666 },
-	{ "/dev/urandom", LINUX_FD_RANDOM, LINUX_S_IFCHR | 0666 },
 	{ "/run/utmp", LINUX_FD_UTMP, LINUX_S_IFREG | 0444 },
 	{ "/var/run/utmp", LINUX_FD_UTMP, LINUX_S_IFREG | 0444 },
 };
