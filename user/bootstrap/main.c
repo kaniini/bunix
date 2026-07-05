@@ -179,6 +179,12 @@ struct boot_path_command {
 	u64 path_count;
 };
 
+struct boot_spawn {
+	const char *path;
+	const char *spawned_log;
+	const char *done_log;
+};
+
 static long register_proc_execs(u64 proc)
 {
 	const struct boot_exec execs[] = {
@@ -200,6 +206,63 @@ static long register_proc_execs(u64 proc)
 		if (proc_register_exec(proc, execs[i].path,
 				       execs[i].task_name, execs[i].linux,
 				       execs[i].log_kind) != 0) {
+			return -1;
+		}
+	}
+	return 0;
+}
+
+static long proc_spawn_wait(u64 proc, const struct boot_spawn *spawn)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = BUNIX_PROC_SPAWN,
+		.sender = 0,
+		.reply = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (spawn == 0 || spawn->path == 0) {
+		return -1;
+	}
+	pack_path(&request.words[0], spawn->path);
+	if (bunix_ipc_call(proc, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+	if (spawn->spawned_log != 0) {
+		bunix_console_log(spawn->spawned_log,
+				  str_len(spawn->spawned_log));
+	}
+	request.type = BUNIX_PROC_WAIT;
+	request.words[0] = reply.words[1];
+	request.words[1] = 0;
+	request.words[2] = 0;
+	request.words[3] = 0;
+	if (bunix_ipc_call(proc, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+	if (spawn->done_log != 0) {
+		bunix_console_log(spawn->done_log, str_len(spawn->done_log));
+	}
+	return 0;
+}
+
+static long run_boot_spawns(u64 proc)
+{
+	const struct boot_spawn spawns[] = {
+		{ "/bin/first", 0, "bootstrap: first process exited\n" },
+		{ "/bin/ipcstress", 0, "bootstrap: ipcstress exited\n" },
+		{ "/bin/lxtest", "bootstrap: linux process spawned\n",
+		  "bootstrap: linux process exited\n" },
+		{ "/bin/musl-hello", "bootstrap: musl process spawned\n",
+		  "bootstrap: musl process exited\n" },
+	};
+
+	for (u64 i = 0; i < sizeof(spawns) / sizeof(spawns[0]); i++) {
+		if (proc_spawn_wait(proc, &spawns[i]) != 0) {
 			return -1;
 		}
 	}
@@ -485,21 +548,7 @@ int main(void)
 		bunix_console_log(file, vfs_reply.words[1]);
 	}
 
-	struct bunix_msg proc_request = {
-		.protocol = BUNIX_PROTO_PROC,
-		.type = BUNIX_PROC_SPAWN,
-		.sender = 0,
-		.reply = 0,
-		.words = { 0, 0, 0, 0 },
-	};
-	struct bunix_msg proc_reply;
-	const char first_done[] = "bootstrap: first process exited\n";
-	const char ipcstress_done[] = "bootstrap: ipcstress exited\n";
-	const char linux_spawned[] = "bootstrap: linux process spawned\n";
-	const char linux_done[] = "bootstrap: linux process exited\n";
 	const char linux_init_exec[] = "bootstrap: linux init exec\n";
-	const char musl_spawned[] = "bootstrap: musl process spawned\n";
-	const char musl_done[] = "bootstrap: musl process exited\n";
 
 	if (bunix_launch_module_with_caps("ping", bad_caps,
 					  sizeof(bad_caps) /
@@ -532,69 +581,9 @@ int main(void)
 	}
 	bunix_console_log(linux_init_exec, sizeof(linux_init_exec) - 1);
 
-	proc_request.type = BUNIX_PROC_SPAWN;
-	proc_request.words[2] = 0;
-	proc_request.words[3] = 0;
-	pack_path(&proc_request.words[0], "/bin/first");
-	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
-	    proc_reply.words[0] != 0) {
+	if (run_boot_spawns(proc) != 0) {
 		return 1;
 	}
-	proc_request.type = BUNIX_PROC_WAIT;
-	proc_request.words[0] = proc_reply.words[1];
-	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
-	    proc_reply.words[0] != 0) {
-		return 1;
-	}
-	bunix_console_log(first_done, sizeof(first_done) - 1);
-
-	proc_request.type = BUNIX_PROC_SPAWN;
-	proc_request.words[2] = 0;
-	proc_request.words[3] = 0;
-	pack_path(&proc_request.words[0], "/bin/ipcstress");
-	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
-	    proc_reply.words[0] != 0) {
-		return 1;
-	}
-	proc_request.type = BUNIX_PROC_WAIT;
-	proc_request.words[0] = proc_reply.words[1];
-	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
-	    proc_reply.words[0] != 0) {
-		return 1;
-	}
-	bunix_console_log(ipcstress_done, sizeof(ipcstress_done) - 1);
-
-	proc_request.type = BUNIX_PROC_SPAWN;
-	proc_request.words[2] = 0;
-	proc_request.words[3] = 0;
-	pack_path(&proc_request.words[0], "/bin/lxtest");
-	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
-	    proc_reply.words[0] != 0) {
-		return 1;
-	}
-	bunix_console_log(linux_spawned, sizeof(linux_spawned) - 1);
-	proc_request.type = BUNIX_PROC_WAIT;
-	proc_request.words[0] = proc_reply.words[1];
-	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
-	    proc_reply.words[0] != 0) {
-		return 1;
-	}
-	bunix_console_log(linux_done, sizeof(linux_done) - 1);
-
-	proc_request.type = BUNIX_PROC_SPAWN;
-	pack_path(&proc_request.words[0], "/bin/musl-hello");
-	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
-	    proc_reply.words[0] != 0) {
-		return 1;
-	}
-	bunix_console_log(musl_spawned, sizeof(musl_spawned) - 1);
-	proc_request.type = BUNIX_PROC_WAIT;
-	proc_request.words[0] = proc_reply.words[1];
-	if (bunix_ipc_call(proc, &proc_request, &proc_reply) != 0 ||
-	    proc_reply.words[0] != 0) {
-		return 1;
-	}
-	bunix_console_log(musl_done, sizeof(musl_done) - 1);
 
 	bunix_console_logs_to_ring();
 
