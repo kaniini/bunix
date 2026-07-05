@@ -561,6 +561,61 @@ static void reply_readdir(struct rootfs_open *open, u64 index,
 	reply->words[0] = BUNIX_VFS_ERR_NOENT;
 }
 
+static void reply_readdir_buffer(struct rootfs_open *open,
+				 const struct bunix_msg *message,
+				 struct bunix_msg *reply)
+{
+	u64 current = 0;
+	const char *directory;
+
+	if (open == 0 ||
+	    (open->kind == ROOTFS_OPEN_ENTRY &&
+	     open->entry->type != BUNIX_VFS_TYPE_DIRECTORY)) {
+		reply->words[0] = BUNIX_VFS_ERR_NOTDIR;
+		return;
+	}
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	directory = open->kind == ROOTFS_OPEN_ROOT ? "/" : open->entry->path;
+	for (u64 i = 0; i < root_entry_count; i++) {
+		const struct rootfs_entry *entry = &root_entries[i];
+		const char *name;
+
+		if (!path_is_child_of(entry->path, directory)) {
+			continue;
+		}
+		name = path_name_in_dir(entry->path, directory);
+		if (!name_is_valid(name)) {
+			continue;
+		}
+		if (current == message->words[1]) {
+			const u64 name_len = str_len(name);
+			u64 written = name_len;
+
+			if (written > message->words[3]) {
+				written = message->words[3];
+			}
+			if (written != 0 &&
+			    bunix_buffer_write(message->cap, message->words[2],
+					       name, written) != 0) {
+				reply->words[0] = (u64)-1;
+				return;
+			}
+			reply->words[0] = 0;
+			reply->words[1] = (message->words[1] + 1) |
+					  ((u64)entry->type << 32);
+			reply->words[2] = name_len;
+			reply->words[3] = written;
+			return;
+		}
+		current++;
+	}
+	reply->words[0] = BUNIX_VFS_ERR_NOENT;
+}
+
 static void forward_open_handle(struct bunix_msg *message,
 				struct bunix_msg *reply)
 {
@@ -609,6 +664,8 @@ static void forward_open_handle(struct bunix_msg *message,
 		reply->words[1] = nread < 0 ? 0 : (u64)nread;
 	} else if (message->type == BUNIX_VFS_READDIR) {
 		reply_readdir(open, message->words[1], reply);
+	} else if (message->type == BUNIX_VFS_READDIR_BUFFER) {
+		reply_readdir_buffer(open, message, reply);
 	} else {
 		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 	}
@@ -666,6 +723,7 @@ int main(void)
 		case BUNIX_VFS_STAT_META:
 		case BUNIX_VFS_READ_FILE_BUFFER:
 		case BUNIX_VFS_READDIR:
+		case BUNIX_VFS_READDIR_BUFFER:
 		case BUNIX_VFS_CLOSE:
 			forward_open_handle(&message, &reply);
 			break;

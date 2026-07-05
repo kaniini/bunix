@@ -2898,39 +2898,87 @@ static u64 linux_dirent_reclen(const char *name)
 	return (raw + 7) & ~7ull;
 }
 
+static long linux_readdir_name(u64 handle, u64 index, u64 name_buffer,
+			       char *name, u64 name_cap, u64 *type,
+			       u64 *next_offset)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_READDIR_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND,
+		.reply = 0,
+		.cap = name_buffer,
+		.words = { handle, index, 0, name_cap - 1 },
+	};
+	struct bunix_msg reply;
+
+	if (name == 0 || name_cap == 0 || type == 0 || next_offset == 0) {
+		return -LINUX_EINVAL;
+	}
+	for (u64 i = 0; i < name_cap; i++) {
+		name[i] = '\0';
+	}
+	if (name_buffer != 0 &&
+	    bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) == 0 &&
+	    reply.words[0] == 0) {
+		const u64 name_len = reply.words[2];
+		const u64 written = reply.words[3];
+
+		if (name_len >= name_cap || written < name_len ||
+		    (name_len != 0 &&
+		     bunix_buffer_read(name_buffer, 0, name, name_len) != 0)) {
+			return -LINUX_EINVAL;
+		}
+		name[name_len] = '\0';
+		*type = reply.words[1] >> 32;
+		*next_offset = (reply.words[1] & 0xffffffff) + 2;
+		return 0;
+	}
+
+	request.type = BUNIX_VFS_READDIR;
+	request.cap_rights = 0;
+	request.cap = 0;
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_ENOENT;
+	}
+	unpack_path(name, reply.words[2], reply.words[3]);
+	*type = reply.words[1] >> 32;
+	*next_offset = (reply.words[1] & 0xffffffff) + 2;
+	return 0;
+}
+
 static long linux_getdents64(struct linux_process *process, u64 fd,
 			     u64 buffer, u64 len)
 {
 	char out[LINUX_MAX_WRITE];
 	u64 written = 0;
+	const long name_buffer = bunix_buffer_create(LINUX_MAX_PATH);
 
 	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
+		if (name_buffer > 0) {
+			bunix_handle_close((u64)name_buffer);
+		}
 		return -LINUX_EBADF;
 	}
 	if (process->fds[fd].kind != LINUX_FD_DIR) {
+		if (name_buffer > 0) {
+			bunix_handle_close((u64)name_buffer);
+		}
 		return -LINUX_ENOTDIR;
 	}
-	if (buffer == 0 || len > sizeof(out)) {
+	if (buffer == 0 || len > sizeof(out) || name_buffer <= 0) {
+		if (name_buffer > 0) {
+			bunix_handle_close((u64)name_buffer);
+		}
 		return -LINUX_EINVAL;
 	}
 
 	while (written < len) {
-		char name[16];
+		char name[LINUX_MAX_PATH];
 		u64 type;
 		u64 next_offset;
-		struct bunix_msg request = {
-			.protocol = BUNIX_PROTO_VFS,
-			.type = BUNIX_VFS_READDIR,
-			.sender = 0,
-			.cap_rights = 0,
-			.reply = 0,
-			.cap = 0,
-			.words = { process->fds[fd].handle,
-				   process->fds[fd].offset >= 2 ?
-				   process->fds[fd].offset - 2 : 0,
-				   0, 0 },
-		};
-		struct bunix_msg reply;
 		u64 reclen;
 
 		for (u64 i = 0; i < sizeof(name); i++) {
@@ -2949,13 +2997,20 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 			type = BUNIX_VFS_TYPE_DIRECTORY;
 			next_offset = 2;
 		} else {
-			if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
-			    reply.words[0] != 0) {
+			const long result =
+				linux_readdir_name(process->fds[fd].handle,
+						   process->fds[fd].offset - 2,
+						   (u64)name_buffer,
+						   name, sizeof(name),
+						   &type, &next_offset);
+
+			if (result == -(long)LINUX_ENOENT) {
 				break;
 			}
-			unpack_path(name, reply.words[2], reply.words[3]);
-			type = reply.words[1] >> 32;
-			next_offset = (reply.words[1] & 0xffffffff) + 2;
+			if (result != 0) {
+				bunix_handle_close((u64)name_buffer);
+				return result;
+			}
 		}
 
 		reclen = linux_dirent_reclen(name);
@@ -2976,8 +3031,10 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 	}
 
 	if (bunix_buffer_write(buffer, 0, out, written) != 0) {
+		bunix_handle_close((u64)name_buffer);
 		return -LINUX_EINVAL;
 	}
+	bunix_handle_close((u64)name_buffer);
 	return (long)written;
 }
 
