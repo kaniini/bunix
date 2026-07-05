@@ -4,7 +4,6 @@
 
 enum {
 	PROCFS_HANDLE_NAMES = 3,
-	PROCFS_MAX_TEXT = 8192,
 	PROCFS_MAX_PATH = 4096,
 	PROCFS_KIND_PROC = 1,
 	PROCFS_KIND_KTHREADS = 2,
@@ -29,7 +28,9 @@ enum {
 
 static struct bunix_id_table open_files;
 static struct bunix_tree mounts;
-static char text[PROCFS_MAX_TEXT];
+static char *text;
+static u64 text_capacity;
+static int text_failed;
 static u64 proc_handle;
 
 struct procfs_mount {
@@ -51,6 +52,7 @@ struct proc_details {
 };
 
 static u64 build_kthreads(void);
+static u64 build_file_text(u64 file);
 static const char *pid_cmdline(u64 pid);
 
 static u64 resolve_service(u64 service, unsigned int rights)
@@ -481,6 +483,8 @@ static u64 file_for_path(const char *path)
 
 static u64 file_size(u64 file)
 {
+	u64 size;
+
 	if (file_kind(file) == PROCFS_KIND_PID_EXE) {
 		return str_len(pid_cmdline(file_arg(file)));
 	}
@@ -488,14 +492,66 @@ static u64 file_size(u64 file)
 	    file_kind(file) != PROCFS_KIND_SELF &&
 	    file_kind(file) != PROCFS_KIND_PID &&
 	    file_kind(file) != PROCFS_KIND_PID_FD) {
-		return PROCFS_MAX_TEXT;
+		size = build_file_text(file);
+		bunix_free(text);
+		text = 0;
+		text_capacity = 0;
+		text_failed = 0;
+		return size;
 	}
+	return 0;
+}
+
+static void text_release(void)
+{
+	bunix_free(text);
+	text = 0;
+	text_capacity = 0;
+	text_failed = 0;
+}
+
+static int text_reserve(u64 needed)
+{
+	u64 next_capacity;
+	char *next;
+
+	if (text_failed) {
+		return -1;
+	}
+	if (needed <= text_capacity) {
+		return 0;
+	}
+	next_capacity = text_capacity == 0 ? 256 : text_capacity;
+	while (next_capacity < needed) {
+		if (next_capacity > (~0ull / 2)) {
+			text_failed = 1;
+			return -1;
+		}
+		next_capacity *= 2;
+	}
+	next = (char *)bunix_realloc(text, text_capacity, next_capacity);
+	if (next == 0) {
+		text_failed = 1;
+		return -1;
+	}
+	text = next;
+	text_capacity = next_capacity;
+	return 0;
+}
+
+static int text_reset(void)
+{
+	text_failed = 0;
+	if (text_reserve(1) != 0) {
+		return -1;
+	}
+	text[0] = '\0';
 	return 0;
 }
 
 static void append_char(u64 *len, char c)
 {
-	if (*len + 1 < sizeof(text)) {
+	if (text_reserve(*len + 2) == 0) {
 		text[*len] = c;
 		*len += 1;
 		text[*len] = '\0';
@@ -1042,38 +1098,58 @@ static u64 build_fd_entry(u64 fd)
 
 static u64 build_file_text(u64 file)
 {
+	u64 len;
+
+	if (text_reset() != 0) {
+		return 0;
+	}
 	switch (file_kind(file)) {
 	case PROCFS_KIND_KTHREADS:
-		return build_kthreads();
+		len = build_kthreads();
+		break;
 	case PROCFS_KIND_UPTIME:
-		return build_uptime();
+		len = build_uptime();
+		break;
 	case PROCFS_KIND_STAT:
-		return build_proc_stat();
+		len = build_proc_stat();
+		break;
 	case PROCFS_KIND_IPC:
-		return build_ipc();
+		len = build_ipc();
+		break;
 	case PROCFS_KIND_LOADAVG:
-		return build_loadavg();
+		len = build_loadavg();
+		break;
 	case PROCFS_KIND_MEMINFO:
-		return build_meminfo();
+		len = build_meminfo();
+		break;
 	case PROCFS_KIND_FILESYSTEMS:
-		return build_filesystems();
+		len = build_filesystems();
+		break;
 	case PROCFS_KIND_CPUINFO:
-		return build_cpuinfo();
+		len = build_cpuinfo();
+		break;
 	case PROCFS_KIND_MOUNTS:
-		return build_mounts();
+		len = build_mounts();
+		break;
 	case PROCFS_KIND_PID_STAT:
-		return build_pid_stat(file_arg(file));
+		len = build_pid_stat(file_arg(file));
+		break;
 	case PROCFS_KIND_PID_STATUS:
-		return build_pid_status(file_arg(file));
+		len = build_pid_status(file_arg(file));
+		break;
 	case PROCFS_KIND_PID_CMDLINE:
-		return build_pid_cmdline(file_arg(file));
+		len = build_pid_cmdline(file_arg(file));
+		break;
 	case PROCFS_KIND_PID_STATM:
-		return build_pid_statm(file_arg(file));
+		len = build_pid_statm(file_arg(file));
+		break;
 	case PROCFS_KIND_PID_FD_ENTRY:
-		return build_fd_entry(file_arg(file));
+		len = build_fd_entry(file_arg(file));
+		break;
 	default:
 		return 0;
 	}
+	return text_failed ? 0 : len;
 }
 
 static u64 open_file(u64 file)
@@ -1348,11 +1424,17 @@ int main(void)
 			} else if (len > size - offset) {
 				len = size - offset;
 			}
-			reply.words[0] = bunix_buffer_write(message.cap, 0,
-							    text + offset,
-							    len) == 0 ? 0 :
-					 (u64)-1;
+			if (len == 0) {
+				reply.words[0] = 0;
+			} else {
+				reply.words[0] =
+					bunix_buffer_write(message.cap, 0,
+							   text + offset,
+							   len) == 0 ?
+					0 : (u64)-1;
+			}
 			reply.words[1] = reply.words[0] == 0 ? len : 0;
+			text_release();
 			break;
 		}
 		case BUNIX_VFS_READDIR_BUFFER: {
