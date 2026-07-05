@@ -149,6 +149,7 @@ enum {
 	LINUX_AT_SYMLINK_NOFOLLOW = 0x100,
 	LINUX_SYSCALL_PPOLL = 271,
 	LINUX_SYSCALL_SET_ROBUST_LIST = 273,
+	LINUX_SYSCALL_UTIMENSAT = 280,
 	LINUX_SYSCALL_DUP3 = 292,
 	LINUX_SYSCALL_PIPE2 = 293,
 	LINUX_SYSCALL_OPENAT = 257,
@@ -181,6 +182,8 @@ enum {
 	LINUX_CLOCK_REALTIME = 0,
 	LINUX_CLOCK_MONOTONIC = 1,
 	LINUX_TIMER_ABSTIME = 1,
+	LINUX_UTIME_NOW = 0x3fffffff,
+	LINUX_UTIME_OMIT = 0x3ffffffe,
 	LINUX_POLLIN = 0x0001,
 	LINUX_POLLOUT = 0x0004,
 	LINUX_ARCH_SET_FS = 0x1002,
@@ -618,6 +621,27 @@ static int linux_timespec_to_ns(u64 vaddr, u64 *ns)
 	}
 
 	*ns = timespec[0] * nsec_per_sec + timespec[1];
+	return 0;
+}
+
+static int linux_validate_utimens(u64 vaddr)
+{
+	u64 timespec[4];
+	const u64 nsec_per_sec = 1000000000ull;
+
+	if (vaddr == 0) {
+		return 0;
+	}
+	if (read_current_user(vaddr, timespec, sizeof(timespec)) != 0) {
+		return -LINUX_EFAULT;
+	}
+	for (u64 i = 1; i < 4; i += 2) {
+		if (timespec[i] >= nsec_per_sec &&
+		    timespec[i] != LINUX_UTIME_NOW &&
+		    timespec[i] != LINUX_UTIME_OMIT) {
+			return -LINUX_EINVAL;
+		}
+	}
 	return 0;
 }
 
@@ -3153,6 +3177,8 @@ static const char *linux_syscall_name(u64 number)
 		return "symlinkat";
 	case LINUX_SYSCALL_PRLIMIT64:
 		return "prlimit64";
+	case LINUX_SYSCALL_UTIMENSAT:
+		return "utimensat";
 	case LINUX_SYSCALL_RENAMEAT2:
 		return "renameat2";
 	case LINUX_SYSCALL_GETRANDOM:
@@ -4306,6 +4332,20 @@ poll_again:
 		return linux_forward_renameat2(linux, reply_port, &request,
 					       olddirfd, oldpath, newdirfd,
 					       newpath, flags);
+	}
+	case LINUX_SYSCALL_UTIMENSAT: {
+		const int time_result = linux_validate_utimens(arg2);
+
+		if (time_result != 0) {
+			return (u64)time_result;
+		}
+		request.type = LINUX_SYSCALL_UTIMENSAT;
+		request.words[0] = arg0;
+		request.words[2] = arg3;
+		request.words[3] = 0;
+		return linux_forward_path(linux, reply_port, &request, &reply,
+					  (const char *)arg1, 0, 1,
+					  TASK_RIGHT_RECV);
 	}
 	case LINUX_SYSCALL_STAT:
 	case LINUX_SYSCALL_LSTAT:

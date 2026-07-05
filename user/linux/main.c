@@ -131,6 +131,7 @@ enum {
 	LINUX_UTMPS_GETENT = 'e',
 	LINUX_AT_FDCWD = (u64)-100,
 	LINUX_AT_SYMLINK_NOFOLLOW = 0x100,
+	LINUX_AT_REMOVEDIR = 0x200,
 	LINUX_AT_EACCESS = 0x200,
 	LINUX_AT_NO_AUTOMOUNT = 0x800,
 	LINUX_AT_STATX_SYNC_TYPE = 0x6000,
@@ -2619,12 +2620,14 @@ static long linux_unlinkat(struct linux_process *process, u64 dirfd,
 	char path[LINUX_MAX_PATH];
 	char full_path[LINUX_MAX_PATH];
 	struct bunix_msg reply;
+	const u64 type = (flags & LINUX_AT_REMOVEDIR) != 0 ?
+			 BUNIX_VFS_RMDIR_BUFFER : BUNIX_VFS_UNLINK_BUFFER;
 	u64 base_handle;
 	long base_result;
 	long path_result;
 	long normalize_result;
 
-	if (flags != 0) {
+	if ((flags & ~LINUX_AT_REMOVEDIR) != 0) {
 		return -LINUX_EINVAL;
 	}
 	path_result = linux_read_path_arg(path_buffer, path_len, path,
@@ -2641,9 +2644,7 @@ static long linux_unlinkat(struct linux_process *process, u64 dirfd,
 	if (base_result != 0) {
 		return base_result;
 	}
-	(void)base_handle;
-	if (linux_vfs_path_call_word3(process, BUNIX_VFS_UNLINK_BUFFER,
-				      base_handle, path,
+	if (linux_vfs_path_call_word3(process, type, base_handle, path,
 				      process->bunix_task | (flags << 32),
 				      &reply) != 0) {
 		return -LINUX_EIO;
@@ -3380,6 +3381,27 @@ static long linux_statx(struct linux_process *process, u64 dirfd,
 		return -LINUX_ENOENT;
 	}
 	return linux_statx_from_vfs_meta(path_buffer, &meta);
+}
+
+static long linux_utimensat(struct linux_process *process, u64 dirfd,
+			    u64 path_len, u64 flags, u64 path_buffer)
+{
+	struct bunix_msg meta = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = 0,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+
+	if ((flags & ~LINUX_AT_SYMLINK_NOFOLLOW) != 0) {
+		return -LINUX_EINVAL;
+	}
+	return linux_newfstatat(process, dirfd, path_len, path_buffer,
+				flags & LINUX_AT_SYMLINK_NOFOLLOW ? 1 : 0,
+				&meta);
 }
 
 static long linux_readlinkat(struct linux_process *process, u64 dirfd,
@@ -4930,6 +4952,16 @@ int main(void)
 							  message.words[2],
 							  message.words[3],
 							  message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_UTIMENSAT:
+			reply.words[0] = (u64)linux_utimensat(process,
+							      message.words[0],
+							      message.words[1],
+							      message.words[2],
+							      message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
