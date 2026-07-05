@@ -9,6 +9,7 @@ enum {
 };
 
 static char read_buffer[UTMPFS_MAX_READ];
+static u64 vfs_service;
 
 static int str_eq(const char *left, const char *right)
 {
@@ -54,6 +55,17 @@ static void pack_path(u64 *words, const char *path)
 
 		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
 	}
+}
+
+static void unpack_path(char *path, const u64 *words)
+{
+	for (u64 i = 0; i < BUNIX_IPC_DATA_BYTES; i++) {
+		const u64 slot = i / 8;
+		const u64 shift = (i % 8) * 8;
+
+		path[i] = (char)((words[slot] >> shift) & 0xff);
+	}
+	path[BUNIX_IPC_DATA_BYTES] = '\0';
 }
 
 static void copy_literal(char *dst, u64 dst_len, const char *src)
@@ -341,17 +353,14 @@ int main(void)
 	const char online[] = "utmpfs: online\n";
 	const char mounted[] = "utmpfs: mounted\n";
 	struct bunix_msg message;
-	const u64 vfs = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
 	const u64 user = resolve_service(BUNIX_SERVICE_USER, BUNIX_RIGHT_SEND);
 
 	bunix_console_log(online, sizeof(online) - 1);
-	if (vfs == 0 || user == 0 ||
-	    mount_path(vfs, "/run/utmp") != 0 ||
-	    mount_path(vfs, "/var/run/utmp") != 0 ||
+	vfs_service = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
+	if (vfs_service == 0 || user == 0 ||
 	    register_service(BUNIX_SERVICE_UTMPFS, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
 	}
-	bunix_console_log(mounted, sizeof(mounted) - 1);
 
 	for (;;) {
 		struct bunix_msg reply = {
@@ -380,6 +389,15 @@ int main(void)
 					(message.cap_rights & BUNIX_RIGHT_SEND) != 0 &&
 					getent_utmp(user, message.words[0],
 						    message.cap) == 0 ? 0 : (u64)-1;
+				break;
+			case BUNIX_UTMPFS_MOUNT_PATH:
+				unpack_path(path, &message.words[0]);
+				reply.words[0] =
+					(u64)mount_path(vfs_service, path);
+				if (reply.words[0] == 0) {
+					bunix_console_log(mounted,
+							  sizeof(mounted) - 1);
+				}
 				break;
 			default:
 				reply.words[0] = (u64)-1;

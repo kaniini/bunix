@@ -138,6 +138,26 @@ static long tmpfs_mount_root(u64 tmpfs, const char *path)
 	return reply.words[0] == 0 ? 0 : -1;
 }
 
+static long utmpfs_mount_path(u64 utmpfs, const char *path)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_UTMPFS,
+		.type = BUNIX_UTMPFS_MOUNT_PATH,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	pack_path(&request.words[0], path);
+	if (bunix_ipc_call(utmpfs, &request, &reply) != 0) {
+		return -1;
+	}
+	return reply.words[0] == 0 ? 0 : -1;
+}
+
 static void sleep_ns(u64 time, u64 ns)
 {
 	struct bunix_msg request = {
@@ -294,9 +314,24 @@ int main(void)
 	}
 	bunix_launch_module_with_caps("utmpfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
-	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_UTMPFS,
-				      BUNIX_RIGHT_SEND) == 0) {
-		return 1;
+	{
+		const char *utmpfs_paths[] = {
+			"/run/utmp",
+			"/var/run/utmp",
+		};
+		u64 utmpfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						       BUNIX_SERVICE_UTMPFS,
+						       BUNIX_RIGHT_SEND);
+
+		if (utmpfs == 0) {
+			return 1;
+		}
+		for (u64 i = 0; i < sizeof(utmpfs_paths) /
+		     sizeof(utmpfs_paths[0]); i++) {
+			if (utmpfs_mount_path(utmpfs, utmpfs_paths[i]) != 0) {
+				return 1;
+			}
+		}
 	}
 	bunix_launch_module_with_caps("unionfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
