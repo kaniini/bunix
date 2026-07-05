@@ -68,6 +68,7 @@ enum {
 	LINUX_ECHOK = 0000040,
 	LINUX_MAX_WRITE = 4096,
 	LINUX_MAX_PATH = 256,
+	LINUX_UTSNAME_SIZE = 65 * 6,
 	LINUX_STAT_SIZE = 144,
 	LINUX_STATX_SIZE = 256,
 	LINUX_STATX_BASIC_STATS = 0x7ff,
@@ -494,6 +495,17 @@ static void zero_bytes(char *buffer, u64 len)
 {
 	for (u64 i = 0; i < len; i++) {
 		buffer[i] = 0;
+	}
+}
+
+static void copy_field(char *buffer, u64 offset, u64 field_size,
+		       const char *text)
+{
+	u64 i = 0;
+
+	while (i + 1 < field_size && text[i] != '\0') {
+		buffer[offset + i] = text[i];
+		i++;
 	}
 }
 
@@ -3494,6 +3506,24 @@ static long linux_exec_process(struct linux_process *process)
 	return (long)process->pid;
 }
 
+static long linux_uname(u64 buffer)
+{
+	char uts[LINUX_UTSNAME_SIZE];
+
+	if (buffer == 0) {
+		return -LINUX_EINVAL;
+	}
+	zero_bytes(uts, sizeof(uts));
+	copy_field(uts, 0 * 65, 65, "Bunix");
+	copy_field(uts, 1 * 65, 65, "bunix");
+	copy_field(uts, 2 * 65, 65, "0.1");
+	copy_field(uts, 3 * 65, 65, "#1");
+	copy_field(uts, 4 * 65, 65, "x86_64");
+	copy_field(uts, 5 * 65, 65, "local");
+	return bunix_buffer_write(buffer, 0, uts, sizeof(uts)) == 0 ? 0 :
+	       -LINUX_EINVAL;
+}
+
 static void linux_close_process_fds(struct linux_process *process)
 {
 	if (process == 0) {
@@ -3962,6 +3992,12 @@ int main(void)
 								message.words[0],
 								&reply.words[1],
 								&reply.words[2]);
+			break;
+		case BUNIX_LINUX_UNAME:
+			reply.words[0] = (u64)linux_uname(message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
 			break;
 		case BUNIX_LINUX_SOCKET:
 			reply.words[0] = (u64)linux_socket(process,

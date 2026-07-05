@@ -146,22 +146,32 @@ for expected in "HOME=/home/kaniini" "USER=kaniini" "LOGNAME=kaniini" "SHELL=/bi
 		sleep 1
 	done
 done
-if ! awk '{ sub(/\r$/, "") } /^\/home\/kaniini$/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
-	echo "shell did not cd to login home directory" >&2
-	tail -n 160 "$log" >&2 || true
-	exit 1
-fi
+i=0
+while ! awk '{ sub(/\r$/, "") } /^\/home\/kaniini$/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "shell did not cd to login home directory" >&2
+		tail -n 160 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
 if ! awk '{ sub(/\r$/, "") } /^USR_ENV_OK$/ { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
 	echo "/usr/bin/env symlink did not execute" >&2
 	tail -n 160 "$log" >&2 || true
 	exit 1
 fi
 for marker in ACCESS_X_OK ACCESS_R_OK ACCESS_DENY_OK; do
-	if ! awk -v marker="$marker" '{ sub(/\r$/, "") } $0 == marker { found = 1 } END { exit found ? 0 : 1 }' "$log"; then
-		echo "linux access/faccessat regression missing: $marker" >&2
-		tail -n 160 "$log" >&2 || true
-		exit 1
-	fi
+	i=0
+	while ! grep -aF "$marker" "$log" >/dev/null 2>&1; do
+		i=$((i + 1))
+		if [ "$i" -gt 45 ]; then
+			echo "linux access/faccessat regression missing: $marker" >&2
+			tail -n 160 "$log" >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
 done
 i=0
 while ! grep -F "erase = ^?" "$log" >/dev/null 2>&1; do

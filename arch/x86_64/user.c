@@ -194,6 +194,7 @@ enum {
 	LINUX_STAT_SIZE = 144,
 	LINUX_STATX_SIZE = 256,
 	LINUX_WAIT_STATUS_SIZE = 4,
+	LINUX_UTSNAME_SIZE = 65 * 6,
 	LINUX_S_IFDIR = 0040000,
 	LINUX_S_IFLNK = 0120000,
 	LINUX_S_IFREG = 0100000,
@@ -3003,34 +3004,6 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 		return arg1;
 	}
-	case LINUX_SYSCALL_UNAME: {
-		u8 uts[65 * 6];
-		const char sysname[] = "Bunix";
-		const char nodename[] = "bunix";
-		const char release[] = "0.1";
-		const char version[] = "#1";
-		const char machine[] = "x86_64";
-		const char domain[] = "local";
-		const char *fields[] = {
-			sysname, nodename, release, version, machine, domain,
-		};
-
-		if (arg0 == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		mem_zero(uts, sizeof(uts));
-		for (u64 field = 0; field < 6; field++) {
-			const char *text = fields[field];
-			u64 i = 0;
-
-			while (text[i] != '\0' && i < 64) {
-				uts[field * 65 + i] = (u8)text[i];
-				i++;
-			}
-		}
-		return write_current_user(arg0, uts, sizeof(uts)) == 0 ?
-		       0 : (u64)-LINUX_EINVAL;
-	}
 	case LINUX_SYSCALL_PRLIMIT64:
 		if (arg3 != 0) {
 			u64 limit[2] = { 0x800000, 0x800000 };
@@ -3210,6 +3183,15 @@ poll_again:
 		request.words[3] = 0;
 		return linux_forward_two_u32_out(linux, reply_port, &request,
 						 arg0);
+	}
+	case LINUX_SYSCALL_UNAME: {
+		if (arg0 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		return linux_forward_fixed_output_words(
+			linux, reply_port, &request, LINUX_SYSCALL_UNAME,
+			(void *)arg0, LINUX_UTSNAME_SIZE, 1, 0,
+			0, 0, 0, 0);
 	}
 	case LINUX_SYSCALL_CONNECT: {
 		const u64 len = arg2 > LINUX_MAX_SOCKADDR ?
