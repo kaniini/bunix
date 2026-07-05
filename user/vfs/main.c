@@ -1087,7 +1087,7 @@ static void vfs_readlink_path(struct bunix_msg *message,
 	char target[VFS_MAX_PATH];
 
 	if (mount != 0) {
-		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		(void)forward_mount_buffer_path(mount, message, reply, path);
 		return;
 	}
 

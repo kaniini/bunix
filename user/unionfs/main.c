@@ -7,7 +7,6 @@ enum {
 	ROOTFS_MAGIC = 0x30534652,
 	ROOTFS_MAX_PATH = 128,
 	UNIONFS_MAX_PATH = 256,
-	UNIONFS_MOUNT_PATH_LEN = 10,
 	UNIONFS_OPEN_LOWER = 1,
 	UNIONFS_OPEN_UPPER = 2,
 	UNIONFS_OPEN_DIR = 3,
@@ -64,6 +63,8 @@ static u64 next_open_id = 1;
 static u64 vfs_service;
 static u64 tmpfs_service;
 static u64 block_service;
+static const char unionfs_mount_path[] = "/";
+static const char unionfs_upper_path[] = "/tmp/union";
 
 static u64 str_len(const char *text)
 {
@@ -156,23 +157,35 @@ static int read_resolved_path(const struct bunix_msg *message, char *path)
 
 static int mounted_relative_path(const char *path, char *relative)
 {
-	const char mount[] = "/mnt/union";
+	const u64 mount_len = str_len(unionfs_mount_path);
 
-	if (str_eq(path, mount)) {
+	if (str_eq(unionfs_mount_path, "/")) {
+		if (path == 0 || path[0] != '/') {
+			return -1;
+		}
+		for (u64 i = 0; i < UNIONFS_MAX_PATH; i++) {
+			relative[i] = path[i];
+			if (relative[i] == '\0') {
+				return 0;
+			}
+		}
+		return -1;
+	}
+	if (str_eq(path, unionfs_mount_path)) {
 		relative[0] = '/';
 		relative[1] = '\0';
 		return 0;
 	}
-	for (u64 i = 0; mount[i] != '\0'; i++) {
-		if (path[i] != mount[i]) {
+	for (u64 i = 0; unionfs_mount_path[i] != '\0'; i++) {
+		if (path[i] != unionfs_mount_path[i]) {
 			return -1;
 		}
 	}
-	if (path[UNIONFS_MOUNT_PATH_LEN] != '/') {
+	if (path[mount_len] != '/') {
 		return -1;
 	}
 	for (u64 i = 0; i < UNIONFS_MAX_PATH; i++) {
-		relative[i] = path[UNIONFS_MOUNT_PATH_LEN + i];
+		relative[i] = path[mount_len + i];
 		if (relative[i] == '\0') {
 			return 0;
 		}
@@ -182,11 +195,10 @@ static int mounted_relative_path(const char *path, char *relative)
 
 static int compose_upper_path(const char *relative, char *path)
 {
-	const char upper[] = "/tmp/union";
 	u64 pos = 0;
 
-	for (u64 i = 0; upper[i] != '\0'; i++) {
-		path[pos++] = upper[i];
+	for (u64 i = 0; unionfs_upper_path[i] != '\0'; i++) {
+		path[pos++] = unionfs_upper_path[i];
 	}
 	if (str_eq(relative, "/")) {
 		path[pos] = '\0';
@@ -1137,10 +1149,10 @@ int main(void)
 	    block_service == 0 ||
 	    rootfs_mount() != 0 ||
 	    service_path_call(tmpfs_service, BUNIX_VFS_MKDIR_BUFFER,
-			      "/tmp/union", (u64)0777 << 32,
+			      unionfs_upper_path, (u64)0777 << 32,
 			      &mkdir_reply) != 0 ||
 	    mkdir_reply.words[0] != 0 ||
-	    vfs_mount_path("/mnt/union") != 0 ||
+	    vfs_mount_path(unionfs_mount_path) != 0 ||
 	    register_service(BUNIX_SERVICE_UNIONFS, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
 	}

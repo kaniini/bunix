@@ -122,13 +122,15 @@ boot module only to the block server. Init launches a block server and a VFS
 server with only console and names capabilities. The block server registers
 `BLK0` in the root namespace and serves read-only bytes from its assigned disk
 image. VFS resolves `BLK0`, registers `VFS0`, parses the generated rootfs entry
-table, and serves pathname reads, metadata, directory enumeration, and delegated
-procfs paths.
+table for bootstrap access, and then delegates mounted paths to user-space
+filesystem translators. Procfs attaches at `/proc`, tmpfs attaches at `/tmp`,
+`/run`, and `/var/tmp`, and unionfs attaches at `/` so the read-only rootfs
+image is visible through a writable tmpfs-backed upper layer.
 
 This is intentionally not a real disk filesystem yet. The useful primitive is
-the capability-shaped chain `init/proc -> names -> vfs -> block -> disk0`,
-which is the path that can later point at a real disk image and then at an
-Alpine root filesystem format.
+the capability-shaped chain `init/proc -> names -> vfs -> unionfs -> block +
+tmpfs`, which is the path that can later point at a real disk image and then at
+an Alpine root filesystem format.
 
 `procfs.server` is a separate user-space server that dynamically attaches
 itself to VFS as the `/proc` translator. It currently exposes `/proc/kthreads`,
@@ -137,6 +139,8 @@ userspace, plus process metadata such as `/proc/self/status`,
 `/proc/self/cmdline`, `/proc/self/fd`, `/proc/self/exe`, `/proc/stat`,
 `/proc/ipc`, `/proc/filesystems`, `/proc/cpuinfo`, `/proc/meminfo`,
 `/proc/mounts`, and `/proc/uptime`.
+VFS sends mount notifications to procfs, so `/proc/mounts` reflects the live
+translator set without procfs calling back into VFS during file reads.
 
 ## User Mode
 
@@ -204,8 +208,9 @@ and `cd` through the shell. The generated rootfs includes explicit
 Backspace, canonical tty input, Ctrl-C delivery to foreground jobs, login
 prompt respawn after shell exit, `/secret.txt` permission denial for the login
 user, second login as root, root access to `/secret.txt`, and applet argv
-handling are covered by
-`make test-shell`.
+handling are covered by `make test-shell`. The same regression also verifies
+that creating, copying up, and whiteouting files at `/` uses the unionfs root
+overlay while preserving the read-only lower image as unionfs input.
 
 `/bin/lxtest` contains no Bunix headers or crt0; it issues raw x86_64 Linux
 syscall numbers for the compatibility path and verifies returned byte counts,
@@ -318,7 +323,8 @@ console, logs in, runs BusyBox applets,
 checks pipes and file reads, verifies login/session-visible `uptime`, checks
 `id`, `stat`, `ls`, `cat`, shell `cd`/`pwd`, backspace, Ctrl-C, permission
 denial for `/secret.txt`, and confirms that exiting the shell returns to the
-login prompt.
+login prompt. It also checks writable-root unionfs behavior and live
+`/proc/mounts` output.
 
 The static PIE BusyBox path remains available as a compatibility regression:
 
