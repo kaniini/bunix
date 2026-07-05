@@ -168,6 +168,10 @@ struct boot_exec {
 	u64 log_kind;
 };
 
+struct boot_path {
+	const char *path;
+};
+
 static long register_proc_execs(u64 proc)
 {
 	const struct boot_exec execs[] = {
@@ -215,6 +219,22 @@ static long tmpfs_mount_root(u64 tmpfs, const char *path)
 	return reply.words[0] == 0 ? 0 : -1;
 }
 
+static long mount_tmpfs_roots(u64 tmpfs)
+{
+	const struct boot_path roots[] = {
+		{ "/tmp" },
+		{ "/run" },
+		{ "/var/tmp" },
+	};
+
+	for (u64 i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
+		if (tmpfs_mount_root(tmpfs, roots[i].path) != 0) {
+			return -1;
+		}
+	}
+	return 0;
+}
+
 static long utmpfs_mount_path(u64 utmpfs, const char *path)
 {
 	struct bunix_msg request = {
@@ -233,6 +253,21 @@ static long utmpfs_mount_path(u64 utmpfs, const char *path)
 		return -1;
 	}
 	return reply.words[0] == 0 ? 0 : -1;
+}
+
+static long mount_utmpfs_paths(u64 utmpfs)
+{
+	const struct boot_path paths[] = {
+		{ "/run/utmp" },
+		{ "/var/run/utmp" },
+	};
+
+	for (u64 i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+		if (utmpfs_mount_path(utmpfs, paths[i].path) != 0) {
+			return -1;
+		}
+	}
+	return 0;
 }
 
 static long devfs_mount_path(u64 devfs, const char *path)
@@ -450,23 +485,12 @@ int main(void)
 	bunix_launch_module_with_caps("tmpfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	{
-		const char *tmpfs_roots[] = {
-			"/tmp",
-			"/run",
-			"/var/tmp",
-		};
 		u64 tmpfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						      BUNIX_SERVICE_TMPFS,
 						      BUNIX_RIGHT_SEND);
 
-		if (tmpfs == 0) {
+		if (tmpfs == 0 || mount_tmpfs_roots(tmpfs) != 0) {
 			return 1;
-		}
-		for (u64 i = 0; i < sizeof(tmpfs_roots) /
-		     sizeof(tmpfs_roots[0]); i++) {
-			if (tmpfs_mount_root(tmpfs, tmpfs_roots[i]) != 0) {
-				return 1;
-			}
 		}
 	}
 	bunix_launch_module_with_caps("devfs", fs_caps,
@@ -483,22 +507,12 @@ int main(void)
 	bunix_launch_module_with_caps("utmpfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	{
-		const char *utmpfs_paths[] = {
-			"/run/utmp",
-			"/var/run/utmp",
-		};
 		u64 utmpfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						       BUNIX_SERVICE_UTMPFS,
 						       BUNIX_RIGHT_SEND);
 
-		if (utmpfs == 0) {
+		if (utmpfs == 0 || mount_utmpfs_paths(utmpfs) != 0) {
 			return 1;
-		}
-		for (u64 i = 0; i < sizeof(utmpfs_paths) /
-		     sizeof(utmpfs_paths[0]); i++) {
-			if (utmpfs_mount_path(utmpfs, utmpfs_paths[i]) != 0) {
-				return 1;
-			}
 		}
 	}
 	bunix_launch_module_with_caps("unionfs", fs_caps,
