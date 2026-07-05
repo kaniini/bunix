@@ -198,6 +198,46 @@ static long procfs_mount_path(u64 procfs, const char *path)
 	return reply.words[0] == 0 ? 0 : -1;
 }
 
+static long unionfs_set_upper(u64 unionfs, const char *path)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_UNIONFS,
+		.type = BUNIX_UNIONFS_SET_UPPER,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	pack_path(&request.words[0], path);
+	if (bunix_ipc_call(unionfs, &request, &reply) != 0) {
+		return -1;
+	}
+	return reply.words[0] == 0 ? 0 : -1;
+}
+
+static long unionfs_mount_path(u64 unionfs, const char *path)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_UNIONFS,
+		.type = BUNIX_UNIONFS_MOUNT_PATH,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	pack_path(&request.words[0], path);
+	if (bunix_ipc_call(unionfs, &request, &reply) != 0) {
+		return -1;
+	}
+	return reply.words[0] == 0 ? 0 : -1;
+}
+
 static void sleep_ns(u64 time, u64 ns)
 {
 	struct bunix_msg request = {
@@ -385,9 +425,16 @@ int main(void)
 	}
 	bunix_launch_module_with_caps("unionfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
-	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_UNIONFS,
-				      BUNIX_RIGHT_SEND) == 0) {
-		return 1;
+	{
+		u64 unionfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+							BUNIX_SERVICE_UNIONFS,
+							BUNIX_RIGHT_SEND);
+
+		if (unionfs == 0 ||
+		    unionfs_set_upper(unionfs, "/tmp/union") != 0 ||
+		    unionfs_mount_path(unionfs, "/") != 0) {
+			return 1;
+		}
 	}
 	fs_namespace = create_namespace();
 	if (fs_namespace == 0 ||

@@ -63,8 +63,8 @@ static u64 next_open_id = 1;
 static u64 vfs_service;
 static u64 tmpfs_service;
 static u64 block_service;
-static const char unionfs_mount_path[] = "/";
-static const char unionfs_upper_path[] = "/tmp/union";
+static char unionfs_mount_path[UNIONFS_MAX_PATH];
+static char unionfs_upper_path[UNIONFS_MAX_PATH];
 
 static u64 str_len(const char *text)
 {
@@ -124,6 +124,17 @@ static int name_is_valid(const char *name)
 static void pack_path(u64 *words, const char *path)
 {
 	pack_bytes(words, (const unsigned char *)path, str_len(path) + 1);
+}
+
+static void unpack_path(char *path, const u64 *words)
+{
+	for (u64 i = 0; i < BUNIX_IPC_DATA_BYTES; i++) {
+		const u64 slot = i / 8;
+		const u64 shift = (i % 8) * 8;
+
+		path[i] = (char)((words[slot] >> shift) & 0xff);
+	}
+	path[BUNIX_IPC_DATA_BYTES] = '\0';
 }
 
 static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
@@ -197,6 +208,9 @@ static int compose_upper_path(const char *relative, char *path)
 {
 	u64 pos = 0;
 
+	if (unionfs_upper_path[0] == '\0') {
+		return -1;
+	}
 	for (u64 i = 0; unionfs_upper_path[i] != '\0'; i++) {
 		path[pos++] = unionfs_upper_path[i];
 	}
@@ -576,6 +590,49 @@ static int vfs_mount_path(const char *path)
 	pack_path(&request.words[0], path);
 	return bunix_ipc_call(vfs_service, &request, &reply) == 0 &&
 	       reply.words[0] == 0 ? 0 : -1;
+}
+
+static int set_path(char *target, const char *path)
+{
+	u64 i;
+
+	if (target == 0 || path == 0 || path[0] != '/') {
+		return -1;
+	}
+	for (i = 0; i + 1 < UNIONFS_MAX_PATH && path[i] != '\0'; i++) {
+		target[i] = path[i];
+	}
+	if (path[i] != '\0') {
+		return -1;
+	}
+	target[i] = '\0';
+	return 0;
+}
+
+static int unionfs_set_upper_path(const char *path)
+{
+	struct bunix_msg mkdir_reply;
+
+	if (set_path(unionfs_upper_path, path) != 0 ||
+	    service_path_call(tmpfs_service, BUNIX_VFS_MKDIR_BUFFER,
+			      unionfs_upper_path, (u64)0777 << 32,
+			      &mkdir_reply) != 0 ||
+	    mkdir_reply.words[0] != 0) {
+		unionfs_upper_path[0] = '\0';
+		return -1;
+	}
+	return 0;
+}
+
+static int unionfs_mount_root_path(const char *path)
+{
+	if (unionfs_upper_path[0] == '\0' ||
+	    set_path(unionfs_mount_path, path) != 0 ||
+	    vfs_mount_path(unionfs_mount_path) != 0) {
+		unionfs_mount_path[0] = '\0';
+		return -1;
+	}
+	return 0;
 }
 
 static u64 remember_upper_open(u64 service, u64 remote_handle)
@@ -1135,7 +1192,6 @@ int main(void)
 	const char online[] = "unionfs: online\n";
 	const char mounted[] = "unionfs: mounted\n";
 	struct bunix_msg message;
-	struct bunix_msg mkdir_reply;
 
 	bunix_console_log(online, sizeof(online) - 1);
 	bunix_tree_init(&whiteouts);
@@ -1148,15 +1204,9 @@ int main(void)
 	    tmpfs_service == 0 ||
 	    block_service == 0 ||
 	    rootfs_mount() != 0 ||
-	    service_path_call(tmpfs_service, BUNIX_VFS_MKDIR_BUFFER,
-			      unionfs_upper_path, (u64)0777 << 32,
-			      &mkdir_reply) != 0 ||
-	    mkdir_reply.words[0] != 0 ||
-	    vfs_mount_path(unionfs_mount_path) != 0 ||
 	    register_service(BUNIX_SERVICE_UNIONFS, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
 	}
-	bunix_console_log(mounted, sizeof(mounted) - 1);
 
 	for (;;) {
 		struct bunix_msg reply = {
@@ -1167,10 +1217,37 @@ int main(void)
 		};
 		char path[UNIONFS_MAX_PATH];
 
-		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
-		    message.protocol != BUNIX_PROTO_VFS) {
+		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0) {
 			continue;
 		}
+		if (message.protocol == BUNIX_PROTO_UNIONFS) {
+			unpack_path(path, &message.words[0]);
+			reply.protocol = BUNIX_PROTO_UNIONFS;
+			reply.type = message.type;
+			switch (message.type) {
+			case BUNIX_UNIONFS_SET_UPPER:
+				reply.words[0] =
+					(u64)unionfs_set_upper_path(path);
+				break;
+			case BUNIX_UNIONFS_MOUNT_PATH:
+				reply.words[0] =
+					(u64)unionfs_mount_root_path(path);
+				if (reply.words[0] == 0) {
+					bunix_console_log(mounted,
+							  sizeof(mounted) - 1);
+				}
+				break;
+			default:
+				reply.words[0] = (u64)-1;
+				break;
+			}
+			bunix_ipc_send(message.reply, &reply);
+			continue;
+		}
+		if (message.protocol != BUNIX_PROTO_VFS) {
+			continue;
+		}
+		reply.protocol = BUNIX_PROTO_VFS;
 		reply.type = message.type;
 		switch (message.type) {
 		case BUNIX_VFS_OPEN_BUFFER:
