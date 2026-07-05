@@ -78,7 +78,12 @@ enum {
 	LINUX_UTSNAME_SIZE = 65 * 6,
 	LINUX_STAT_SIZE = 144,
 	LINUX_STATX_SIZE = 256,
+	LINUX_STATFS_SIZE = 120,
 	LINUX_STATX_BASIC_STATS = 0x7ff,
+	LINUX_STATFS_MAGIC = 0x42554e58,
+	LINUX_STATFS_BLOCK_SIZE = 4096,
+	LINUX_STATFS_BLOCKS = 32768,
+	LINUX_STATFS_FREE_BLOCKS = 16384,
 	LINUX_INITIAL_FDS = 16,
 	LINUX_PIPE_CAPACITY = 4096,
 	LINUX_S_IFCHR = 0020000,
@@ -670,7 +675,7 @@ static long utmps_recv_response(struct linux_fd *fd, u64 len, u64 buffer)
 		response_len = len;
 	}
 	if (bunix_buffer_write(buffer, 0, write_buffer, response_len) != 0) {
-		return -LINUX_EINVAL;
+		return -LINUX_EFAULT;
 	}
 	return (long)response_len;
 }
@@ -1889,7 +1894,7 @@ static long tty_termios_get(u64 buffer)
 	tty_init();
 	return bunix_buffer_write(buffer, 0, tty_termios,
 				  sizeof(tty_termios)) == 0 ?
-	       0 : -LINUX_EINVAL;
+	       0 : -LINUX_EFAULT;
 }
 
 static long tty_termios_set(u64 buffer)
@@ -1897,7 +1902,7 @@ static long tty_termios_set(u64 buffer)
 	if (buffer == 0 ||
 	    bunix_buffer_read(buffer, 0, tty_termios,
 			      sizeof(tty_termios)) != 0) {
-		return -LINUX_EINVAL;
+		return -LINUX_EFAULT;
 	}
 	tty_line_offset = 0;
 	tty_line_len = 0;
@@ -1957,7 +1962,7 @@ static long tty_read_raw(struct linux_process *process, u64 len, u64 buffer)
 	}
 
 	if (bunix_buffer_write(buffer, 0, write_buffer, done) != 0) {
-		return -LINUX_EINVAL;
+		return -LINUX_EFAULT;
 	}
 	return (long)done;
 }
@@ -2042,7 +2047,7 @@ static long tty_read_canonical(struct linux_process *process, u64 len,
 	}
 
 	if (bunix_buffer_write(buffer, 0, write_buffer, nread) != 0) {
-		return -LINUX_EINVAL;
+		return -LINUX_EFAULT;
 	}
 	return (long)nread;
 }
@@ -2078,25 +2083,25 @@ static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
 		return tty_termios_set(buffer);
 	case LINUX_TIOCGPGRP:
 		if (buffer == 0) {
-			return -LINUX_EINVAL;
+			return -LINUX_EFAULT;
 		}
 		zero_bytes(data, sizeof(data));
 		store_u32(data, 0,
 			  (unsigned int)linux_foreground_pgid(process));
 		return bunix_buffer_write(buffer, 0, data, 4) == 0 ?
-		       0 : -LINUX_EINVAL;
+		       0 : -LINUX_EFAULT;
 	case LINUX_TIOCSPGRP:
 		pgid = value;
 		return linux_set_foreground_pgid(process, pgid);
 	case LINUX_TIOCGWINSZ:
 		if (buffer == 0) {
-			return -LINUX_EINVAL;
+			return -LINUX_EFAULT;
 		}
 		zero_bytes(data, sizeof(data));
 		store_u16(data, 0, 25);
 		store_u16(data, 2, 80);
 		return bunix_buffer_write(buffer, 0, data, 8) == 0 ?
-		       0 : -LINUX_EINVAL;
+		       0 : -LINUX_EFAULT;
 	default:
 		return -LINUX_EINVAL;
 	}
@@ -2243,7 +2248,7 @@ static long linux_vfs_readlink_call(struct linux_process *process,
 				copy_len) != 0 ||
 	      bunix_buffer_write(syscall_buffer, 0, target, copy_len) != 0))) {
 		bunix_handle_close((u64)path_buffer);
-		return -LINUX_EINVAL;
+		return -LINUX_EFAULT;
 	}
 	bunix_handle_close((u64)path_buffer);
 	*target_len = copy_len;
@@ -2759,7 +2764,7 @@ static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
 	char stat[LINUX_STAT_SIZE];
 
 	if (stat_buffer == 0) {
-		return -LINUX_EINVAL;
+		return -LINUX_EFAULT;
 	}
 
 	zero_bytes(stat, sizeof(stat));
@@ -2774,7 +2779,7 @@ static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
 	store_u64(stat, 64, (size + 511) / 512);
 
 	return bunix_buffer_write(stat_buffer, 0, stat, sizeof(stat)) == 0 ?
-		0 : -LINUX_EINVAL;
+		0 : -LINUX_EFAULT;
 }
 
 static long linux_stat_from_vfs_meta(u64 stat_buffer,
@@ -2795,7 +2800,7 @@ static long linux_statx_write(u64 statx_buffer, u64 mode, u64 uid, u64 gid,
 	char statx[LINUX_STATX_SIZE];
 
 	if (statx_buffer == 0) {
-		return -LINUX_EINVAL;
+		return -LINUX_EFAULT;
 	}
 
 	zero_bytes(statx, sizeof(statx));
@@ -2810,7 +2815,7 @@ static long linux_statx_write(u64 statx_buffer, u64 mode, u64 uid, u64 gid,
 	store_u64(statx, 48, (size + 511) / 512);
 
 	return bunix_buffer_write(statx_buffer, 0, statx, sizeof(statx)) == 0 ?
-		0 : -LINUX_EINVAL;
+		0 : -LINUX_EFAULT;
 }
 
 static long linux_statx_from_vfs_meta(u64 statx_buffer,
@@ -2823,6 +2828,64 @@ static long linux_statx_from_vfs_meta(u64 statx_buffer,
 				 reply->words[3] & 0xffffffff,
 				 reply->words[3] >> 32,
 				 reply->words[1]);
+}
+
+static long linux_statfs_write(u64 statfs_buffer)
+{
+	char statfs[LINUX_STATFS_SIZE];
+
+	if (statfs_buffer == 0) {
+		return -LINUX_EFAULT;
+	}
+
+	zero_bytes(statfs, sizeof(statfs));
+	store_u64(statfs, 0, LINUX_STATFS_MAGIC);
+	store_u64(statfs, 8, LINUX_STATFS_BLOCK_SIZE);
+	store_u64(statfs, 16, LINUX_STATFS_BLOCKS);
+	store_u64(statfs, 24, LINUX_STATFS_FREE_BLOCKS);
+	store_u64(statfs, 32, LINUX_STATFS_FREE_BLOCKS);
+	store_u64(statfs, 40, 65536);
+	store_u64(statfs, 48, 32768);
+	store_u32(statfs, 64, LINUX_MAX_PATH - 1);
+	store_u64(statfs, 72, LINUX_STATFS_BLOCK_SIZE);
+	return bunix_buffer_write(statfs_buffer, 0, statfs, sizeof(statfs)) == 0 ?
+	       0 : -LINUX_EFAULT;
+}
+
+static long linux_fstatfs(struct linux_process *process, u64 fd,
+			  u64 statfs_buffer)
+{
+	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
+		return -LINUX_EBADF;
+	}
+	return linux_statfs_write(statfs_buffer);
+}
+
+static long linux_statfs(struct linux_process *process, u64 path_len,
+			 u64 path_buffer)
+{
+	char path[LINUX_MAX_PATH];
+	struct bunix_msg reply;
+	u64 base_handle;
+	long path_result;
+	long base_result;
+
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
+	}
+	base_result = linux_dirfd_base_handle(process, LINUX_AT_FDCWD, path,
+					      &base_handle);
+	if (base_result != 0) {
+		return base_result;
+	}
+	if (linux_vfs_path_call_flags(process, BUNIX_VFS_STAT_PATH_META_BUFFER,
+				      base_handle, path, 0, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_ENOENT;
+	}
+	return linux_statfs_write(path_buffer);
 }
 
 static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
@@ -3133,7 +3196,7 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 
 	if (bunix_buffer_write(buffer, 0, out, written) != 0) {
 		bunix_handle_close((u64)name_buffer);
-		return -LINUX_EINVAL;
+		return -LINUX_EFAULT;
 	}
 	bunix_handle_close((u64)name_buffer);
 	return (long)written;
@@ -3150,7 +3213,7 @@ static long linux_getcwd(struct linux_process *process, u64 size,
 	}
 	if (buffer != 0) {
 		if (bunix_buffer_write(buffer, 0, process->cwd, len) != 0) {
-			return -LINUX_EINVAL;
+			return -LINUX_EFAULT;
 		}
 		return (long)len;
 	}
@@ -3252,9 +3315,12 @@ static long linux_connect(struct linux_process *process, u64 fd, u64 addr_len,
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
 		return -LINUX_ENOTSOCK;
 	}
-	if (addr_buffer == 0 || addr_len < 3 || addr_len > sizeof(addr) ||
-	    bunix_buffer_read(addr_buffer, 0, addr, addr_len) != 0) {
+	if (addr_len < 3 || addr_len > sizeof(addr)) {
 		return -LINUX_EINVAL;
+	}
+	if (addr_buffer == 0 ||
+	    bunix_buffer_read(addr_buffer, 0, addr, addr_len) != 0) {
+		return -LINUX_EFAULT;
 	}
 
 	family = ((unsigned int)(unsigned char)addr[0]) |
@@ -3293,9 +3359,11 @@ static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 	if (process->fds[fd].handle != LINUX_SOCKET_UTMPD) {
 		return -LINUX_EINVAL;
 	}
-	if (len != 1 || buffer == 0 ||
-	    bunix_buffer_read(buffer, 0, &command, 1) != 0) {
+	if (len != 1) {
 		return -LINUX_EINVAL;
+	}
+	if (buffer == 0 || bunix_buffer_read(buffer, 0, &command, 1) != 0) {
+		return -LINUX_EFAULT;
 	}
 	if (command != LINUX_UTMPS_REWIND &&
 	    command != LINUX_UTMPS_GETENT) {
@@ -3758,7 +3826,7 @@ static long linux_uname(u64 buffer)
 	char uts[LINUX_UTSNAME_SIZE];
 
 	if (buffer == 0) {
-		return -LINUX_EINVAL;
+		return -LINUX_EFAULT;
 	}
 	zero_bytes(uts, sizeof(uts));
 	copy_field(uts, 0 * 65, 65, "Bunix");
@@ -3768,7 +3836,7 @@ static long linux_uname(u64 buffer)
 	copy_field(uts, 4 * 65, 65, "x86_64");
 	copy_field(uts, 5 * 65, 65, "local");
 	return bunix_buffer_write(buffer, 0, uts, sizeof(uts)) == 0 ? 0 :
-	       -LINUX_EINVAL;
+	       -LINUX_EFAULT;
 }
 
 static long linux_sysinfo(u64 buffer)
@@ -3776,7 +3844,7 @@ static long linux_sysinfo(u64 buffer)
 	char info[LINUX_SYSINFO_SIZE];
 
 	if (buffer == 0) {
-		return -LINUX_EINVAL;
+		return -LINUX_EFAULT;
 	}
 	zero_bytes(info, sizeof(info));
 	store_u64(info, 0, bunix_timer_ticks() / 1000000000ull);
@@ -3785,7 +3853,7 @@ static long linux_sysinfo(u64 buffer)
 	store_u16(info, 80, 1);
 	store_u32(info, 104, 1);
 	return bunix_buffer_write(buffer, 0, info, sizeof(info)) == 0 ? 0 :
-	       -LINUX_EINVAL;
+	       -LINUX_EFAULT;
 }
 
 static long linux_getrandom(u64 len, u64 buffer)
@@ -3793,14 +3861,14 @@ static long linux_getrandom(u64 len, u64 buffer)
 	u64 done = 0;
 
 	if (buffer == 0 || len > LINUX_MAX_WRITE) {
-		return -LINUX_EINVAL;
+		return buffer == 0 ? -LINUX_EFAULT : -LINUX_EINVAL;
 	}
 	while (done < len) {
 		write_buffer[done] = (char)(0xa5u ^ (unsigned char)done);
 		done++;
 	}
 	return bunix_buffer_write(buffer, 0, write_buffer, len) == 0 ?
-	       (long)len : (long)-LINUX_EINVAL;
+	       (long)len : (long)-LINUX_EFAULT;
 }
 
 static long linux_clock_gettime(u64 buffer)
@@ -3809,13 +3877,13 @@ static long linux_clock_gettime(u64 buffer)
 	const u64 ns = bunix_timer_ticks();
 
 	if (buffer == 0) {
-		return -LINUX_EINVAL;
+		return -LINUX_EFAULT;
 	}
 	zero_bytes(timespec, sizeof(timespec));
 	store_u64(timespec, 0, ns / 1000000000ull);
 	store_u64(timespec, 8, ns % 1000000000ull);
 	return bunix_buffer_write(buffer, 0, timespec, sizeof(timespec)) == 0 ?
-	       0 : -LINUX_EINVAL;
+	       0 : -LINUX_EFAULT;
 }
 
 static long linux_gettimeofday(u64 buffer)
@@ -3830,7 +3898,7 @@ static long linux_gettimeofday(u64 buffer)
 	store_u64(timeval, 0, ns / 1000000000ull);
 	store_u64(timeval, 8, (ns % 1000000000ull) / 1000ull);
 	return bunix_buffer_write(buffer, 0, timeval, sizeof(timeval)) == 0 ?
-	       0 : -LINUX_EINVAL;
+	       0 : -LINUX_EFAULT;
 }
 
 static long linux_time(u64 buffer, u64 *seconds_out)
@@ -3847,7 +3915,7 @@ static long linux_time(u64 buffer, u64 *seconds_out)
 	zero_bytes(time_value, sizeof(time_value));
 	store_u64(time_value, 0, seconds);
 	return bunix_buffer_write(buffer, 0, time_value, sizeof(time_value)) == 0 ?
-	       (long)seconds : (long)-LINUX_EINVAL;
+	       (long)seconds : (long)-LINUX_EFAULT;
 }
 
 static void linux_close_process_fds(struct linux_process *process)
@@ -4329,15 +4397,31 @@ int main(void)
 				bunix_handle_close(message.cap);
 			}
 			break;
-		case BUNIX_LINUX_SYSINFO:
-			reply.words[0] = (u64)linux_sysinfo(message.cap);
-			if (message.cap != 0) {
-				bunix_handle_close(message.cap);
-			}
-			break;
-		case BUNIX_LINUX_GETRANDOM:
-			reply.words[0] = (u64)linux_getrandom(message.words[1],
-							     message.cap);
+			case BUNIX_LINUX_SYSINFO:
+				reply.words[0] = (u64)linux_sysinfo(message.cap);
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				break;
+			case BUNIX_LINUX_STATFS:
+				reply.words[0] = (u64)linux_statfs(process,
+								   message.words[1],
+								   message.cap);
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				break;
+			case BUNIX_LINUX_FSTATFS:
+				reply.words[0] = (u64)linux_fstatfs(process,
+								    message.words[0],
+								    message.cap);
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				break;
+			case BUNIX_LINUX_GETRANDOM:
+				reply.words[0] = (u64)linux_getrandom(message.words[1],
+								     message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

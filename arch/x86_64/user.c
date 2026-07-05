@@ -119,6 +119,8 @@ enum {
 	LINUX_SYSCALL_SETPGID = 109,
 	LINUX_SYSCALL_SETSID = 112,
 	LINUX_SYSCALL_GETSID = 124,
+	LINUX_SYSCALL_STATFS = 137,
+	LINUX_SYSCALL_FSTATFS = 138,
 	LINUX_SYSCALL_GETGROUPS = 115,
 	LINUX_SYSCALL_SETGROUPS = 116,
 	LINUX_SYSCALL_SETRESUID = 117,
@@ -193,6 +195,7 @@ enum {
 	LINUX_EXEC_STACK_PAGES = 64,
 	LINUX_STAT_SIZE = 144,
 	LINUX_STATX_SIZE = 256,
+	LINUX_STATFS_SIZE = 120,
 	LINUX_WAIT_STATUS_SIZE = 4,
 	LINUX_TIMEVAL_SIZE = 16,
 	LINUX_TIMESPEC_SIZE = 16,
@@ -2526,6 +2529,10 @@ static const char *linux_syscall_name(u64 number)
 		return "getpgid";
 	case LINUX_SYSCALL_GETSID:
 		return "getsid";
+	case LINUX_SYSCALL_STATFS:
+		return "statfs";
+	case LINUX_SYSCALL_FSTATFS:
+		return "fstatfs";
 	case LINUX_SYSCALL_SETPGID:
 		return "setpgid";
 	case LINUX_SYSCALL_SETSID:
@@ -3316,6 +3323,15 @@ poll_again:
 			(void *)arg0, LINUX_SYSINFO_SIZE, 1, 0,
 			0, 0, 0, 0);
 	}
+	case LINUX_SYSCALL_FSTATFS: {
+		if (arg1 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		return linux_forward_fixed_output_words(
+			linux, reply_port, &request, LINUX_SYSCALL_FSTATFS,
+			(void *)arg1, LINUX_STATFS_SIZE, 1, 0,
+			arg0, 0, 0, 0);
+	}
 	case LINUX_SYSCALL_CLOCK_GETTIME: {
 		if (arg1 == 0) {
 			return (u64)-LINUX_EINVAL;
@@ -3752,6 +3768,37 @@ poll_again:
 					  reply.words[3]) != 0) {
 			return (u64)-LINUX_EINVAL;
 		}
+		return result;
+	}
+	case LINUX_SYSCALL_STATFS: {
+		struct shared_buffer *buffer;
+		const char *path = (const char *)arg0;
+		u64 result;
+
+		if (path == 0 || arg1 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		request.type = LINUX_SYSCALL_STATFS;
+		request.words[0] = 0;
+		request.words[1] = 0;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		buffer = linux_forward_path_buffer(linux, reply_port, &request,
+						   &reply, path,
+						   LINUX_STATFS_SIZE, 1,
+						   TASK_RIGHT_RECV |
+						   TASK_RIGHT_SEND,
+						   &result);
+		if (buffer == 0) {
+			return result;
+		}
+		if (result == 0 &&
+		    buffer_read(buffer, 0, (void *)arg1,
+				LINUX_STATFS_SIZE) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EINVAL;
+		}
+		buffer_release(buffer);
 		return result;
 	}
 	case LINUX_SYSCALL_STATX: {

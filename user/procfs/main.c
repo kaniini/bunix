@@ -740,6 +740,9 @@ static const char *mount_fstype_name(u64 fstype)
 	if (fstype == BUNIX_SERVICE_TMPFS) {
 		return "tmpfs";
 	}
+	if (fstype == BUNIX_SERVICE_DEVFS) {
+		return "devtmpfs";
+	}
 	if (fstype == BUNIX_SERVICE_UNIONFS) {
 		return "unionfs";
 	}
