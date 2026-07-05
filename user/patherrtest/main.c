@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -68,6 +70,19 @@ int main(void)
 		}
 		return 1;
 	}
+
+	fd = open("/hello.txt", O_RDONLY);
+	if (fd < 0) {
+		perror("linux patherr open-fstatat");
+		return 1;
+	}
+	if (fstatat(fd, "", &st, AT_EMPTY_PATH) != 0 || st.st_size != 15) {
+		printf("linux patherr fstatat-empty errno=%d size=%llu\n",
+		       errno, (unsigned long long)st.st_size);
+		close(fd);
+		return 1;
+	}
+	close(fd);
 
 	puts("linux patherr ok");
 	return 0;

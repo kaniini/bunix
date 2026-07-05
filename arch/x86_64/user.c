@@ -149,6 +149,7 @@ enum {
 	LINUX_SYSCALL_FCHMODAT = 268,
 	LINUX_SYSCALL_FACCESSAT = 269,
 	LINUX_AT_SYMLINK_NOFOLLOW = 0x100,
+	LINUX_AT_EMPTY_PATH = 0x1000,
 	LINUX_SYSCALL_PPOLL = 271,
 	LINUX_SYSCALL_SET_ROBUST_LIST = 273,
 	LINUX_SYSCALL_UTIMENSAT = 280,
@@ -4582,7 +4583,7 @@ poll_again:
 		request.type = LINUX_SYSCALL_NEWFSTATAT;
 		request.words[0] = dirfd;
 		request.words[1] = 0;
-		request.words[2] = flags & LINUX_AT_SYMLINK_NOFOLLOW ? 1 : 0;
+		request.words[2] = flags;
 		request.words[3] = 0;
 		result = linux_forward_path(linux, reply_port, &request, &reply,
 					    path, 0, 1, TASK_RIGHT_RECV);

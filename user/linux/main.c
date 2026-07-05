@@ -146,6 +146,7 @@ enum {
 	LINUX_AT_REMOVEDIR = 0x200,
 	LINUX_AT_EACCESS = 0x200,
 	LINUX_AT_NO_AUTOMOUNT = 0x800,
+	LINUX_AT_EMPTY_PATH = 0x1000,
 	LINUX_AT_STATX_SYNC_TYPE = 0x6000,
 	LINUX_RENAME_NOREPLACE = 1,
 	LINUX_R_OK = 4,
@@ -3592,6 +3593,40 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 	u64 base_handle;
 	long base_result;
 	long path_result;
+	const u64 allowed_flags = LINUX_AT_SYMLINK_NOFOLLOW |
+				  LINUX_AT_NO_AUTOMOUNT |
+				  LINUX_AT_EMPTY_PATH;
+
+	if ((flags & ~allowed_flags) != 0) {
+		return -LINUX_EINVAL;
+	}
+	if ((flags & LINUX_AT_EMPTY_PATH) != 0 && path_len == 1) {
+		struct bunix_msg request = {
+			.protocol = BUNIX_PROTO_VFS,
+			.type = BUNIX_VFS_STAT_META,
+			.sender = 0,
+			.cap_rights = 0,
+			.reply = 0,
+			.cap = 0,
+			.words = { 0, 0, 0, 0 },
+		};
+
+		if (dirfd >= process->fd_capacity ||
+		    process->fds[dirfd].kind == 0) {
+			return -LINUX_EBADF;
+		}
+		request.words[0] = process->fds[dirfd].handle;
+		if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0) {
+			return -LINUX_EIO;
+		}
+		if (reply.words[0] != 0) {
+			return linux_vfs_error(reply.words[0]);
+		}
+		out->words[1] = reply.words[1];
+		out->words[2] = reply.words[2];
+		out->words[3] = reply.words[3];
+		return 0;
+	}
 
 	path_result = linux_read_path_arg(path_buffer, path_len, path,
 					  sizeof(path));
@@ -3605,7 +3640,9 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 	}
 
 	if (linux_vfs_path_call_flags(process, BUNIX_VFS_STAT_PATH_META_BUFFER,
-				      base_handle, path, flags != 0 ? 1 : 0,
+				      base_handle, path,
+				      (flags & LINUX_AT_SYMLINK_NOFOLLOW) != 0 ?
+				      1 : 0,
 				      &reply) != 0) {
 		return -LINUX_EIO;
 	}
@@ -3633,6 +3670,7 @@ static long linux_statx(struct linux_process *process, u64 dirfd,
 	};
 	const u64 allowed_flags = LINUX_AT_SYMLINK_NOFOLLOW |
 				  LINUX_AT_NO_AUTOMOUNT |
+				  LINUX_AT_EMPTY_PATH |
 				  LINUX_AT_STATX_SYNC_TYPE;
 	(void)mask;
 
