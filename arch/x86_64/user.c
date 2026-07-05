@@ -1433,6 +1433,38 @@ static u64 linux_forward_path(struct ipc_port *linux,
 	return reply->words[0];
 }
 
+static struct shared_buffer *linux_forward_path_buffer(
+	struct ipc_port *linux, struct ipc_port *reply_port,
+	struct ipc_message *request, struct ipc_message *reply,
+	const char *path, u64 min_buffer_size, u64 path_len_word,
+	u32 cap_rights, u64 *result)
+{
+	struct shared_buffer *buffer;
+	u64 len = 0;
+
+	if (result == 0) {
+		return 0;
+	}
+	buffer = linux_path_buffer_from_user(path, min_buffer_size, &len);
+	if (buffer == 0) {
+		*result = (u64)-LINUX_EINVAL;
+		return 0;
+	}
+	if (path_len_word < 4) {
+		request->words[path_len_word] = len;
+	}
+	request->cap_type = IPC_CAP_BUFFER;
+	request->cap_rights = cap_rights;
+	request->cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, request, reply) != 0) {
+		buffer_release(buffer);
+		*result = (u64)-LINUX_ENOSYS;
+		return 0;
+	}
+	*result = reply->words[0];
+	return buffer;
+}
+
 static int linux_exec_map_segment(struct task *task, const u8 *image,
 				  const struct elf64_phdr *phdr,
 				  u64 load_bias)
@@ -3508,46 +3540,32 @@ poll_again:
 				     arg2 : arg3;
 		const u64 dirfd = number == LINUX_SYSCALL_READLINK ?
 				  (u64)-100 : arg0;
-		u64 len = 0;
-		u64 buffer_size;
+		u64 result;
 
 		if (path == 0 || out == 0 || out_size == 0 ||
 		    out_size > LINUX_MAX_SYSCALL_BUFFER) {
 			return (u64)-LINUX_EINVAL;
 		}
-		if (copy_cstr_from_user((char *)syscall_copy_buffer, path,
-					LINUX_MAX_SYSCALL_BUFFER) != 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		len = str_len((const char *)syscall_copy_buffer) + 1;
-		buffer_size = out_size > len ? out_size : len;
-
-		buffer = buffer_create(buffer_size);
-		if (buffer == 0 ||
-		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
-		}
-
 		request.type = LINUX_SYSCALL_READLINKAT;
 		request.words[0] = dirfd;
-		request.words[1] = len;
+		request.words[1] = 0;
 		request.words[2] = out_size;
 		request.words[3] = 0;
-		request.cap_type = IPC_CAP_BUFFER;
-		request.cap_rights = TASK_RIGHT_RECV | TASK_RIGHT_SEND;
-		request.cap_object = buffer;
-		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_ENOSYS;
+		buffer = linux_forward_path_buffer(linux, reply_port, &request,
+						   &reply, path, out_size, 1,
+						   TASK_RIGHT_RECV |
+						   TASK_RIGHT_SEND,
+						   &result);
+		if (buffer == 0) {
+			return result;
 		}
-		if ((long)reply.words[0] >= 0 &&
-		    buffer_read(buffer, 0, out, reply.words[0]) != 0) {
+		if ((long)result >= 0 &&
+		    buffer_read(buffer, 0, out, result) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
 		buffer_release(buffer);
-		return reply.words[0];
+		return result;
 	}
 	case LINUX_SYSCALL_STAT:
 	case LINUX_SYSCALL_LSTAT:
@@ -3586,46 +3604,33 @@ poll_again:
 		struct shared_buffer *buffer;
 		const char *path = (const char *)arg1;
 		const u64 statx_addr = frame->r8;
-		u64 len = 0;
-		u64 buffer_size;
+		u64 result;
 
 		if (path == 0 || statx_addr == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
-		if (copy_cstr_from_user((char *)syscall_copy_buffer, path,
-					LINUX_MAX_SYSCALL_BUFFER) != 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		len = str_len((const char *)syscall_copy_buffer) + 1;
-		buffer_size = len > LINUX_STATX_SIZE ? len : LINUX_STATX_SIZE;
-
-		buffer = buffer_create(buffer_size);
-		if (buffer == 0 ||
-		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_EINVAL;
-		}
-
 		request.type = LINUX_SYSCALL_STATX;
 		request.words[0] = arg0;
-		request.words[1] = len;
+		request.words[1] = 0;
 		request.words[2] = arg2;
 		request.words[3] = arg3;
-		request.cap_type = IPC_CAP_BUFFER;
-		request.cap_rights = TASK_RIGHT_RECV | TASK_RIGHT_SEND;
-		request.cap_object = buffer;
-		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_ENOSYS;
+		buffer = linux_forward_path_buffer(linux, reply_port, &request,
+						   &reply, path,
+						   LINUX_STATX_SIZE, 1,
+						   TASK_RIGHT_RECV |
+						   TASK_RIGHT_SEND,
+						   &result);
+		if (buffer == 0) {
+			return result;
 		}
-		if (reply.words[0] == 0 &&
+		if (result == 0 &&
 		    buffer_read(buffer, 0, (void *)statx_addr,
 				LINUX_STATX_SIZE) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_EINVAL;
 		}
 		buffer_release(buffer);
-		return reply.words[0];
+		return result;
 	}
 	case LINUX_SYSCALL_EXIT_GROUP:
 		return linux_exit_current(arg0);
