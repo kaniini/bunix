@@ -367,7 +367,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "sched: init cpus=2 boot_cpu=0" $(BUILD_DIR)/serial.log
 	grep -F "sched: cpu=1 online" $(BUILD_DIR)/serial.log
 	grep -F "smp: scheduler aps=1" $(BUILD_DIR)/serial.log
-	grep -F "names: init entries=32" $(BUILD_DIR)/serial.log
+	grep -F "names: init dynamic" $(BUILD_DIR)/serial.log
 	grep -F "slab: init caches=" $(BUILD_DIR)/serial.log
 	grep -F "buffer: init slab" $(BUILD_DIR)/serial.log
 	grep -F "ipc: init slab ports messages" $(BUILD_DIR)/serial.log

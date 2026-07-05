@@ -1,45 +1,29 @@
 #include "console.h"
 #include "name.h"
+#include "slab.h"
 #include "spinlock.h"
-
-enum {
-	MAX_NAMES = 32,
-};
+#include "tree.h"
 
 struct name_entry {
+	struct tree_node name_node;
+	struct u64_tree_node id_node;
 	u64 id;
 	const char *name;
 	enum name_service_kind kind;
 	u64 object;
-	u32 owner;
 };
 
-static struct name_entry names[MAX_NAMES];
+static struct tree names_by_name;
+static struct u64_tree names_by_id;
 static u64 next_name_id = 1;
 static struct spinlock name_lock = SPINLOCK_INIT("name");
 
-static int str_eq(const char *left, const char *right)
-{
-	while (*left != '\0' && *right != '\0') {
-		if (*left++ != *right++) {
-			return 0;
-		}
-	}
-
-	return *left == *right;
-}
-
 void name_service_init(void)
 {
-	for (u32 i = 0; i < MAX_NAMES; i++) {
-		names[i].id = 0;
-		names[i].name = 0;
-		names[i].kind = NAME_SERVICE_EMPTY;
-		names[i].object = 0;
-		names[i].owner = 0;
-	}
+	tree_init(&names_by_name);
+	u64_tree_init(&names_by_id);
 
-	console_printf("names: init entries=%u\n", MAX_NAMES);
+	console_printf("names: init dynamic\n");
 }
 
 u64 name_service_register(const char *name, enum name_service_kind kind,
@@ -50,35 +34,50 @@ u64 name_service_register(const char *name, enum name_service_kind kind,
 	}
 
 	const u64 flags = spin_lock_irqsave(&name_lock);
+	struct name_entry *entry =
+		(struct name_entry *)tree_get(&names_by_name, name);
 
-	for (u32 i = 0; i < MAX_NAMES; i++) {
-		if (names[i].id != 0 && str_eq(names[i].name, name)) {
-			names[i].kind = kind;
-			names[i].object = object;
-			console_printf("names: update name=%s id=%u kind=%u\n",
-				       name, (u32)names[i].id, kind);
-			spin_unlock_irqrestore(&name_lock, flags);
-			return names[i].id;
-		}
-	}
-
-	for (u32 i = 0; i < MAX_NAMES; i++) {
-		if (names[i].id != 0) {
-			continue;
-		}
-
-		names[i].id = next_name_id++;
-		names[i].name = name;
-		names[i].kind = kind;
-		names[i].object = object;
-		console_printf("names: register name=%s id=%u kind=%u\n",
-			       name, (u32)names[i].id, kind);
+	if (entry != 0) {
+		entry->kind = kind;
+		entry->object = object;
+		console_printf("names: update name=%s id=%u kind=%u\n",
+			       name, (u32)entry->id, kind);
 		spin_unlock_irqrestore(&name_lock, flags);
-		return names[i].id;
+		return entry->id;
 	}
 
+	entry = (struct name_entry *)slab_zalloc(sizeof(*entry));
+	if (entry == 0) {
+		spin_unlock_irqrestore(&name_lock, flags);
+		console_printf("names: alloc failed for %s\n", name);
+		return 0;
+	}
+	entry->id = next_name_id++;
+	if (entry->id == 0) {
+		entry->id = next_name_id++;
+	}
+	entry->name = name;
+	entry->kind = kind;
+	entry->object = object;
+	if (tree_insert_node(&names_by_name, &entry->name_node, entry->name,
+			     (u64)entry) == 0 &&
+	    u64_tree_insert_node(&names_by_id, &entry->id_node, entry->id,
+				 (u64)entry) == 0) {
+		console_printf("names: register name=%s id=%u kind=%u\n",
+			       name, (u32)entry->id, kind);
+		spin_unlock_irqrestore(&name_lock, flags);
+		return entry->id;
+	}
+
+	if (entry->name_node.value != 0) {
+		tree_remove_node(&names_by_name, &entry->name_node);
+	}
+	if (entry->id_node.value != 0) {
+		u64_tree_remove_node(&names_by_id, &entry->id_node);
+	}
+	slab_free(entry);
 	spin_unlock_irqrestore(&name_lock, flags);
-	console_printf("names: table full for %s\n", name);
+	console_printf("names: register failed for %s\n", name);
 	return 0;
 }
 
@@ -89,14 +88,14 @@ u64 name_service_lookup(const char *name)
 	}
 
 	const u64 flags = spin_lock_irqsave(&name_lock);
+	const struct name_entry *entry =
+		(const struct name_entry *)tree_get(&names_by_name, name);
 
-	for (u32 i = 0; i < MAX_NAMES; i++) {
-		if (names[i].id != 0 && str_eq(names[i].name, name)) {
-			console_printf("names: lookup name=%s id=%u\n",
-				       name, (u32)names[i].id);
-			spin_unlock_irqrestore(&name_lock, flags);
-			return names[i].id;
-		}
+	if (entry != 0) {
+		console_printf("names: lookup name=%s id=%u\n",
+			       name, (u32)entry->id);
+		spin_unlock_irqrestore(&name_lock, flags);
+		return entry->id;
 	}
 
 	spin_unlock_irqrestore(&name_lock, flags);
@@ -107,13 +106,13 @@ u64 name_service_lookup(const char *name)
 enum name_service_kind name_service_kind(u64 id)
 {
 	const u64 flags = spin_lock_irqsave(&name_lock);
+	const struct name_entry *entry =
+		(const struct name_entry *)u64_tree_get(&names_by_id, id);
 
-	for (u32 i = 0; i < MAX_NAMES; i++) {
-		if (names[i].id == id) {
-			const enum name_service_kind kind = names[i].kind;
-			spin_unlock_irqrestore(&name_lock, flags);
-			return kind;
-		}
+	if (entry != 0) {
+		const enum name_service_kind kind = entry->kind;
+		spin_unlock_irqrestore(&name_lock, flags);
+		return kind;
 	}
 
 	spin_unlock_irqrestore(&name_lock, flags);
@@ -123,13 +122,13 @@ enum name_service_kind name_service_kind(u64 id)
 u64 name_service_object(u64 id)
 {
 	const u64 flags = spin_lock_irqsave(&name_lock);
+	const struct name_entry *entry =
+		(const struct name_entry *)u64_tree_get(&names_by_id, id);
 
-	for (u32 i = 0; i < MAX_NAMES; i++) {
-		if (names[i].id == id) {
-			const u64 object = names[i].object;
-			spin_unlock_irqrestore(&name_lock, flags);
-			return object;
-		}
+	if (entry != 0) {
+		const u64 object = entry->object;
+		spin_unlock_irqrestore(&name_lock, flags);
+		return object;
 	}
 
 	spin_unlock_irqrestore(&name_lock, flags);
