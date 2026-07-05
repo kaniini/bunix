@@ -9,6 +9,8 @@ tmp=${TMPDIR:-/tmp}/bunix-shell-test.$$
 log=$tmp/serial.log
 qemu_log=$tmp/qemu.log
 pipe=$tmp/serial
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+. "$script_dir/test-lib.sh"
 
 cleanup() {
 	if [ "${qemu_pid:-}" ]; then
@@ -22,39 +24,6 @@ cleanup() {
 	else
 		echo "kept test tmp: $tmp" >&2
 	fi
-}
-
-fail_with_log() {
-	echo "$1" >&2
-	tail -n "${2:-160}" "$log" >&2 || true
-	exit 1
-}
-
-wait_for_fixed() {
-	expected=$1
-	label=$2
-	limit=${3:-45}
-	tail_lines=${4:-160}
-	i=0
-	while ! grep -aF "$expected" "$log" >/dev/null 2>&1; do
-		i=$((i + 1))
-		if [ "$i" -gt "$limit" ]; then
-			fail_with_log "$label: $expected" "$tail_lines"
-		fi
-		sleep 1
-	done
-}
-
-check_fixed_markers() {
-	label=$1
-	limit=$2
-	tail_lines=$3
-	while IFS= read -r expected; do
-		if [ -z "$expected" ]; then
-			continue
-		fi
-		wait_for_fixed "$expected" "$label" "$limit" "$tail_lines"
-	done
 }
 
 mkdir -p "$tmp"
@@ -440,7 +409,7 @@ for expected in DEV_NULL_CHAR_OK DEV_ZERO_CHAR_OK DEV_CONSOLE_CHAR_OK; do
 	done
 done
 
-check_fixed_markers "shell regression missing" 75 220 <<'EOF_MARKERS'
+check_fixed_markers "$log" "shell regression missing" 75 220 <<'EOF_MARKERS'
 PROC_STATUS_OK
 PROC_FD_OK
 PROC_EXE_OK
