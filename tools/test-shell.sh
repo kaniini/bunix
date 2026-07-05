@@ -16,6 +16,7 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$script_dir/shell-tests/login-smoke.sh"
 . "$script_dir/shell-tests/exec-argv-pipe.sh"
 . "$script_dir/shell-tests/rootfs-vfs-proc-dev.sh"
+. "$script_dir/shell-tests/tmpfs-basic-linux-tests.sh"
 BUNIX_COLLECT_FAILURES=1
 BUNIX_FAILURE_DIR=$failure_dir
 BUNIX_QEMU_LOG=$qemu_log
@@ -140,44 +141,8 @@ login_user kaniini bunix "~ $ "
 run_login_smoke
 run_exec_argv_pipe
 run_rootfs_vfs_proc_dev
+run_tmpfs_basic_linux_tests
 send_script <<'EOF_USER_SMOKE'
-echo TMP_WRITE_OK > /tmp/bunix-write.txt
-busybox sh -c "set -C; echo TMP_EXCL_BAD > /tmp/bunix-write.txt" || echo TMP_EXCL_DENY_OK
-busybox cat /tmp/bunix-write.txt | busybox grep TMP_WRITE_OK && echo TMP_EXCL_PRESERVE_OK
-busybox cat /tmp/bunix-write.txt && echo TMP_CAT_OK
-busybox stat /tmp/bunix-write.txt && echo TMP_STAT_OK
-echo TMP_APPEND_ONE > /tmp/bunix-append.txt
-echo TMP_APPEND_TWO >> /tmp/bunix-append.txt
-busybox cat /tmp/bunix-append.txt && echo TMP_APPEND_CAT_OK
-busybox sh -c "echo RUN_WRITE_OK > /run/bunix-run.txt"
-busybox cat /run/bunix-run.txt && echo RUN_CAT_OK
-echo TRUNCATE_PAYLOAD > /tmp/bunix-trunc.txt
-busybox truncate -s 4 /tmp/bunix-trunc.txt && echo TRUNCATE_OK
-busybox cat /tmp/bunix-trunc.txt && echo TRUNCATE_CAT_OK
-busybox rm /tmp/bunix-trunc.txt && echo UNLINK_OK
-busybox test ! -e /tmp/bunix-trunc.txt && echo UNLINK_GONE_OK
-/bin/getdentstest && echo GETDENTS64_OK
-/bin/vforkstress && echo VFORKSTRESS_OK
-busybox test ! -e /lib/ld.so && echo MUSL_LDSO_CANONICAL_OK
-/bin/dyn-hello && echo DYN_HELLO_OK
-busybox top -b -n 1 >/dev/null && echo PROC_TOP_OK
-busybox ps && echo PROC_PS_OK
-busybox free && echo PROC_FREE_OK
-busybox mount && echo PROC_MOUNT_OK
-/bin/iovtest && echo IOVTEST_OK
-/bin/fchmodattest
-/bin/waitpgidtest
-/bin/execlongtest
-/bin/auxidtest
-/bin/fcntllocktest
-/bin/sysracetest
-busybox mkdir -p /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_EXISTING_ROOT_OK
-busybox test -d /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_NESTED_OK
-busybox mkdir /tmp || echo TMP_MKDIR_EXISTING_ROOT_DENY_OK
-busybox mkdir -p /union-mkdir-p/a/b && echo UNION_MKDIR_P_ROOT_OK
-busybox test -d /union-mkdir-p/a/b && echo UNION_MKDIR_P_CHILD_OK
-busybox mkdir /usr || echo UNION_MKDIR_EXISTING_LOWER_DENY_OK
-/bin/execbig && echo EXECBIG_OK
 LONG_TMP=/tmp/bunix-pathmax2
 busybox mkdir "$LONG_TMP"
 LONG_TMP=$LONG_TMP/segment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -345,17 +310,14 @@ wait_for_each_fixed_count "$log" 2 "append payload missing from file output" 45 
 	TMP_APPEND_ONE TMP_APPEND_TWO TMP_LONG_READDIR_PAYLOAD TMP_NAME_MAX_PAYLOAD \
 	TMP_NAME255_PAYLOAD PATHMAX2_TMP_PAYLOAD UNION_ROOT_BASE_PAYLOAD \
 	UNION_ROOT_APPEND_PAYLOAD UNION_ROOT_LONG_PAYLOAD UNION_NAME_MAX_PAYLOAD
-wait_for_fixed "$log" "DYN_HELLO_OK" "dynamic musl hello did not complete" 45 220
-wait_for_fixed "$log" "EXECBIG_OK" "large Linux executable did not complete" 45 220
 wait_for_fixed "$log" "READBIG_OK" "large Linux read did not complete" 45 220
-wait_for_fixed "$log" "sysrace ok" "Linux syscall race stress test did not complete" 75 220
 wait_for_each_fixed "$log" "procfs content regression missing" 45 220 \
 	"cpu  " "/bin/sh" PROC_SHELL_PPID_OK "direct_delivered " "direct_handoff "
 wait_for_each_regex "$log" "IPC fast path counter did not increase" 45 220 \
 	"direct_delivered [1-9][0-9]*" "direct_handoff [1-9][0-9]*"
 wait_for_each_regex "$log" "IPC per-CPU counter did not increase" 45 220 \
 	"cpu[0-9][0-9]* sends [1-9][0-9]*"
-require_no_fixed "$log" "top:" "busybox top reported an error" 220
+check_tmpfs_basic_linux_tests
 
 check_exec_argv_pipe
 

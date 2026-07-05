@@ -66,12 +66,15 @@ Plan:
    - `tools/shell-tests/rootfs-vfs-proc-dev.sh` owns rootfs path reads, symlink
      reads, directory stats, VFS cwd/path normalization, procfs basics, and
      devfs character-device smoke checks.
+   - `tools/shell-tests/tmpfs-basic-linux-tests.sh` owns basic tmpfs and `/run`
+     writes, truncate/unlink behavior, bundled Linux regression binaries,
+     proc tools, mount listing, basic mkdir checks, and large exec coverage.
 
    Needs:
 
    - Extract the remaining user-phase batches:
-     `tmpfs-basic-linux-tests`, `path-limits-statfs`, `union-root-user`,
-     `tmpfs-extended`, `large-io-mount`, and `interactive-tty`.
+     `path-limits-statfs`, `union-root-user`, `tmpfs-extended`,
+     `large-io-mount`, and `interactive-tty`.
    - Extract the root-phase batches:
      `root-login-union`, `root-tmpfs-chown`, `long-login`, and
      `root-mount-soak`.
