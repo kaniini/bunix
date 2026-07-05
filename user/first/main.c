@@ -8,6 +8,7 @@ enum {
 	AT_PAGESZ = 6,
 	AT_ENTRY = 9,
 	AT_EXECFN = 31,
+	LARGE_BUFFER_SIZE = 128 * 1024,
 };
 
 struct startup_aux {
@@ -23,8 +24,8 @@ static u64 stdout_handle;
 static u64 stderr_handle;
 static u64 time_handle;
 static u64 proc_handle;
-static unsigned char large_src[8192];
-static unsigned char large_dst[8192];
+static unsigned char large_src[LARGE_BUFFER_SIZE];
+static unsigned char large_dst[LARGE_BUFFER_SIZE];
 
 static void stdout_write(const char *text, u64 len)
 {

@@ -408,7 +408,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "smp: scheduler aps=1" $(BUILD_DIR)/serial.log
 	grep -F "names: init dynamic" $(BUILD_DIR)/serial.log
 	grep -F "slab: init caches=" $(BUILD_DIR)/serial.log
-	grep -F "buffer: init max=65536" $(BUILD_DIR)/serial.log
+	grep -F "buffer: init max=1048576" $(BUILD_DIR)/serial.log
 	grep -F "ipc: init slab ports messages" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: grant_space owner=vm id=1" $(BUILD_DIR)/serial.log
 	grep -F "vm-server: memory authority online" $(BUILD_DIR)/serial.log

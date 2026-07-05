@@ -120,7 +120,7 @@ static u64 str_len(const char *text)
 }
 
 enum {
-	BOOT_CONFIG_MAX = 65536,
+	BOOT_CONFIG_MAX = 512 * 1024,
 	BOOT_TOKEN_MAX = 4096,
 	BOOT_NAME_MAX = 256,
 };

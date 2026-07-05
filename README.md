@@ -168,8 +168,8 @@ the server-side buddy allocator builds on that to provide growable maps and
 object tables.
 Shared buffer capabilities provide bulk byte transport for servers. Kernel
 buffer metadata is separate from dynamically allocated byte storage, so buffers
-can grow beyond the syscall scratch page; native read/write syscalls chunk
-copies internally while preserving the handle API. VFS exposes the exec-facing
+can grow up to 1 MiB beyond the syscall scratch page; native read/write syscalls
+chunk copies internally while preserving the handle API. VFS exposes the exec-facing
 file operations proc needs now: open a named regular file, query its size/type,
 read positioned byte ranges through a shared buffer, and close the open object.
 Proc allocates a buffer, sends duplicate/write authority to VFS, VFS forwards
@@ -222,9 +222,10 @@ inline IPC word path. Linux `write(2)` chunks user buffers through the current
 just because they cross the transport boundary.
 Proc's native executable registry and bootstrap's `/etc/execs` and
 `/etc/spawns` parsing use the same runtime path budget, so native task spawns
-can exercise long VFS paths as well. Buffer-backed proc spawn requests and the
-native initial stack image now use a 64 KiB budget, with stack writes chunked
-through the lower 4 KiB native syscall transport.
+can exercise long VFS paths as well. Bootstrap config reads and buffer-backed
+proc spawn requests now accept 512 KiB payloads, while the native initial stack
+image uses a 256 KiB budget with stack writes chunked through the lower 4 KiB
+native syscall transport.
 The login program now execs the shell with `HOME`, `USER`, `LOGNAME`, `SHELL`,
 `PATH`, and `TERM`, and changes into the account home directory before execing
 the shell. Command lookup, login environment inheritance, larger argv/env

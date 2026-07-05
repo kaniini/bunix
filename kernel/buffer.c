@@ -4,7 +4,7 @@
 #include "spinlock.h"
 
 enum {
-	BUFFER_MAX_SIZE = 65536,
+	BUFFER_MAX_SIZE = 1024 * 1024,
 };
 
 struct shared_buffer {
