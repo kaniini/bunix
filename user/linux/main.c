@@ -1370,7 +1370,16 @@ static int linux_child_matches(const struct linux_process *parent,
 		return 0;
 	}
 
-	return pid == -1 || child->pid == (u64)pid;
+	if (pid == -1) {
+		return 1;
+	}
+	if (pid == 0) {
+		return child->pgid == parent->pgid;
+	}
+	if (pid < -1) {
+		return child->pgid == (u64)(-(pid + 1)) + 1;
+	}
+	return pid > 0 && child->pid == (u64)pid;
 }
 
 static void linux_reparent_children(struct linux_process *process)
@@ -1418,8 +1427,7 @@ static long linux_wait4(struct linux_process *parent, long pid, u64 options,
 {
 	struct linux_process *candidate = 0;
 
-	if ((pid != -1 && pid <= 0) ||
-	    (options & ~(LINUX_WNOHANG | LINUX_WUNTRACED |
+	if ((options & ~(LINUX_WNOHANG | LINUX_WUNTRACED |
 			 LINUX_WCONTINUED)) != 0) {
 		return -LINUX_EINVAL;
 	}
