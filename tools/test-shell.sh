@@ -24,6 +24,39 @@ cleanup() {
 	fi
 }
 
+fail_with_log() {
+	echo "$1" >&2
+	tail -n "${2:-160}" "$log" >&2 || true
+	exit 1
+}
+
+wait_for_fixed() {
+	expected=$1
+	label=$2
+	limit=${3:-45}
+	tail_lines=${4:-160}
+	i=0
+	while ! grep -aF "$expected" "$log" >/dev/null 2>&1; do
+		i=$((i + 1))
+		if [ "$i" -gt "$limit" ]; then
+			fail_with_log "$label: $expected" "$tail_lines"
+		fi
+		sleep 1
+	done
+}
+
+check_fixed_markers() {
+	label=$1
+	limit=$2
+	tail_lines=$3
+	while IFS= read -r expected; do
+		if [ -z "$expected" ]; then
+			continue
+		fi
+		wait_for_fixed "$expected" "$label" "$limit" "$tail_lines"
+	done
+}
+
 mkdir -p "$tmp"
 mkfifo "$pipe.in" "$pipe.out"
 trap cleanup EXIT INT TERM
@@ -75,6 +108,7 @@ printf 'uptime\nbusybox uptime\nbusybox uname\nbusybox uname -r\nbusybox stty -a
 printf 'busybox sh -c "test \"\\$13\" = m && echo BUSYBOX_MANY_ARGV_OK" _ a b c d e f g h i j k l m\nBUNIX_LONG_ENV=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 busybox sh -c "test \"\\$BUNIX_LONG_ENV\" = abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 && echo BUSYBOX_LONG_ENV_OK"\n' >&3
 printf 'set --\ni=1\nwhile [ "$i" -le 300 ]; do set -- "$@" "x$i"; i=$((i + 1)); done\nbusybox sh -c '"'"'test "$300" = x300 && echo BUSYBOX_ARGV300_OK'"'"' _ "$@"\ni=1\nwhile [ "$i" -le 300 ]; do eval "BUNIX_EXEC_ENV_$i=x$i; export BUNIX_EXEC_ENV_$i"; i=$((i + 1)); done\nbusybox sh -c '"'"'test "$BUNIX_EXEC_ENV_300" = x300 && echo BUSYBOX_ENV300_OK'"'"'\n' >&3
 printf 'busybox stat /hello.txt\nbusybox stat /usr/share\nbusybox stat /tmp\nbusybox stat /run\nbusybox stat /var/tmp\nbusybox stat /usr/bin/env\nbusybox ls /\nbusybox ls /bin\nbusybox readlink /bin/cat && echo SYMLINK_READLINK_OK\nbusybox readlink /usr/share/bunix/long-target-link | busybox grep "/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/hello.txt" && echo LONG_SYMLINK_READLINK_OK\nbusybox ls -l /bin/cat && echo SYMLINK_LS_OK\nbusybox ls /usr/share/bunix/nested\nbusybox stat /bin\ncd /tmp\npwd\ncd /usr/share/bunix/nested\npwd\nbusybox ls .\nbusybox cat ../nested/./hello.txt && echo VFS_DOTDOT_OK\ncd /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components\ntest "$(pwd)" = "/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components" && echo LONG_GETCWD_OK\ncd /\nbusybox cat //usr///share/bunix/nested/hello.txt && echo VFS_SLASH_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_STILL_OK\nbusybox cat /proc/self/status && echo PROC_STATUS_OK\nbusybox ls /proc/self/fd && echo PROC_FD_OK\nbusybox readlink /proc/self/exe && echo PROC_EXE_OK\nbusybox cat /proc/stat && echo PROC_STAT_OK\nbusybox cat /proc/ipc && echo PROC_IPC_OK\nbusybox cat /proc/filesystems && echo PROC_FILESYSTEMS_OK\nbusybox cat /proc/cpuinfo && echo PROC_CPUINFO_OK\nbusybox cat /proc/self/cmdline && echo PROC_CMDLINE_OK\nbusybox stat /dev/zero && echo DEV_ZERO_STAT_OK\nbusybox stat /dev/urandom && echo DEV_URANDOM_STAT_OK\nbusybox test -r /dev/zero && echo DEV_ZERO_ACCESS_OK\nbusybox head -c 4 /dev/zero >/dev/null && echo DEV_ZERO_READ_OK\nbusybox head -c 4 /dev/urandom >/dev/null && echo DEV_URANDOM_READ_OK\necho TMP_WRITE_OK > /tmp/bunix-write.txt\nbusybox sh -c "set -C; echo TMP_EXCL_BAD > /tmp/bunix-write.txt" || echo TMP_EXCL_DENY_OK\nbusybox cat /tmp/bunix-write.txt | busybox grep TMP_WRITE_OK && echo TMP_EXCL_PRESERVE_OK\nbusybox cat /tmp/bunix-write.txt && echo TMP_CAT_OK\nbusybox stat /tmp/bunix-write.txt && echo TMP_STAT_OK\necho TMP_APPEND_ONE > /tmp/bunix-append.txt\necho TMP_APPEND_TWO >> /tmp/bunix-append.txt\nbusybox cat /tmp/bunix-append.txt && echo TMP_APPEND_CAT_OK\nbusybox sh -c "echo RUN_WRITE_OK > /run/bunix-run.txt"\nbusybox cat /run/bunix-run.txt && echo RUN_CAT_OK\necho TRUNCATE_PAYLOAD > /tmp/bunix-trunc.txt\nbusybox truncate -s 4 /tmp/bunix-trunc.txt && echo TRUNCATE_OK\nbusybox cat /tmp/bunix-trunc.txt && echo TRUNCATE_CAT_OK\nbusybox rm /tmp/bunix-trunc.txt && echo UNLINK_OK\nbusybox test ! -e /tmp/bunix-trunc.txt && echo UNLINK_GONE_OK\n/bin/getdentstest && echo GETDENTS64_OK\n/bin/vforkstress && echo VFORKSTRESS_OK\nbusybox test ! -e /lib/ld.so && echo MUSL_LDSO_CANONICAL_OK\n/bin/dyn-hello && echo DYN_HELLO_OK\nbusybox top -b -n 1 >/dev/null && echo PROC_TOP_OK\nbusybox ps && echo PROC_PS_OK\nbusybox free && echo PROC_FREE_OK\nbusybox mount && echo PROC_MOUNT_OK\n' >&3
+printf '/bin/iovtest && echo IOVTEST_OK\n' >&3
 printf 'busybox mkdir -p /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_EXISTING_ROOT_OK\nbusybox test -d /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_NESTED_OK\nbusybox mkdir /tmp || echo TMP_MKDIR_EXISTING_ROOT_DENY_OK\nbusybox mkdir -p /union-mkdir-p/a/b && echo UNION_MKDIR_P_ROOT_OK\nbusybox test -d /union-mkdir-p/a/b && echo UNION_MKDIR_P_CHILD_OK\nbusybox mkdir /usr || echo UNION_MKDIR_EXISTING_LOWER_DENY_OK\n' >&3
 printf 'busybox grep "PPid:\t1" /proc/$$/status && echo PROC_SHELL_PPID_OK\n' >&3
 printf '/bin/cat /proc/self/cmdline | busybox grep -a /bin/cat && echo PROC_SELF_CMDLINE_CALLER_OK\n' >&3
@@ -406,18 +440,140 @@ for expected in DEV_NULL_CHAR_OK DEV_ZERO_CHAR_OK DEV_CONSOLE_CHAR_OK; do
 	done
 done
 
-for expected in "PROC_STATUS_OK" "PROC_FD_OK" "PROC_EXE_OK" "/bin/sh" "PROC_STAT_OK" "PROC_IPC_OK" "nodev" "PROC_FILESYSTEMS_OK" "Bunix virtual CPU" "PROC_CPUINFO_OK" "PROC_CMDLINE_OK" "DEV_ZERO_STAT_OK" "DEV_URANDOM_STAT_OK" "DEV_ZERO_ACCESS_OK" "DEV_ZERO_READ_OK" "DEV_URANDOM_READ_OK" "DEV_CONSOLE_BIG_END" "DEV_CONSOLE_BIG_WRITE_OK" "TMP_WRITE_OK" "TMP_EXCL_DENY_OK" "TMP_EXCL_PRESERVE_OK" "TMP_CAT_OK" "TMP_STAT_OK" "TMP_APPEND_CAT_OK" "PATHMAX2_TMP_MKDIR_OK" "PATHMAX2_TMP_FILE_OK" "PATHMAX2_TMP_CHDIR_OK" "TMP_MKDIR_P_EXISTING_ROOT_OK" "TMP_MKDIR_P_NESTED_OK" "TMP_MKDIR_EXISTING_ROOT_DENY_OK" "UNION_MKDIR_P_ROOT_OK" "UNION_MKDIR_P_CHILD_OK" "UNION_MKDIR_EXISTING_LOWER_DENY_OK" "1000:1000 644" "TMP_MKDIR_OK" "TMP_MKDIR_STAT_OK" "TMP_LONG_READDIR_OK" "TMP_LONG_NAME_CAT_OK" "TMP_NAME_MAX_READDIR_OK" "TMP_NAME_MAX_CAT_OK" "TMP_NAME255_CREATE_OK" "TMP_NAME255_CAT_OK" "TMP_NAME256_DENY_OK" "TMP_TOUCH_CREATE_OK" "TMP_TOUCH_EXISTING_OK" "TMP_MKFIFO_OK" "TMP_FIFO_STAT_OK" "TMP_HARDLINK_CREATE_OK" "TMP_HARDLINK_SHARE_OK" "TMP_HARDLINK_RENAME_OK" "RMDIR_OK" "RM_R_DIR_OK" "TMP_DIR_RENAME_NONEMPTY_OK" "TMP_DIR_RENAME_SUBTREE_OK" "TMP_DIR_RENAME_OLD_GONE_OK" "TMP_DIR_REPLACE_EMPTY_OK" "TMP_DIR_REPLACE_SUBTREE_OK" "TMP_DIR_REPLACE_NONEMPTY_DENY_OK" "TMP_DIR_RENAME_DESCENDANT_DENY_OK" "TMP_DIR_RENAME_DESCENDANT_PRESERVE_OK" "TMP_CHMOD_OK" "700" "TMP_CHOWN_DENY_OK" "TMP_SYMLINK_CREATE_OK" "TMP_SYMLINK_READLINK_OK" "TMP_SYMLINK_LS_OK" "LINUX_BIG_WRITE_OK" "linux mmapbig ok" "MMAPBIG_OK" "linux readbig ok" "READBIG_OK" "RUN_WRITE_OK" "RUN_CAT_OK" "TRUNCATE_OK" "TRUN" "TRUNCATE_CAT_OK" "UNLINK_OK" "UNLINK_GONE_OK" "GETDENTS64_OK" "linux vforkstress ok" "VFORKSTRESS_OK" "linux getdents64 checks ok" "linux getdents64 large checks ok" "linux getrandom checks ok" "linux readlinkbig ok" "UNION_ROOT_LOWER_OK" "UNION_LOWER_RENAME_CREATE_OK" "UNION_LOWER_RENAME_READ_OK" "UNION_LOWER_RENAME_OLD_GONE_OK" "UNION_LOWER_RENAME_UPPER_OK" "UNION_LOWER_HARDLINK_CREATE_OK" "UNION_LOWER_HARDLINK_READ_OK" "UNION_LOWER_HARDLINK_COPYUP_OK" "UNION_ROOT_APPEND_CAT_OK" "UNION_ROOT_UPPER_BACKING_OK" "UNION_ROOT_LONG_READDIR_OK" "UNION_ROOT_LONG_CAT_OK" "UNION_NAME_MAX_READDIR_OK" "UNION_NAME_MAX_CAT_OK" "UNION_ROOT_READDIR_UPPER_OK" "UNION_ROOT_READDIR_LOWER_OK" "UNION_ROOT_UNLINK_UPPER_OK" "UNION_ROOT_UNLINK_UPPER_GONE_OK" "UNION_ROOT_LOWER_STILL_OK" "UNION_SYMLINK_CREATE_OK" "UNION_SYMLINK_READLINK_OK" "UNION_SYMLINK_LS_OK" "UNION_HARDLINK_CREATE_OK" "UNION_HARDLINK_SHARE_OK" "MUSL_LDSO_CANONICAL_OK" "DYN_HELLO_OK" "linux exec child ok" "EXECBIG_OK" "PROC_TOP_OK" "PROC_PS_OK" "PROC_FREE_OK" "unionfs on / type unionfs (rw)" "rootfs on /.lower type rootfs (rw)" "tmpfs on /.upper type tmpfs (rw)" "tmpfs on /run type tmpfs (rw)" "tmpfs on /tmp type tmpfs (rw)" "tmpfs on /var/tmp type tmpfs (rw)" "PROC_MOUNT_OK" "MNT_OK" "MNT_PAYLOAD" "MNT_CAT" "MNT_LIST" "UMNT_OK" "UMNT_GONE" "UMNT_HIDE"; do
-	i=0
-	while ! grep -F "$expected" "$log" >/dev/null 2>&1; do
-		i=$((i + 1))
-		if [ "$i" -gt 75 ]; then
-			echo "procfs regression missing: $expected" >&2
-			tail -n 220 "$log" >&2 || true
-			exit 1
-		fi
-		sleep 1
-	done
-done
+check_fixed_markers "shell regression missing" 75 220 <<'EOF_MARKERS'
+PROC_STATUS_OK
+PROC_FD_OK
+PROC_EXE_OK
+/bin/sh
+PROC_STAT_OK
+PROC_IPC_OK
+nodev
+PROC_FILESYSTEMS_OK
+Bunix virtual CPU
+PROC_CPUINFO_OK
+PROC_CMDLINE_OK
+DEV_ZERO_STAT_OK
+DEV_URANDOM_STAT_OK
+DEV_ZERO_ACCESS_OK
+DEV_ZERO_READ_OK
+DEV_URANDOM_READ_OK
+DEV_CONSOLE_BIG_END
+DEV_CONSOLE_BIG_WRITE_OK
+TMP_WRITE_OK
+TMP_EXCL_DENY_OK
+TMP_EXCL_PRESERVE_OK
+TMP_CAT_OK
+TMP_STAT_OK
+TMP_APPEND_CAT_OK
+PATHMAX2_TMP_MKDIR_OK
+PATHMAX2_TMP_FILE_OK
+PATHMAX2_TMP_CHDIR_OK
+TMP_MKDIR_P_EXISTING_ROOT_OK
+TMP_MKDIR_P_NESTED_OK
+TMP_MKDIR_EXISTING_ROOT_DENY_OK
+UNION_MKDIR_P_ROOT_OK
+UNION_MKDIR_P_CHILD_OK
+UNION_MKDIR_EXISTING_LOWER_DENY_OK
+1000:1000 644
+TMP_MKDIR_OK
+TMP_MKDIR_STAT_OK
+TMP_LONG_READDIR_OK
+TMP_LONG_NAME_CAT_OK
+TMP_NAME_MAX_READDIR_OK
+TMP_NAME_MAX_CAT_OK
+TMP_NAME255_CREATE_OK
+TMP_NAME255_CAT_OK
+TMP_NAME256_DENY_OK
+TMP_TOUCH_CREATE_OK
+TMP_TOUCH_EXISTING_OK
+TMP_MKFIFO_OK
+TMP_FIFO_STAT_OK
+TMP_HARDLINK_CREATE_OK
+TMP_HARDLINK_SHARE_OK
+TMP_HARDLINK_RENAME_OK
+RMDIR_OK
+RM_R_DIR_OK
+TMP_DIR_RENAME_NONEMPTY_OK
+TMP_DIR_RENAME_SUBTREE_OK
+TMP_DIR_RENAME_OLD_GONE_OK
+TMP_DIR_REPLACE_EMPTY_OK
+TMP_DIR_REPLACE_SUBTREE_OK
+TMP_DIR_REPLACE_NONEMPTY_DENY_OK
+TMP_DIR_RENAME_DESCENDANT_DENY_OK
+TMP_DIR_RENAME_DESCENDANT_PRESERVE_OK
+TMP_CHMOD_OK
+700
+TMP_CHOWN_DENY_OK
+TMP_SYMLINK_CREATE_OK
+TMP_SYMLINK_READLINK_OK
+TMP_SYMLINK_LS_OK
+LINUX_BIG_WRITE_OK
+linux mmapbig ok
+MMAPBIG_OK
+linux readbig ok
+READBIG_OK
+RUN_WRITE_OK
+RUN_CAT_OK
+TRUNCATE_OK
+TRUN
+TRUNCATE_CAT_OK
+UNLINK_OK
+UNLINK_GONE_OK
+GETDENTS64_OK
+linux vforkstress ok
+VFORKSTRESS_OK
+linux getdents64 checks ok
+linux getdents64 large checks ok
+linux getrandom checks ok
+linux readlinkbig ok
+linux iovtest ok
+IOVTEST_OK
+UNION_ROOT_LOWER_OK
+UNION_LOWER_RENAME_CREATE_OK
+UNION_LOWER_RENAME_READ_OK
+UNION_LOWER_RENAME_OLD_GONE_OK
+UNION_LOWER_RENAME_UPPER_OK
+UNION_LOWER_HARDLINK_CREATE_OK
+UNION_LOWER_HARDLINK_READ_OK
+UNION_LOWER_HARDLINK_COPYUP_OK
+UNION_ROOT_APPEND_CAT_OK
+UNION_ROOT_UPPER_BACKING_OK
+UNION_ROOT_LONG_READDIR_OK
+UNION_ROOT_LONG_CAT_OK
+UNION_NAME_MAX_READDIR_OK
+UNION_NAME_MAX_CAT_OK
+UNION_ROOT_READDIR_UPPER_OK
+UNION_ROOT_READDIR_LOWER_OK
+UNION_ROOT_UNLINK_UPPER_OK
+UNION_ROOT_UNLINK_UPPER_GONE_OK
+UNION_ROOT_LOWER_STILL_OK
+UNION_SYMLINK_CREATE_OK
+UNION_SYMLINK_READLINK_OK
+UNION_SYMLINK_LS_OK
+UNION_HARDLINK_CREATE_OK
+UNION_HARDLINK_SHARE_OK
+MUSL_LDSO_CANONICAL_OK
+DYN_HELLO_OK
+linux exec child ok
+EXECBIG_OK
+PROC_TOP_OK
+PROC_PS_OK
+PROC_FREE_OK
+unionfs on / type unionfs (rw)
+rootfs on /.lower type rootfs (rw)
+tmpfs on /.upper type tmpfs (rw)
+tmpfs on /run type tmpfs (rw)
+tmpfs on /tmp type tmpfs (rw)
+tmpfs on /var/tmp type tmpfs (rw)
+PROC_MOUNT_OK
+MNT_OK
+MNT_PAYLOAD
+MNT_CAT
+MNT_LIST
+UMNT_OK
+UMNT_GONE
+UMNT_HIDE
+EOF_MARKERS
 i=0
 while ! grep -F "STATFS_DF_OK" "$log" >/dev/null 2>&1; do
 	i=$((i + 1))

@@ -205,6 +205,7 @@ enum {
 	LINUX_MAX_SYSCALL_BUFFER = 65536,
 	LINUX_MAX_SHARED_BUFFER = 1024 * 1024,
 	LINUX_MAX_SOCKADDR = 128,
+	LINUX_IOV_MAX = 1024,
 	LINUX_EXEC_MAX_PATH = 4096,
 	LINUX_EXEC_MAX_STRING = 4096,
 	LINUX_EXEC_MAX_STRING_BYTES = 128 * 1024,
@@ -3861,7 +3862,16 @@ poll_again:
 		} iov;
 		u64 total = 0;
 
-		if (linux == 0 || reply_port == 0 || arg1 == 0 || arg2 > 16) {
+		if (arg2 == 0) {
+			return 0;
+		}
+		if (linux == 0 || reply_port == 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		if (arg1 == 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		if (arg2 > LINUX_IOV_MAX) {
 			return linux_einval_u64(__func__, __LINE__);
 		}
 		for (u64 i = 0; i < arg2; i++) {
@@ -3870,7 +3880,7 @@ poll_again:
 				return (u64)-LINUX_EFAULT;
 			}
 			if (iov.base == 0 && iov.len != 0) {
-				return linux_einval_u64(__func__, __LINE__);
+				return (u64)-LINUX_EFAULT;
 			}
 			for (u64 offset = 0; offset < iov.len;) {
 				const u64 chunk =
