@@ -161,24 +161,38 @@ static long proc_register_exec(u64 proc, const char *path,
 	return 0;
 }
 
+struct boot_exec {
+	const char *path;
+	const char *task_name;
+	u64 linux;
+	u64 log_kind;
+};
+
 static long register_proc_execs(u64 proc)
 {
-	return proc_register_exec(proc, "/bin/lxtest", "lxtest", 1,
-				  BUNIX_PROC_EXEC_LOG_LINUX) != 0 ||
-	       proc_register_exec(proc, "/bin/musl-hello", "musl-hello", 1,
-				  BUNIX_PROC_EXEC_LOG_MUSL) != 0 ||
-	       proc_register_exec(proc, "/bin/fputest", "fputest", 1,
-				  BUNIX_PROC_EXEC_LOG_DEFAULT) != 0 ||
-	       proc_register_exec(proc, "/bin/sh", "busybox", 1,
-				  BUNIX_PROC_EXEC_LOG_SHELL) != 0 ||
-	       proc_register_exec(proc, "/bin/busybox", "busybox", 1,
-				  BUNIX_PROC_EXEC_LOG_DEFAULT) != 0 ||
-	       proc_register_exec(proc, "/bin/login", "login", 1,
-				  BUNIX_PROC_EXEC_LOG_LOGIN) != 0 ||
-	       proc_register_exec(proc, "/sbin/init", "busybox", 1,
-				  BUNIX_PROC_EXEC_LOG_INIT) != 0 ||
-	       proc_register_exec(proc, "/bin/ipcstress", "ipcstress", 0,
-				  BUNIX_PROC_EXEC_LOG_DEFAULT) != 0;
+	const struct boot_exec execs[] = {
+		{ "/bin/lxtest", "lxtest", 1, BUNIX_PROC_EXEC_LOG_LINUX },
+		{ "/bin/musl-hello", "musl-hello", 1,
+		  BUNIX_PROC_EXEC_LOG_MUSL },
+		{ "/bin/fputest", "fputest", 1,
+		  BUNIX_PROC_EXEC_LOG_DEFAULT },
+		{ "/bin/sh", "busybox", 1, BUNIX_PROC_EXEC_LOG_SHELL },
+		{ "/bin/busybox", "busybox", 1,
+		  BUNIX_PROC_EXEC_LOG_DEFAULT },
+		{ "/bin/login", "login", 1, BUNIX_PROC_EXEC_LOG_LOGIN },
+		{ "/sbin/init", "busybox", 1, BUNIX_PROC_EXEC_LOG_INIT },
+		{ "/bin/ipcstress", "ipcstress", 0,
+		  BUNIX_PROC_EXEC_LOG_DEFAULT },
+	};
+
+	for (u64 i = 0; i < sizeof(execs) / sizeof(execs[0]); i++) {
+		if (proc_register_exec(proc, execs[i].path,
+				       execs[i].task_name, execs[i].linux,
+				       execs[i].log_kind) != 0) {
+			return -1;
+		}
+	}
+	return 0;
 }
 
 static long tmpfs_mount_root(u64 tmpfs, const char *path)
