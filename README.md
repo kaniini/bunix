@@ -76,6 +76,11 @@ read them without trampling the interactive shell. Linux syscall tracing accepts
 line; `KERNEL_CMDLINE=...` regenerates the GRUB config used by the EFI/ISO
 builds.
 
+Failure artifacts for `test-command` and `test-shell` are collected under
+`build/failures/<timestamp>-<pid>/`. Each bundle includes the failure reason,
+serial and QEMU logs, a serial tail, recent `linux-strace` lines, the git commit,
+kernel command line, and the test harness or input command script when present.
+
 ## IPC shape
 
 IPC is port-based and event-oriented. Servers create named ports, senders queue

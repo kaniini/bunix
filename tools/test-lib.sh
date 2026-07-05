@@ -1,11 +1,50 @@
 #!/bin/sh
 
+save_failure_artifacts() {
+	label=$1
+	serial_log=${2:-}
+	qemu_log=${3:-}
+	tail_lines=${4:-160}
+	failure_dir=${BUNIX_FAILURE_DIR:-${FAILURE_DIR:-build/failures}}
+	id=$(date -u +%Y%m%dT%H%M%SZ)-$$
+	out=$failure_dir/$id
+
+	mkdir -p "$out"
+	printf '%s\n' "$label" > "$out/reason.txt"
+	printf '%s\n' "${KERNEL_CMDLINE:-}" > "$out/kernel-cmdline.txt"
+	printf '%s\n' "${BUNIX_CMD:-${CMD:-}}" > "$out/command.txt"
+	if [ -n "${BUNIX_CMD_FILE:-}" ] && [ -r "${BUNIX_CMD_FILE:-}" ]; then
+		cp "$BUNIX_CMD_FILE" "$out/input-script.sh"
+	fi
+	if [ -n "${BUNIX_TEST_HARNESS:-}" ] && [ -r "${BUNIX_TEST_HARNESS:-}" ]; then
+		cp "$BUNIX_TEST_HARNESS" "$out/test-harness.sh"
+	fi
+	if [ -n "$serial_log" ]; then
+		cp "$serial_log" "$out/serial.log" 2>/dev/null || true
+		tail -n "$tail_lines" "$serial_log" > "$out/serial-tail.log" 2>/dev/null || true
+		grep -a 'linux-strace' "$serial_log" | tail -n "${BUNIX_STRACE_LINES:-200}" > "$out/linux-strace.log" 2>/dev/null || true
+	fi
+	if [ -n "$qemu_log" ]; then
+		cp "$qemu_log" "$out/qemu.log" 2>/dev/null || true
+	fi
+	git rev-parse HEAD > "$out/git-commit.txt" 2>/dev/null || true
+	printf '%s\n' "$out"
+}
+
 fail_with_log() {
 	label=$1
 	log=$2
 	tail_lines=${3:-160}
+	out=
+
+	if [ -n "${BUNIX_COLLECT_FAILURES:-}" ]; then
+		out=$(save_failure_artifacts "$label" "$log" "${BUNIX_QEMU_LOG:-}" "$tail_lines")
+	fi
 
 	echo "$label" >&2
+	if [ -n "$out" ]; then
+		echo "failure artifacts: $out" >&2
+	fi
 	tail -n "$tail_lines" "$log" >&2 || true
 	exit 1
 }

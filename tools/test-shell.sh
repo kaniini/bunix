@@ -10,8 +10,14 @@ tmp=${TMPDIR:-/tmp}/bunix-shell-test.$$
 log=$tmp/serial.log
 qemu_log=$tmp/qemu.log
 pipe=$tmp/serial
+failure_dir=${FAILURE_DIR:-build/failures}
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$script_dir/test-lib.sh"
+BUNIX_COLLECT_FAILURES=1
+BUNIX_FAILURE_DIR=$failure_dir
+BUNIX_QEMU_LOG=$qemu_log
+BUNIX_TEST_HARNESS=$0
+export BUNIX_COLLECT_FAILURES BUNIX_FAILURE_DIR BUNIX_QEMU_LOG BUNIX_TEST_HARNESS
 
 cleanup() {
 	if [ "${qemu_pid:-}" ]; then
@@ -30,8 +36,10 @@ cleanup() {
 fail_with_qemu_log() {
 	label=$1
 	tail_lines=${2:-120}
+	out=$(save_failure_artifacts "$label" "$log" "$qemu_log" "$tail_lines")
 
 	echo "$label" >&2
+	echo "failure artifacts: $out" >&2
 	cat "$qemu_log" >&2 || true
 	tail -n "$tail_lines" "$log" >&2 || true
 	exit 1

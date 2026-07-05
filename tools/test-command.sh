@@ -13,6 +13,11 @@ pipe=$tmp/serial
 failure_dir=${FAILURE_DIR:-build/failures}
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$script_dir/test-lib.sh"
+BUNIX_COLLECT_FAILURES=1
+BUNIX_FAILURE_DIR=$failure_dir
+BUNIX_QEMU_LOG=$qemu_log
+BUNIX_TEST_HARNESS=$0
+export BUNIX_COLLECT_FAILURES BUNIX_FAILURE_DIR BUNIX_QEMU_LOG BUNIX_TEST_HARNESS
 
 command_text=${BUNIX_CMD:-${CMD:-}}
 command_file=${BUNIX_CMD_FILE:-}
@@ -49,28 +54,10 @@ cleanup() {
 	fi
 }
 
-save_failure() {
-	label=$1
-	id=$(date -u +%Y%m%dT%H%M%SZ)-$$
-	out=$failure_dir/$id
-
-	mkdir -p "$out"
-	printf '%s\n' "$label" > "$out/reason.txt"
-	printf '%s\n' "${command_text:-}" > "$out/command.txt"
-	if [ -n "$command_file" ] && [ -r "$command_file" ]; then
-		cp "$command_file" "$out/input-script.sh"
-	fi
-	cp "$log" "$out/serial.log" 2>/dev/null || true
-	cp "$qemu_log" "$out/qemu.log" 2>/dev/null || true
-	git rev-parse HEAD > "$out/git-commit.txt" 2>/dev/null || true
-	grep -a 'linux-strace' "$log" > "$out/linux-strace.log" 2>/dev/null || true
-	echo "$out"
-}
-
 fail_command() {
 	label=$1
 	tail_lines=${2:-160}
-	out=$(save_failure "$label")
+	out=$(save_failure_artifacts "$label" "$log" "$qemu_log" "$tail_lines")
 
 	echo "$label" >&2
 	echo "failure artifacts: $out" >&2
