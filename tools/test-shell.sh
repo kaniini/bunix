@@ -269,8 +269,10 @@ cd "$LONG_TMP" && echo PATHMAX2_TMP_CHDIR_OK
 pwd
 cd /
 /bin/pathmaxtest
+/bin/patherrtest
 EOF_USER_SMOKE
 wait_for_fixed "$log" "linux pathmax ok" "linux pathmax regression failed" 75 220
+wait_for_fixed "$log" "linux patherr ok" "empty Linux path errno regression failed" 45 220
 send_script <<'EOF_USER_SMOKE'
 busybox df / /tmp /proc >/dev/null && echo STATFS_DF_OK
 EOF_USER_SMOKE

@@ -815,6 +815,9 @@ static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
 	if (path[path_len - 1] != '\0') {
 		return -LINUX_ENAMETOOLONG;
 	}
+	if (path[0] == '\0') {
+		return -LINUX_ENOENT;
+	}
 	return linux_check_name_max(path);
 }
 
