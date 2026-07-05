@@ -5,6 +5,7 @@
 #include "slab.h"
 #include "spinlock.h"
 #include "timer.h"
+#include "tree.h"
 #include "vm.h"
 #include <arch/smp.h>
 #include <arch/thread.h>
@@ -33,9 +34,9 @@ struct task_handle {
 };
 
 struct task {
+	struct u64_tree_node pid_node;
 	u32 pid;
 	const char *name;
-	struct task *next;
 	u32 ref_count;
 	u32 dead;
 	u32 killing;
@@ -91,7 +92,7 @@ struct cpu_sched {
 	u32 handoff_depth;
 };
 
-static struct task *tasks;
+static struct u64_tree tasks_by_pid;
 static struct task kernel_task;
 static struct cpu_sched cpus[MAX_CPUS];
 static u32 boot_cpu_id;
@@ -379,7 +380,6 @@ void sched_init(void)
 {
 	kernel_task.pid = 0;
 	kernel_task.name = "kernel";
-	kernel_task.next = 0;
 	kernel_task.ref_count = 1;
 	kernel_task.dead = 0;
 	kernel_task.killing = 0;
@@ -397,7 +397,7 @@ void sched_init(void)
 	kernel_task.handle_capacity = 0;
 	spinlock_init(&kernel_task.lock, "task");
 
-	tasks = 0;
+	u64_tree_init(&tasks_by_pid);
 	sched_cpu_count = arch_smp_cpu_count();
 	if (sched_cpu_count > MAX_CPUS) {
 		sched_cpu_count = MAX_CPUS;
@@ -473,7 +473,6 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 
 	task->pid = next_pid++;
 	task->name = owned_name;
-	task->next = tasks;
 	task->ref_count = 1;
 	task->dead = 0;
 	task->killing = 0;
@@ -492,7 +491,14 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	task->handles = 0;
 	task->handle_capacity = 0;
 	spinlock_init(&task->lock, "task");
-	tasks = task;
+	if (u64_tree_insert_node(&tasks_by_pid, &task->pid_node,
+				 task->pid, (u64)task) != 0) {
+		spin_unlock_irqrestore(&task_table_lock, flags);
+		slab_free(owned_name);
+		slab_free(task);
+		console_printf("sched: task registry failed for %s\n", name);
+		return 0;
+	}
 	console_printf("sched: task pid=%u name=%s vm=%u\n",
 		       task->pid, owned_name, task->vm_space->id);
 	spin_unlock_irqrestore(&task_table_lock, flags);
@@ -1065,14 +1071,8 @@ static void task_handle_release(enum task_handle_type type, void *object)
 static void task_remove_from_list(struct task *task)
 {
 	const u64 flags = spin_lock_irqsave(&task_table_lock);
-	struct task **link = &tasks;
-
-	while (*link != 0) {
-		if (*link == task) {
-			*link = task->next;
-			break;
-		}
-		link = &(*link)->next;
+	if (task != 0 && task->pid_node.value != 0) {
+		u64_tree_remove_node(&tasks_by_pid, &task->pid_node);
 	}
 	spin_unlock_irqrestore(&task_table_lock, flags);
 }
@@ -1573,7 +1573,10 @@ int task_info_at(u64 index, u64 *pid_threads_flags, u64 *name_words)
 	u64 seen = 0;
 	const u64 flags = spin_lock_irqsave(&task_table_lock);
 
-	for (struct task *task = tasks; task != 0; task = task->next) {
+	for (struct u64_tree_node *node = u64_tree_first_node(&tasks_by_pid);
+	     node != 0; node = u64_tree_next_node(node)) {
+		struct task *task = (struct task *)node->value;
+
 		if (seen++ != index) {
 			continue;
 		}
