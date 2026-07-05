@@ -626,27 +626,6 @@ static int is_utmps_socket_path(const char *path)
 	return string_equal(path, "/run/utmps/.utmpd-socket");
 }
 
-static int path_has_prefix(const char *path, const char *prefix)
-{
-	u64 i = 0;
-
-	while (prefix[i] != '\0') {
-		if (path[i] != prefix[i]) {
-			return 0;
-		}
-		i++;
-	}
-	return path[i] == '/';
-}
-
-static int is_scratch_path(const char *path)
-{
-	return path_has_prefix(path, "/tmp") ||
-	       path_has_prefix(path, "/run") ||
-	       path_has_prefix(path, "/var/tmp") ||
-	       path_has_prefix(path, "/mnt/union");
-}
-
 static void copy_literal(char *dst, u64 dst_len, const char *src)
 {
 	for (u64 i = 0; i < dst_len; i++) {
@@ -2339,18 +2318,11 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 				linux_user_session_count() *
 				LINUX_UTMP_RECORD_SIZE);
 	}
-	if ((flags & LINUX_O_ACCMODE) != 0) {
-		if (!is_scratch_path(full_path)) {
-			return -LINUX_EINVAL;
-		}
-	}
-
 	if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER, base_handle,
 				path, &reply) != 0) {
 		return -LINUX_ENOENT;
 	}
 	if (reply.words[0] == BUNIX_VFS_ERR_NOENT &&
-	    is_scratch_path(full_path) &&
 	    (flags & LINUX_O_CREAT) != 0) {
 		if (linux_vfs_path_call_word3(process, BUNIX_VFS_CREATE_BUFFER,
 					      base_handle, path,
@@ -2478,9 +2450,6 @@ static long linux_unlinkat(struct linux_process *process, u64 dirfd,
 		return base_result;
 	}
 	(void)base_handle;
-	if (!is_scratch_path(full_path)) {
-		return -LINUX_EINVAL;
-	}
 	if (linux_vfs_path_call_word3(process, BUNIX_VFS_UNLINK_BUFFER,
 				      base_handle, path,
 				      process->bunix_task | (flags << 32),
@@ -2513,9 +2482,6 @@ static long linux_rmdir(struct linux_process *process, u64 path_len,
 					      &base_handle);
 	if (base_result != 0) {
 		return base_result;
-	}
-	if (!is_scratch_path(full_path)) {
-		return -LINUX_EINVAL;
 	}
 	if (linux_vfs_path_call_word3(process, BUNIX_VFS_RMDIR_BUFFER,
 				      base_handle, path,
@@ -2552,9 +2518,6 @@ static long linux_truncate(struct linux_process *process, u64 dirfd,
 		return base_result;
 	}
 	(void)base_handle;
-	if (!is_scratch_path(full_path)) {
-		return -LINUX_EINVAL;
-	}
 	fd = linux_openat(process, dirfd, path_len, LINUX_O_RDWR, 0,
 			  path_buffer);
 	if (fd < 0) {
@@ -2584,9 +2547,6 @@ static long linux_mkdirat(struct linux_process *process, u64 dirfd,
 					      &base_handle);
 	if (base_result != 0) {
 		return base_result;
-	}
-	if (!is_scratch_path(full_path)) {
-		return -LINUX_EINVAL;
 	}
 	if (linux_vfs_path_call_word3(process, BUNIX_VFS_MKDIR_BUFFER,
 				      base_handle, path,
@@ -2623,9 +2583,6 @@ static long linux_chmodat(struct linux_process *process, u64 dirfd,
 					      &base_handle);
 	if (base_result != 0) {
 		return base_result;
-	}
-	if (!is_scratch_path(full_path)) {
-		return -LINUX_EINVAL;
 	}
 	if (linux_vfs_path_call_word3(process, BUNIX_VFS_CHMOD_BUFFER,
 				      base_handle, path,
@@ -2730,9 +2687,6 @@ static long linux_chownat(struct linux_process *process, u64 dirfd,
 		return base_result;
 	}
 	(void)base_handle;
-	if (!is_scratch_path(full_path)) {
-		return -LINUX_EINVAL;
-	}
 	fd = linux_openat(process, dirfd, path_len, LINUX_O_RDWR, 0,
 			  path_buffer);
 	if (fd < 0) {
