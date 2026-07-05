@@ -51,6 +51,7 @@ static u64 root_entry_count;
 static u64 next_open_id = 1;
 static u64 block_service;
 static u64 user_service;
+static char rootfs_mount_path[ROOTFS_MAX_PATH] = "/";
 
 static u64 str_len(const char *text)
 {
@@ -129,17 +130,43 @@ static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
 static int read_resolved_path(const struct bunix_msg *message, char *path)
 {
 	char cwd[ROOTFS_MAX_PATH];
+	char full_path[ROOTFS_MAX_PATH];
 
 	if ((message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
 	    read_path_buffer_at(message->cap, 0, message->words[0],
 				cwd) != 0 ||
 	    read_path_buffer_at(message->cap, message->words[0],
-				message->words[1], path) != 0 ||
-	    path[0] != '/') {
+				message->words[1], full_path) != 0 ||
+	    full_path[0] != '/') {
 		return -1;
 	}
 	(void)cwd;
-	return 0;
+	if (str_eq(rootfs_mount_path, "/")) {
+		return set_path(path, full_path);
+	}
+	const u64 mount_len = str_len(rootfs_mount_path);
+
+	for (u64 i = 0; i < mount_len; i++) {
+		if (full_path[i] != rootfs_mount_path[i]) {
+			return -1;
+		}
+	}
+	if (full_path[mount_len] == '\0') {
+		path[0] = '/';
+		path[1] = '\0';
+		return 0;
+	}
+	if (full_path[mount_len] != '/') {
+		return -1;
+	}
+	path[0] = '/';
+	for (u64 i = 1; i < ROOTFS_MAX_PATH; i++) {
+		path[i] = full_path[mount_len + i];
+		if (path[i] == '\0') {
+			return 0;
+		}
+	}
+	return -1;
 }
 
 static u64 resolve_service(u64 service, unsigned int rights)
@@ -688,6 +715,26 @@ int main(void)
 		char path[ROOTFS_MAX_PATH];
 
 		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0) {
+			continue;
+		}
+		if (message.protocol == BUNIX_PROTO_ROOTFS &&
+		    message.type == BUNIX_ROOTFS_MOUNT_PATH) {
+			reply.protocol = BUNIX_PROTO_ROOTFS;
+			reply.type = message.type;
+			if (bunix_read_path_cap(&message, rootfs_mount_path,
+						sizeof(rootfs_mount_path)) != 0) {
+				rootfs_mount_path[0] = '/';
+				rootfs_mount_path[1] = '\0';
+				reply.words[0] = (u64)-1;
+			} else {
+				reply.words[0] = 0;
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			if (message.reply != 0) {
+				bunix_ipc_send(message.reply, &reply);
+			}
 			continue;
 		}
 		if (message.protocol != BUNIX_PROTO_VFS) {

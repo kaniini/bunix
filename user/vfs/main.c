@@ -1483,7 +1483,8 @@ int main(void)
 				u64 service;
 
 				service = resolve_service(message.words[1],
-							  BUNIX_RIGHT_SEND);
+							  BUNIX_RIGHT_SEND |
+							  BUNIX_RIGHT_DUP);
 				if (service == 0 ||
 				    bunix_read_path_cap(&message, path,
 							sizeof(path)) != 0 ||
@@ -1494,6 +1495,26 @@ int main(void)
 					reply.words[0] = 0;
 					notify_procfs_mount(path, message.words[1]);
 					bunix_console_log("vfs: mounted translator\n", 24);
+				}
+				break;
+			}
+			case BUNIX_VFS_RESOLVE_MOUNT_BUFFER: {
+				char path[VFS_MAX_PATH];
+				struct vfs_mount *mount;
+
+				if (bunix_read_path_cap(&message, path,
+							sizeof(path)) != 0) {
+					reply.words[0] = (u64)-1;
+					break;
+				}
+				mount = mount_for_path(path);
+				if (mount == 0 || mount->service == 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply.words[0] = 0;
+					reply.cap = mount->service;
+					reply.cap_rights = BUNIX_RIGHT_SEND |
+							   BUNIX_RIGHT_DUP;
 				}
 				break;
 			}

@@ -648,6 +648,7 @@ static long send_path_commands(u64 service,
 static long mount_tmpfs_roots(u64 tmpfs)
 {
 	const struct boot_path roots[] = {
+		{ "/.upper" },
 		{ "/tmp" },
 		{ "/run" },
 		{ "/var/tmp" },
@@ -676,6 +677,18 @@ static long mount_utmpfs_paths(u64 utmpfs)
 	};
 
 	return send_path_commands(utmpfs, &command);
+}
+
+static long vfs_mount_service(u64 vfs, const char *path, u64 service)
+{
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call_path(vfs, BUNIX_PROTO_VFS,
+				BUNIX_VFS_MOUNT_BUFFER, path,
+				service, 0, 0, &reply) != 0) {
+		return -1;
+	}
+	return reply.words[0] == 0 ? 0 : -1;
 }
 
 static long unionfs_set_upper(u64 unionfs, const char *path)
@@ -866,7 +879,11 @@ int main(void)
 						       BUNIX_SERVICE_ROOTFS,
 						       BUNIX_RIGHT_SEND);
 
-		if (rootfs == 0) {
+		if (rootfs == 0 ||
+		    send_path_command(rootfs, BUNIX_PROTO_ROOTFS,
+				      BUNIX_ROOTFS_MOUNT_PATH, "/.lower") != 0 ||
+		    vfs_mount_service(vfs, "/.lower",
+				      BUNIX_SERVICE_ROOTFS) != 0) {
 			return 1;
 		}
 	}
@@ -878,8 +895,8 @@ int main(void)
 							BUNIX_RIGHT_SEND);
 
 		if (unionfs == 0 ||
-		    unionfs_set_lower(unionfs, "/") != 0 ||
-		    unionfs_set_upper(unionfs, "/tmp/union") != 0 ||
+		    unionfs_set_lower(unionfs, "/.lower") != 0 ||
+		    unionfs_set_upper(unionfs, "/.upper") != 0 ||
 		    send_path_command(unionfs, BUNIX_PROTO_UNIONFS,
 				      BUNIX_UNIONFS_MOUNT_PATH, "/") != 0) {
 			return 1;
