@@ -4,6 +4,7 @@
 #include "sched.h"
 #include "slab.h"
 #include "spinlock.h"
+#include "tree.h"
 
 enum {
 	PROTO_BLOCK = ('B') | ('L' << 8) | ('K' << 16) | ('0' << 24),
@@ -21,11 +22,12 @@ struct ipc_wait {
 };
 
 struct ipc_port {
+	struct tree_node name_node;
+	struct u64_tree_node id_node;
 	const char *name;
 	u64 id;
 	u32 ref_count;
 	u32 immortal;
-	struct ipc_port *next;
 	struct ipc_message_node *head;
 	struct ipc_message_node *tail;
 	struct thread *receiver;
@@ -35,7 +37,8 @@ struct ipc_port {
 	u32 queued;
 };
 
-static struct ipc_port *ports;
+static struct tree ports_by_name;
+static struct u64_tree ports_by_id;
 static struct ipc_port *kernel_reply_port;
 static u64 next_port_id = 1;
 static struct spinlock ipc_lock = SPINLOCK_INIT("ipc");
@@ -69,13 +72,7 @@ static int ipc_should_log(const struct ipc_port *port,
 
 static struct ipc_port *ipc_port_find_locked(const char *name)
 {
-	for (struct ipc_port *port = ports; port != 0; port = port->next) {
-		if (str_eq(port->name, name)) {
-			return port;
-		}
-	}
-
-	return 0;
+	return (struct ipc_port *)tree_get(&ports_by_name, name);
 }
 
 static struct ipc_message_node *message_alloc(void)
@@ -127,7 +124,8 @@ void ipc_message_release(struct ipc_message *message)
 
 void ipc_init(void)
 {
-	ports = 0;
+	tree_init(&ports_by_name);
+	u64_tree_init(&ports_by_id);
 	ipc_counters = (struct ipc_stats){ 0 };
 	console_printf("ipc: init slab ports messages\n");
 	kernel_reply_port = ipc_port_create("kernel-rpc");
@@ -146,15 +144,14 @@ void ipc_stats_snapshot(struct ipc_stats *stats)
 
 static void ipc_port_remove_locked(struct ipc_port *port)
 {
-	struct ipc_port **link = &ports;
-
-	while (*link != 0) {
-		if (*link == port) {
-			*link = port->next;
-			port->next = 0;
-			return;
-		}
-		link = &(*link)->next;
+	if (port == 0) {
+		return;
+	}
+	if (port->id_node.value != 0) {
+		u64_tree_remove_node(&ports_by_id, &port->id_node);
+	}
+	if (port->name_node.value != 0) {
+		tree_remove_node(&ports_by_name, &port->name_node);
 	}
 }
 
@@ -175,8 +172,17 @@ static struct ipc_port *ipc_port_alloc(const char *name, u32 reuse_named)
 		port->name = name;
 		port->ref_count = 0;
 		port->immortal = reuse_named;
-		port->next = ports;
-		ports = port;
+		if (u64_tree_insert_node(&ports_by_id, &port->id_node,
+					 port->id, (u64)port) != 0 ||
+		    (reuse_named &&
+		     tree_insert_node(&ports_by_name, &port->name_node,
+				      name, (u64)port) != 0)) {
+			ipc_port_remove_locked(port);
+			spin_unlock_irqrestore(&ipc_lock, flags);
+			slab_free(port);
+			console_printf("ipc: port index failed for %s\n", name);
+			return 0;
+		}
 		console_printf("ipc: port create %s id=%u\n", name,
 			       (u32)port->id);
 		spin_unlock_irqrestore(&ipc_lock, flags);
@@ -257,21 +263,17 @@ u64 ipc_port_id(const struct ipc_port *port)
 
 struct ipc_port *ipc_port_from_id(u64 id)
 {
+	struct ipc_port *port;
+
 	if (id == 0) {
 		return 0;
 	}
 
 	const u64 flags = spin_lock_irqsave(&ipc_lock);
-
-	for (struct ipc_port *port = ports; port != 0; port = port->next) {
-		if (port->id == id) {
-			spin_unlock_irqrestore(&ipc_lock, flags);
-			return port;
-		}
-	}
+	port = (struct ipc_port *)u64_tree_get(&ports_by_id, id);
 
 	spin_unlock_irqrestore(&ipc_lock, flags);
-	return 0;
+	return port;
 }
 
 int ipc_port_affinity_cpu(struct ipc_port *port, u32 *cpu_id)
@@ -458,7 +460,10 @@ void ipc_cancel_thread(struct thread *thread)
 
 	const u64 flags = spin_lock_irqsave(&ipc_lock);
 
-	for (struct ipc_port *port = ports; port != 0; port = port->next) {
+	for (struct u64_tree_node *node = u64_tree_first_node(&ports_by_id);
+	     node != 0; node = u64_tree_next_node(node)) {
+		struct ipc_port *port = (struct ipc_port *)node->value;
+
 		if (port->receiver == thread) {
 			port->receiver = 0;
 			port->receiver_wait = 0;
