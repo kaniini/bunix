@@ -309,8 +309,13 @@ busybox cat /.upper/usr/share/bunix/nested/created.txt && echo UNION_LOWER_PAREN
 echo UNION_LOWER_COPYUP_APPEND_PAYLOAD >> /usr/share/bunix/nested/hello.txt
 busybox cat /usr/share/bunix/nested/hello.txt && echo UNION_LOWER_COPYUP_APPEND_OK
 busybox cat /.upper/usr/share/bunix/nested/hello.txt && echo UNION_LOWER_COPYUP_UPPER_OK
+busybox umount /.lower || echo UNION_LOWER_UMOUNT_BUSY_OK
+busybox umount /.upper || echo UNION_UPPER_UMOUNT_BUSY_OK
+busybox mount -t tmpfs tmpfs /.lower || echo UNION_LOWER_REPLACE_BUSY_OK
+busybox mount -t tmpfs tmpfs /.upper || echo UNION_UPPER_REPLACE_BUSY_OK
+busybox cat /hello.txt && echo UNION_PINNED_ROUTES_STILL_OK
 EOF_ROOT_UNION
-for expected in UNION_LOWER_PARENT_CREATE_OK UNION_LOWER_PARENT_UPPER_OK UNION_LOWER_COPYUP_APPEND_OK UNION_LOWER_COPYUP_UPPER_OK; do
+for expected in UNION_LOWER_PARENT_CREATE_OK UNION_LOWER_PARENT_UPPER_OK UNION_LOWER_COPYUP_APPEND_OK UNION_LOWER_COPYUP_UPPER_OK UNION_LOWER_UMOUNT_BUSY_OK UNION_UPPER_UMOUNT_BUSY_OK UNION_LOWER_REPLACE_BUSY_OK UNION_UPPER_REPLACE_BUSY_OK UNION_PINNED_ROUTES_STILL_OK; do
 	wait_for_fixed "$log" "$expected" "root unionfs lower-parent regression missing" 45 220
 done
 for expected in UNION_LOWER_PARENT_CREATE_PAYLOAD UNION_LOWER_COPYUP_APPEND_PAYLOAD; do

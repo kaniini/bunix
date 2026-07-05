@@ -35,6 +35,8 @@ static u64 next_open_id = 1;
 static u64 vfs_service;
 static u64 upper_service;
 static u64 lower_layer_service;
+static u64 upper_route_id;
+static u64 lower_route_id;
 static char unionfs_mount_path[UNIONFS_MAX_PATH];
 static char unionfs_upper_path[UNIONFS_MAX_PATH];
 static char unionfs_lower_path[UNIONFS_MAX_PATH];
@@ -660,20 +662,38 @@ static int vfs_mount_path(const char *path)
 	       reply.words[0] == 0 ? 0 : -1;
 }
 
-static u64 vfs_resolve_layer_route(const char *path)
+static int vfs_pin_layer_route(const char *path, u64 *service, u64 *route_id)
 {
 	struct bunix_msg reply;
 
-	if (vfs_service == 0 ||
+	if (service == 0 || route_id == 0 ||
+	    vfs_service == 0 ||
 	    bunix_ipc_call_path(vfs_service, BUNIX_PROTO_VFS,
-				BUNIX_VFS_RESOLVE_MOUNT_BUFFER, path,
+				BUNIX_VFS_PIN_ROUTE_BUFFER, path,
 				0, 0, 0, &reply) != 0 ||
 	    reply.words[0] != 0 ||
 	    reply.words[1] == BUNIX_SERVICE_UNIONFS ||
 	    (reply.words[2] & BUNIX_VFS_ROUTE_FLAG_RECURSIVE) != 0) {
-		return 0;
+		return -1;
 	}
-	return reply.cap;
+	*service = reply.cap;
+	*route_id = reply.words[3];
+	return *service != 0 && *route_id != 0 ? 0 : -1;
+}
+
+static void vfs_unpin_layer_route(u64 route_id)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_UNPIN_ROUTE,
+		.words = { route_id, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (vfs_service == 0 || route_id == 0) {
+		return;
+	}
+	(void)bunix_ipc_call(vfs_service, &request, &reply);
 }
 
 static int set_path(char *target, const char *path)
@@ -696,6 +716,9 @@ static int set_path(char *target, const char *path)
 static int unionfs_set_upper_path(const char *path)
 {
 	u64 service;
+	u64 route_id;
+	u64 old_service = upper_service;
+	u64 old_route_id = upper_route_id;
 	struct bunix_msg stat_reply;
 	struct bunix_msg mkdir_reply;
 
@@ -703,24 +726,36 @@ static int unionfs_set_upper_path(const char *path)
 		unionfs_upper_path[0] = '\0';
 		return -1;
 	}
-	service = vfs_resolve_layer_route(unionfs_upper_path);
-	if (service == 0) {
+	if (vfs_pin_layer_route(unionfs_upper_path, &service, &route_id) != 0) {
+		unionfs_upper_path[0] = '\0';
+		return -1;
+	}
+	if (service_path_call(service, BUNIX_VFS_STAT_PATH_META_BUFFER,
+			      unionfs_upper_path, 0, 0, &stat_reply) == 0 &&
+	    stat_reply.words[0] == 0 &&
+	    (stat_reply.words[2] >> 32) == BUNIX_VFS_TYPE_DIRECTORY) {
+		upper_service = service;
+		upper_route_id = route_id;
+		vfs_unpin_layer_route(old_route_id);
+		if (old_service != 0) {
+			bunix_handle_close(old_service);
+		}
+		return 0;
+	}
+	if (service_path_call(service, BUNIX_VFS_MKDIR_BUFFER,
+			      unionfs_upper_path, (u64)0777 << 32,
+			      0, &mkdir_reply) != 0 ||
+	    mkdir_reply.words[0] != 0) {
+		vfs_unpin_layer_route(route_id);
+		bunix_handle_close(service);
 		unionfs_upper_path[0] = '\0';
 		return -1;
 	}
 	upper_service = service;
-	if (service_path_call(upper_service, BUNIX_VFS_STAT_PATH_META_BUFFER,
-			      unionfs_upper_path, 0, 0, &stat_reply) == 0 &&
-	    stat_reply.words[0] == 0 &&
-	    (stat_reply.words[2] >> 32) == BUNIX_VFS_TYPE_DIRECTORY) {
-		return 0;
-	}
-	if (service_path_call(upper_service, BUNIX_VFS_MKDIR_BUFFER,
-			      unionfs_upper_path, (u64)0777 << 32,
-			      0, &mkdir_reply) != 0 ||
-	    mkdir_reply.words[0] != 0) {
-		unionfs_upper_path[0] = '\0';
-		return -1;
+	upper_route_id = route_id;
+	vfs_unpin_layer_route(old_route_id);
+	if (old_service != 0) {
+		bunix_handle_close(old_service);
 	}
 	return 0;
 }
@@ -728,17 +763,24 @@ static int unionfs_set_upper_path(const char *path)
 static int unionfs_set_lower_path(const char *path)
 {
 	u64 service;
+	u64 route_id;
+	u64 old_service = lower_layer_service;
+	u64 old_route_id = lower_route_id;
 
 	if (set_path(unionfs_lower_path, path) != 0) {
 		unionfs_lower_path[0] = '\0';
 		return -1;
 	}
-	service = vfs_resolve_layer_route(unionfs_lower_path);
-	if (service == 0) {
+	if (vfs_pin_layer_route(unionfs_lower_path, &service, &route_id) != 0) {
 		unionfs_lower_path[0] = '\0';
 		return -1;
 	}
 	lower_layer_service = service;
+	lower_route_id = route_id;
+	vfs_unpin_layer_route(old_route_id);
+	if (old_service != 0) {
+		bunix_handle_close(old_service);
+	}
 	return 0;
 }
 

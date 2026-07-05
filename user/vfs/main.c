@@ -24,8 +24,10 @@ struct rootfs_entry {
 struct vfs_mount {
 	struct bunix_tree_node node;
 	char *path;
+	u64 id;
 	u64 service;
 	u64 fstype;
+	u64 pins;
 };
 
 struct vfs_open {
@@ -43,6 +45,7 @@ static struct bunix_tree rootfs_by_path;
 static struct bunix_tree mounts;
 static struct bunix_u64_tree open_files;
 static u64 next_open_id = 1;
+static u64 next_mount_id = 1;
 static u64 user_service;
 static u64 root_block;
 
@@ -935,16 +938,35 @@ static void vfs_open_path(struct bunix_msg *message,
 			  struct bunix_msg *reply,
 			  const char *path);
 
-static long mount_translator(const char *path, u64 service, u64 fstype)
+static struct vfs_mount *mount_by_id(u64 id)
+{
+	if (id == 0) {
+		return 0;
+	}
+	for (struct bunix_tree_node *node = bunix_tree_first_node(&mounts);
+	     node != 0; node = bunix_tree_next_node(node)) {
+		struct vfs_mount *mount = (struct vfs_mount *)node->value;
+
+		if (mount != 0 && mount->id == id) {
+			return mount;
+		}
+	}
+	return 0;
+}
+
+static u64 mount_translator(const char *path, u64 service, u64 fstype)
 {
 	struct vfs_mount *mount;
 
 	if (path == 0 || path[0] != '/' || service == 0) {
-		return -1;
+		return BUNIX_VFS_ERR_INVAL;
 	}
 
 	mount = (struct vfs_mount *)bunix_tree_get(&mounts, path);
 	if (mount != 0) {
+		if (mount->pins != 0) {
+			return BUNIX_VFS_ERR_BUSY;
+		}
 		mount->service = service;
 		mount->fstype = fstype;
 		return 0;
@@ -952,12 +974,16 @@ static long mount_translator(const char *path, u64 service, u64 fstype)
 
 	mount = (struct vfs_mount *)bunix_calloc(1, sizeof(*mount));
 	if (mount == 0) {
-		return -1;
+		return (u64)-1;
 	}
 	mount->path = str_dup(path);
 	if (mount->path == 0) {
 		bunix_free(mount);
-		return -1;
+		return (u64)-1;
+	}
+	mount->id = next_mount_id++;
+	while (mount->id == 0 || mount_by_id(mount->id) != 0) {
+		mount->id = next_mount_id++;
 	}
 	mount->service = service;
 	mount->fstype = fstype;
@@ -965,26 +991,68 @@ static long mount_translator(const char *path, u64 service, u64 fstype)
 				   (u64)mount) != 0) {
 		bunix_free(mount->path);
 		bunix_free(mount);
-		return -1;
+		return (u64)-1;
 	}
 	return 0;
 }
 
-static long unmount_translator(const char *path)
+static u64 unmount_translator(const char *path)
 {
 	struct vfs_mount *mount;
 
 	if (path == 0 || path[0] != '/' || path_eq(path, "/")) {
-		return -1;
+		return BUNIX_VFS_ERR_INVAL;
 	}
 	mount = (struct vfs_mount *)bunix_tree_get(&mounts, path);
 	if (mount == 0) {
-		return -1;
+		return BUNIX_VFS_ERR_NOENT;
+	}
+	if (mount->pins != 0) {
+		return BUNIX_VFS_ERR_BUSY;
 	}
 	bunix_tree_remove_node(&mounts, &mount->node);
 	bunix_free(mount->path);
 	bunix_free(mount);
 	return 0;
+}
+
+static void vfs_reply_mount_route(struct bunix_msg *reply, const char *path,
+				  int pin)
+{
+	struct vfs_mount *mount = mount_for_path(path);
+
+	if (mount == 0 || mount->service == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	if (mount->fstype == BUNIX_SERVICE_UNIONFS) {
+		reply->words[0] = BUNIX_VFS_ERR_INVAL;
+		reply->words[1] = mount->fstype;
+		reply->words[2] = BUNIX_VFS_ROUTE_FLAG_RECURSIVE;
+		return;
+	}
+	if (pin) {
+		mount->pins++;
+	}
+	reply->words[0] = 0;
+	reply->cap = mount->service;
+	reply->cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP;
+	reply->words[1] = mount->fstype;
+	reply->words[2] = 0;
+	reply->words[3] = mount->id;
+}
+
+static void vfs_unpin_mount_route(struct bunix_msg *reply, u64 route_id)
+{
+	struct vfs_mount *mount = mount_by_id(route_id);
+
+	if (mount == 0 || mount->pins == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	mount->pins--;
+	reply->words[0] = 0;
+	reply->words[1] = mount->pins;
 }
 
 static void notify_procfs_mount_event(const char *path, u64 type, u64 fstype)
@@ -1708,16 +1776,21 @@ int main(void)
 			case BUNIX_VFS_MOUNT_BUFFER: {
 				char path[VFS_MAX_PATH];
 				u64 service;
+				u64 status;
 
 				service = resolve_service(message.words[1],
 							  BUNIX_RIGHT_SEND |
 							  BUNIX_RIGHT_DUP);
 				if (service == 0 ||
 				    bunix_read_path_cap(&message, path,
-							sizeof(path)) != 0 ||
-				    mount_translator(path, service,
-						     message.words[1]) != 0) {
+							sizeof(path)) != 0) {
 					reply.words[0] = (u64)-1;
+					break;
+				}
+				status = mount_translator(path, service,
+							  message.words[1]);
+				if (status != 0) {
+					reply.words[0] = status;
 				} else {
 					reply.words[0] = 0;
 					notify_procfs_mount(path, message.words[1]);
@@ -1727,35 +1800,42 @@ int main(void)
 			}
 			case BUNIX_VFS_RESOLVE_MOUNT_BUFFER: {
 				char path[VFS_MAX_PATH];
-				struct vfs_mount *mount;
 
 				if (bunix_read_path_cap(&message, path,
 							sizeof(path)) != 0) {
 					reply.words[0] = (u64)-1;
 					break;
 				}
-				mount = mount_for_path(path);
-				if (mount == 0 || mount->service == 0) {
-					reply.words[0] = BUNIX_VFS_ERR_NOENT;
-			} else {
-				reply.words[0] = 0;
-				reply.cap = mount->service;
-				reply.cap_rights = BUNIX_RIGHT_SEND |
-						   BUNIX_RIGHT_DUP;
-				reply.words[1] = mount->fstype;
-				reply.words[2] =
-					mount->fstype == BUNIX_SERVICE_UNIONFS ?
-					BUNIX_VFS_ROUTE_FLAG_RECURSIVE : 0;
+				vfs_reply_mount_route(&reply, path, 0);
+				break;
 			}
-			break;
-		}
-			case BUNIX_VFS_UNMOUNT_BUFFER: {
+			case BUNIX_VFS_PIN_ROUTE_BUFFER: {
 				char path[VFS_MAX_PATH];
 
 				if (bunix_read_path_cap(&message, path,
-							sizeof(path)) != 0 ||
-				    unmount_translator(path) != 0) {
+							sizeof(path)) != 0) {
 					reply.words[0] = (u64)-1;
+					break;
+				}
+				vfs_reply_mount_route(&reply, path, 1);
+				break;
+			}
+			case BUNIX_VFS_UNPIN_ROUTE: {
+				vfs_unpin_mount_route(&reply, message.words[0]);
+				break;
+			}
+			case BUNIX_VFS_UNMOUNT_BUFFER: {
+				char path[VFS_MAX_PATH];
+				u64 status;
+
+				if (bunix_read_path_cap(&message, path,
+							sizeof(path)) != 0) {
+					reply.words[0] = (u64)-1;
+					break;
+				}
+				status = unmount_translator(path);
+				if (status != 0) {
+					reply.words[0] = status;
 				} else {
 					reply.words[0] = 0;
 					notify_procfs_unmount(path);

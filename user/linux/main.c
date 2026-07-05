@@ -2248,6 +2248,9 @@ static long linux_vfs_error(u64 status)
 	if (status == BUNIX_VFS_ERR_INVAL) {
 		return -LINUX_EINVAL;
 	}
+	if (status == BUNIX_VFS_ERR_BUSY) {
+		return -LINUX_EBUSY;
+	}
 	return -LINUX_ENOENT;
 }
 
@@ -3404,7 +3407,7 @@ static long linux_vfs_unmount(const char *target)
 				&reply) != 0) {
 		return -LINUX_ENOSYS;
 	}
-	return reply.words[0] == 0 ? 0 : -LINUX_ENOENT;
+	return reply.words[0] == 0 ? 0 : linux_vfs_error(reply.words[0]);
 }
 
 static long linux_mount(struct linux_process *process, u64 target_len,
