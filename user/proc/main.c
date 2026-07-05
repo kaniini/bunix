@@ -284,16 +284,6 @@ static int process_set_cmdline_from_buffer(struct process *process, u64 buffer,
 	return result;
 }
 
-static void unpack_bytes(unsigned char *out, const u64 *words, u64 len)
-{
-	for (u64 i = 0; i < len; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		out[i] = (unsigned char)((words[slot] >> shift) & 0xff);
-	}
-}
-
 static unsigned int read_magic(const unsigned char *ident)
 {
 	return ((unsigned int)ident[0]) |
@@ -1779,35 +1769,6 @@ int main(void)
 
 		reply.type = message.type;
 		switch (message.type) {
-		case BUNIX_PROC_SPAWN: {
-			char path[16];
-			u64 pid = 0;
-
-			for (u64 i = 0; i < sizeof(path); i++) {
-				path[i] = '\0';
-			}
-			unpack_bytes((unsigned char *)path, &message.words[0],
-				     sizeof(path));
-			const u64 flags = message.words[3] &
-					  PROC_SPAWN_FLAGS_MASK;
-			const u64 session_id = message.words[3] >>
-					       PROC_SPAWN_SESSION_SHIFT;
-			if (spawn_process(path, message.words[2],
-					  (flags & PROC_SPAWN_SET_LOGIN) != 0,
-					  session_id,
-					  0,
-					  &pid) == 0) {
-				reply.words[0] = 0;
-				reply.words[1] = pid;
-				log_exec_line(path);
-				log_pid_line("proc: spawned pid=", pid);
-			} else {
-				reply.words[0] = (u64)-1;
-				bunix_console_log("proc: spawn failed\n",
-						  sizeof("proc: spawn failed\n") - 1);
-			}
-			break;
-		}
 		case BUNIX_PROC_SPAWN_BUFFER: {
 			char *path = 0;
 			struct exec_strings strings = { 0, 0, 0, 0 };

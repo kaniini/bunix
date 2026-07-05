@@ -96,19 +96,6 @@ static u64 resolve_service(u64 service, unsigned int rights)
 	return resolve_service_in_namespace(BUNIX_NAMES_ROOT, service, rights);
 }
 
-static void pack_path(u64 *words, const char *path)
-{
-	words[0] = 0;
-	words[1] = 0;
-
-	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
-	}
-}
-
 static u64 str_len(const char *text)
 {
 	u64 len = 0;
@@ -444,38 +431,7 @@ static long proc_spawn_wait_args(u64 proc, const char *path,
 
 static long proc_spawn_wait(u64 proc, const char *path)
 {
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_PROC,
-		.type = BUNIX_PROC_SPAWN,
-		.sender = 0,
-		.reply = 0,
-		.words = { 0, 0, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	if (path == 0) {
-		return -1;
-	}
-	if (str_len(path) + 1 > BUNIX_IPC_DATA_BYTES) {
-		return proc_spawn_wait_args(proc, path, 0, 0, 0, 0);
-	}
-	pack_path(&request.words[0], path);
-	if (bunix_ipc_call(proc, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		return -1;
-	}
-	log_path_line("bootstrap: spawned ", path);
-	request.type = BUNIX_PROC_WAIT;
-	request.words[0] = reply.words[1];
-	request.words[1] = 0;
-	request.words[2] = 0;
-	request.words[3] = 0;
-	if (bunix_ipc_call(proc, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
-		return -1;
-	}
-	log_path_line("bootstrap: exited ", path);
-	return 0;
+	return proc_spawn_wait_args(proc, path, 0, 0, 0, 0);
 }
 
 static int token_is_env(const char *token)
@@ -758,19 +714,27 @@ static long spawn_linux_init(u64 linux, const char *path)
 		.protocol = BUNIX_PROTO_LINUX,
 		.type = BUNIX_LINUX_EXEC_INIT,
 		.sender = 0,
-		.cap_rights = 0,
+		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
 		.reply = 0,
 		.cap = 0,
 		.words = { 0, 0, 0, 0 },
 	};
 	struct bunix_msg reply;
+	const u64 len = path == 0 ? 0 : str_len(path) + 1;
+	const long buffer = len == 0 ? -1 : bunix_buffer_create(len);
 
-	pack_path(&request.words[0], path);
-	if (linux == 0 ||
-	    bunix_ipc_call(linux, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
+	if (linux == 0 || buffer <= 0) {
 		return -1;
 	}
+	request.cap = (u64)buffer;
+	request.words[0] = len;
+	if (bunix_buffer_write((u64)buffer, 0, path, len) != 0 ||
+	    bunix_ipc_call(linux, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
 	return 0;
 }
 

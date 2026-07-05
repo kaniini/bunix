@@ -215,7 +215,9 @@ static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
 static void pack_path(u64 *words, const char *path);
-static void unpack_path(char *path, u64 word0, u64 word1);
+static u64 string_len(const char *text);
+static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
+				u64 path_cap);
 static long alloc_fd(struct linux_process *process, u64 kind, u64 handle,
 		     u64 size);
 
@@ -496,29 +498,56 @@ static void notify_proc_register_linux(u64 linux_pid, u64 bunix_task,
 	}
 }
 
-static long linux_exec_init(u64 path_word0, u64 path_word1)
+static long linux_proc_spawn_path(u64 proc, const char *path)
 {
-	const u64 proc = resolve_service(BUNIX_SERVICE_PROC, BUNIX_RIGHT_SEND);
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_PROC,
-		.type = BUNIX_PROC_SPAWN,
+		.type = BUNIX_PROC_SPAWN_BUFFER,
 		.sender = 0,
-		.cap_rights = 0,
+		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
 		.reply = 0,
 		.cap = 0,
-		.words = { 0, 0, 0, 0 },
+		.words = { 0, 1, 0, 0 },
 	};
-	char path[16];
+	u64 len;
+	u64 total;
+	long buffer;
+
+	if (proc == 0 || path == 0 || path[0] != '/') {
+		return -LINUX_ESRCH;
+	}
+	len = string_len(path) + 1;
+	total = len * 2;
+	buffer = bunix_buffer_create(total);
+	if (buffer <= 0) {
+		return -LINUX_EAGAIN;
+	}
+	request.cap = (u64)buffer;
+	request.words[0] = total;
+	if (bunix_buffer_write((u64)buffer, 0, path, len) != 0 ||
+	    bunix_buffer_write((u64)buffer, len, path, len) != 0 ||
+	    bunix_ipc_send(proc, &request) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -LINUX_ESRCH;
+	}
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
+static long linux_exec_init(u64 path_len, u64 path_buffer)
+{
+	const u64 proc = resolve_service(BUNIX_SERVICE_PROC, BUNIX_RIGHT_SEND);
+	char path[LINUX_MAX_PATH];
+	long result;
 
 	if (proc == 0) {
 		return -LINUX_ESRCH;
 	}
-	unpack_path(path, path_word0, path_word1);
-	if (path[0] != '/') {
-		return -LINUX_EINVAL;
+	result = linux_read_path_arg(path_buffer, path_len, path, sizeof(path));
+	if (result != 0) {
+		return result;
 	}
-	pack_path(&request.words[0], path);
-	return bunix_ipc_send(proc, &request) == 0 ? 0 : -LINUX_ESRCH;
+	return linux_proc_spawn_path(proc, path);
 }
 
 static void zero_bytes(char *buffer, u64 len)
@@ -583,19 +612,6 @@ static void pack_path(u64 *words, const char *path)
 
 		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
 	}
-}
-
-static void unpack_path(char *path, u64 word0, u64 word1)
-{
-	const u64 words[] = { word0, word1 };
-
-	for (u64 i = 0; i < 16; i++) {
-		path[i] = (char)((words[i / 8] >> ((i % 8) * 8)) & 0xff);
-		if (path[i] == '\0') {
-			return;
-		}
-	}
-	path[15] = '\0';
 }
 
 static int string_equal(const char *left, const char *right)
@@ -4156,7 +4172,10 @@ int main(void)
 		}
 		if (message.type == BUNIX_LINUX_EXEC_INIT) {
 			reply.words[0] = (u64)linux_exec_init(message.words[0],
-							     message.words[1]);
+							     message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
 			if (message.reply != 0) {
 				bunix_ipc_send(message.reply, &reply);
 			}
