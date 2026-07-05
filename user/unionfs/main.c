@@ -29,6 +29,7 @@ struct rootfs_disk_entry {
 };
 
 struct rootfs_entry {
+	struct bunix_tree_node node;
 	char path[ROOTFS_MAX_PATH];
 	u64 offset;
 	u64 size;
@@ -55,6 +56,7 @@ struct unionfs_whiteout {
 };
 
 static struct bunix_tree whiteouts;
+static struct bunix_tree rootfs_by_path;
 static struct bunix_u64_tree open_files;
 static struct rootfs_entry *root_entries;
 static u64 root_entry_count;
@@ -431,6 +433,13 @@ static int rootfs_mount(void)
 		root_entries[i].gid = disk_entries[i].gid;
 		root_entries[i].mode = disk_entries[i].mode;
 		root_entries[i].type = disk_entries[i].type;
+		if (bunix_tree_insert_node(&rootfs_by_path,
+					   &root_entries[i].node,
+					   root_entries[i].path,
+					   (u64)&root_entries[i]) != 0) {
+			bunix_free(disk_entries);
+			return -1;
+		}
 	}
 	bunix_free(disk_entries);
 	root_entry_count = header.entries;
@@ -439,12 +448,8 @@ static int rootfs_mount(void)
 
 static const struct rootfs_entry *rootfs_find(const char *path)
 {
-	for (u64 i = 0; i < root_entry_count; i++) {
-		if (str_eq(root_entries[i].path, path)) {
-			return &root_entries[i];
-		}
-	}
-	return 0;
+	return (const struct rootfs_entry *)bunix_tree_get(&rootfs_by_path,
+							   path);
 }
 
 static int path_is_child_of(const char *path, const char *directory)
@@ -1122,6 +1127,7 @@ int main(void)
 
 	bunix_console_log(online, sizeof(online) - 1);
 	bunix_tree_init(&whiteouts);
+	bunix_tree_init(&rootfs_by_path);
 	bunix_u64_tree_init(&open_files);
 	vfs_service = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
 	tmpfs_service = resolve_service(BUNIX_SERVICE_TMPFS, BUNIX_RIGHT_SEND);
