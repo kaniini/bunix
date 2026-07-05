@@ -1,6 +1,7 @@
 #ifndef BUNIXOS_VM_H
 #define BUNIXOS_VM_H
 
+#include "tree.h"
 #include "types.h"
 #include <arch/vm.h>
 
@@ -13,9 +14,9 @@ struct vm_frame {
 };
 
 struct vm_space {
+	struct u64_tree_node id_node;
 	u32 id;
 	const char *owner;
-	struct vm_space *next;
 	struct arch_vm_space arch;
 };
 

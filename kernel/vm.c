@@ -2,11 +2,12 @@
 #include "pmm.h"
 #include "slab.h"
 #include "spinlock.h"
+#include "tree.h"
 #include "vm.h"
 #include <arch/smp.h>
 
 static struct vm_space kernel_space;
-static struct vm_space *spaces;
+static struct u64_tree spaces_by_id;
 static u32 next_space_id = 1;
 static struct spinlock vm_spaces_lock = SPINLOCK_INIT("vm-spaces");
 
@@ -14,9 +15,9 @@ void vm_init(u64 multiboot_info)
 {
 	pmm_init(multiboot_info);
 	arch_vm_kernel_space_init(&kernel_space.arch);
+	u64_tree_init(&spaces_by_id);
 	kernel_space.id = 0;
 	kernel_space.owner = "kernel";
-	kernel_space.next = 0;
 }
 
 struct vm_space *vm_kernel_space(void)
@@ -49,9 +50,18 @@ struct vm_space *vm_rpc_create_space(const char *owner)
 	}
 
 	space->id = next_space_id++;
+	if (space->id == 0) {
+		space->id = next_space_id++;
+	}
 	space->owner = owner;
-	space->next = spaces;
-	spaces = space;
+	if (u64_tree_insert_node(&spaces_by_id, &space->id_node,
+				 space->id, (u64)space) != 0) {
+		arch_vm_space_destroy(&space->arch);
+		slab_free(space);
+		spin_unlock_irqrestore(&vm_spaces_lock, flags);
+		console_printf("vm: space registry failed for %s\n", owner);
+		return 0;
+	}
 	console_printf("vm: create space id=%u owner=%s cr3=%p\n",
 		       space->id, owner, (const void *)space->arch.cr3);
 	spin_unlock_irqrestore(&vm_spaces_lock, flags);
@@ -65,14 +75,8 @@ void vm_rpc_destroy_space(struct vm_space *space)
 	}
 
 	const u64 flags = spin_lock_irqsave(&vm_spaces_lock);
-	struct vm_space **link = &spaces;
-
-	while (*link != 0) {
-		if (*link == space) {
-			*link = space->next;
-			break;
-		}
-		link = &(*link)->next;
+	if (space->id_node.value != 0) {
+		u64_tree_remove_node(&spaces_by_id, &space->id_node);
 	}
 	spin_unlock_irqrestore(&vm_spaces_lock, flags);
 
@@ -81,7 +85,6 @@ void vm_rpc_destroy_space(struct vm_space *space)
 	arch_vm_space_destroy(&space->arch);
 	space->id = 0;
 	space->owner = 0;
-	space->next = 0;
 	slab_free(space);
 }
 
