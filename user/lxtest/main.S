@@ -494,6 +494,32 @@ fork_child:
 	cmpl $3, group_buffer + 4(%rip)
 	jne fail
 
+	leaq group_buffer(%rip), %r9
+	xorq %r8, %r8
+fill_many_groups:
+	movl $5000, %eax
+	addl %r8d, %eax
+	movl %eax, (%r9,%r8,4)
+	incq %r8
+	cmpq $80, %r8
+	jne fill_many_groups
+	movq $116, %rax
+	movq $80, %rdi
+	leaq group_buffer(%rip), %rsi
+	syscall
+	testq %rax, %rax
+	jne fail
+	movq $115, %rax
+	movq $80, %rdi
+	leaq group_buffer(%rip), %rsi
+	syscall
+	cmpq $80, %rax
+	jne fail
+	cmpl $5000, group_buffer(%rip)
+	jne fail
+	cmpl $5079, group_buffer + 316(%rip)
+	jne fail
+
 	movq $119, %rax
 	movq $5, %rdi
 	movq $6, %rsi
@@ -691,7 +717,7 @@ statx_buffer:
 wait_status:
 	.skip 4
 group_buffer:
-	.skip 8
+	.skip 512
 sendfile_offset:
 	.skip 8
 getdents_buffer:

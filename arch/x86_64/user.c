@@ -207,7 +207,7 @@ enum {
 	LINUX_EXEC_MAX_PATH = 4096,
 	LINUX_EXEC_MAX_STRING = 4096,
 	LINUX_EXEC_MAX_STRING_BYTES = 128 * 1024,
-	LINUX_MAX_GROUPS = 64,
+	LINUX_MAX_GROUPS = 65536,
 	LINUX_EXEC_DYN_LOAD_BIAS = 0x400000,
 	LINUX_EXEC_INTERP_LOAD_BIAS = 0x600000,
 	LINUX_EXEC_STACK_TOP = 0x800000,
@@ -1322,11 +1322,20 @@ static u64 linux_forward_input_buffer(struct ipc_port *linux,
 	}
 	if (len != 0) {
 		flags = spin_lock_irqsave(&syscall_copy_lock);
-		if (read_current_user(user_buffer, syscall_copy_buffer, len) != 0 ||
-		    buffer_write(buffer, 0, syscall_copy_buffer, len) != 0) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			buffer_release(buffer);
-			return (u64)-LINUX_EFAULT;
+		for (u64 done = 0; done < len;) {
+			const u64 chunk = min_u64(len - done,
+						  LINUX_MAX_SYSCALL_BUFFER);
+
+			if (read_current_user(user_buffer + done,
+					      syscall_copy_buffer, chunk) != 0 ||
+			    buffer_write(buffer, done, syscall_copy_buffer,
+					 chunk) != 0) {
+				spin_unlock_irqrestore(&syscall_copy_lock,
+						       flags);
+				buffer_release(buffer);
+				return (u64)-LINUX_EFAULT;
+			}
+			done += chunk;
 		}
 		spin_unlock_irqrestore(&syscall_copy_lock, flags);
 	}
@@ -1459,6 +1468,8 @@ static u64 linux_forward_output_words(struct ipc_port *linux,
 				      u64 word0,
 				      u64 word2,
 				      u64 word3);
+static u64 linux_copy_buffer_to_user(struct shared_buffer *buffer,
+				     u64 offset, u64 user_out, u64 size);
 
 static u64 linux_exit_current(u64 status)
 {
@@ -2067,23 +2078,12 @@ static u64 linux_forward_output_buffer(struct ipc_port *linux,
 		return (u64)-LINUX_ENOSYS;
 	}
 	if ((i64)reply.words[0] > 0) {
-		u64 flags;
-
 		if (reply.words[0] > size ||
-		    reply.words[0] > LINUX_MAX_SYSCALL_BUFFER) {
+		    linux_copy_buffer_to_user(buffer, 0, (u64)user_out,
+					      reply.words[0]) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_EFAULT;
 		}
-		flags = spin_lock_irqsave(&syscall_copy_lock);
-		if (buffer_read(buffer, 0, syscall_copy_buffer,
-				reply.words[0]) != 0 ||
-		    write_current_user((u64)user_out, syscall_copy_buffer,
-				       reply.words[0]) != 0) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			buffer_release(buffer);
-			return (u64)-LINUX_EFAULT;
-		}
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
 	}
 	buffer_release(buffer);
 	return reply.words[0];
@@ -2094,14 +2094,19 @@ static u64 linux_copy_buffer_to_user(struct shared_buffer *buffer,
 {
 	u64 flags;
 
-	if (size > LINUX_MAX_SYSCALL_BUFFER) {
-		return (u64)-LINUX_EFAULT;
-	}
 	flags = spin_lock_irqsave(&syscall_copy_lock);
-	if (buffer_read(buffer, offset, syscall_copy_buffer, size) != 0 ||
-	    write_current_user(user_out, syscall_copy_buffer, size) != 0) {
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
-		return (u64)-LINUX_EFAULT;
+	for (u64 done = 0; done < size;) {
+		const u64 chunk = min_u64(size - done,
+					  LINUX_MAX_SYSCALL_BUFFER);
+
+		if (buffer_read(buffer, offset + done, syscall_copy_buffer,
+				chunk) != 0 ||
+		    write_current_user(user_out + done, syscall_copy_buffer,
+				       chunk) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			return (u64)-LINUX_EFAULT;
+		}
+		done += chunk;
 	}
 	spin_unlock_irqrestore(&syscall_copy_lock, flags);
 	return 0;
@@ -2152,21 +2157,11 @@ static u64 linux_forward_fixed_output_buffer(struct ipc_port *linux,
 	result = reply.words[0];
 	if ((copy_on_zero && result == 0) ||
 	    (copy_on_positive && (i64)result > 0)) {
-		u64 flags;
-
-		if (size > LINUX_MAX_SYSCALL_BUFFER) {
+		if (linux_copy_buffer_to_user(buffer, 0, (u64)user_out,
+					      size) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_EFAULT;
 		}
-		flags = spin_lock_irqsave(&syscall_copy_lock);
-		if (buffer_read(buffer, 0, syscall_copy_buffer, size) != 0 ||
-		    write_current_user((u64)user_out, syscall_copy_buffer,
-				       size) != 0) {
-			spin_unlock_irqrestore(&syscall_copy_lock, flags);
-			buffer_release(buffer);
-			return (u64)-LINUX_EFAULT;
-		}
-		spin_unlock_irqrestore(&syscall_copy_lock, flags);
 	}
 	buffer_release(buffer);
 	return result;
@@ -2210,7 +2205,7 @@ static u64 linux_forward_two_u32_out(struct ipc_port *linux,
 	       reply.words[0] : (u64)-LINUX_EFAULT;
 }
 
-static u64 linux_forward_groups_out(struct task *task, struct ipc_port *linux,
+static u64 linux_forward_groups_out(struct ipc_port *linux,
 				    struct ipc_port *reply_port,
 				    struct ipc_message *request,
 				    u64 count, u64 user_out)
@@ -2244,11 +2239,9 @@ static u64 linux_forward_groups_out(struct task *task, struct ipc_port *linux,
 			buffer_release(buffer);
 			return linux_einval_u64(__func__, __LINE__);
 		}
-		if (buffer_read(buffer, 0, syscall_copy_buffer,
-				reply.words[0] * sizeof(u32)) != 0 ||
-		    vm_write_user(task_vm_space(task), user_out,
-				  syscall_copy_buffer,
-				  reply.words[0] * sizeof(u32)) != 0) {
+		if (linux_copy_buffer_to_user(buffer, 0, user_out,
+					      reply.words[0] *
+					      sizeof(u32)) != 0) {
 			buffer_release(buffer);
 			return (u64)-LINUX_EFAULT;
 		}
@@ -4085,30 +4078,17 @@ poll_again:
 		request.words[1] = 0;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		return linux_forward_groups_out(task, linux, reply_port,
-						&request, arg0, arg1);
+		return linux_forward_groups_out(linux, reply_port, &request,
+						arg0, arg1);
 	case LINUX_SYSCALL_SETGROUPS: {
-		struct shared_buffer *buffer;
-		struct ipc_message reply;
 		const u64 size = arg0 * sizeof(u32);
 
 		if (arg0 > LINUX_MAX_GROUPS ||
-		    size > LINUX_MAX_SYSCALL_BUFFER) {
+		    (arg0 != 0 && size / sizeof(u32) != arg0)) {
 			return linux_einval_u64(__func__, __LINE__);
 		}
-		if (arg0 != 0 &&
-		    vm_read_user(task_vm_space(task), arg1, syscall_copy_buffer,
-				 size) != 0) {
+		if (arg0 != 0 && arg1 == 0) {
 			return (u64)-LINUX_EFAULT;
-		}
-		buffer = buffer_create(size == 0 ? 1 : size);
-		if (buffer == 0 ||
-		    (size != 0 &&
-		     buffer_write(buffer, 0, syscall_copy_buffer, size) != 0)) {
-			if (buffer != 0) {
-				buffer_release(buffer);
-			}
-			return (u64)-LINUX_ENOMEM;
 		}
 
 		request.type = LINUX_SYSCALL_SETGROUPS;
@@ -4116,15 +4096,10 @@ poll_again:
 		request.words[1] = 0;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		request.cap_type = IPC_CAP_BUFFER;
-		request.cap_rights = TASK_RIGHT_RECV | TASK_RIGHT_DUP;
-		request.cap_object = buffer;
-		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			buffer_release(buffer);
-			return (u64)-LINUX_ENOSYS;
-		}
-		buffer_release(buffer);
-		return reply.words[0];
+		return linux_forward_input_buffer(linux, reply_port, &request,
+						  arg1, size,
+						  TASK_RIGHT_RECV |
+						  TASK_RIGHT_DUP);
 	}
 	case LINUX_SYSCALL_IOCTL: {
 		struct shared_buffer *buffer = 0;
