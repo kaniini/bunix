@@ -37,6 +37,9 @@ Useful test targets:
 - `BUNIX_CMD='/bin/pathmaxtest' make test-command` boots, logs in, runs one
   command, and preserves serial/QEMU/strace artifacts under `build/failures/`
   if the command fails.
+- `make audit-linux-syscalls` reports Linux syscall enum coverage, arch
+  dispatch forwarding, Linux-server cases, obvious fallback sites, and heuristic
+  test marker hints.
 
 The init, names, time, user, linux, proc, procfs, block, VFS, and ping servers
 are freestanding C ELF images loaded as Multiboot2 modules and entered in ring 3.
