@@ -38,18 +38,6 @@ static int str_eq(const char *left, const char *right)
 	return left[i] == right[i];
 }
 
-static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
-{
-	words[0] = 0;
-	words[1] = 0;
-	for (u64 i = 0; i < len && i < BUNIX_IPC_DATA_BYTES; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)data[i]) << shift;
-	}
-}
-
 static void pack_path(u64 *words, const char *path)
 {
 	words[0] = 0;
@@ -349,18 +337,31 @@ int main(void)
 					 device == DEVFS_TTY ||
 					 device == DEVFS_CONSOLE ? 0 : (u64)-1;
 			break;
-		case BUNIX_VFS_READDIR:
+		case BUNIX_VFS_READDIR_BUFFER:
 			if (message.words[0] != DEVFS_DIR ||
 			    message.words[1] >= sizeof(entries) / sizeof(entries[0])) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
+			if (message.cap == 0 ||
+			    (message.cap_rights & BUNIX_RIGHT_SEND) == 0) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] = 0;
 			reply.words[1] = (message.words[1] + 1) |
 					 ((u64)BUNIX_VFS_TYPE_REGULAR << 32);
-			pack_bytes(&reply.words[2],
-				   (const unsigned char *)entries[message.words[1]],
-				   str_len(entries[message.words[1]]) + 1);
+			reply.words[2] = str_len(entries[message.words[1]]);
+			reply.words[3] = reply.words[2];
+			if (reply.words[3] > message.words[3]) {
+				reply.words[3] = message.words[3];
+			}
+			if (reply.words[3] != 0 &&
+			    bunix_buffer_write(message.cap, message.words[2],
+					       entries[message.words[1]],
+					       reply.words[3]) != 0) {
+				reply.words[0] = (u64)-1;
+			}
 			break;
 		case BUNIX_VFS_CLOSE:
 			reply.words[0] = 0;

@@ -199,18 +199,6 @@ static int read_path_buffer(u64 buffer, u64 offset, u64 len, char *path)
 	return 0;
 }
 
-static void pack_name(u64 *words, const char *name)
-{
-	words[0] = 0;
-	words[1] = 0;
-	for (u64 i = 0; i < 16 && name[i] != '\0'; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)(unsigned char)name[i]) << shift;
-	}
-}
-
 static void pack_path(u64 *words, const char *path)
 {
 	words[0] = 0;
@@ -1394,13 +1382,20 @@ int main(void)
 			reply.words[1] = reply.words[0] == 0 ? len : 0;
 			break;
 		}
-		case BUNIX_VFS_READDIR: {
+		case BUNIX_VFS_READDIR_BUFFER: {
 			const u64 file = file_from_handle(message.words[0]);
 			const char *name = 0;
 			u64 type = BUNIX_VFS_TYPE_REGULAR;
+			u64 name_len;
+			u64 written;
 
 			if (!file_is_dir(file)) {
 				reply.words[0] = BUNIX_VFS_ERR_NOTDIR;
+				break;
+			}
+			if (message.cap == 0 ||
+			    (message.cap_rights & BUNIX_RIGHT_SEND) == 0) {
+				reply.words[0] = (u64)-1;
 				break;
 			}
 			if (file_kind(file) == PROCFS_KIND_PROC) {
@@ -1414,10 +1409,22 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
+			name_len = str_len(name);
+			written = name_len;
+			if (written > message.words[3]) {
+				written = message.words[3];
+			}
+			if (written != 0 &&
+			    bunix_buffer_write(message.cap, message.words[2],
+					       name, written) != 0) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] = 0;
 			reply.words[1] = (message.words[1] + 1) |
 					 (type << 32);
-			pack_name(&reply.words[2], name);
+			reply.words[2] = name_len;
+			reply.words[3] = written;
 			break;
 		}
 		case BUNIX_VFS_CLOSE:

@@ -139,18 +139,6 @@ static int file_is_child_of(const struct tmpfs_file *file, const char *dir)
 	return 1;
 }
 
-static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
-{
-	words[0] = 0;
-	words[1] = 0;
-	for (u64 i = 0; i < len && i < BUNIX_IPC_DATA_BYTES; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)data[i]) << shift;
-	}
-}
-
 static void unpack_path(char *path, const u64 *words)
 {
 	for (u64 i = 0; i < BUNIX_IPC_DATA_BYTES; i++) {
@@ -1016,16 +1004,14 @@ int main(void)
 				reply.words[0] = 0;
 			}
 			break;
-		case BUNIX_VFS_READDIR:
 		case BUNIX_VFS_READDIR_BUFFER:
 			open = open_from_handle(message.words[0]);
 			if (open == 0 || open->kind != TMPFS_OPEN_DIR) {
 				reply.words[0] = BUNIX_VFS_ERR_NOTDIR;
 				break;
 			}
-			if (message.type == BUNIX_VFS_READDIR_BUFFER &&
-			    (message.cap == 0 ||
-			     (message.cap_rights & BUNIX_RIGHT_SEND) == 0)) {
+			if (message.cap == 0 ||
+			    (message.cap_rights & BUNIX_RIGHT_SEND) == 0) {
 				reply.words[0] = (u64)-1;
 				break;
 			}
@@ -1046,26 +1032,20 @@ int main(void)
 					reply.words[0] = 0;
 					reply.words[1] = (message.words[1] + 1) |
 							 ((u64)file->type << 32);
-					if (message.type == BUNIX_VFS_READDIR_BUFFER) {
-						u64 written = name_len;
+					u64 written = name_len;
 
-						if (written > message.words[3]) {
-							written = message.words[3];
-						}
-						if (written != 0 &&
-						    bunix_buffer_write(message.cap,
-								       message.words[2],
-								       name,
-								       written) != 0) {
-							reply.words[0] = (u64)-1;
-						} else {
-							reply.words[2] = name_len;
-							reply.words[3] = written;
-						}
+					if (written > message.words[3]) {
+						written = message.words[3];
+					}
+					if (written != 0 &&
+					    bunix_buffer_write(message.cap,
+							       message.words[2],
+							       name,
+							       written) != 0) {
+						reply.words[0] = (u64)-1;
 					} else {
-						pack_bytes(&reply.words[2],
-							   (const unsigned char *)name,
-							   name_len + 1);
+						reply.words[2] = name_len;
+						reply.words[3] = written;
 					}
 					break;
 				}

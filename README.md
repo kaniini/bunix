@@ -265,10 +265,11 @@ Linux syscall forwarding uses bounded shared buffers internally. Large
 `write(2)` calls are chunked, and large `getdents64(2)` user buffers are
 handled as short directory reads instead of being rejected; `/bin/getdentstest`
 keeps that path covered by the shell regression.
-VFS, rootfs, tmpfs, and unionfs also support buffer-backed directory entry
+VFS, rootfs, tmpfs, unionfs, procfs, and devfs use buffer-backed directory entry
 names, so Linux `getdents64(2)` can return names longer than the inline IPC word
-payload; the shell regression creates and lists long filenames through both
-tmpfs and the writable union root to cover this path.
+payload. The old packed 16-byte VFS directory-entry protocol has been removed;
+the shell regression creates and lists long filenames through both tmpfs and the
+writable union root to cover this path.
 Linux `readlink(2)`/`readlinkat(2)` now use a buffer-backed VFS target window
 through VFS, unionfs, rootfs, and procfs, so symlink targets are no longer
 truncated to the inline IPC word payload.

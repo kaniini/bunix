@@ -71,19 +71,6 @@ static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
 	}
 }
 
-static void unpack_name(char *name, u64 word0, u64 word1)
-{
-	const u64 words[] = { word0, word1 };
-
-	for (u64 i = 0; i < BUNIX_IPC_DATA_BYTES; i++) {
-		name[i] = (char)((words[i / 8] >> ((i % 8) * 8)) & 0xff);
-		if (name[i] == '\0') {
-			return;
-		}
-	}
-	name[BUNIX_IPC_DATA_BYTES - 1] = '\0';
-}
-
 static int name_is_valid(const char *name)
 {
 	if (name == 0 || name[0] == '\0') {
@@ -1002,30 +989,19 @@ static int remote_readdir_name(u64 service, u64 handle, u64 index,
 	for (u64 i = 0; i < name_cap; i++) {
 		name[i] = '\0';
 	}
-	if (bunix_ipc_call(service, &request, &reply) == 0 &&
-	    reply.words[0] == 0) {
-		const u64 name_len = reply.words[2];
-		const u64 written = reply.words[3];
-
-		if (name_len >= name_cap || written < name_len ||
-		    (name_len != 0 &&
-		     bunix_buffer_read(scratch_buffer, 0, name,
-				       name_len) != 0)) {
-			return -1;
-		}
-		name[name_len] = '\0';
-		*type = reply.words[1] >> 32;
-		return 1;
-	}
-
-	request.type = BUNIX_VFS_READDIR;
-	request.cap_rights = 0;
-	request.cap = 0;
 	if (bunix_ipc_call(service, &request, &reply) != 0 ||
 	    reply.words[0] != 0) {
 		return 0;
 	}
-	unpack_name(name, reply.words[2], reply.words[3]);
+	const u64 name_len = reply.words[2];
+	const u64 written = reply.words[3];
+
+	if (name_len >= name_cap || written < name_len ||
+	    (name_len != 0 &&
+	     bunix_buffer_read(scratch_buffer, 0, name, name_len) != 0)) {
+		return -1;
+	}
+	name[name_len] = '\0';
 	*type = reply.words[1] >> 32;
 	return 1;
 }
@@ -1038,28 +1014,24 @@ static void readdir_reply_name(const struct bunix_msg *message,
 
 	reply->words[0] = 0;
 	reply->words[1] = (message->words[1] + 1) | (type << 32);
-	if (message->type == BUNIX_VFS_READDIR_BUFFER) {
-		u64 written = name_len;
+	u64 written = name_len;
 
-		if (message->cap == 0 ||
-		    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
-			reply->words[0] = (u64)-1;
-			return;
-		}
-		if (written > message->words[3]) {
-			written = message->words[3];
-		}
-		if (written != 0 &&
-		    bunix_buffer_write(message->cap, message->words[2],
-				       name, written) != 0) {
-			reply->words[0] = (u64)-1;
-			return;
-		}
-		reply->words[2] = name_len;
-		reply->words[3] = written;
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
 		return;
 	}
-	pack_path(&reply->words[2], name);
+	if (written > message->words[3]) {
+		written = message->words[3];
+	}
+	if (written != 0 &&
+	    bunix_buffer_write(message->cap, message->words[2],
+			       name, written) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[2] = name_len;
+	reply->words[3] = written;
 }
 
 static int whiteout_child_exists(const char *directory, const char *name)
@@ -1164,9 +1136,8 @@ static void readdir_merged(struct unionfs_open *open, struct bunix_msg *message,
 		reply->words[0] = BUNIX_VFS_ERR_NOTDIR;
 		return;
 	}
-	if (message->type == BUNIX_VFS_READDIR_BUFFER &&
-	    (message->cap == 0 ||
-	     (message->cap_rights & BUNIX_RIGHT_SEND) == 0)) {
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -1211,8 +1182,7 @@ static void forward_open_handle(struct bunix_msg *message,
 			reply->words[0] = 0;
 			reply->words[1] = 0;
 			reply->words[2] = BUNIX_VFS_TYPE_DIRECTORY;
-		} else if (message->type == BUNIX_VFS_READDIR ||
-			   message->type == BUNIX_VFS_READDIR_BUFFER) {
+		} else if (message->type == BUNIX_VFS_READDIR_BUFFER) {
 			readdir_merged(open, message, reply);
 		} else {
 			reply->words[0] = BUNIX_VFS_ERR_ACCESS;
@@ -1362,7 +1332,6 @@ int main(void)
 		case BUNIX_VFS_STAT_META:
 		case BUNIX_VFS_READ_FILE_BUFFER:
 		case BUNIX_VFS_WRITE_FILE_BUFFER:
-		case BUNIX_VFS_READDIR:
 		case BUNIX_VFS_READDIR_BUFFER:
 		case BUNIX_VFS_CHMOD:
 		case BUNIX_VFS_CHOWN:

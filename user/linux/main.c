@@ -2969,31 +2969,19 @@ static long linux_readdir_name(u64 handle, u64 index, u64 name_buffer,
 	for (u64 i = 0; i < name_cap; i++) {
 		name[i] = '\0';
 	}
-	if (name_buffer != 0 &&
-	    bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) == 0 &&
-	    reply.words[0] == 0) {
-		const u64 name_len = reply.words[2];
-		const u64 written = reply.words[3];
-
-		if (name_len >= name_cap || written < name_len ||
-		    (name_len != 0 &&
-		     bunix_buffer_read(name_buffer, 0, name, name_len) != 0)) {
-			return -LINUX_EINVAL;
-		}
-		name[name_len] = '\0';
-		*type = reply.words[1] >> 32;
-		*next_offset = (reply.words[1] & 0xffffffff) + 2;
-		return 0;
-	}
-
-	request.type = BUNIX_VFS_READDIR;
-	request.cap_rights = 0;
-	request.cap = 0;
 	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
 	    reply.words[0] != 0) {
 		return -LINUX_ENOENT;
 	}
-	unpack_path(name, reply.words[2], reply.words[3]);
+	const u64 name_len = reply.words[2];
+	const u64 written = reply.words[3];
+
+	if (name_len >= name_cap || written < name_len ||
+	    (name_len != 0 &&
+	     bunix_buffer_read(name_buffer, 0, name, name_len) != 0)) {
+		return -LINUX_EINVAL;
+	}
+	name[name_len] = '\0';
 	*type = reply.words[1] >> 32;
 	*next_offset = (reply.words[1] & 0xffffffff) + 2;
 	return 0;

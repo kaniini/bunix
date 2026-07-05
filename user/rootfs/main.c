@@ -555,44 +555,6 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 	reply->words[3] = entry == 0 ? BUNIX_VFS_TYPE_DIRECTORY : entry->type;
 }
 
-static void reply_readdir(struct rootfs_open *open, u64 index,
-			  struct bunix_msg *reply)
-{
-	u64 current = 0;
-	const char *directory;
-
-	if (open == 0 ||
-	    (open->kind == ROOTFS_OPEN_ENTRY &&
-	     open->entry->type != BUNIX_VFS_TYPE_DIRECTORY)) {
-		reply->words[0] = BUNIX_VFS_ERR_NOTDIR;
-		return;
-	}
-	directory = open->kind == ROOTFS_OPEN_ROOT ? "/" : open->entry->path;
-	for (u64 i = 0; i < root_entry_count; i++) {
-		const struct rootfs_entry *entry = &root_entries[i];
-		const char *name;
-
-		if (!path_is_child_of(entry->path, directory)) {
-			continue;
-		}
-		name = path_name_in_dir(entry->path, directory);
-		if (!name_is_valid(name)) {
-			continue;
-		}
-		if (current == index) {
-			reply->words[0] = 0;
-			reply->words[1] = (index + 1) |
-					  ((u64)entry->type << 32);
-			pack_bytes(&reply->words[2],
-				   (const unsigned char *)name,
-				   str_len(name) + 1);
-			return;
-		}
-		current++;
-	}
-	reply->words[0] = BUNIX_VFS_ERR_NOENT;
-}
-
 static void reply_readdir_buffer(struct rootfs_open *open,
 				 const struct bunix_msg *message,
 				 struct bunix_msg *reply)
@@ -694,8 +656,6 @@ static void forward_open_handle(struct bunix_msg *message,
 					  message->cap, len);
 		reply->words[0] = nread < 0 ? (u64)-1 : 0;
 		reply->words[1] = nread < 0 ? 0 : (u64)nread;
-	} else if (message->type == BUNIX_VFS_READDIR) {
-		reply_readdir(open, message->words[1], reply);
 	} else if (message->type == BUNIX_VFS_READDIR_BUFFER) {
 		reply_readdir_buffer(open, message, reply);
 	} else {
@@ -754,7 +714,6 @@ int main(void)
 		case BUNIX_VFS_STAT:
 		case BUNIX_VFS_STAT_META:
 		case BUNIX_VFS_READ_FILE_BUFFER:
-		case BUNIX_VFS_READDIR:
 		case BUNIX_VFS_READDIR_BUFFER:
 		case BUNIX_VFS_CLOSE:
 			forward_open_handle(&message, &reply);

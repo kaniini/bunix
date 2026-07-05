@@ -1557,7 +1557,6 @@ int main(void)
 			}
 			break;
 		}
-		case BUNIX_VFS_READDIR:
 		case BUNIX_VFS_READDIR_BUFFER: {
 			struct vfs_open *open = open_from_handle(message.words[0]);
 			const struct rootfs_entry *directory =
@@ -1569,9 +1568,8 @@ int main(void)
 				(void)forward_remote_handle(open, &message, &reply);
 				break;
 			}
-			if (message.type == BUNIX_VFS_READDIR_BUFFER &&
-			    (message.cap == 0 ||
-			     (message.cap_rights & BUNIX_RIGHT_SEND) == 0)) {
+			if (message.cap == 0 ||
+			    (message.cap_rights & BUNIX_RIGHT_SEND) == 0) {
 				reply.words[0] = (u64)-1;
 				break;
 			}
@@ -1590,26 +1588,20 @@ int main(void)
 			reply.words[0] = 0;
 			reply.words[1] = (message.words[1] + 1) |
 					 ((u64)child->type << 32);
-			if (message.type == BUNIX_VFS_READDIR_BUFFER) {
-				const u64 name_len = str_len(name);
-				u64 written = name_len;
+			const u64 name_len = str_len(name);
+			u64 written = name_len;
 
-				if (written > message.words[3]) {
-					written = message.words[3];
-				}
-				if (written != 0 &&
-				    bunix_buffer_write(message.cap,
-						       message.words[2],
-						       name, written) != 0) {
-					reply.words[0] = (u64)-1;
-				} else {
-					reply.words[2] = name_len;
-					reply.words[3] = written;
-				}
+			if (written > message.words[3]) {
+				written = message.words[3];
+			}
+			if (written != 0 &&
+			    bunix_buffer_write(message.cap,
+					       message.words[2],
+					       name, written) != 0) {
+				reply.words[0] = (u64)-1;
 			} else {
-				pack_bytes(&reply.words[2],
-					   (const unsigned char *)name,
-					   str_len(name) + 1);
+				reply.words[2] = name_len;
+				reply.words[3] = written;
 			}
 			break;
 		}
