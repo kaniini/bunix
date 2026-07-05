@@ -133,8 +133,9 @@ through a writable tmpfs-backed upper layer.
 This is intentionally not a real disk filesystem yet. The useful primitive is
 the capability-shaped chain `init/proc -> names -> vfs -> unionfs -> block +
 tmpfs`, which is the path that can later point at a real disk image and then at
-an Alpine root filesystem format. The generated rootfs image uses 256-byte path
-fields, matching the current VFS path budget for deeper Alpine-style trees.
+an Alpine root filesystem format. Runtime Linux/VFS path handling follows the
+Linux 4096-byte `PATH_MAX` budget, while the generated rootfs image still uses
+256-byte path fields until the on-disk image format is widened.
 
 `procfs.server` is a separate user-space server that dynamically attaches
 itself to VFS as the `/proc` translator. It currently exposes `/proc/kthreads`,
@@ -208,11 +209,11 @@ returns the child PID with a Linux wait status.
 Linux `execve` dynamically copies argv and envp strings within the current
 64 KiB exec stack budget, builds the full replacement stack image, and writes it
 into the new task image instead of using tiny fixed argv/env arrays. Linux
-`execve` accepts executable paths up to the current 256-byte VFS path budget,
+`execve` accepts executable paths up to the 4096-byte Linux `PATH_MAX` budget,
 and `getcwd` returns cwd strings through shared-buffer transport instead of the
 inline IPC word path.
 Proc's native executable registry and bootstrap's `/etc/execs` and
-`/etc/spawns` parsing use the same 256-byte path budget, so native task spawns
+`/etc/spawns` parsing use the same runtime path budget, so native task spawns
 can exercise long VFS paths as well.
 The login program now execs the shell with `HOME`, `USER`, `LOGNAME`, `SHELL`,
 `PATH`, and `TERM`, and changes into the account home directory before execing
@@ -344,7 +345,7 @@ make test-shell
 `make test-shell` builds the default dynamic-BusyBox rootfs, drives the serial
 console, logs in, runs BusyBox applets,
 checks pipes and file reads, verifies login/session-visible `uptime`, checks
-`id`, `stat`, `ls`, `cat`, append writes, shell `cd`/`pwd`, backspace, Ctrl-C,
+`id`, `stat`, `ls`, `cat`, append writes, long tmpfs paths, shell `cd`/`pwd`, backspace, Ctrl-C,
 permission denial for `/secret.txt`, and confirms that exiting the shell returns
 to the login prompt. It also checks writable-root unionfs behavior and live
 `/proc/mounts` output.
