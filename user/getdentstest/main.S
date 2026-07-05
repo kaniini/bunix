@@ -50,7 +50,7 @@ _start:
 	testq %rax, %rax
 	jne fail
 
-	movq $400, %r13
+	movq $512, %r13
 create_loop:
 	movq $257, %rax
 	movq $-100, %rdi
