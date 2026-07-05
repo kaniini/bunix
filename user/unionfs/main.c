@@ -399,6 +399,42 @@ static int service_path_call(u64 service, u64 type, const char *path, u64 word3,
 	return result;
 }
 
+static int service_symlink_call(u64 service, const char *target,
+				const char *path, u64 word3,
+				struct bunix_msg *reply)
+{
+	const char root[] = "/";
+	const u64 target_len = str_len(target) + 1;
+	const u64 cwd_len = 2;
+	const u64 path_len = str_len(path) + 1;
+	const long buffer = bunix_buffer_create(target_len + cwd_len +
+						path_len);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_SYMLINK_BUFFER,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.words = { target_len, cwd_len, path_len, word3 },
+	};
+	int result = -1;
+
+	if (buffer < 0 ||
+	    bunix_buffer_write((u64)buffer, 0, target, target_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, target_len, root, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, target_len + cwd_len, path,
+			       path_len) != 0) {
+		if (buffer >= 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	request.cap = (u64)buffer;
+	if (bunix_ipc_call(service, &request, reply) == 0) {
+		result = 0;
+	}
+	bunix_handle_close((u64)buffer);
+	return result;
+}
+
 static int lower_path_call(u64 type, const char *relative, u64 word3,
 			   const struct bunix_msg *source,
 			   struct bunix_msg *reply)
@@ -1050,6 +1086,26 @@ static void reply_mutate(struct bunix_msg *message, struct bunix_msg *reply,
 	}
 }
 
+static void reply_symlink(struct bunix_msg *message, struct bunix_msg *reply,
+			  const char *target, const char *path)
+{
+	char relative[UNIONFS_MAX_PATH];
+	char upper[UNIONFS_MAX_PATH];
+
+	if (mounted_relative_path(path, relative) != 0 ||
+	    compose_upper_path(relative, upper) != 0 ||
+	    materialize_upper_parent(relative, message->words[3]) != 0 ||
+	    service_symlink_call(upper_service, target, upper,
+				 message->words[3] & 0xffffffff,
+				 reply) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (reply->words[0] == 0) {
+		whiteout_remove(relative);
+	}
+}
+
 static int upper_child_exists(const char *directory, const char *name)
 {
 	char relative[UNIONFS_MAX_PATH];
@@ -1416,6 +1472,31 @@ int main(void)
 				reply_mutate(&message, &reply, path);
 			}
 			break;
+		case BUNIX_VFS_SYMLINK_BUFFER: {
+			char target[UNIONFS_MAX_PATH];
+			char cwd[UNIONFS_MAX_PATH];
+			char input[UNIONFS_MAX_PATH];
+			const u64 target_len = message.words[0];
+			const u64 cwd_len = message.words[1];
+			const u64 path_len = message.words[2];
+
+			if ((message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+			    read_path_buffer_at(message.cap, 0, target_len,
+						target) != 0 ||
+			    read_path_buffer_at(message.cap, target_len,
+						cwd_len, cwd) != 0 ||
+			    read_path_buffer_at(message.cap,
+						target_len + cwd_len,
+						path_len, input) != 0 ||
+			    input[0] != '/' ||
+			    target[0] == '\0') {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+			} else {
+				(void)cwd;
+				reply_symlink(&message, &reply, target, input);
+			}
+			break;
+		}
 		case BUNIX_VFS_TRUNCATE:
 			if (message.cap != 0) {
 				if (read_resolved_path(&message, path) != 0) {

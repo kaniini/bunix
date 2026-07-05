@@ -791,6 +791,44 @@ static int forward_mount_buffer_path(struct vfs_mount *mount,
 	return result;
 }
 
+static int forward_mount_symlink_path(struct vfs_mount *mount,
+				      struct bunix_msg *message,
+				      struct bunix_msg *reply,
+				      const char *target,
+				      const char *path)
+{
+	const char root[] = "/";
+	const u64 target_len = str_len(target) + 1;
+	const u64 cwd_len = 2;
+	const u64 path_len = str_len(path) + 1;
+	const long buffer = bunix_buffer_create(target_len + cwd_len +
+						path_len);
+	struct bunix_msg forwarded = *message;
+	int result;
+
+	if (buffer < 0 ||
+	    bunix_buffer_write((u64)buffer, 0, target, target_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, target_len, root, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, target_len + cwd_len, path,
+			       path_len) != 0) {
+		if (buffer >= 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		reply->words[0] = (u64)-1;
+		return -1;
+	}
+
+	forwarded.cap = (u64)buffer;
+	forwarded.cap_rights = BUNIX_RIGHT_RECV;
+	forwarded.words[0] = target_len;
+	forwarded.words[1] = cwd_len;
+	forwarded.words[2] = path_len;
+	forwarded.words[3] &= 0xffffffff;
+	result = forward_mount_path(mount, &forwarded, reply, path);
+	bunix_handle_close((u64)buffer);
+	return result;
+}
+
 static int forward_remote_handle(struct vfs_open *open,
 				 struct bunix_msg *message,
 				 struct bunix_msg *reply)
@@ -1069,6 +1107,21 @@ static void vfs_mutate_path(struct bunix_msg *message, struct bunix_msg *reply,
 	reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 }
 
+static void vfs_symlink_path(struct bunix_msg *message,
+			     struct bunix_msg *reply,
+			     const char *target,
+			     const char *path)
+{
+	struct vfs_mount *mount = mount_for_path(path);
+
+	if (mount != 0) {
+		(void)forward_mount_symlink_path(mount, message, reply,
+						 target, path);
+		return;
+	}
+	reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+}
+
 static void vfs_readlink_path(struct bunix_msg *message,
 			      struct bunix_msg *reply, const char *path)
 {
@@ -1245,6 +1298,34 @@ int main(void)
 				break;
 			}
 			vfs_mutate_path(&message, &reply, path);
+			break;
+		}
+		case BUNIX_VFS_SYMLINK_BUFFER: {
+			char target[VFS_MAX_PATH];
+			char cwd[VFS_MAX_PATH];
+			char input[VFS_MAX_PATH];
+			char path[VFS_MAX_PATH];
+			const u64 target_len = message.words[0];
+			const u64 cwd_len = message.words[1];
+			const u64 path_len = message.words[2];
+			const u64 base_handle = message.words[3] >> 32;
+			u64 error = (u64)-1;
+
+			if ((message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+			    read_path_buffer_at(message.cap, 0, target_len,
+						target) != 0 ||
+			    read_path_buffer_at(message.cap, target_len,
+						cwd_len, cwd) != 0 ||
+			    read_path_buffer_at(message.cap,
+						target_len + cwd_len,
+						path_len, input) != 0 ||
+			    target[0] == '\0' ||
+			    vfs_resolve_with_base(base_handle, cwd, input,
+						  path, &error) != 0) {
+				reply.words[0] = error;
+				break;
+			}
+			vfs_symlink_path(&message, &reply, target, path);
 			break;
 		}
 		case BUNIX_VFS_CHMOD: {

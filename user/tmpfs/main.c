@@ -177,6 +177,25 @@ static int read_resolved_path(const struct bunix_msg *message, char *path)
 	return -1;
 }
 
+static int read_symlink_buffer(const struct bunix_msg *message, char *target,
+			       char *path)
+{
+	char cwd[TMPFS_MAX_PATH];
+	const u64 target_len = message->words[0];
+	const u64 cwd_len = message->words[1];
+	const u64 path_len = message->words[2];
+
+	if ((message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    read_path_buffer_at(message->cap, 0, target_len, target) != 0 ||
+	    read_path_buffer_at(message->cap, target_len, cwd_len, cwd) != 0 ||
+	    read_path_buffer_at(message->cap, target_len + cwd_len,
+				path_len, path) != 0) {
+		return -1;
+	}
+	(void)cwd;
+	return path[0] == '/' && target[0] != '\0' ? 0 : -1;
+}
+
 static struct tmpfs_file *file_find(const char *path)
 {
 	return (struct tmpfs_file *)bunix_tree_get(&files, path);
@@ -395,7 +414,8 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 
 	if (!path_parent_exists(path) || file_find(path) != 0 ||
 	    (type != BUNIX_VFS_TYPE_REGULAR &&
-	     type != BUNIX_VFS_TYPE_DIRECTORY)) {
+	     type != BUNIX_VFS_TYPE_DIRECTORY &&
+	     type != BUNIX_VFS_TYPE_SYMLINK)) {
 		return 0;
 	}
 	file = (struct tmpfs_file *)bunix_calloc(1, sizeof(*file));
@@ -553,6 +573,42 @@ static void stat_dir(struct bunix_msg *reply)
 	reply->words[1] = 0;
 	reply->words[2] = 0777 | ((u64)BUNIX_VFS_TYPE_DIRECTORY << 32);
 	reply->words[3] = 0;
+}
+
+static void reply_readlink(const struct bunix_msg *message,
+			   struct bunix_msg *reply,
+			   const struct tmpfs_file *file)
+{
+	u64 written;
+	const u64 target_len = file != 0 ? file->size : 0;
+	const u64 out_cap = message->words[3] >> 32;
+
+	if (file == 0 || file->type != BUNIX_VFS_TYPE_SYMLINK ||
+	    file->data == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = target_len;
+	if (out_cap == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	written = target_len > out_cap ? out_cap : target_len;
+	if (written != 0 &&
+	    bunix_buffer_write(message->cap, message->words[0] +
+			       message->words[1], file->data,
+			       written) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[2] = target_len;
+	reply->words[3] = written;
 }
 
 static u64 resolve_service(u64 service, unsigned int rights)
@@ -758,8 +814,40 @@ int main(void)
 					   message.words[3] & 0xffffffff);
 			reply.words[0] = file == 0 ? (u64)-1 : 0;
 			break;
+		case BUNIX_VFS_SYMLINK_BUFFER: {
+			char target[TMPFS_MAX_PATH];
+			const u64 task = message.words[3] & 0xffffffff;
+			const u64 target_len = message.words[0];
+
+			if (read_symlink_buffer(&message, target, path) != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			file = parent_file_for_path(path);
+			if (!task_can_access(task, file, 03)) {
+				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
+				break;
+			}
+			file = file_create(path, 0777, BUNIX_VFS_TYPE_SYMLINK,
+					   task);
+			if (file == 0 ||
+			    file_resize(file, target_len) != 0) {
+				if (file != 0) {
+					file_unlink(file);
+				}
+				reply.words[0] = (u64)-1;
+				break;
+			}
+			for (u64 i = 0; i < target_len; i++) {
+				file->data[i] = target[i];
+			}
+			file->size = target_len - 1;
+			reply.words[0] = 0;
+			break;
+		}
 		case BUNIX_VFS_STAT_PATH_META_BUFFER:
 		case BUNIX_VFS_ACCESS_BUFFER:
+		case BUNIX_VFS_READLINK_BUFFER:
 			if (read_resolved_path(&message, path) != 0) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
@@ -771,6 +859,8 @@ int main(void)
 			file = file_find(path);
 			if (file == 0) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+			} else if (message.type == BUNIX_VFS_READLINK_BUFFER) {
+				reply_readlink(&message, &reply, file);
 			} else if (message.type == BUNIX_VFS_ACCESS_BUFFER) {
 				reply.words[0] =
 					task_can_access(message.words[3] &

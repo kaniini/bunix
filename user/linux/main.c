@@ -2226,6 +2226,48 @@ static long linux_vfs_path_call(struct linux_process *process, u64 type,
 					 reply);
 }
 
+static long linux_vfs_symlink_call(struct linux_process *process,
+				   u64 base_handle, const char *target,
+				   const char *path, struct bunix_msg *reply)
+{
+	const u64 target_len = string_len(target) + 1;
+	const u64 cwd_len = string_len(process->cwd) + 1;
+	const u64 path_len = string_len(path) + 1;
+	const u64 len = target_len + cwd_len + path_len;
+	const long path_buffer = bunix_buffer_create(len);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_SYMLINK_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = (u64)path_buffer,
+		.words = { target_len, cwd_len, path_len,
+			   process->bunix_task | (base_handle << 32) },
+	};
+	long result;
+
+	if (path_buffer < 0 || target_len == 0 || cwd_len == 0 ||
+	    path_len == 0 || target_len > LINUX_MAX_PATH ||
+	    cwd_len > LINUX_MAX_PATH || path_len > LINUX_MAX_PATH ||
+	    len > LINUX_MAX_PATH * 3 || base_handle > 0xffffffff ||
+	    bunix_buffer_write((u64)path_buffer, 0, target,
+			       target_len) != 0 ||
+	    bunix_buffer_write((u64)path_buffer, target_len,
+			       process->cwd, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)path_buffer, target_len + cwd_len,
+			       path, path_len) != 0) {
+		if (path_buffer >= 0) {
+			bunix_handle_close((u64)path_buffer);
+		}
+		return -1;
+	}
+
+	result = bunix_ipc_call(LINUX_HANDLE_VFS, &request, reply);
+	bunix_handle_close((u64)path_buffer);
+	return result;
+}
+
 static long linux_vfs_readlink_call(struct linux_process *process,
 				    u64 base_handle, const char *path,
 				    u64 out_size, u64 syscall_buffer,
@@ -2648,6 +2690,45 @@ static long linux_mkdirat(struct linux_process *process, u64 dirfd,
 			return linux_vfs_error(reply.words[0]);
 		}
 		return -LINUX_EINVAL;
+	}
+	return 0;
+}
+
+static long linux_symlinkat(struct linux_process *process, u64 dirfd,
+			    u64 target_len, u64 path_len, u64 buffer)
+{
+	char target[LINUX_MAX_PATH];
+	char path[LINUX_MAX_PATH];
+	struct bunix_msg reply = {
+		.words = { 0, 0, 0, 0 },
+	};
+	u64 base_handle;
+	long base_result;
+
+	if (target_len == 0 || path_len == 0 ||
+	    target_len > sizeof(target) || path_len > sizeof(path) ||
+	    buffer == 0 ||
+	    bunix_buffer_read(buffer, 0, target, target_len) != 0 ||
+	    bunix_buffer_read(buffer, target_len, path, path_len) != 0) {
+		return -LINUX_EFAULT;
+	}
+	if (target[target_len - 1] != '\0' ||
+	    path[path_len - 1] != '\0' ||
+	    target[0] == '\0' || path[0] == '\0') {
+		return -LINUX_ENOENT;
+	}
+	base_result = linux_dirfd_base_handle(process, dirfd, path,
+					      &base_handle);
+	if (base_result != 0) {
+		return base_result;
+	}
+	if (linux_vfs_symlink_call(process, base_handle, target, path,
+				   &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (reply.words[0] != 0) {
+			return linux_vfs_error(reply.words[0]);
+		}
+		return -LINUX_EIO;
 	}
 	return 0;
 }
@@ -4484,6 +4565,16 @@ int main(void)
 							    message.words[1],
 							    message.words[2],
 							    message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_SYMLINKAT:
+			reply.words[0] = (u64)linux_symlinkat(process,
+							      message.words[0],
+							      message.words[1],
+							      message.words[2],
+							      message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

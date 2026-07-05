@@ -92,6 +92,7 @@ enum {
 	LINUX_SYSCALL_GETCWD = 79,
 	LINUX_SYSCALL_CHDIR = 80,
 	LINUX_SYSCALL_MKDIR = 83,
+	LINUX_SYSCALL_SYMLINK = 88,
 	LINUX_SYSCALL_CHMOD = 90,
 	LINUX_SYSCALL_FCHMOD = 91,
 	LINUX_SYSCALL_CHOWN = 92,
@@ -153,6 +154,7 @@ enum {
 	LINUX_SYSCALL_MKDIRAT = 258,
 	LINUX_SYSCALL_FCHOWNAT = 260,
 	LINUX_SYSCALL_UNLINKAT = 263,
+	LINUX_SYSCALL_SYMLINKAT = 266,
 	LINUX_SYSCALL_PRLIMIT64 = 302,
 	LINUX_SYSCALL_GETRANDOM = 318,
 	LINUX_SYSCALL_STATX = 332,
@@ -1782,6 +1784,68 @@ static struct shared_buffer *linux_forward_path_buffer(
 	return buffer;
 }
 
+static u64 linux_forward_symlinkat(struct ipc_port *linux,
+				   struct ipc_port *reply_port,
+				   struct ipc_message *request,
+				   const char *target, u64 dirfd,
+				   const char *linkpath)
+{
+	struct shared_buffer *buffer;
+	struct ipc_message reply;
+	u64 target_len;
+	u64 link_len;
+	u64 total_len;
+	int rc;
+
+	if (target == 0 || linkpath == 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	rc = copy_cstr_from_user_errno((char *)syscall_copy_buffer, target,
+				       LINUX_MAX_SYSCALL_BUFFER);
+	if (rc != 0) {
+		return (u64)rc;
+	}
+	target_len = str_len((const char *)syscall_copy_buffer) + 1;
+	if (target_len == 1) {
+		return (u64)-LINUX_ENOENT;
+	}
+	if (target_len >= LINUX_MAX_SYSCALL_BUFFER) {
+		return (u64)-LINUX_ENAMETOOLONG;
+	}
+	rc = copy_cstr_from_user_errno((char *)syscall_copy_buffer +
+				       target_len, linkpath,
+				       LINUX_MAX_SYSCALL_BUFFER -
+				       target_len);
+	if (rc != 0) {
+		return (u64)rc;
+	}
+	link_len = str_len((const char *)syscall_copy_buffer + target_len) + 1;
+	if (link_len == 1) {
+		return (u64)-LINUX_ENOENT;
+	}
+	total_len = target_len + link_len;
+	buffer = buffer_create(total_len);
+	if (buffer == 0 ||
+	    buffer_write(buffer, 0, syscall_copy_buffer, total_len) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOMEM;
+	}
+	request->type = LINUX_SYSCALL_SYMLINKAT;
+	request->words[0] = dirfd;
+	request->words[1] = target_len;
+	request->words[2] = link_len;
+	request->words[3] = 0;
+	request->cap_type = IPC_CAP_BUFFER;
+	request->cap_rights = TASK_RIGHT_RECV;
+	request->cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	buffer_release(buffer);
+	return reply.words[0];
+}
+
 static u64 linux_forward_mount(struct ipc_port *linux,
 			       struct ipc_port *reply_port,
 			       struct ipc_message *request,
@@ -2875,6 +2939,8 @@ static const char *linux_syscall_name(u64 number)
 		return "lchown";
 	case LINUX_SYSCALL_UNLINK:
 		return "unlink";
+	case LINUX_SYSCALL_SYMLINK:
+		return "symlink";
 	case LINUX_SYSCALL_NANOSLEEP:
 		return "nanosleep";
 	case LINUX_SYSCALL_DUP:
@@ -3009,6 +3075,8 @@ static const char *linux_syscall_name(u64 number)
 		return "fchownat";
 	case LINUX_SYSCALL_UNLINKAT:
 		return "unlinkat";
+	case LINUX_SYSCALL_SYMLINKAT:
+		return "symlinkat";
 	case LINUX_SYSCALL_PRLIMIT64:
 		return "prlimit64";
 	case LINUX_SYSCALL_GETRANDOM:
@@ -4132,6 +4200,16 @@ poll_again:
 		}
 		buffer_release(buffer);
 		return result;
+	}
+	case LINUX_SYSCALL_SYMLINK:
+	case LINUX_SYSCALL_SYMLINKAT: {
+		return linux_forward_symlinkat(linux, reply_port, &request,
+					       (const char *)arg0,
+					       number == LINUX_SYSCALL_SYMLINK ?
+					       (u64)-100 : arg1,
+					       number == LINUX_SYSCALL_SYMLINK ?
+					       (const char *)arg1 :
+					       (const char *)arg2);
 	}
 	case LINUX_SYSCALL_STAT:
 	case LINUX_SYSCALL_LSTAT:
