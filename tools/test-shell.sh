@@ -770,4 +770,43 @@ while ! awk '{ sub(/\r$/, "") } /^0:0$/ { found = 1 } END { exit found ? 0 : 1 }
 	fi
 	sleep 1
 done
+
+login_prompts_before_long=$(grep -F -c "login: " "$log" 2>/dev/null || true)
+i=0
+while [ "$(grep -F -c "login: " "$log" 2>/dev/null || true)" -le "$login_prompts_before_long" ]; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "login prompt did not return after root shell exit" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+long_root_prompts_before=$(grep -F -c "~ # " "$log" 2>/dev/null || true)
+printf 'administrator_with_long_name\npassword_longer_than_sixteen\n' >&3
+i=0
+while [ "$(grep -F -c "~ # " "$log" 2>/dev/null || true)" -le "$long_root_prompts_before" ]; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "long login shell prompt did not appear" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+printf 'busybox id\nenv\nexit\n' >&3
+for expected in "uid=0(root)" "USER=administrator_with_long_name" "LOGNAME=administrator_with_long_name"; do
+	i=0
+	while ! grep -F "$expected" "$log" >/dev/null 2>&1; do
+		i=$((i + 1))
+		if [ "$i" -gt 45 ]; then
+			echo "long login regression missing: $expected" >&2
+			tail -n 180 "$log" >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+done
 echo "shell regression ok"

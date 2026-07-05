@@ -6,9 +6,9 @@ enum {
 	USER_DEFAULT_GROUP_CAPACITY = 4,
 	USER_WIRE_GROUPS = 2,
 	USER_ID_KEEP = (u64)-1,
-	USER_ACCOUNT_BUFFER = 2048,
-	USER_NAME_MAX = 16,
-	USER_PASSWORD_MAX = 16,
+	USER_ACCOUNT_BUFFER = 16384,
+	USER_NAME_MAX = 256,
+	USER_PASSWORD_MAX = 512,
 	USER_TTY_CONSOLE = 1,
 };
 
@@ -713,6 +713,23 @@ static long login_groups_lookup_buffer(const char *name, u64 name_len,
 	return 0;
 }
 
+static long read_buffer_text(u64 buffer, u64 offset, u64 len,
+			     char *out, u64 out_size);
+
+static long login_groups_lookup_name_buffer(u64 name_buffer, u64 name_len,
+					    u64 primary_gid,
+					    u64 output_buffer,
+					    struct bunix_msg *reply)
+{
+	char name[USER_NAME_MAX];
+
+	if (read_buffer_text(name_buffer, 0, name_len, name, sizeof(name)) != 0) {
+		return -1;
+	}
+	return login_groups_lookup_buffer(name, name_len, primary_gid,
+					  output_buffer, reply);
+}
+
 static long credential_register(u64 task)
 {
 	struct user_credential *credential;
@@ -1033,24 +1050,33 @@ static u64 text_len(const char *text)
 	return len;
 }
 
-static long credential_auth_login(u64 name_left, u64 name_right,
-				  u64 password_left, u64 password_right,
-				  struct bunix_msg *reply)
+static long read_buffer_text(u64 buffer, u64 offset, u64 len,
+			     char *out, u64 out_size)
 {
-	char name[USER_NAME_MAX];
-	char password[USER_PASSWORD_MAX];
-	struct user_account account = { 0, 0, 0 };
-	u64 name_len;
-	u64 password_len;
+	if (buffer == 0 || out == 0 || out_size == 0 ||
+	    len >= out_size ||
+	    bunix_buffer_read(buffer, offset, out, len) != 0) {
+		return -1;
+	}
+	out[len] = '\0';
+	for (u64 i = 0; i < len; i++) {
+		if (out[i] == '\0') {
+			return -1;
+		}
+	}
+	return 0;
+}
 
-	if (reply == 0) {
+static long credential_auth_login_text(const char *name, u64 name_len,
+				       const char *password, u64 password_len,
+				       struct bunix_msg *reply)
+{
+	struct user_account account = { 0, 0, 0 };
+
+	if (reply == 0 || name == 0 || password == 0) {
 		return -1;
 	}
 
-	unpack_text(name, sizeof(name), name_left, name_right);
-	unpack_text(password, sizeof(password), password_left, password_right);
-	name_len = text_len(name);
-	password_len = text_len(password);
 	if (name_len == 0 ||
 	    account_lookup_name(name, name_len, &account) != 0 ||
 	    !account.found ||
@@ -1061,6 +1087,36 @@ static long credential_auth_login(u64 name_left, u64 name_right,
 	reply->words[1] = account.uid;
 	reply->words[2] = account.gid;
 	return 0;
+}
+
+static long credential_auth_login(u64 name_left, u64 name_right,
+				  u64 password_left, u64 password_right,
+				  struct bunix_msg *reply)
+{
+	char name[USER_NAME_MAX];
+	char password[USER_PASSWORD_MAX];
+
+	unpack_text(name, sizeof(name), name_left, name_right);
+	unpack_text(password, sizeof(password), password_left, password_right);
+	return credential_auth_login_text(name, text_len(name),
+					  password, text_len(password), reply);
+}
+
+static long credential_auth_login_buffer(u64 buffer, u64 name_len,
+					 u64 password_len,
+					 struct bunix_msg *reply)
+{
+	char name[USER_NAME_MAX];
+	char password[USER_PASSWORD_MAX];
+	const u64 password_offset = name_len;
+
+	if (read_buffer_text(buffer, 0, name_len, name, sizeof(name)) != 0 ||
+	    read_buffer_text(buffer, password_offset, password_len, password,
+			     sizeof(password)) != 0) {
+		return -1;
+	}
+	return credential_auth_login_text(name, name_len, password,
+					  password_len, reply);
 }
 
 static struct user_session *session_find(u64 session_id)
@@ -1298,6 +1354,15 @@ int main(void)
 								   message.words[3],
 								   &reply);
 			break;
+		case BUNIX_USER_AUTH_LOGIN_BUFFER:
+			reply.words[0] =
+				(message.cap_rights & BUNIX_RIGHT_RECV) != 0 ?
+				(u64)credential_auth_login_buffer(message.cap,
+								  message.words[0],
+								  message.words[1],
+								  &reply) :
+				(u64)-1;
+			break;
 		case BUNIX_USER_LOGIN_GROUPS: {
 			char name[USER_NAME_MAX];
 
@@ -1324,6 +1389,18 @@ int main(void)
 				(u64)-1;
 			break;
 		}
+		case BUNIX_USER_LOGIN_GROUPS_NAME_BUFFER:
+			reply.words[0] =
+				(message.cap_rights & (BUNIX_RIGHT_RECV |
+						       BUNIX_RIGHT_SEND)) ==
+				(BUNIX_RIGHT_RECV | BUNIX_RIGHT_SEND) ?
+				(u64)login_groups_lookup_name_buffer(message.cap,
+								     message.words[0],
+								     message.words[1],
+								     message.cap,
+								     &reply) :
+				(u64)-1;
+			break;
 		case BUNIX_USER_SESSION_BEGIN:
 			reply.words[0] = (u64)session_begin(message.words[0],
 							    message.words[1],

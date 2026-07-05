@@ -16,6 +16,8 @@ enum {
 	LINUX_ECHO = 0000010,
 	LINUX_TERM_LFLAG = 12,
 	LOGIN_MAX_GROUPS = 64,
+	LOGIN_NAME_MAX = 256,
+	LOGIN_PASSWORD_MAX = 512,
 };
 
 struct startup_aux {
@@ -111,18 +113,6 @@ static void exit_group(u64 status)
 	}
 }
 
-static void pack_text(u64 *words, const char *text)
-{
-	words[0] = 0;
-	words[1] = 0;
-	for (u64 i = 0; i < 16 && text[i] != '\0'; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)(unsigned char)text[i]) << shift;
-	}
-}
-
 static void strip_line(char *text, u64 len)
 {
 	for (u64 i = 0; i < len; i++) {
@@ -134,6 +124,16 @@ static void strip_line(char *text, u64 len)
 	if (len != 0) {
 		text[len - 1] = '\0';
 	}
+}
+
+static u64 text_len(const char *text)
+{
+	u64 len = 0;
+
+	while (text[len] != '\0') {
+		len++;
+	}
+	return len;
 }
 
 static void copy_text(char *out, u64 out_size, const char *text)
@@ -221,58 +221,73 @@ static u64 resolve_service(u64 names, u64 service, unsigned int rights)
 static long authenticate(u64 user, const char *name, const char *password,
 			 u64 *uid, u64 *gid)
 {
+	const u64 name_len = text_len(name);
+	const u64 password_len = text_len(password);
+	const u64 buffer_size = name_len + password_len;
+	const long buffer = bunix_buffer_create(buffer_size == 0 ? 1 :
+						buffer_size);
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_USER,
-		.type = BUNIX_USER_AUTH_LOGIN,
+		.type = BUNIX_USER_AUTH_LOGIN_BUFFER,
 		.sender = 0,
-		.cap_rights = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
 		.reply = 0,
-		.cap = 0,
-		.words = { 0, 0, 0, 0 },
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { name_len, password_len, 0, 0 },
 	};
 	struct bunix_msg reply;
 
-	pack_text(&request.words[0], name);
-	pack_text(&request.words[2], password);
+	if (uid == 0 || gid == 0 || name_len == 0 || buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, name, name_len) != 0 ||
+	    (password_len != 0 &&
+	     bunix_buffer_write((u64)buffer, name_len, password,
+				password_len) != 0)) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
 	if (user == 0 ||
 	    bunix_ipc_call(user, &request, &reply) != 0 ||
-	    reply.words[0] != 0 ||
-	    uid == 0 ||
-	    gid == 0) {
+	    reply.words[0] != 0) {
+		bunix_handle_close((u64)buffer);
 		return -1;
 	}
 
 	*uid = reply.words[1];
 	*gid = reply.words[2];
+	bunix_handle_close((u64)buffer);
 	return 0;
 }
 
 static long login_groups(u64 user, const char *name, u64 gid, u64 *count,
 			 unsigned int *groups)
 {
-	u64 words[2];
-	const long buffer = bunix_buffer_create(LOGIN_MAX_GROUPS *
-						sizeof(*groups));
+	const u64 name_len = text_len(name);
+	const u64 group_bytes = LOGIN_MAX_GROUPS * sizeof(*groups);
+	const u64 buffer_size = name_len > group_bytes ? name_len :
+				group_bytes;
+	const long buffer = bunix_buffer_create(buffer_size == 0 ? 1 :
+						buffer_size);
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_USER,
-		.type = BUNIX_USER_LOGIN_GROUPS_BUFFER,
+		.type = BUNIX_USER_LOGIN_GROUPS_NAME_BUFFER,
 		.sender = 0,
-		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_SEND |
+			      BUNIX_RIGHT_DUP,
 		.reply = 0,
 		.cap = (u64)buffer,
-		.words = { 0, 0, gid, 0 },
+		.words = { name_len, gid, 0, 0 },
 	};
 	struct bunix_msg reply;
 
-	if (count == 0 || groups == 0 || buffer <= 0) {
+	if (count == 0 || groups == 0 || name_len == 0 || buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, name, name_len) != 0) {
 		if (buffer > 0) {
 			bunix_handle_close((u64)buffer);
 		}
 		return -1;
 	}
-	pack_text(words, name);
-	request.words[0] = words[0];
-	request.words[1] = words[1];
 	if (user == 0 ||
 	    bunix_ipc_call(user, &request, &reply) != 0 ||
 	    reply.words[0] != 0 ||
@@ -348,10 +363,10 @@ static long exec_shell(const char *name, u64 uid)
 {
 	char path[] = "/bin/sh";
 	char *argv[] = { path, 0 };
-	char home[48];
-	char home_path[40];
-	char user[32];
-	char logname[40];
+	char home[LOGIN_NAME_MAX + 16];
+	char home_path[LOGIN_NAME_MAX + 8];
+	char user[LOGIN_NAME_MAX + 8];
+	char logname[LOGIN_NAME_MAX + 12];
 	char *shell_env[7];
 
 	make_login_env(name, uid, home, sizeof(home), user, sizeof(user),
@@ -414,8 +429,8 @@ static long session_end(u64 user, u64 session_id)
 int main(int argc, char **argv, char **envp)
 {
 	struct startup_aux aux;
-	char name[16];
-	char password[16];
+	char name[LOGIN_NAME_MAX];
+	char password[LOGIN_PASSWORD_MAX];
 	u64 uid = 0;
 	u64 gid = 0;
 	u64 group_count = 0;
