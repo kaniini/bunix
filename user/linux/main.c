@@ -2282,10 +2282,10 @@ static long linux_vfs_symlink_call(struct linux_process *process,
 	return result;
 }
 
-static long linux_vfs_rename_call(struct linux_process *process,
-				  u64 old_base, const char *old_path,
-				  u64 new_base, const char *new_path, u64 flags,
-				  struct bunix_msg *reply)
+static long linux_vfs_two_path_call(struct linux_process *process, u64 type,
+				    u64 old_base, const char *old_path,
+				    u64 new_base, const char *new_path,
+				    u64 flags, struct bunix_msg *reply)
 {
 	const u64 old_cwd_len = string_len(process->cwd) + 1;
 	const u64 old_path_len = string_len(old_path) + 1;
@@ -2296,7 +2296,7 @@ static long linux_vfs_rename_call(struct linux_process *process,
 	const long path_buffer = bunix_buffer_create(len);
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_RENAME_BUFFER,
+		.type = (unsigned int)type,
 		.sender = 0,
 		.cap_rights = BUNIX_RIGHT_RECV,
 		.reply = 0,
@@ -2334,6 +2334,16 @@ static long linux_vfs_rename_call(struct linux_process *process,
 	result = bunix_ipc_call(LINUX_HANDLE_VFS, &request, reply);
 	bunix_handle_close((u64)path_buffer);
 	return result;
+}
+
+static long linux_vfs_rename_call(struct linux_process *process,
+				  u64 old_base, const char *old_path,
+				  u64 new_base, const char *new_path, u64 flags,
+				  struct bunix_msg *reply)
+{
+	return linux_vfs_two_path_call(process, BUNIX_VFS_RENAME_BUFFER,
+				       old_base, old_path, new_base, new_path,
+				       flags, reply);
 }
 
 static long linux_vfs_readlink_call(struct linux_process *process,
@@ -2921,6 +2931,55 @@ static long linux_renameat2(struct linux_process *process, u64 olddirfd,
 	}
 	if (linux_vfs_rename_call(process, old_base, old_path, new_base,
 				  new_path, flags, &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
+	}
+	return 0;
+}
+
+static long linux_linkat(struct linux_process *process, u64 olddirfd,
+			 u64 newdirfd, u64 old_len, u64 new_len, u64 flags,
+			 u64 buffer)
+{
+	char old_path[LINUX_MAX_PATH];
+	char new_path[LINUX_MAX_PATH];
+	struct bunix_msg reply = {
+		.words = { 0, 0, 0, 0 },
+	};
+	u64 old_base;
+	u64 new_base;
+	long base_result;
+
+	if (flags != 0) {
+		return -LINUX_EINVAL;
+	}
+	if (old_len == 0 || new_len == 0 ||
+	    old_len > sizeof(old_path) || new_len > sizeof(new_path) ||
+	    buffer == 0 ||
+	    bunix_buffer_read(buffer, 0, old_path, old_len) != 0 ||
+	    bunix_buffer_read(buffer, old_len, new_path, new_len) != 0) {
+		return -LINUX_EFAULT;
+	}
+	if (old_path[old_len - 1] != '\0' ||
+	    new_path[new_len - 1] != '\0' ||
+	    old_path[0] == '\0' || new_path[0] == '\0') {
+		return -LINUX_ENOENT;
+	}
+	base_result = linux_dirfd_base_handle(process, olddirfd, old_path,
+					      &old_base);
+	if (base_result != 0) {
+		return base_result;
+	}
+	base_result = linux_dirfd_base_handle(process, newdirfd, new_path,
+					      &new_base);
+	if (base_result != 0) {
+		return base_result;
+	}
+	if (linux_vfs_two_path_call(process, BUNIX_VFS_LINK_BUFFER, old_base,
+				    old_path, new_base, new_path, flags,
+				    &reply) != 0) {
 		return -LINUX_EIO;
 	}
 	if (reply.words[0] != 0) {
@@ -4819,6 +4878,16 @@ int main(void)
 							      message.words[1],
 							      message.words[2],
 							      message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_LINK:
+		case BUNIX_LINUX_LINKAT:
+			reply.words[0] = (u64)linux_linkat(
+				process, message.words[0], message.words[1],
+				message.words[2], message.words[3] & 0xffffffff,
+				message.words[3] >> 32, message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

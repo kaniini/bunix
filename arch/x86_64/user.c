@@ -82,6 +82,7 @@ enum {
 	LINUX_SYSCALL_TRUNCATE = 76,
 	LINUX_SYSCALL_FTRUNCATE = 77,
 	LINUX_SYSCALL_RMDIR = 84,
+	LINUX_SYSCALL_LINK = 86,
 	LINUX_SYSCALL_UNLINK = 87,
 	LINUX_SYSCALL_SENDFILE = 40,
 	LINUX_SYSCALL_SOCKET = 41,
@@ -157,6 +158,7 @@ enum {
 	LINUX_SYSCALL_MKDIRAT = 258,
 	LINUX_SYSCALL_MKNODAT = 259,
 	LINUX_SYSCALL_FCHOWNAT = 260,
+	LINUX_SYSCALL_LINKAT = 265,
 	LINUX_SYSCALL_RENAMEAT = 264,
 	LINUX_SYSCALL_UNLINKAT = 263,
 	LINUX_SYSCALL_SYMLINKAT = 266,
@@ -1875,12 +1877,12 @@ static u64 linux_forward_symlinkat(struct ipc_port *linux,
 	return reply.words[0];
 }
 
-static u64 linux_forward_renameat2(struct ipc_port *linux,
-				   struct ipc_port *reply_port,
-				   struct ipc_message *request,
-				   u64 olddirfd, const char *oldpath,
-				   u64 newdirfd, const char *newpath,
-				   u64 flags)
+static u64 linux_forward_two_path_at(struct ipc_port *linux,
+				     struct ipc_port *reply_port,
+				     struct ipc_message *request,
+				     u32 type, u64 olddirfd,
+				     const char *oldpath, u64 newdirfd,
+				     const char *newpath, u64 flags)
 {
 	struct shared_buffer *buffer;
 	struct ipc_message reply;
@@ -1926,7 +1928,7 @@ static u64 linux_forward_renameat2(struct ipc_port *linux,
 		buffer_release(buffer);
 		return (u64)-LINUX_ENOMEM;
 	}
-	request->type = LINUX_SYSCALL_RENAMEAT2;
+	request->type = type;
 	request->words[0] = olddirfd;
 	request->words[1] = newdirfd;
 	request->words[2] = old_len;
@@ -1940,6 +1942,18 @@ static u64 linux_forward_renameat2(struct ipc_port *linux,
 	}
 	buffer_release(buffer);
 	return reply.words[0];
+}
+
+static u64 linux_forward_renameat2(struct ipc_port *linux,
+				   struct ipc_port *reply_port,
+				   struct ipc_message *request,
+				   u64 olddirfd, const char *oldpath,
+				   u64 newdirfd, const char *newpath,
+				   u64 flags)
+{
+	return linux_forward_two_path_at(linux, reply_port, request,
+					 LINUX_SYSCALL_RENAMEAT2, olddirfd,
+					 oldpath, newdirfd, newpath, flags);
 }
 
 static u64 linux_forward_mount(struct ipc_port *linux,
@@ -3099,6 +3113,8 @@ static const char *linux_syscall_name(u64 number)
 		return "getsid";
 	case LINUX_SYSCALL_MKNOD:
 		return "mknod";
+	case LINUX_SYSCALL_LINK:
+		return "link";
 	case LINUX_SYSCALL_STATFS:
 		return "statfs";
 	case LINUX_SYSCALL_FSTATFS:
@@ -3175,6 +3191,8 @@ static const char *linux_syscall_name(u64 number)
 		return "mknodat";
 	case LINUX_SYSCALL_FCHOWNAT:
 		return "fchownat";
+	case LINUX_SYSCALL_LINKAT:
+		return "linkat";
 	case LINUX_SYSCALL_RENAMEAT:
 		return "renameat";
 	case LINUX_SYSCALL_UNLINKAT:
@@ -4325,6 +4343,26 @@ poll_again:
 					       number == LINUX_SYSCALL_SYMLINK ?
 					       (const char *)arg1 :
 					       (const char *)arg2);
+	}
+	case LINUX_SYSCALL_LINK:
+	case LINUX_SYSCALL_LINKAT: {
+		const u64 olddirfd = number == LINUX_SYSCALL_LINK ?
+				     (u64)-100 : arg0;
+		const char *oldpath = number == LINUX_SYSCALL_LINK ?
+				      (const char *)arg0 :
+				      (const char *)arg1;
+		const u64 newdirfd = number == LINUX_SYSCALL_LINK ?
+				     (u64)-100 : arg2;
+		const char *newpath = number == LINUX_SYSCALL_LINK ?
+				      (const char *)arg1 :
+				      (const char *)arg3;
+		const u64 flags = number == LINUX_SYSCALL_LINKAT ?
+				  frame->r8 : 0;
+
+		return linux_forward_two_path_at(linux, reply_port, &request,
+						 LINUX_SYSCALL_LINKAT,
+						 olddirfd, oldpath, newdirfd,
+						 newpath, flags);
 	}
 	case LINUX_SYSCALL_RENAME:
 	case LINUX_SYSCALL_RENAMEAT:

@@ -14,18 +14,23 @@ struct tmpfs_root {
 	char *path;
 };
 
-struct tmpfs_file {
-	struct bunix_tree_node node;
-	char *path;
+struct tmpfs_inode {
 	char *data;
 	u64 size;
 	u64 capacity;
 	u64 refs;
-	int deleted;
 	unsigned int type;
 	unsigned int mode;
 	unsigned int uid;
 	unsigned int gid;
+};
+
+struct tmpfs_file {
+	struct bunix_tree_node node;
+	char *path;
+	u64 refs;
+	int deleted;
+	struct tmpfs_inode *inode;
 };
 
 struct tmpfs_open {
@@ -259,7 +264,7 @@ static int path_parent_exists(const char *path)
 		return 1;
 	}
 	file = file_find(parent);
-	return file != 0 && file->type == BUNIX_VFS_TYPE_DIRECTORY;
+	return file != 0 && file->inode->type == BUNIX_VFS_TYPE_DIRECTORY;
 }
 
 static u64 resolve_service(u64 service, unsigned int rights);
@@ -316,9 +321,9 @@ static int task_can_access(u64 task, const struct tmpfs_file *file, u64 mask)
 	if (task == 0 || mask == 0) {
 		return 1;
 	}
-	request.words[1] = file->uid;
-	request.words[2] = file->gid;
-	request.words[3] = ((u64)file->mode << 32) | mask;
+	request.words[1] = file->inode->uid;
+	request.words[2] = file->inode->gid;
+	request.words[3] = ((u64)file->inode->mode << 32) | mask;
 	if (user == 0 ||
 	    bunix_ipc_call(user, &request, &reply) != 0 ||
 	    reply.words[0] != 0) {
@@ -337,7 +342,7 @@ static int task_can_chmod(u64 task, const struct tmpfs_file *file)
 	if (file == 0 || user_credential(task, BUNIX_USER_GETEUID, &euid) != 0) {
 		return 0;
 	}
-	return euid == 0 || euid == file->uid;
+	return euid == 0 || euid == file->inode->uid;
 }
 
 static int task_can_chown(u64 task)
@@ -351,6 +356,17 @@ static int task_can_chown(u64 task)
 	       euid == 0;
 }
 
+static struct tmpfs_inode root_inode = {
+	.data = 0,
+	.size = 0,
+	.capacity = 0,
+	.refs = 1,
+	.type = BUNIX_VFS_TYPE_DIRECTORY,
+	.mode = 0777,
+	.uid = 0,
+	.gid = 0,
+};
+
 static struct tmpfs_file *parent_file_for_path(const char *path)
 {
 	char parent[TMPFS_MAX_PATH];
@@ -362,15 +378,9 @@ static struct tmpfs_file *parent_file_for_path(const char *path)
 		static struct tmpfs_file root = {
 			.node = { 0, 0, 0, 0, 0 },
 			.path = 0,
-			.data = 0,
-			.size = 0,
-			.capacity = 0,
 			.refs = 0,
 			.deleted = 0,
-			.type = BUNIX_VFS_TYPE_DIRECTORY,
-			.mode = 0777,
-			.uid = 0,
-			.gid = 0,
+			.inode = &root_inode,
 		};
 
 		return &root;
@@ -391,6 +401,22 @@ static int directory_is_empty(const char *path)
 	return 1;
 }
 
+static void inode_release(struct tmpfs_inode *inode)
+{
+	if (inode == 0) {
+		return;
+	}
+	if (inode->refs != 0) {
+		inode->refs--;
+	}
+	if (inode->refs == 0) {
+		if (inode->data != 0) {
+			bunix_free(inode->data);
+		}
+		bunix_free(inode);
+	}
+}
+
 static void file_release(struct tmpfs_file *file)
 {
 	if (file == 0) {
@@ -400,9 +426,7 @@ static void file_release(struct tmpfs_file *file)
 		file->refs--;
 	}
 	if (file->refs == 0 && file->deleted) {
-		if (file->data != 0) {
-			bunix_free(file->data);
-		}
+		inode_release(file->inode);
 		bunix_free(file->path);
 		bunix_free(file);
 	}
@@ -452,38 +476,38 @@ static int file_resize(struct tmpfs_file *file, u64 size)
 	if (file == 0) {
 		return -1;
 	}
-	if (size <= file->capacity) {
+	if (size <= file->inode->capacity) {
 		return 0;
 	}
-	capacity = file->capacity == 0 ? 64 : file->capacity;
+	capacity = file->inode->capacity == 0 ? 64 : file->inode->capacity;
 	while (capacity < size) {
 		capacity *= 2;
 	}
-	data = (char *)bunix_realloc(file->data, file->capacity, capacity);
+	data = (char *)bunix_realloc(file->inode->data, file->inode->capacity, capacity);
 	if (data == 0) {
 		return -1;
 	}
-	for (u64 i = file->capacity; i < capacity; i++) {
+	for (u64 i = file->inode->capacity; i < capacity; i++) {
 		data[i] = 0;
 	}
-	file->data = data;
-	file->capacity = capacity;
+	file->inode->data = data;
+	file->inode->capacity = capacity;
 	return 0;
 }
 
 static int file_set_size(struct tmpfs_file *file, u64 size)
 {
-	const u64 old_size = file != 0 ? file->size : 0;
+	const u64 old_size = file != 0 ? file->inode->size : 0;
 
 	if (file == 0 || file_resize(file, size) != 0) {
 		return -1;
 	}
 	if (size > old_size) {
 		for (u64 i = old_size; i < size; i++) {
-			file->data[i] = 0;
+			file->inode->data[i] = 0;
 		}
 	}
-	file->size = size;
+	file->inode->size = size;
 	return 0;
 }
 
@@ -510,20 +534,29 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 		bunix_free(file);
 		return 0;
 	}
+	file->inode = (struct tmpfs_inode *)bunix_calloc(1, sizeof(*file->inode));
+	if (file->inode == 0) {
+		bunix_free(file->path);
+		bunix_free(file);
+		return 0;
+	}
+	file->inode->refs = 1;
 	if (task != 0) {
 		if (user_credential(task, BUNIX_USER_GETEUID, &uid) != 0 ||
 		    user_credential(task, BUNIX_USER_GETEGID, &gid) != 0) {
+			inode_release(file->inode);
 			bunix_free(file->path);
 			bunix_free(file);
 			return 0;
 		}
 	}
-	file->type = (unsigned int)type;
-	file->mode = (unsigned int)(mode & 0777);
-	file->uid = (unsigned int)uid;
-	file->gid = (unsigned int)gid;
+	file->inode->type = (unsigned int)type;
+	file->inode->mode = (unsigned int)(mode & 0777);
+	file->inode->uid = (unsigned int)uid;
+	file->inode->gid = (unsigned int)gid;
 	if (bunix_tree_insert_node(&files, &file->node, file->path,
 				   (u64)file) != 0) {
+		inode_release(file->inode);
 		bunix_free(file->path);
 		bunix_free(file);
 		return 0;
@@ -642,39 +675,72 @@ static void file_unlink(struct tmpfs_file *file)
 	file_release(file);
 }
 
-static int file_clone_to_path(struct tmpfs_file *file, const char *new_path)
+static int file_move_to_path(struct tmpfs_file *file, const char *new_path)
 {
-	struct tmpfs_file *copy;
+	char *old_path;
+	char *path_copy;
 
 	if (file == 0 || new_path == 0 || file_find(new_path) != 0) {
 		return -1;
 	}
-	copy = file_create(new_path, file->mode, file->type, 0);
-	if (copy == 0) {
+	path_copy = str_dup(new_path);
+	if (path_copy == 0) {
 		return -1;
 	}
-	copy->uid = file->uid;
-	copy->gid = file->gid;
-	if (file->size != 0) {
-		if (file_resize(copy, file->size) != 0) {
-			file_unlink(copy);
-			return -1;
-		}
-		for (u64 i = 0; i < file->size; i++) {
-			copy->data[i] = file->data[i];
-		}
-		copy->size = file->size;
+	old_path = file->path;
+	files_remove_file(file);
+	file->path = path_copy;
+	if (bunix_tree_insert_node(&files, &file->node, file->path,
+				   (u64)file) == 0) {
+		bunix_free(old_path);
+		return 0;
 	}
-	file_unlink(file);
+	file->path = old_path;
+	if (bunix_tree_insert_node(&files, &file->node, file->path,
+				   (u64)file) != 0) {
+		file->deleted = 1;
+	}
+	bunix_free(path_copy);
+	return -1;
+}
+
+static int file_link_to_path(struct tmpfs_file *file, const char *new_path)
+{
+	struct tmpfs_file *link;
+
+	if (file == 0 || file->deleted || file->inode == 0 ||
+	    new_path == 0 || file_find(new_path) != 0 ||
+	    !path_parent_exists(new_path) ||
+	    file->inode->type == BUNIX_VFS_TYPE_DIRECTORY) {
+		return -1;
+	}
+	link = (struct tmpfs_file *)bunix_calloc(1, sizeof(*link));
+	if (link == 0) {
+		return -1;
+	}
+	link->path = str_dup(new_path);
+	if (link->path == 0) {
+		bunix_free(link);
+		return -1;
+	}
+	link->inode = file->inode;
+	link->inode->refs++;
+	if (bunix_tree_insert_node(&files, &link->node, link->path,
+				   (u64)link) != 0) {
+		inode_release(link->inode);
+		bunix_free(link->path);
+		bunix_free(link);
+		return -1;
+	}
 	return 0;
 }
 
 static void stat_file(struct bunix_msg *reply, const struct tmpfs_file *file)
 {
 	reply->words[0] = 0;
-	reply->words[1] = file->size;
-	reply->words[2] = file->mode | ((u64)file->type << 32);
-	reply->words[3] = file->uid | ((u64)file->gid << 32);
+	reply->words[1] = file->inode->size;
+	reply->words[2] = file->inode->mode | ((u64)file->inode->type << 32);
+	reply->words[3] = file->inode->uid | ((u64)file->inode->gid << 32);
 }
 
 static void stat_dir(struct bunix_msg *reply)
@@ -690,11 +756,11 @@ static void reply_readlink(const struct bunix_msg *message,
 			   const struct tmpfs_file *file)
 {
 	u64 written;
-	const u64 target_len = file != 0 ? file->size : 0;
+	const u64 target_len = file != 0 ? file->inode->size : 0;
 	const u64 out_cap = message->words[3] >> 32;
 
-	if (file == 0 || file->type != BUNIX_VFS_TYPE_SYMLINK ||
-	    file->data == 0) {
+	if (file == 0 || file->inode->type != BUNIX_VFS_TYPE_SYMLINK ||
+	    file->inode->data == 0) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -712,7 +778,7 @@ static void reply_readlink(const struct bunix_msg *message,
 	written = target_len > out_cap ? out_cap : target_len;
 	if (written != 0 &&
 	    bunix_buffer_write(message->cap, message->words[0] +
-			       message->words[1], file->data,
+			       message->words[1], file->inode->data,
 			       written) != 0) {
 		reply->words[0] = (u64)-1;
 		return;
@@ -882,10 +948,10 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
-			reply.words[1] = file->type == BUNIX_VFS_TYPE_DIRECTORY ?
+			reply.words[1] = file->inode->type == BUNIX_VFS_TYPE_DIRECTORY ?
 					 open_dir(path) : open_file(file);
-			reply.words[2] = file->size;
-			reply.words[3] = file->type;
+			reply.words[2] = file->inode->size;
+			reply.words[3] = file->inode->type;
 			reply.words[0] = reply.words[1] == 0 ? (u64)-1 : 0;
 			break;
 		case BUNIX_VFS_CREATE_BUFFER:
@@ -972,9 +1038,9 @@ int main(void)
 				break;
 			}
 			for (u64 i = 0; i < target_len; i++) {
-				file->data[i] = target[i];
+				file->inode->data[i] = target[i];
 			}
-			file->size = target_len - 1;
+			file->inode->size = target_len - 1;
 			reply.words[0] = 0;
 			break;
 		}
@@ -1023,17 +1089,17 @@ int main(void)
 				reply.words[0] = (u64)-1;
 				break;
 			}
-			if (message.words[1] >= open->file->size) {
+			if (message.words[1] >= open->file->inode->size) {
 				reply.words[0] = 0;
 				reply.words[1] = 0;
 				break;
 			}
-			u64 nread = open->file->size - message.words[1];
+			u64 nread = open->file->inode->size - message.words[1];
 			if (nread > message.words[2]) {
 				nread = message.words[2];
 			}
 			if (bunix_buffer_write(message.cap, 0,
-					       open->file->data + message.words[1],
+					       open->file->inode->data + message.words[1],
 					       nread) != 0) {
 				reply.words[0] = (u64)-1;
 			} else {
@@ -1050,13 +1116,13 @@ int main(void)
 			    file_resize(open->file, message.words[1] +
 					message.words[2]) != 0 ||
 			    bunix_buffer_read(message.cap, 0,
-					      open->file->data + message.words[1],
+					      open->file->inode->data + message.words[1],
 					      message.words[2]) != 0) {
 				reply.words[0] = (u64)-1;
 				break;
 			}
-			if (message.words[1] + message.words[2] > open->file->size) {
-				open->file->size = message.words[1] + message.words[2];
+			if (message.words[1] + message.words[2] > open->file->inode->size) {
+				open->file->inode->size = message.words[1] + message.words[2];
 			}
 			reply.words[0] = 0;
 			reply.words[1] = message.words[2];
@@ -1069,7 +1135,7 @@ int main(void)
 				}
 				file = file_find(path);
 				if (file == 0 ||
-				    file->type != BUNIX_VFS_TYPE_REGULAR) {
+				    file->inode->type != BUNIX_VFS_TYPE_REGULAR) {
 					reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				} else if (!task_can_access(0, file, 02)) {
 					reply.words[0] = BUNIX_VFS_ERR_ACCESS;
@@ -1103,7 +1169,7 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
 				break;
 			}
-			file->mode = (unsigned int)((message.words[3] >> 32) &
+			file->inode->mode = (unsigned int)((message.words[3] >> 32) &
 						    0777);
 			reply.words[0] = 0;
 			break;
@@ -1123,7 +1189,7 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
 				break;
 			}
-			file->mode = (unsigned int)(message.words[1] & 0777);
+			file->inode->mode = (unsigned int)(message.words[1] & 0777);
 			reply.words[0] = 0;
 			break;
 		case BUNIX_VFS_CHOWN_BUFFER:
@@ -1141,10 +1207,10 @@ int main(void)
 				break;
 			}
 			if (message.words[2] != (u64)-1) {
-				file->uid = (unsigned int)message.words[2];
+				file->inode->uid = (unsigned int)message.words[2];
 			}
 			if ((message.words[3] >> 32) != 0xffffffff) {
-				file->gid = (unsigned int)(message.words[3] >> 32);
+				file->inode->gid = (unsigned int)(message.words[3] >> 32);
 			}
 			reply.words[0] = 0;
 			break;
@@ -1163,10 +1229,10 @@ int main(void)
 				break;
 			}
 			if (message.words[1] != (u64)-1) {
-				file->uid = (unsigned int)message.words[1];
+				file->inode->uid = (unsigned int)message.words[1];
 			}
 			if (message.words[2] != (u64)-1) {
-				file->gid = (unsigned int)message.words[2];
+				file->inode->gid = (unsigned int)message.words[2];
 			}
 			reply.words[0] = 0;
 			break;
@@ -1185,7 +1251,7 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
-			if (file->type == BUNIX_VFS_TYPE_DIRECTORY) {
+			if (file->inode->type == BUNIX_VFS_TYPE_DIRECTORY) {
 				reply.words[0] = BUNIX_VFS_ERR_ISDIR;
 				break;
 			}
@@ -1205,7 +1271,7 @@ int main(void)
 			file = file_find(path);
 			if (file == 0) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
-			} else if (file->type != BUNIX_VFS_TYPE_DIRECTORY) {
+			} else if (file->inode->type != BUNIX_VFS_TYPE_DIRECTORY) {
 				reply.words[0] = BUNIX_VFS_ERR_NOTDIR;
 			} else if (!directory_is_empty(path)) {
 				reply.words[0] = (u64)-1;
@@ -1243,7 +1309,7 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
 				break;
 			}
-			if (file->type == BUNIX_VFS_TYPE_DIRECTORY &&
+			if (file->inode->type == BUNIX_VFS_TYPE_DIRECTORY &&
 			    !directory_is_empty(path)) {
 				reply.words[0] = BUNIX_VFS_ERR_NOTEMPTY;
 				break;
@@ -1254,24 +1320,59 @@ int main(void)
 				break;
 			}
 			if (target != 0) {
-				if (target->type == BUNIX_VFS_TYPE_DIRECTORY &&
-				    file->type != BUNIX_VFS_TYPE_DIRECTORY) {
+				if (target->inode->type == BUNIX_VFS_TYPE_DIRECTORY &&
+				    file->inode->type != BUNIX_VFS_TYPE_DIRECTORY) {
 					reply.words[0] = BUNIX_VFS_ERR_ISDIR;
 					break;
 				}
-				if (target->type != BUNIX_VFS_TYPE_DIRECTORY &&
-				    file->type == BUNIX_VFS_TYPE_DIRECTORY) {
+				if (target->inode->type != BUNIX_VFS_TYPE_DIRECTORY &&
+				    file->inode->type == BUNIX_VFS_TYPE_DIRECTORY) {
 					reply.words[0] = BUNIX_VFS_ERR_NOTDIR;
 					break;
 				}
-				if (target->type == BUNIX_VFS_TYPE_DIRECTORY &&
+				if (target->inode->type == BUNIX_VFS_TYPE_DIRECTORY &&
 				    !directory_is_empty(new_path)) {
 					reply.words[0] = BUNIX_VFS_ERR_NOTEMPTY;
 					break;
 				}
 				file_unlink(target);
 			}
-			reply.words[0] = file_clone_to_path(file, new_path) == 0 ?
+			reply.words[0] = file_move_to_path(file, new_path) == 0 ?
+					 0 : (u64)-1;
+			break;
+		}
+		case BUNIX_VFS_LINK_BUFFER: {
+			char new_path[TMPFS_MAX_PATH];
+			struct tmpfs_file *old_parent;
+			struct tmpfs_file *new_parent;
+			const u64 task = message.words[3] & 0xffffffff;
+
+			if (read_rename_buffer(&message, path, new_path) != 0 ||
+			    path_is_root(path) || path_is_root(new_path)) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			file = file_find(path);
+			if (file == 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			if (file_find(new_path) != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_EXIST;
+				break;
+			}
+			if (file->inode->type == BUNIX_VFS_TYPE_DIRECTORY) {
+				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
+				break;
+			}
+			old_parent = parent_file_for_path(path);
+			new_parent = parent_file_for_path(new_path);
+			if (!task_can_access(task, old_parent, 01) ||
+			    !task_can_access(task, new_parent, 03)) {
+				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
+				break;
+			}
+			reply.words[0] = file_link_to_path(file, new_path) == 0 ?
 					 0 : (u64)-1;
 			break;
 		}
@@ -1302,7 +1403,7 @@ int main(void)
 					const u64 name_len = str_len(name);
 					reply.words[0] = 0;
 					reply.words[1] = (message.words[1] + 1) |
-							 ((u64)file->type << 32);
+							 ((u64)file->inode->type << 32);
 					u64 written = name_len;
 
 					if (written > message.words[3]) {

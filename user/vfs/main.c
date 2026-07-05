@@ -829,11 +829,11 @@ static int forward_mount_symlink_path(struct vfs_mount *mount,
 	return result;
 }
 
-static int forward_mount_rename_path(struct vfs_mount *mount,
-				     struct bunix_msg *message,
-				     struct bunix_msg *reply,
-				     const char *old_path,
-				     const char *new_path)
+static int forward_mount_two_path(struct vfs_mount *mount,
+				  struct bunix_msg *message,
+				  struct bunix_msg *reply,
+				  const char *old_path,
+				  const char *new_path)
 {
 	const char root[] = "/";
 	const u64 cwd_len = 2;
@@ -1176,8 +1176,27 @@ static void vfs_rename_path(struct bunix_msg *message, struct bunix_msg *reply,
 		reply->words[0] = BUNIX_VFS_ERR_XDEV;
 		return;
 	}
-	(void)forward_mount_rename_path(old_mount, message, reply, old_path,
-					new_path);
+	(void)forward_mount_two_path(old_mount, message, reply, old_path,
+				     new_path);
+}
+
+static void vfs_link_path(struct bunix_msg *message, struct bunix_msg *reply,
+			  const char *old_path, const char *new_path)
+{
+	struct vfs_mount *old_mount = mount_for_path(old_path);
+	struct vfs_mount *new_mount = mount_for_path(new_path);
+
+	if (old_mount == 0 || new_mount == 0) {
+		reply->words[0] = old_mount == new_mount ?
+				  BUNIX_VFS_ERR_ACCESS : BUNIX_VFS_ERR_XDEV;
+		return;
+	}
+	if (old_mount != new_mount) {
+		reply->words[0] = BUNIX_VFS_ERR_XDEV;
+		return;
+	}
+	(void)forward_mount_two_path(old_mount, message, reply, old_path,
+				     new_path);
 }
 
 static void vfs_readlink_path(struct bunix_msg *message,
@@ -1407,7 +1426,8 @@ int main(void)
 			vfs_symlink_path(&message, &reply, target, path);
 			break;
 		}
-		case BUNIX_VFS_RENAME_BUFFER: {
+		case BUNIX_VFS_RENAME_BUFFER:
+		case BUNIX_VFS_LINK_BUFFER: {
 			char old_cwd[VFS_MAX_PATH];
 			char old_input[VFS_MAX_PATH];
 			char old_path[VFS_MAX_PATH];
@@ -1453,7 +1473,13 @@ int main(void)
 				reply.words[0] = error;
 				break;
 			}
-			vfs_rename_path(&message, &reply, old_path, new_path);
+			if (message.type == BUNIX_VFS_RENAME_BUFFER) {
+				vfs_rename_path(&message, &reply, old_path,
+						new_path);
+			} else {
+				vfs_link_path(&message, &reply, old_path,
+					      new_path);
+			}
 			break;
 		}
 		case BUNIX_VFS_CHMOD: {

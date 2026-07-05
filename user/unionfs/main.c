@@ -471,9 +471,9 @@ static int service_symlink_call(u64 service, const char *target,
 	return result;
 }
 
-static int service_rename_call(u64 service, const char *old_path,
-			       const char *new_path, u64 word3,
-			       struct bunix_msg *reply)
+static int service_two_path_call(u64 service, unsigned int type,
+				 const char *old_path, const char *new_path,
+				 u64 word3, struct bunix_msg *reply)
 {
 	const char root[] = "/";
 	const u64 cwd_len = 2;
@@ -483,7 +483,7 @@ static int service_rename_call(u64 service, const char *old_path,
 						cwd_len + new_len);
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_RENAME_BUFFER,
+		.type = type,
 		.cap_rights = BUNIX_RIGHT_RECV,
 		.words = {
 			0,
@@ -512,6 +512,14 @@ static int service_rename_call(u64 service, const char *old_path,
 	}
 	bunix_handle_close((u64)buffer);
 	return result;
+}
+
+static int service_rename_call(u64 service, const char *old_path,
+			       const char *new_path, u64 word3,
+			       struct bunix_msg *reply)
+{
+	return service_two_path_call(service, BUNIX_VFS_RENAME_BUFFER,
+				     old_path, new_path, word3, reply);
 }
 
 static int lower_path_call(u64 type, const char *relative, u64 word3,
@@ -1211,6 +1219,30 @@ static void reply_rename(struct bunix_msg *message, struct bunix_msg *reply,
 	}
 }
 
+static void reply_link(struct bunix_msg *message, struct bunix_msg *reply,
+		       const char *old_path, const char *new_path)
+{
+	char old_relative[UNIONFS_MAX_PATH];
+	char new_relative[UNIONFS_MAX_PATH];
+	char old_upper[UNIONFS_MAX_PATH];
+	char new_upper[UNIONFS_MAX_PATH];
+
+	if (mounted_relative_path(old_path, old_relative) != 0 ||
+	    mounted_relative_path(new_path, new_relative) != 0 ||
+	    compose_upper_path(old_relative, old_upper) != 0 ||
+	    compose_upper_path(new_relative, new_upper) != 0 ||
+	    materialize_upper_parent(new_relative, message->words[3]) != 0 ||
+	    service_two_path_call(upper_service, BUNIX_VFS_LINK_BUFFER,
+				  old_upper, new_upper, message->words[3],
+				  reply) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (reply->words[0] == 0) {
+		whiteout_remove(new_relative);
+	}
+}
+
 static int upper_child_exists(const char *directory, const char *name)
 {
 	char relative[UNIONFS_MAX_PATH];
@@ -1603,16 +1635,19 @@ int main(void)
 			}
 			break;
 		}
-		case BUNIX_VFS_RENAME_BUFFER: {
+		case BUNIX_VFS_RENAME_BUFFER:
+		case BUNIX_VFS_LINK_BUFFER: {
 			char old_path[UNIONFS_MAX_PATH];
 			char new_path[UNIONFS_MAX_PATH];
 
 			if (read_rename_buffer(&message, old_path,
 					       new_path) != 0) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
-			} else {
+			} else if (message.type == BUNIX_VFS_RENAME_BUFFER) {
 				reply_rename(&message, &reply, old_path,
 					     new_path);
+			} else {
+				reply_link(&message, &reply, old_path, new_path);
 			}
 			break;
 		}
