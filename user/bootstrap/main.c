@@ -172,6 +172,13 @@ struct boot_path {
 	const char *path;
 };
 
+struct boot_path_command {
+	unsigned int protocol;
+	unsigned int type;
+	const struct boot_path *paths;
+	u64 path_count;
+};
+
 static long register_proc_execs(u64 proc)
 {
 	const struct boot_exec execs[] = {
@@ -199,11 +206,14 @@ static long register_proc_execs(u64 proc)
 	return 0;
 }
 
-static long tmpfs_mount_root(u64 tmpfs, const char *path)
+static long send_path_command(u64 service,
+			      unsigned int protocol,
+			      unsigned int type,
+			      const char *path)
 {
 	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_TMPFS,
-		.type = BUNIX_TMPFS_MOUNT_ROOT,
+		.protocol = protocol,
+		.type = type,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply = 0,
@@ -213,10 +223,22 @@ static long tmpfs_mount_root(u64 tmpfs, const char *path)
 	struct bunix_msg reply;
 
 	pack_path(&request.words[0], path);
-	if (bunix_ipc_call(tmpfs, &request, &reply) != 0) {
+	if (bunix_ipc_call(service, &request, &reply) != 0) {
 		return -1;
 	}
 	return reply.words[0] == 0 ? 0 : -1;
+}
+
+static long send_path_commands(u64 service,
+			       const struct boot_path_command *command)
+{
+	for (u64 i = 0; i < command->path_count; i++) {
+		if (send_path_command(service, command->protocol, command->type,
+				      command->paths[i].path) != 0) {
+			return -1;
+		}
+	}
+	return 0;
 }
 
 static long mount_tmpfs_roots(u64 tmpfs)
@@ -226,33 +248,14 @@ static long mount_tmpfs_roots(u64 tmpfs)
 		{ "/run" },
 		{ "/var/tmp" },
 	};
-
-	for (u64 i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
-		if (tmpfs_mount_root(tmpfs, roots[i].path) != 0) {
-			return -1;
-		}
-	}
-	return 0;
-}
-
-static long utmpfs_mount_path(u64 utmpfs, const char *path)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_UTMPFS,
-		.type = BUNIX_UTMPFS_MOUNT_PATH,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { 0, 0, 0, 0 },
+	const struct boot_path_command command = {
+		BUNIX_PROTO_TMPFS,
+		BUNIX_TMPFS_MOUNT_ROOT,
+		roots,
+		sizeof(roots) / sizeof(roots[0]),
 	};
-	struct bunix_msg reply;
 
-	pack_path(&request.words[0], path);
-	if (bunix_ipc_call(utmpfs, &request, &reply) != 0) {
-		return -1;
-	}
-	return reply.words[0] == 0 ? 0 : -1;
+	return send_path_commands(tmpfs, &command);
 }
 
 static long mount_utmpfs_paths(u64 utmpfs)
@@ -261,93 +264,20 @@ static long mount_utmpfs_paths(u64 utmpfs)
 		{ "/run/utmp" },
 		{ "/var/run/utmp" },
 	};
-
-	for (u64 i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
-		if (utmpfs_mount_path(utmpfs, paths[i].path) != 0) {
-			return -1;
-		}
-	}
-	return 0;
-}
-
-static long devfs_mount_path(u64 devfs, const char *path)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_DEVFS,
-		.type = BUNIX_DEVFS_MOUNT_PATH,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { 0, 0, 0, 0 },
+	const struct boot_path_command command = {
+		BUNIX_PROTO_UTMPFS,
+		BUNIX_UTMPFS_MOUNT_PATH,
+		paths,
+		sizeof(paths) / sizeof(paths[0]),
 	};
-	struct bunix_msg reply;
 
-	pack_path(&request.words[0], path);
-	if (bunix_ipc_call(devfs, &request, &reply) != 0) {
-		return -1;
-	}
-	return reply.words[0] == 0 ? 0 : -1;
-}
-
-static long procfs_mount_path(u64 procfs, const char *path)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_PROCFS,
-		.type = BUNIX_PROCFS_MOUNT_PATH,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { 0, 0, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	pack_path(&request.words[0], path);
-	if (bunix_ipc_call(procfs, &request, &reply) != 0) {
-		return -1;
-	}
-	return reply.words[0] == 0 ? 0 : -1;
+	return send_path_commands(utmpfs, &command);
 }
 
 static long unionfs_set_upper(u64 unionfs, const char *path)
 {
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_UNIONFS,
-		.type = BUNIX_UNIONFS_SET_UPPER,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { 0, 0, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	pack_path(&request.words[0], path);
-	if (bunix_ipc_call(unionfs, &request, &reply) != 0) {
-		return -1;
-	}
-	return reply.words[0] == 0 ? 0 : -1;
-}
-
-static long unionfs_mount_path(u64 unionfs, const char *path)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_UNIONFS,
-		.type = BUNIX_UNIONFS_MOUNT_PATH,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply = 0,
-		.cap = 0,
-		.words = { 0, 0, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	pack_path(&request.words[0], path);
-	if (bunix_ipc_call(unionfs, &request, &reply) != 0) {
-		return -1;
-	}
-	return reply.words[0] == 0 ? 0 : -1;
+	return send_path_command(unionfs, BUNIX_PROTO_UNIONFS,
+				 BUNIX_UNIONFS_SET_UPPER, path);
 }
 
 static void sleep_ns(u64 time, u64 ns)
@@ -478,7 +408,9 @@ int main(void)
 						       BUNIX_SERVICE_PROCFS,
 						       BUNIX_RIGHT_SEND);
 
-		if (procfs == 0 || procfs_mount_path(procfs, "/proc") != 0) {
+		if (procfs == 0 ||
+		    send_path_command(procfs, BUNIX_PROTO_PROCFS,
+				      BUNIX_PROCFS_MOUNT_PATH, "/proc") != 0) {
 			return 1;
 		}
 	}
@@ -500,7 +432,9 @@ int main(void)
 						      BUNIX_SERVICE_DEVFS,
 						      BUNIX_RIGHT_SEND);
 
-		if (devfs == 0 || devfs_mount_path(devfs, "/dev") != 0) {
+		if (devfs == 0 ||
+		    send_path_command(devfs, BUNIX_PROTO_DEVFS,
+				      BUNIX_DEVFS_MOUNT_PATH, "/dev") != 0) {
 			return 1;
 		}
 	}
@@ -524,7 +458,8 @@ int main(void)
 
 		if (unionfs == 0 ||
 		    unionfs_set_upper(unionfs, "/tmp/union") != 0 ||
-		    unionfs_mount_path(unionfs, "/") != 0) {
+		    send_path_command(unionfs, BUNIX_PROTO_UNIONFS,
+				      BUNIX_UNIONFS_MOUNT_PATH, "/") != 0) {
 			return 1;
 		}
 	}
