@@ -25,6 +25,7 @@ static const struct server boot_servers[] = {
 	{ "tmpfs", 0 },
 	{ "devfs", 0 },
 	{ "utmpfs", 0 },
+	{ "rootfs", 0 },
 	{ "unionfs", 0 },
 	{ "block", 0 },
 	{ "vfs", 0 },

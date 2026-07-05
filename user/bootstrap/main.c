@@ -678,6 +678,12 @@ static long unionfs_set_upper(u64 unionfs, const char *path)
 				 BUNIX_UNIONFS_SET_UPPER, path);
 }
 
+static long unionfs_set_lower(u64 unionfs, const char *path)
+{
+	return send_path_command(unionfs, BUNIX_PROTO_UNIONFS,
+				 BUNIX_UNIONFS_SET_LOWER, path);
+}
+
 static void sleep_ns(u64 time, u64 ns)
 {
 	struct bunix_msg request = {
@@ -847,6 +853,17 @@ int main(void)
 			return 1;
 		}
 	}
+	bunix_launch_module_with_caps("rootfs", fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	{
+		u64 rootfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						       BUNIX_SERVICE_ROOTFS,
+						       BUNIX_RIGHT_SEND);
+
+		if (rootfs == 0) {
+			return 1;
+		}
+	}
 	bunix_launch_module_with_caps("unionfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	{
@@ -855,6 +872,7 @@ int main(void)
 							BUNIX_RIGHT_SEND);
 
 		if (unionfs == 0 ||
+		    unionfs_set_lower(unionfs, "/") != 0 ||
 		    unionfs_set_upper(unionfs, "/tmp/union") != 0 ||
 		    send_path_command(unionfs, BUNIX_PROTO_UNIONFS,
 				      BUNIX_UNIONFS_MOUNT_PATH, "/") != 0) {

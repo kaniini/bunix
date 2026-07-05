@@ -125,17 +125,19 @@ module. The kernel assigns that
 boot module only to the block server. Init launches a block server and a VFS
 server with only console and names capabilities. The block server registers
 `BLK0` in the root namespace and serves read-only bytes from its assigned disk
-image. VFS registers `VFS0` and delegates paths to user-space filesystem
-translators. Procfs attaches at `/proc`, tmpfs attaches at `/tmp`, `/run`, and
-`/var/tmp`, and unionfs attaches at `/` so the read-only rootfs image is visible
-through a writable tmpfs-backed upper layer.
+image. The rootfs server registers `RFS0` and translates that image into
+read-only VFS operations. VFS registers `VFS0` and delegates paths to
+user-space filesystem translators. Procfs attaches at `/proc`, tmpfs attaches
+at `/tmp`, `/run`, and `/var/tmp`, and unionfs attaches at `/` with rootfs as
+its lower layer so the read-only rootfs image is visible through a writable
+tmpfs-backed upper layer.
 
 This is intentionally not a real disk filesystem yet. The useful primitive is
-the capability-shaped chain `init/proc -> names -> vfs -> unionfs -> block +
-tmpfs`, which is the path that can later point at a real disk image and then at
-an Alpine root filesystem format. Runtime Linux/VFS path handling follows the
-Linux 4096-byte `PATH_MAX` budget, while the generated rootfs image still uses
-256-byte path fields until the on-disk image format is widened.
+the capability-shaped chain `init/proc -> names -> vfs -> unionfs -> rootfs +
+tmpfs -> block`, which is the path that can later point at a real disk image
+and then at an Alpine root filesystem format. Runtime Linux/VFS path handling
+follows the Linux 4096-byte `PATH_MAX` budget, while the generated rootfs image
+still uses 256-byte path fields until the on-disk image format is widened.
 
 `procfs.server` is a separate user-space server that dynamically attaches
 itself to VFS as the `/proc` translator. It currently exposes `/proc/kthreads`,
