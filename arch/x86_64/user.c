@@ -207,13 +207,13 @@ enum {
 	LINUX_MAX_SOCKADDR = 128,
 	LINUX_IOV_MAX = 1024,
 	LINUX_EXEC_MAX_PATH = 4096,
-	LINUX_EXEC_MAX_STRING = 4096,
-	LINUX_EXEC_MAX_STRING_BYTES = 128 * 1024,
+	LINUX_EXEC_MAX_STRING = 128 * 1024,
+	LINUX_EXEC_MAX_STRING_BYTES = 384 * 1024,
 	LINUX_MAX_GROUPS = 65536,
 	LINUX_EXEC_DYN_LOAD_BIAS = 0x400000,
 	LINUX_EXEC_INTERP_LOAD_BIAS = 0x600000,
 	LINUX_EXEC_STACK_TOP = 0x800000,
-	LINUX_EXEC_STACK_PAGES = 64,
+	LINUX_EXEC_STACK_PAGES = 128,
 	LINUX_STAT_SIZE = 144,
 	LINUX_STATX_SIZE = 256,
 	LINUX_STATFS_SIZE = 120,
@@ -2635,7 +2635,13 @@ static int linux_exec_build_stack(const char *path,
 		env_addrs[index] = stack_base + sp;
 	}
 
-	const u64 execfn = argv_addrs[0];
+	const u64 path_len = str_len(path) + 1;
+	if (path_len > LINUX_EXEC_MAX_PATH || sp < path_len) {
+		goto out;
+	}
+	sp -= path_len;
+	mem_copy(stack_image + sp, (const u8 *)path, path_len);
+	const u64 execfn = stack_base + sp;
 	const u8 random_bytes[16] = {
 		0x62, 0x75, 0x6e, 0x69, 0x78, 0x2d, 0x72, 0x61,
 		0x6e, 0x64, 0x6f, 0x6d, 0x2d, 0x65, 0x78, 0x00,
