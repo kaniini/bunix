@@ -136,8 +136,8 @@ This is intentionally not a real disk filesystem yet. The useful primitive is
 the capability-shaped chain `init/proc -> names -> vfs -> unionfs -> rootfs +
 tmpfs -> block`, which is the path that can later point at a real disk image
 and then at an Alpine root filesystem format. Runtime Linux/VFS path handling
-follows the Linux 4096-byte `PATH_MAX` budget, while the generated rootfs image
-still uses 256-byte path fields until the on-disk image format is widened.
+and the generated rootfs image both follow the Linux 4096-byte `PATH_MAX`
+budget.
 
 `procfs.server` is a separate user-space server that dynamically attaches
 itself to VFS as the `/proc` translator. It currently exposes `/proc/kthreads`,

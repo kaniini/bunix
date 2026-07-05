@@ -1,6 +1,6 @@
 # path task linux
 /bin/first first 0
-/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/one-hundred-twenty-eight-byte/proc-exec-registry-limit/with-extra-components/first first 0
+/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/proc-exec-registry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/first first 0
 /bin/lxtest lxtest 1
 /bin/musl-hello musl-hello 1
 /bin/fputest fputest 1

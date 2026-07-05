@@ -130,8 +130,9 @@ static u64 str_len(const char *text)
 }
 
 enum {
-	BOOT_EXECS_MAX = 4096,
-	BOOT_TOKEN_MAX = 256,
+	BOOT_CONFIG_MAX = 65536,
+	BOOT_TOKEN_MAX = 4096,
+	BOOT_NAME_MAX = 256,
 };
 
 struct boot_spawn_args {
@@ -303,7 +304,7 @@ static long vfs_read_text(u64 vfs, const char *path, char *out, u64 out_size)
 	struct bunix_msg reply;
 
 	if (vfs == 0 || path == 0 || out == 0 || out_size == 0 ||
-	    out_size > BOOT_EXECS_MAX || buffer <= 0) {
+	    out_size > BOOT_CONFIG_MAX || buffer <= 0) {
 		if (buffer > 0) {
 			bunix_handle_close((u64)buffer);
 		}
@@ -323,17 +324,22 @@ static long vfs_read_text(u64 vfs, const char *path, char *out, u64 out_size)
 
 static long register_proc_execs(u64 proc, u64 vfs)
 {
-	char text[BOOT_EXECS_MAX];
+	char *text;
 	u64 pos = 0;
 	u64 count = 0;
+	long result = -1;
 
-	if (vfs_read_text(vfs, "/etc/execs", text, sizeof(text)) != 0) {
+	text = (char *)bunix_alloc(BOOT_CONFIG_MAX);
+	if (text == 0) {
 		return -1;
+	}
+	if (vfs_read_text(vfs, "/etc/execs", text, BOOT_CONFIG_MAX) != 0) {
+		goto out;
 	}
 	while (text[pos] != '\0') {
 		char path[BOOT_TOKEN_MAX];
-		char task_name[BOOT_TOKEN_MAX];
-		char linux_text[BOOT_TOKEN_MAX];
+		char task_name[BOOT_NAME_MAX];
+		char linux_text[BOOT_NAME_MAX];
 		u64 linux;
 
 		while (is_space(text[pos])) {
@@ -349,22 +355,25 @@ static long register_proc_execs(u64 proc, u64 vfs)
 		if (read_token(text, &pos, path, sizeof(path)) != 0 ||
 		    read_token(text, &pos, task_name, sizeof(task_name)) != 0 ||
 		    read_token(text, &pos, linux_text, sizeof(linux_text)) != 0) {
-			return -1;
+			goto out;
 		}
 		if (linux_text[0] == '0' && linux_text[1] == '\0') {
 			linux = 0;
 		} else if (linux_text[0] == '1' && linux_text[1] == '\0') {
 			linux = 1;
 		} else {
-			return -1;
+			goto out;
 		}
 		if (proc_register_exec(proc, path, task_name, linux) != 0) {
-			return -1;
+			goto out;
 		}
 		count++;
 		skip_line(text, &pos);
 	}
-	return count != 0 ? 0 : -1;
+	result = count != 0 ? 0 : -1;
+out:
+	bunix_free(text);
+	return result;
 }
 
 static void log_path_line(const char *prefix, const char *path)
@@ -528,12 +537,17 @@ static long proc_spawn_wait_args(u64 proc, const char *path,
 
 static long run_boot_spawns(u64 proc, u64 vfs)
 {
-	char text[BOOT_EXECS_MAX];
+	char *text;
 	u64 pos = 0;
 	u64 count = 0;
+	long final = -1;
 
-	if (vfs_read_text(vfs, "/etc/spawns", text, sizeof(text)) != 0) {
+	text = (char *)bunix_alloc(BOOT_CONFIG_MAX);
+	if (text == 0) {
 		return -1;
+	}
+	if (vfs_read_text(vfs, "/etc/spawns", text, BOOT_CONFIG_MAX) != 0) {
+		goto out;
 	}
 	while (text[pos] != '\0') {
 		char path[BOOT_TOKEN_MAX];
@@ -551,7 +565,7 @@ static long run_boot_spawns(u64 proc, u64 vfs)
 			break;
 		}
 		if (read_token(text, &pos, path, sizeof(path)) != 0) {
-			return -1;
+			goto out;
 		}
 		while (text[pos] != '\0' && text[pos] != '\n') {
 			char token[BOOT_TOKEN_MAX];
@@ -565,7 +579,7 @@ static long run_boot_spawns(u64 proc, u64 vfs)
 			}
 			if (read_token(text, &pos, token, sizeof(token)) != 0) {
 				boot_spawn_args_free(&spawn);
-				return -1;
+				goto out;
 			}
 			if (token_is_env(token)) {
 				if (boot_spawn_push(&spawn.envs,
@@ -573,7 +587,7 @@ static long run_boot_spawns(u64 proc, u64 vfs)
 						    &spawn.env_cap,
 						    token + 4) != 0) {
 					boot_spawn_args_free(&spawn);
-					return -1;
+					goto out;
 				}
 			} else {
 				if (boot_spawn_push(&spawn.args,
@@ -581,7 +595,7 @@ static long run_boot_spawns(u64 proc, u64 vfs)
 						    &spawn.arg_cap,
 						    token) != 0) {
 					boot_spawn_args_free(&spawn);
-					return -1;
+					goto out;
 				}
 			}
 		}
@@ -596,12 +610,15 @@ static long run_boot_spawns(u64 proc, u64 vfs)
 		}
 		boot_spawn_args_free(&spawn);
 		if (result != 0) {
-			return -1;
+			goto out;
 		}
 		count++;
 		skip_line(text, &pos);
 	}
-	return count != 0 ? 0 : -1;
+	final = count != 0 ? 0 : -1;
+out:
+	bunix_free(text);
+	return final;
 }
 
 static long send_path_command(u64 service,

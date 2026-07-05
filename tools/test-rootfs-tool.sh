@@ -17,7 +17,12 @@ for i in $(seq 1 150); do
 	printf 'entry %s\n' "$i" > "$file"
 	args="$args /many/file-$i.txt $file"
 done
-long_path=/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/one-hundred-twenty-eight-byte/rootfs-entry-limit/with-extra-components/hello.txt
+long_component=path-component-that-forces-the-rootfs-image-format-past-the-old-two-hundred-fifty-six-byte-path-field
+long_path=/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/$long_component/$long_component/$long_component/hello.txt
+if [ "${#long_path}" -le 256 ]; then
+	echo "test bug: long path is not longer than old rootfs path cap" >&2
+	exit 1
+fi
 args="$args $long_path $tmp/files/file-1.txt"
 
 # shellcheck disable=SC2086
@@ -29,4 +34,4 @@ if [ "$entries" -le 128 ]; then
 	exit 1
 fi
 
-echo "rootfs tool regression ok entries=$entries"
+echo "rootfs tool regression ok entries=$entries long_path=${#long_path}"
