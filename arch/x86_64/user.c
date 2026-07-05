@@ -3445,16 +3445,9 @@ poll_again:
 		const u64 flags = number == LINUX_SYSCALL_OPEN ? arg1 : arg2;
 		const u64 mode = number == LINUX_SYSCALL_OPEN ? arg2 : arg3;
 
-		if (path == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		request.type = LINUX_SYSCALL_OPENAT;
-		request.words[0] = dirfd;
-		request.words[1] = 0;
-		request.words[2] = flags;
-		request.words[3] = mode;
-		return linux_forward_path(linux, reply_port, &request, &reply,
-					  path, 0, 1, TASK_RIGHT_RECV);
+		return linux_forward_path_words(linux, reply_port, &request,
+						&reply, LINUX_SYSCALL_OPENAT,
+						path, dirfd, flags, mode);
 	}
 	case LINUX_SYSCALL_UNLINK:
 	case LINUX_SYSCALL_UNLINKAT:
@@ -3466,21 +3459,16 @@ poll_again:
 				  arg0 : (u64)-100;
 		const u64 flags = number == LINUX_SYSCALL_UNLINKAT ? arg2 : 0;
 		const u64 length = number == LINUX_SYSCALL_TRUNCATE ? arg1 : 0;
+		const u32 type = number == LINUX_SYSCALL_TRUNCATE ?
+				 LINUX_SYSCALL_TRUNCATE :
+				 (number == LINUX_SYSCALL_RMDIR ?
+				  LINUX_SYSCALL_RMDIR : LINUX_SYSCALL_UNLINKAT);
+		const u64 word2 = number == LINUX_SYSCALL_TRUNCATE ?
+				  length : flags;
 
-		if (path == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		request.type = number == LINUX_SYSCALL_TRUNCATE ?
-			       LINUX_SYSCALL_TRUNCATE :
-			       (number == LINUX_SYSCALL_RMDIR ?
-				LINUX_SYSCALL_RMDIR : LINUX_SYSCALL_UNLINKAT);
-		request.words[0] = dirfd;
-		request.words[1] = 0;
-		request.words[2] = number == LINUX_SYSCALL_TRUNCATE ?
-				   length : flags;
-		request.words[3] = 0;
-		return linux_forward_path(linux, reply_port, &request, &reply,
-					  path, 0, 1, TASK_RIGHT_RECV);
+		return linux_forward_path_words(linux, reply_port, &request,
+						&reply, type, path, dirfd,
+						word2, 0);
 	}
 	case LINUX_SYSCALL_MKDIR:
 	case LINUX_SYSCALL_MKDIRAT:
@@ -3508,21 +3496,17 @@ poll_again:
 				   frame->r8 :
 				   (number == LINUX_SYSCALL_LCHOWN ?
 				    LINUX_AT_SYMLINK_NOFOLLOW : 0));
+		const u32 type = is_mkdir ? LINUX_SYSCALL_MKDIRAT :
+				 (is_chown ? LINUX_SYSCALL_FCHOWNAT :
+				  LINUX_SYSCALL_FCHMODAT);
+		const u64 word2 = is_chown ? owner : mode;
+		const u64 word3 = is_chown ?
+				  ((flags & 0xffffffff) << 32) |
+				  (group & 0xffffffff) : flags;
 
-		if (path == 0) {
-			return (u64)-LINUX_EINVAL;
-		}
-		request.type = is_mkdir ? LINUX_SYSCALL_MKDIRAT :
-			       (is_chown ? LINUX_SYSCALL_FCHOWNAT :
-				LINUX_SYSCALL_FCHMODAT);
-		request.words[0] = dirfd;
-		request.words[1] = 0;
-		request.words[2] = is_chown ? owner : mode;
-		request.words[3] = is_chown ?
-				   ((flags & 0xffffffff) << 32) |
-				   (group & 0xffffffff) : flags;
-		return linux_forward_path(linux, reply_port, &request, &reply,
-					  path, 0, 1, TASK_RIGHT_RECV);
+		return linux_forward_path_words(linux, reply_port, &request,
+						&reply, type, path, dirfd,
+						word2, word3);
 	}
 	case LINUX_SYSCALL_ACCESS:
 	case LINUX_SYSCALL_FACCESSAT: {
