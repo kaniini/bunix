@@ -1189,18 +1189,43 @@ static const char *fd_dir_entry(u64 index, u64 *type)
 	return names[index];
 }
 
-static void readlink_reply(struct bunix_msg *reply, u64 file)
+static void readlink_buffer_reply(const struct bunix_msg *message,
+				  struct bunix_msg *reply, u64 file)
 {
 	const char *target;
+	const u64 out_cap = message->words[3] >> 32;
+	u64 target_len;
+	u64 written;
 
 	if (file_kind(file) != PROCFS_KIND_PID_EXE) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
 	target = pid_cmdline(file_arg(file));
+	target_len = str_len(target);
+	written = target_len;
 	reply->words[0] = 0;
-	reply->words[1] = str_len(target);
-	pack_path(&reply->words[2], target);
+	reply->words[1] = target_len;
+	if (out_cap == 0) {
+		pack_path(&reply->words[2], target);
+		return;
+	}
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (written > out_cap) {
+		written = out_cap;
+	}
+	if (written != 0 &&
+	    bunix_buffer_write(message->cap, message->words[0] + message->words[1],
+			       target, written) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[2] = target_len;
+	reply->words[3] = written;
 }
 
 int main(void)
@@ -1333,7 +1358,7 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
-			readlink_reply(&reply, file);
+			readlink_buffer_reply(&message, &reply, file);
 			break;
 		}
 		case BUNIX_VFS_STAT_META: {

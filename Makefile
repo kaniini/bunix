@@ -65,6 +65,7 @@ ROOTFS_NESTED := modules/nested.txt
 ROOTFS_LONG_PATH := /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/hello.txt
 ROOTFS_LONG_EXEC_PATH := /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/linux-execve-path-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/dyn-hello
 ROOTFS_LONG_PROC_EXEC_PATH := /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/proc-exec-registry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/first
+ROOTFS_LONG_SYMLINK := /usr/share/bunix/long-target-link
 ROOTFS_PASSWD := modules/passwd
 ROOTFS_SHADOW := modules/shadow
 ROOTFS_GROUP := modules/group
@@ -281,7 +282,7 @@ $(MUSL_HELLO_MODULE): user/musl-hello/main.c Makefile
 
 $(DYN_HELLO_MODULE): user/musl-hello/main.c Makefile
 	mkdir -p $(dir $@)
-	$(MUSL_CC) -O2 -g -Wl,--dynamic-linker=/lib/ld.so $< -o $@
+	$(MUSL_CC) -O2 -g -Wl,--dynamic-linker=/lib/ld-musl-x86_64.so.1 $< -o $@
 
 $(FPUTEST_MODULE): user/fputest/main.c Makefile
 	mkdir -p $(dir $@)
@@ -301,7 +302,7 @@ $(ROOTFS_TOOL): tools/mkrootfs.c
 
 $(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(FIRST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(EXECOK_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(BUSYBOX) $(MUSL_LDSO)
 	mkdir -p $(dir $@)
-	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) $(ROOTFS_LONG_PATH) $(ROOTFS_NESTED) $(ROOTFS_LONG_EXEC_PATH) $(DYN_HELLO_MODULE) $(ROOTFS_LONG_PROC_EXEC_PATH) $(FIRST_MODULE) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /etc/group $(ROOTFS_GROUP) /etc/inittab $(ROOTFS_INITTAB) /etc/execs $(ROOTFS_EXECS) /etc/spawns $(ROOTFS_SPAWNS) /lib/ld-musl-x86_64.so.1 $(MUSL_LDSO) /bin/first $(FIRST_MODULE) /bin/ipcstress $(IPCSTRESS_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/getdentstest $(GETDENTSTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/dyn-hello $(DYN_HELLO_MODULE) /bin/fputest $(FPUTEST_MODULE) /bin/busybox $(BUSYBOX) --dir /home/kaniini --dir /root --dir /tmp --dir /run --dir /mnt --dir /sys --dir /var/tmp --dir /var/run --symlink /lib/ld.so /lib/ld-musl-x86_64.so.1 --symlink /lib/libc.musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1 $(ROOTFS_BUSYBOX_LINKS)
+	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) $(ROOTFS_LONG_PATH) $(ROOTFS_NESTED) $(ROOTFS_LONG_EXEC_PATH) $(DYN_HELLO_MODULE) $(ROOTFS_LONG_PROC_EXEC_PATH) $(FIRST_MODULE) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /etc/group $(ROOTFS_GROUP) /etc/inittab $(ROOTFS_INITTAB) /etc/execs $(ROOTFS_EXECS) /etc/spawns $(ROOTFS_SPAWNS) /lib/ld-musl-x86_64.so.1 $(MUSL_LDSO) /bin/first $(FIRST_MODULE) /bin/ipcstress $(IPCSTRESS_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/getdentstest $(GETDENTSTEST_MODULE) /bin/execok $(EXECOK_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/dyn-hello $(DYN_HELLO_MODULE) /bin/fputest $(FPUTEST_MODULE) /bin/busybox $(BUSYBOX) --dir /home/kaniini --dir /root --dir /tmp --dir /run --dir /mnt --dir /sys --dir /var/tmp --dir /var/run --symlink $(ROOTFS_LONG_SYMLINK) $(ROOTFS_LONG_PATH) --symlink /lib/libc.musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1 $(ROOTFS_BUSYBOX_LINKS)
 
 $(EFI_BOOT_APP): $(KERNEL) boot/grub-standalone.cfg $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \

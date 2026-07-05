@@ -750,7 +750,10 @@ static int forward_mount_buffer_path(struct vfs_mount *mount,
 	const char root[] = "/";
 	const u64 cwd_len = 2;
 	const u64 path_len = str_len(path) + 1;
-	const long buffer = bunix_buffer_create(cwd_len + path_len);
+	const u64 out_cap = message->type == BUNIX_VFS_READLINK_BUFFER ?
+			    message->words[3] >> 32 : 0;
+	const u64 buffer_len = cwd_len + path_len + out_cap;
+	const long buffer = bunix_buffer_create(buffer_len);
 	struct bunix_msg forwarded = *message;
 	int result;
 
@@ -765,14 +768,38 @@ static int forward_mount_buffer_path(struct vfs_mount *mount,
 	}
 
 	forwarded.cap = (u64)buffer;
-	forwarded.cap_rights = BUNIX_RIGHT_RECV;
+	forwarded.cap_rights = BUNIX_RIGHT_RECV |
+			       (out_cap != 0 ? BUNIX_RIGHT_SEND : 0);
 	if (forwarded.type == BUNIX_VFS_OPEN) {
 		forwarded.type = BUNIX_VFS_OPEN_BUFFER;
 	}
 	forwarded.words[0] = cwd_len;
 	forwarded.words[1] = path_len;
 	forwarded.words[2] = 0;
+	if (forwarded.type == BUNIX_VFS_READLINK_BUFFER) {
+		forwarded.words[3] = (message->words[3] & 0xffffffff) |
+				     (out_cap << 32);
+	}
 	result = forward_mount_path(mount, &forwarded, reply, path);
+	if (result == 0 && message->type == BUNIX_VFS_READLINK_BUFFER &&
+	    out_cap != 0 && reply->words[0] == 0) {
+		char target[VFS_MAX_PATH];
+		const u64 offset = message->words[0] + message->words[1];
+		const u64 temp_offset = cwd_len + path_len;
+		const u64 written = reply->words[3];
+
+		if (message->cap == 0 ||
+		    (message->cap_rights & BUNIX_RIGHT_SEND) == 0 ||
+		    written > out_cap ||
+		    (written != 0 &&
+		     (bunix_buffer_read((u64)buffer, temp_offset, target,
+					written) != 0 ||
+		      bunix_buffer_write(message->cap, offset, target,
+					 written) != 0))) {
+			reply->words[0] = (u64)-1;
+			result = -1;
+		}
+	}
 	bunix_handle_close((u64)buffer);
 	return result;
 }
@@ -1107,8 +1134,32 @@ static void vfs_readlink_path(struct bunix_msg *message,
 	}
 	reply->words[0] = 0;
 	reply->words[1] = str_len(target);
-	pack_bytes(&reply->words[2], (const unsigned char *)target,
-		   str_len(target) + 1);
+	if ((message->words[3] >> 32) != 0) {
+		const u64 target_len = reply->words[1];
+		const u64 out_cap = message->words[3] >> 32;
+		const u64 offset = message->words[0] + message->words[1];
+		u64 written = target_len;
+
+		if (message->cap == 0 ||
+		    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+			reply->words[0] = (u64)-1;
+			return;
+		}
+		if (written > out_cap) {
+			written = out_cap;
+		}
+		if (written != 0 &&
+		    bunix_buffer_write(message->cap, offset, target,
+				       written) != 0) {
+			reply->words[0] = (u64)-1;
+			return;
+		}
+		reply->words[2] = target_len;
+		reply->words[3] = written;
+	} else {
+		pack_bytes(&reply->words[2], (const unsigned char *)target,
+			   str_len(target) + 1);
+	}
 }
 
 int main(void)

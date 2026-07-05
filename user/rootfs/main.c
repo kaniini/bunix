@@ -457,6 +457,41 @@ static void forget_open(struct rootfs_open *open)
 	bunix_free(open);
 }
 
+static int reply_readlink_target(const struct bunix_msg *message,
+				 struct bunix_msg *reply, const char *target)
+{
+	const u64 target_len = str_len(target);
+	const u64 out_cap = message->words[3] >> 32;
+
+	reply->words[0] = 0;
+	reply->words[1] = target_len;
+	if (out_cap != 0) {
+		const u64 offset = message->words[0] + message->words[1];
+		u64 written = target_len;
+
+		if (message->cap == 0 ||
+		    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+			reply->words[0] = (u64)-1;
+			return -1;
+		}
+		if (written > out_cap) {
+			written = out_cap;
+		}
+		if (written != 0 &&
+		    bunix_buffer_write(message->cap, offset, target,
+				       written) != 0) {
+			reply->words[0] = (u64)-1;
+			return -1;
+		}
+		reply->words[2] = target_len;
+		reply->words[3] = written;
+		return 0;
+	}
+	pack_bytes(&reply->words[2], (const unsigned char *)target,
+		   target_len + 1);
+	return 0;
+}
+
 static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 			    const char *path)
 {
@@ -480,10 +515,7 @@ static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 			reply->words[0] = (u64)-1;
 			return;
 		}
-		reply->words[0] = 0;
-		reply->words[1] = str_len(target);
-		pack_bytes(&reply->words[2], (const unsigned char *)target,
-			   str_len(target) + 1);
+		(void)reply_readlink_target(message, reply, target);
 	} else if (message->type == BUNIX_VFS_ACCESS_BUFFER) {
 		reply->words[0] = task_can_access(message->words[3] &
 						  0xffffffff, entry,

@@ -234,6 +234,9 @@ shell regression.
 
 The current rootfs can run a statically linked musl hello program, a dynamic
 musl hello program, and a dynamically linked BusyBox shell through `/bin/login`.
+Dynamic test binaries use musl's normal `/lib/ld-musl-x86_64.so.1` interpreter
+directly; the generated rootfs no longer installs a `/lib/ld.so` compatibility
+symlink.
 BusyBox applets currently exercised by the test loop include `cat`, `echo`,
 `env`, `stat`, `ls`, `uptime`, `id`, `stty`, `kill`, `sleep`, `dmesg`, `pwd`,
 and `cd` through the shell. The generated rootfs includes explicit
@@ -265,6 +268,9 @@ keeps that path covered by the shell regression.
 VFS, rootfs, and tmpfs also support buffer-backed directory entry names, so
 Linux `getdents64(2)` can return names longer than the inline IPC word payload;
 the shell regression creates and lists a long tmpfs filename to cover this path.
+Linux `readlink(2)`/`readlinkat(2)` now use a buffer-backed VFS target window
+through VFS, unionfs, rootfs, and procfs, so symlink targets are no longer
+truncated to the inline IPC word payload.
 Linux `execve` now collects argv/env with growable kernel vectors instead of a
 256-entry fixed table, and the initial Linux stack is 256 KiB. The shell
 regression covers 300 argv entries and 300 inherited environment entries.

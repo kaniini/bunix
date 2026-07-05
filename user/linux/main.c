@@ -2161,6 +2161,68 @@ static long linux_vfs_path_call(struct linux_process *process, u64 type,
 					 reply);
 }
 
+static long linux_vfs_readlink_call(struct linux_process *process,
+				    u64 base_handle, const char *path,
+				    u64 out_size, u64 syscall_buffer,
+				    u64 *target_len)
+{
+	char target[LINUX_MAX_PATH];
+	const u64 cwd_len = string_len(process->cwd) + 1;
+	const u64 path_len = string_len(path) + 1;
+	const u64 out_cap = out_size > LINUX_MAX_PATH ? LINUX_MAX_PATH :
+			    out_size;
+	const u64 out_offset = cwd_len + path_len;
+	const u64 len = out_offset + out_cap;
+	const long path_buffer = bunix_buffer_create(len);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_READLINK_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_SEND,
+		.reply = 0,
+		.cap = (u64)path_buffer,
+		.words = { cwd_len, path_len, base_handle,
+			   process->bunix_task | (out_cap << 32) },
+	};
+	struct bunix_msg reply;
+	u64 copy_len;
+
+	if (target_len == 0 || syscall_buffer == 0 || out_cap == 0 ||
+	    path_buffer <= 0 || cwd_len == 0 || path_len == 0 ||
+	    cwd_len > LINUX_MAX_PATH || path_len > LINUX_MAX_PATH ||
+	    len > LINUX_MAX_PATH * 3 ||
+	    bunix_buffer_write((u64)path_buffer, 0, process->cwd,
+			       cwd_len) != 0 ||
+	    bunix_buffer_write((u64)path_buffer, cwd_len, path,
+			       path_len) != 0) {
+		if (path_buffer > 0) {
+			bunix_handle_close((u64)path_buffer);
+		}
+		return -LINUX_EINVAL;
+	}
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		bunix_handle_close((u64)path_buffer);
+		return -LINUX_ENOENT;
+	}
+	copy_len = reply.words[1];
+	if (copy_len > out_size) {
+		copy_len = out_size;
+	}
+	if (reply.words[3] < copy_len ||
+	    copy_len > sizeof(target) ||
+	    (copy_len != 0 &&
+	     (bunix_buffer_read((u64)path_buffer, out_offset, target,
+				copy_len) != 0 ||
+	      bunix_buffer_write(syscall_buffer, 0, target, copy_len) != 0))) {
+		bunix_handle_close((u64)path_buffer);
+		return -LINUX_EINVAL;
+	}
+	bunix_handle_close((u64)path_buffer);
+	*target_len = copy_len;
+	return 0;
+}
+
 static long linux_close_vfs_handle(u64 handle)
 {
 	struct bunix_msg request = {
@@ -2841,8 +2903,6 @@ static long linux_readlinkat(struct linux_process *process, u64 dirfd,
 			     u64 path_len, u64 out_size, u64 path_buffer)
 {
 	char path[LINUX_MAX_PATH];
-	char target[16];
-	struct bunix_msg reply;
 	u64 base_handle;
 	u64 copy_len;
 	long base_result;
@@ -2858,19 +2918,9 @@ static long linux_readlinkat(struct linux_process *process, u64 dirfd,
 	if (base_result != 0) {
 		return base_result;
 	}
-	if (linux_vfs_path_call(process, BUNIX_VFS_READLINK_BUFFER,
-				base_handle, path, &reply) != 0 ||
-	    reply.words[0] != 0) {
+	if (linux_vfs_readlink_call(process, base_handle, path, out_size,
+				    path_buffer, &copy_len) != 0) {
 		return -LINUX_ENOENT;
-	}
-	unpack_path(target, reply.words[2], reply.words[3]);
-	copy_len = reply.words[1];
-	if (copy_len > out_size) {
-		copy_len = out_size;
-	}
-	if (copy_len > sizeof(target) ||
-	    bunix_buffer_write(path_buffer, 0, target, copy_len) != 0) {
-		return -LINUX_EINVAL;
 	}
 	return (long)copy_len;
 }
