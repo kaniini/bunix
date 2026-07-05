@@ -59,8 +59,6 @@ struct fork_start {
 	struct arch_syscall_frame frame;
 };
 
-static struct task_start task_starts[64];
-static u32 task_start_count;
 static char task_names[64][32];
 static u32 task_name_count;
 
@@ -321,9 +319,12 @@ static const char *copy_task_name(const char *name)
 
 static void task_entry_thread(void *arg)
 {
-	const struct task_start *start = (const struct task_start *)arg;
+	struct task_start *start = (struct task_start *)arg;
+	const u64 entry = start->entry;
+	const u64 stack = start->stack;
 
-	arch_user_enter(start->entry, start->stack);
+	slab_free(start);
+	arch_user_enter(entry, stack);
 }
 
 static void fork_entry_thread(void *arg)
@@ -598,19 +599,24 @@ int server_task_start(struct task *parent, u64 task_handle, u64 entry)
 
 	struct task *task = task_from_handle(parent, task_handle,
 					    TASK_RIGHT_SEND);
-	if (task == 0 ||
-	    task_start_count >= sizeof(task_starts) / sizeof(task_starts[0])) {
+	if (task == 0) {
 		return -1;
 	}
 
-	struct task_start *start = &task_starts[task_start_count++];
+	struct task_start *start = slab_alloc(sizeof(*start));
+	if (start == 0) {
+		return -1;
+	}
 	start->entry = entry;
 	start->stack = USER_STACK_TOP - sizeof(u64);
 
 	console_printf("kernel: task start task=%u entry=%p\n", task_id(task),
 		       (const void *)entry);
-	return thread_create(task, task_name(task), task_entry_thread, start) != 0 ?
-	       0 : -1;
+	if (thread_create(task, task_name(task), task_entry_thread, start) == 0) {
+		slab_free(start);
+		return -1;
+	}
+	return 0;
 }
 
 int server_task_start_at(struct task *parent, u64 task_handle, u64 entry,
@@ -618,20 +624,25 @@ int server_task_start_at(struct task *parent, u64 task_handle, u64 entry,
 {
 	struct task *task = task_from_handle(parent, task_handle,
 					    TASK_RIGHT_SEND);
-	if (task == 0 || stack == 0 ||
-	    task_start_count >= sizeof(task_starts) / sizeof(task_starts[0])) {
+	if (task == 0 || stack == 0) {
 		return -1;
 	}
 
-	struct task_start *start = &task_starts[task_start_count++];
+	struct task_start *start = slab_alloc(sizeof(*start));
+	if (start == 0) {
+		return -1;
+	}
 	start->entry = entry;
 	start->stack = stack;
 
 	console_printf("kernel: task start task=%u entry=%p stack=%p\n",
 		       task_id(task), (const void *)entry,
 		       (const void *)stack);
-	return thread_create(task, task_name(task), task_entry_thread, start) != 0 ?
-	       0 : -1;
+	if (thread_create(task, task_name(task), task_entry_thread, start) == 0) {
+		slab_free(start);
+		return -1;
+	}
+	return 0;
 }
 
 int server_task_kill(struct task *parent, u64 task_handle)
