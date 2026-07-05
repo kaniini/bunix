@@ -1524,6 +1524,26 @@ static u64 linux_forward_output_buffer(struct ipc_port *linux,
 	return reply.words[0];
 }
 
+static u64 linux_forward_output_words(struct ipc_port *linux,
+				      struct ipc_port *reply_port,
+				      struct ipc_message *request,
+				      u32 type,
+				      void *user_out,
+				      u64 size,
+				      u32 cap_rights,
+				      u64 word0,
+				      u64 word2,
+				      u64 word3)
+{
+	request->type = type;
+	request->words[0] = word0;
+	request->words[1] = size;
+	request->words[2] = word2;
+	request->words[3] = word3;
+	return linux_forward_output_buffer(linux, reply_port, request, user_out,
+					   size, cap_rights);
+}
+
 static u64 linux_forward_fixed_output_buffer(struct ipc_port *linux,
 					     struct ipc_port *reply_port,
 					     struct ipc_message *request,
@@ -3137,28 +3157,21 @@ poll_again:
 		if (arg1 == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
-		request.type = LINUX_SYSCALL_READ;
-		request.words[0] = arg0;
-		request.words[1] = len;
-		request.words[2] = 0;
-		request.words[3] = 0;
-		return linux_forward_output_buffer(linux, reply_port, &request,
-						   (void *)arg1, len,
-						   TASK_RIGHT_SEND |
-						   TASK_RIGHT_DUP);
+		return linux_forward_output_words(linux, reply_port, &request,
+						  LINUX_SYSCALL_READ,
+						  (void *)arg1, len,
+						  TASK_RIGHT_SEND |
+						  TASK_RIGHT_DUP,
+						  arg0, 0, 0);
 	}
 	case LINUX_SYSCALL_GETDENTS64: {
 		if (arg1 == 0 || arg2 == 0 || arg2 > LINUX_MAX_SYSCALL_BUFFER) {
 			return (u64)-LINUX_EINVAL;
 		}
-		request.type = LINUX_SYSCALL_GETDENTS64;
-		request.words[0] = arg0;
-		request.words[1] = arg2;
-		request.words[2] = 0;
-		request.words[3] = 0;
-		return linux_forward_output_buffer(linux, reply_port, &request,
-						   (void *)arg1, arg2,
-						   TASK_RIGHT_SEND);
+		return linux_forward_output_words(linux, reply_port, &request,
+						  LINUX_SYSCALL_GETDENTS64,
+						  (void *)arg1, arg2,
+						  TASK_RIGHT_SEND, arg0, 0, 0);
 	}
 	case LINUX_SYSCALL_WRITE: {
 		if (arg1 == 0 || arg2 > LINUX_MAX_SYSCALL_BUFFER) {
@@ -3218,14 +3231,11 @@ poll_again:
 			return (u64)-LINUX_EINVAL;
 		}
 
-		request.type = LINUX_SYSCALL_RECVFROM;
-		request.words[0] = arg0;
-		request.words[1] = len;
-		request.words[2] = arg3;
-		request.words[3] = 0;
-		return linux_forward_output_buffer(linux, reply_port, &request,
-						   (void *)arg1, len,
-						   TASK_RIGHT_SEND);
+		return linux_forward_output_words(linux, reply_port, &request,
+						  LINUX_SYSCALL_RECVFROM,
+						  (void *)arg1, len,
+						  TASK_RIGHT_SEND,
+						  arg0, arg3, 0);
 	}
 	case LINUX_SYSCALL_SENDFILE:
 		return (u64)-LINUX_EINVAL;
