@@ -211,6 +211,9 @@ into the new task image instead of using tiny fixed argv/env arrays. Linux
 `execve` accepts executable paths up to the current 256-byte VFS path budget,
 and `getcwd` returns cwd strings through shared-buffer transport instead of the
 inline IPC word path.
+Proc's native executable registry and bootstrap's `/etc/execs` and
+`/etc/spawns` parsing use the same 256-byte path budget, so native task spawns
+can exercise long VFS paths as well.
 The login program now execs the shell with `HOME`, `USER`, `LOGNAME`, `SHELL`,
 `PATH`, and `TERM`, and changes into the account home directory before execing
 the shell. Command lookup, login environment inheritance, larger argv/env

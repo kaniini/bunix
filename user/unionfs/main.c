@@ -900,21 +900,23 @@ static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 	char relative[UNIONFS_MAX_PATH];
 	char upper[UNIONFS_MAX_PATH];
 	char lower[UNIONFS_MAX_PATH];
+	int upper_ok;
 
 	if (mounted_relative_path(path, relative) != 0 ||
-	    compose_upper_path(relative, upper) != 0 ||
 	    compose_lower_path(relative, lower) != 0) {
 		bunix_console_log("unionfs: open path failed\n",
 				  sizeof("unionfs: open path failed\n") - 1);
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
 		return;
 	}
-	if (service_path_call(tmpfs_service, message->type, upper,
+	upper_ok = compose_upper_path(relative, upper) == 0;
+	if (upper_ok &&
+	    service_path_call(tmpfs_service, message->type, upper,
 			      message->words[3], reply) == 0 &&
 	    reply->words[0] == 0) {
 		return;
 	}
-	if (whiteout_exists(relative)) {
+	if (upper_ok && whiteout_exists(relative)) {
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
 		return;
 	}
@@ -963,18 +965,20 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 	u64 upper_handle = 0;
 	u64 upper_type = 0;
 	u64 upper_size = 0;
+	int upper_ok;
 	int lower_dir;
 
 	if (mounted_relative_path(path, relative) != 0 ||
-	    compose_upper_path(relative, upper) != 0 ||
 	    compose_lower_path(relative, lower) != 0) {
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
 		return;
 	}
-	if (service_path_call(tmpfs_service, BUNIX_VFS_OPEN_BUFFER, upper,
+	upper_ok = compose_upper_path(relative, upper) == 0;
+	if (!upper_ok ||
+	    service_path_call(tmpfs_service, BUNIX_VFS_OPEN_BUFFER, upper,
 			      message->words[3], &layer_reply) != 0 ||
 	    layer_reply.words[0] != 0) {
-		if (whiteout_exists(relative)) {
+		if (upper_ok && whiteout_exists(relative)) {
 			bunix_console_log("unionfs: open whiteout\n",
 					  sizeof("unionfs: open whiteout\n") - 1);
 			reply->words[0] = BUNIX_VFS_ERR_NOENT;
@@ -1023,7 +1027,8 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 	upper_handle = layer_reply.words[1];
 	upper_size = layer_reply.words[2];
 	upper_type = layer_reply.words[3];
-	lower_dir = lower_is_directory(lower) && !whiteout_exists(relative);
+	lower_dir = lower_is_directory(lower) &&
+		    (!upper_ok || !whiteout_exists(relative));
 	if (upper_type == BUNIX_VFS_TYPE_DIRECTORY || lower_dir) {
 		handle = remember_dir_open(relative,
 					   upper_type == BUNIX_VFS_TYPE_DIRECTORY ?

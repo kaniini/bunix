@@ -131,7 +131,7 @@ static u64 str_len(const char *text)
 
 enum {
 	BOOT_EXECS_MAX = 4096,
-	BOOT_TOKEN_MAX = 128,
+	BOOT_TOKEN_MAX = 256,
 };
 
 struct boot_spawn_args {
@@ -387,6 +387,10 @@ static void log_path_line(const char *prefix, const char *path)
 	bunix_console_log(line, cursor);
 }
 
+static long proc_spawn_wait_args(u64 proc, const char *path,
+				 const char **args, u64 arg_count,
+				 const char **envs, u64 env_count);
+
 static long proc_spawn_wait(u64 proc, const char *path)
 {
 	struct bunix_msg request = {
@@ -400,6 +404,9 @@ static long proc_spawn_wait(u64 proc, const char *path)
 
 	if (path == 0) {
 		return -1;
+	}
+	if (str_len(path) + 1 > BUNIX_IPC_DATA_BYTES) {
+		return proc_spawn_wait_args(proc, path, 0, 0, 0, 0);
 	}
 	pack_path(&request.words[0], path);
 	if (bunix_ipc_call(proc, &request, &reply) != 0 ||
