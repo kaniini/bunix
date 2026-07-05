@@ -78,6 +78,7 @@ enum {
 	LINUX_ECHOE = 0000020,
 	LINUX_ECHOK = 0000040,
 	LINUX_MAX_WRITE = 65536,
+	LINUX_MAX_DIRENT_BUFFER = 512 * 1024,
 	LINUX_MAX_PATH = 4096,
 	LINUX_NAME_MAX = 255,
 	LINUX_TIMEVAL_SIZE = 16,
@@ -3773,9 +3774,10 @@ static long linux_readdir_name(u64 handle, u64 index, u64 name_buffer,
 static long linux_getdents64(struct linux_process *process, u64 fd,
 			     u64 buffer, u64 len)
 {
-	char out[LINUX_MAX_WRITE];
+	char *out;
 	u64 written = 0;
-	const u64 out_len = len > sizeof(out) ? sizeof(out) : len;
+	const u64 out_len = len > LINUX_MAX_DIRENT_BUFFER ?
+			    LINUX_MAX_DIRENT_BUFFER : len;
 	const long name_buffer = bunix_buffer_create(LINUX_MAX_PATH);
 
 	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
@@ -3798,6 +3800,11 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 			return -LINUX_EFAULT;
 		}
 		return linux_einval(__func__, __LINE__);
+	}
+	out = (char *)bunix_alloc(out_len);
+	if (out == 0) {
+		bunix_handle_close((u64)name_buffer);
+		return -LINUX_ENOMEM;
 	}
 
 	while (written < out_len) {
@@ -3834,6 +3841,7 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 			}
 			if (result != 0) {
 				bunix_handle_close((u64)name_buffer);
+				bunix_free(out);
 				return result;
 			}
 		}
@@ -3859,9 +3867,11 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 
 	if (bunix_buffer_write(buffer, 0, out, written) != 0) {
 		bunix_handle_close((u64)name_buffer);
+		bunix_free(out);
 		return -LINUX_EFAULT;
 	}
 	bunix_handle_close((u64)name_buffer);
+	bunix_free(out);
 	return (long)written;
 }
 

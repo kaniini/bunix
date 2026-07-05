@@ -203,6 +203,7 @@ enum {
 	LINUX_TERMIOS_SIZE = 60,
 	ARCH_USER_MAX_CPUS = 8,
 	LINUX_MAX_SYSCALL_BUFFER = 65536,
+	LINUX_MAX_SHARED_BUFFER = 1024 * 1024,
 	LINUX_MAX_SOCKADDR = 128,
 	LINUX_EXEC_MAX_PATH = 4096,
 	LINUX_EXEC_MAX_STRING = 4096,
@@ -1612,7 +1613,7 @@ static u64 linux_getdents64_chunked(struct ipc_port *linux,
 	}
 	while (total < len) {
 		const u64 chunk = min_u64(len - total,
-					  LINUX_MAX_SYSCALL_BUFFER);
+					  LINUX_MAX_SHARED_BUFFER);
 		const u64 nread = linux_forward_output_words(
 			linux, reply_port, request, LINUX_SYSCALL_GETDENTS64,
 			(void *)(user_buffer + total), chunk, TASK_RIGHT_SEND,

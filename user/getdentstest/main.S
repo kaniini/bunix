@@ -50,7 +50,7 @@ _start:
 	testq %rax, %rax
 	jne fail
 
-	movq $260, %r13
+	movq $400, %r13
 create_loop:
 	movq $257, %rax
 	movq $-100, %rdi
@@ -99,7 +99,7 @@ create_next:
 	leaq large_getdents_buffer(%rip), %rsi
 	movq $131072, %rdx
 	syscall
-	testq %rax, %rax
+	cmpq $65536, %rax
 	jle close_fail
 
 	movq $3, %rax
