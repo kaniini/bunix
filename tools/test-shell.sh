@@ -259,6 +259,17 @@ while ! grep -F "LONG_EXEC_PATH_OK" "$log" >/dev/null 2>&1; do
 	fi
 	sleep 1
 done
+
+i=0
+while ! grep -F "proc long cmdline ok" "$log" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -gt 45 ]; then
+		echo "long proc cmdline regression failed" >&2
+		tail -n 180 "$log" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
 i=0
 while ! grep -F "LONG_GETCWD_OK" "$log" >/dev/null 2>&1; do
 	i=$((i + 1))

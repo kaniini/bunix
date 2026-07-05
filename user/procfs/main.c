@@ -4,7 +4,7 @@
 
 enum {
 	PROCFS_HANDLE_NAMES = 3,
-	PROCFS_MAX_TEXT = 2048,
+	PROCFS_MAX_TEXT = 8192,
 	PROCFS_MAX_PATH = 4096,
 	PROCFS_KIND_PROC = 1,
 	PROCFS_KIND_KTHREADS = 2,
@@ -252,6 +252,28 @@ static int proc_call(u64 type, u64 arg, struct bunix_msg *reply)
 	return 0;
 }
 
+static int proc_call_buffer(u64 type, u64 arg0, u64 arg1, u64 arg2,
+			    u64 arg3, u64 buffer, struct bunix_msg *reply)
+{
+	const u64 proc = get_proc_handle();
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = type,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = buffer,
+		.words = { arg0, arg1, arg2, arg3 },
+	};
+
+	if (proc == 0 || buffer == 0 ||
+	    bunix_ipc_call(proc, &request, reply) != 0 ||
+	    reply->words[0] != 0) {
+		return -1;
+	}
+	return 0;
+}
+
 static int proc_info(u64 pid, struct proc_info *info)
 {
 	struct bunix_msg reply;
@@ -283,13 +305,36 @@ static int proc_cmdline(u64 pid, char *out, u64 out_size)
 {
 	struct bunix_msg reply;
 	u64 len;
+	long buffer;
 
-	if (out == 0 || out_size == 0 ||
-	    proc_call(BUNIX_PROC_CMDLINE, pid, &reply) != 0) {
+	if (out == 0 || out_size == 0) {
 		return -1;
 	}
 	for (u64 i = 0; i < out_size; i++) {
 		out[i] = '\0';
+	}
+	buffer = bunix_buffer_create(out_size);
+	if (buffer > 0 &&
+	    proc_call_buffer(BUNIX_PROC_CMDLINE_BUFFER, pid, 0, 0,
+			     out_size - 1, (u64)buffer, &reply) == 0) {
+		len = reply.words[2];
+		if (len >= out_size) {
+			len = out_size - 1;
+		}
+		if (len != 0 &&
+		    bunix_buffer_read((u64)buffer, 0, out, len) != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		out[len] = '\0';
+		bunix_handle_close((u64)buffer);
+		return 0;
+	}
+	if (buffer > 0) {
+		bunix_handle_close((u64)buffer);
+	}
+	if (proc_call(BUNIX_PROC_CMDLINE, pid, &reply) != 0) {
+		return -1;
 	}
 	len = reply.words[1];
 	if (len >= out_size) {
@@ -906,7 +951,7 @@ static u64 build_ipc(void)
 static const char *pid_name(u64 pid)
 {
 	static char name[32];
-	char cmdline[32];
+	char cmdline[PROCFS_MAX_PATH];
 	u64 start = 0;
 	u64 len = 0;
 
@@ -929,7 +974,7 @@ static const char *pid_name(u64 pid)
 
 static const char *pid_cmdline(u64 pid)
 {
-	static char cmdline[32];
+	static char cmdline[PROCFS_MAX_PATH];
 
 	if (proc_cmdline(pid, cmdline, sizeof(cmdline)) != 0 ||
 	    cmdline[0] == '\0') {

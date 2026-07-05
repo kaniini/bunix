@@ -146,6 +146,10 @@ userspace, plus process metadata such as `/proc/self/status`,
 `/proc/self/cmdline`, `/proc/self/fd`, `/proc/self/exe`, `/proc/stat`,
 `/proc/ipc`, `/proc/filesystems`, `/proc/cpuinfo`, `/proc/meminfo`,
 `/proc/mounts`, and `/proc/uptime`.
+Proc command lines are stored as dynamically allocated strings in the proc
+server and read by procfs through buffer-backed RPCs, so long Linux exec paths
+are visible through `/proc/*/cmdline` instead of being truncated to the IPC word
+payload.
 VFS sends mount notifications to procfs, so `/proc/mounts` reflects the live
 translator set without procfs calling back into VFS during file reads.
 

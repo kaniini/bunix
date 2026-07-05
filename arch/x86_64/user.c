@@ -233,7 +233,7 @@ enum {
 	LINUX_RPC_REGISTER_PROCESS = 1000,
 	LINUX_RPC_FORK_PROCESS = 1001,
 	LINUX_RPC_EXEC_PROCESS = 1002,
-	USER_PROC_SET_CMDLINE = 8,
+	USER_PROC_SET_CMDLINE_BUFFER = 14,
 };
 
 enum {
@@ -2406,43 +2406,42 @@ static u64 linux_exec_process(struct task *task)
 	return reply.words[0];
 }
 
-static void linux_pack_path_words(u64 *words, const char *path)
-{
-	words[0] = 0;
-	words[1] = 0;
-	for (u64 i = 0; i < 16 && path[i] != '\0'; i++) {
-		const u64 slot = i / 8;
-		const u64 shift = (i % 8) * 8;
-
-		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
-	}
-}
-
 static void linux_proc_set_cmdline(struct task *task, u64 linux_pid,
 				   const char *path)
 {
 	struct ipc_port *proc = ipc_port_find("proc");
 	struct ipc_port *reply_port = task_reply_port(task);
-	u64 words[2];
+	struct shared_buffer *buffer;
+	u64 len;
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_PROC,
-		.type = USER_PROC_SET_CMDLINE,
+		.type = USER_PROC_SET_CMDLINE_BUFFER,
 		.sender = 0,
-		.cap_rights = 0,
+		.cap_rights = TASK_RIGHT_RECV,
 		.reply_port = reply_port,
-		.cap_type = IPC_CAP_NONE,
+		.cap_type = IPC_CAP_BUFFER,
 		.cap_object = 0,
 		.words = { linux_pid, task_id(task), 0, 0 },
 	};
 	struct ipc_message reply;
 
-	if (proc == 0 || reply_port == 0 || linux_pid == 0) {
+	if (proc == 0 || reply_port == 0 || linux_pid == 0 || path == 0) {
 		return;
 	}
-	linux_pack_path_words(words, path);
-	request.words[2] = words[0];
-	request.words[3] = words[1];
-	(void)(ipc_send(proc, &request) == 0 && ipc_recv(reply_port, &reply) == 0);
+	len = str_len(path) + 1;
+	if (len == 0 || len > LINUX_EXEC_MAX_PATH) {
+		return;
+	}
+	buffer = buffer_create(len);
+	if (buffer == 0 || buffer_write(buffer, 0, path, len) != 0) {
+		buffer_release(buffer);
+		return;
+	}
+	request.cap_object = buffer;
+	request.words[2] = len;
+	(void)(ipc_send(proc, &request) == 0 &&
+	       ipc_recv(reply_port, &reply) == 0);
+	buffer_release(buffer);
 }
 
 static const char *linux_syscall_name(u64 number)

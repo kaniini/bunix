@@ -66,6 +66,7 @@ struct process {
 	u64 waiter;
 	u64 cmd_words[2];
 	u64 cmd_len;
+	char *cmdline;
 };
 
 struct proc_exec_entry {
@@ -141,6 +142,8 @@ static const char proc_online[] = "proc: online\n";
 static const char proc_ready[] = "proc: ready\n";
 static const char proc_register_failed[] = "proc: register failed\n";
 
+static u64 str_len(const char *text);
+
 static long register_service(u64 service, u64 handle)
 {
 	struct bunix_msg request = {
@@ -193,6 +196,92 @@ static void pack_path(u64 *words, const char *path)
 
 		words[slot] |= ((u64)(unsigned char)path[i]) << shift;
 	}
+}
+
+static char *string_dup_len(const char *text, u64 len)
+{
+	char *copy;
+
+	if (text == 0) {
+		return 0;
+	}
+	copy = (char *)bunix_alloc(len + 1);
+	if (copy == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < len; i++) {
+		copy[i] = text[i];
+	}
+	copy[len] = '\0';
+	return copy;
+}
+
+static int process_set_cmdline(struct process *process, const char *cmdline,
+			       u64 cmd_len)
+{
+	char *copy;
+
+	if (process == 0 || cmdline == 0 || cmd_len >= PROC_EXEC_PATH_MAX) {
+		return -1;
+	}
+	copy = string_dup_len(cmdline, cmd_len);
+	if (copy == 0) {
+		return -1;
+	}
+	if (process->cmdline != 0) {
+		bunix_free(process->cmdline);
+	}
+	process->cmdline = copy;
+	process->cmd_len = cmd_len;
+	pack_path(process->cmd_words, copy);
+	return 0;
+}
+
+static int process_set_cmdline_from_words(struct process *process,
+					  u64 cmd_left, u64 cmd_right,
+					  u64 cmd_len)
+{
+	char text[17];
+	u64 len = cmd_len;
+
+	for (u64 i = 0; i < sizeof(text); i++) {
+		text[i] = '\0';
+	}
+	for (u64 i = 0; i < 8; i++) {
+		text[i] = (char)((cmd_left >> (i * 8)) & 0xff);
+		text[i + 8] = (char)((cmd_right >> (i * 8)) & 0xff);
+	}
+	if (len > 16) {
+		len = 16;
+	}
+	while (len > 0 && text[len - 1] == '\0') {
+		len--;
+	}
+	return process_set_cmdline(process, text, len);
+}
+
+static int process_set_cmdline_from_buffer(struct process *process, u64 buffer,
+					   u64 len)
+{
+	char *text;
+	int result;
+
+	if (process == 0 || buffer == 0 || len == 0 ||
+	    len > PROC_EXEC_PATH_MAX) {
+		return -1;
+	}
+	text = (char *)bunix_alloc(len);
+	if (text == 0) {
+		return -1;
+	}
+	if (bunix_buffer_read(buffer, 0, text, len) != 0 ||
+	    text[len - 1] != '\0') {
+		bunix_free(text);
+		return -1;
+	}
+	result = process_set_cmdline(process, text, len - 1);
+	bunix_free(text);
+	return result;
 }
 
 static void unpack_bytes(unsigned char *out, const u64 *words, u64 len)
@@ -1476,6 +1565,10 @@ static void process_reset(struct process *process)
 	process->cmd_words[0] = 0;
 	process->cmd_words[1] = 0;
 	process->cmd_len = 0;
+	if (process->cmdline != 0) {
+		bunix_free(process->cmdline);
+	}
+	process->cmdline = 0;
 	bunix_free(process);
 }
 
@@ -1576,8 +1669,11 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 	process->status = 0;
 	process->exited = 0;
 	process->waiter = 0;
-	pack_path(process->cmd_words, path);
-	process->cmd_len = str_len(path);
+	if (process_set_cmdline(process, path, str_len(path)) != 0) {
+		bunix_free(process);
+		exec_strings_free(&default_strings);
+		return -1;
+	}
 	*pid = process->pid;
 	if (bunix_map_set(&processes_by_pid, process->pid,
 			  (u64)process) != 0) {
@@ -1651,9 +1747,11 @@ static long register_linux_child_process(u64 linux_pid, u64 task_id, u64 ppid,
 	process->status = 0;
 	process->exited = 0;
 	process->waiter = 0;
-	process->cmd_words[0] = cmd_left;
-	process->cmd_words[1] = cmd_right;
-	process->cmd_len = cmd_len;
+	if (process_set_cmdline_from_words(process, cmd_left, cmd_right,
+					   cmd_len) != 0) {
+		bunix_free(process);
+		return -1;
+	}
 	if (bunix_map_set(&processes_by_pid, process->pid,
 			  (u64)process) != 0 ||
 	    bunix_map_set(&processes_by_task_id, task_id,
@@ -1881,6 +1979,38 @@ int main(void)
 			}
 			break;
 		}
+		case BUNIX_PROC_CMDLINE_BUFFER: {
+			struct process *process = process_find(message.words[0]);
+			const u64 buffer = message.cap;
+			const u64 offset = message.words[2];
+			u64 len = message.words[3];
+
+			if (process == 0 || buffer == 0 ||
+			    process->cmdline == 0 ||
+			    offset > process->cmd_len) {
+				reply.words[0] = (u64)-1;
+			} else {
+				const u64 remaining = process->cmd_len - offset;
+
+				if (len > remaining) {
+					len = remaining;
+				}
+				if (len != 0 &&
+				    bunix_buffer_write(buffer, 0,
+						       process->cmdline + offset,
+						       len) != 0) {
+					reply.words[0] = (u64)-1;
+				} else {
+					reply.words[0] = 0;
+					reply.words[1] = process->cmd_len;
+					reply.words[2] = len;
+				}
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		}
 		case BUNIX_PROC_DETAILS: {
 			struct process *process = process_find(message.words[0]);
 
@@ -1920,6 +2050,49 @@ int main(void)
 				process->cmd_words[1] = message.words[3];
 				process->cmd_len = 16;
 				reply.words[0] = 0;
+			}
+			break;
+		}
+		case BUNIX_PROC_SET_CMDLINE_BUFFER: {
+			struct process *process =
+				process_find_linux_pid(message.words[0]);
+			const u64 len = message.words[2];
+
+			if (process == 0) {
+				if (linux_exit_pending(message.words[0])) {
+					reply.words[0] = 0;
+					reply.words[1] = 0;
+				} else {
+					u64 pid = 0;
+
+					reply.words[0] =
+						(u64)register_linux_child_process(message.words[0],
+										  message.words[1],
+										  0,
+										  0,
+										  0,
+										  0,
+										  &pid);
+					reply.words[1] = pid;
+					process = pid == 0 ? 0 :
+						  process_find(pid);
+					if (reply.words[0] == 0 &&
+					    process != 0 &&
+					    process_set_cmdline_from_buffer(process,
+									    message.cap,
+									    len) != 0) {
+						reply.words[0] = (u64)-1;
+					}
+				}
+			} else if (process_set_cmdline_from_buffer(process,
+								   message.cap,
+								   len) == 0) {
+				reply.words[0] = 0;
+			} else {
+				reply.words[0] = (u64)-1;
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
 			}
 			break;
 		}
