@@ -198,6 +198,8 @@ static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
 static void pack_path(u64 *words, const char *path);
+static long alloc_fd(struct linux_process *process, u64 kind, u64 handle,
+		     u64 size);
 
 static u64 linux_user_service(void)
 {
@@ -615,15 +617,62 @@ static int string_equal(const char *left, const char *right)
 	return left[i] == right[i];
 }
 
-static int is_utmp_path(const char *path)
-{
-	return string_equal(path, "/run/utmp") ||
-	       string_equal(path, "/var/run/utmp");
-}
-
 static int is_utmps_socket_path(const char *path)
 {
 	return string_equal(path, "/run/utmps/.utmpd-socket");
+}
+
+struct linux_virtual_path {
+	const char *path;
+	u64 fd_kind;
+	u64 mode;
+};
+
+static const struct linux_virtual_path virtual_paths[] = {
+	{ "/dev/tty", LINUX_FD_CONSOLE, LINUX_S_IFCHR | 0600 },
+	{ "/dev/console", LINUX_FD_CONSOLE, LINUX_S_IFCHR | 0600 },
+	{ "/dev/null", LINUX_FD_NULL, LINUX_S_IFCHR | 0666 },
+	{ "/dev/zero", LINUX_FD_ZERO, LINUX_S_IFCHR | 0666 },
+	{ "/dev/random", LINUX_FD_RANDOM, LINUX_S_IFCHR | 0666 },
+	{ "/dev/urandom", LINUX_FD_RANDOM, LINUX_S_IFCHR | 0666 },
+	{ "/run/utmp", LINUX_FD_UTMP, LINUX_S_IFREG | 0444 },
+	{ "/var/run/utmp", LINUX_FD_UTMP, LINUX_S_IFREG | 0444 },
+};
+
+static const struct linux_virtual_path *linux_virtual_path_find(
+	const char *path)
+{
+	for (u64 i = 0; i < sizeof(virtual_paths) / sizeof(virtual_paths[0]);
+	     i++) {
+		if (string_equal(path, virtual_paths[i].path)) {
+			return &virtual_paths[i];
+		}
+	}
+	return 0;
+}
+
+static u64 linux_virtual_path_size(const struct linux_virtual_path *path)
+{
+	return path != 0 && path->fd_kind == LINUX_FD_UTMP ?
+	       linux_user_session_count() * LINUX_UTMP_RECORD_SIZE : 0;
+}
+
+static long linux_virtual_path_open(struct linux_process *process,
+				    const struct linux_virtual_path *path)
+{
+	const u64 handle = path->fd_kind == LINUX_FD_CONSOLE ?
+			   BUNIX_HANDLE_CONSOLE : 0;
+
+	return alloc_fd(process, path->fd_kind, handle,
+			linux_virtual_path_size(path));
+}
+
+static void linux_virtual_path_meta(const struct linux_virtual_path *path,
+				    struct bunix_msg *out)
+{
+	out->words[1] = linux_virtual_path_size(path);
+	out->words[2] = path->mode;
+	out->words[3] = 0;
 }
 
 static void copy_literal(char *dst, u64 dst_len, const char *src)
@@ -2285,6 +2334,7 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
+	const struct linux_virtual_path *virtual_path;
 
 	if (path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
 	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
@@ -2298,25 +2348,9 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		return base_result;
 	}
 
-	if (string_equal(full_path, "/dev/tty") ||
-	    string_equal(full_path, "/dev/console")) {
-		return alloc_fd(process, LINUX_FD_CONSOLE,
-				BUNIX_HANDLE_CONSOLE, 0);
-	}
-	if (string_equal(full_path, "/dev/null")) {
-		return alloc_fd(process, LINUX_FD_NULL, 0, 0);
-	}
-	if (string_equal(full_path, "/dev/zero")) {
-		return alloc_fd(process, LINUX_FD_ZERO, 0, 0);
-	}
-	if (string_equal(full_path, "/dev/random") ||
-	    string_equal(full_path, "/dev/urandom")) {
-		return alloc_fd(process, LINUX_FD_RANDOM, 0, 0);
-	}
-	if (is_utmp_path(full_path)) {
-		return alloc_fd(process, LINUX_FD_UTMP, 0,
-				linux_user_session_count() *
-				LINUX_UTMP_RECORD_SIZE);
+	virtual_path = linux_virtual_path_find(full_path);
+	if (virtual_path != 0) {
+		return linux_virtual_path_open(process, virtual_path);
 	}
 	if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER, base_handle,
 				path, &reply) != 0) {
@@ -2395,6 +2429,7 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
+	const struct linux_virtual_path *virtual_path;
 
 	if ((mode & ~(LINUX_R_OK | LINUX_W_OK | LINUX_X_OK)) != 0 ||
 	    (flags & ~(LINUX_AT_EACCESS | LINUX_AT_SYMLINK_NOFOLLOW)) != 0 ||
@@ -2410,13 +2445,8 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 		return base_result;
 	}
 
-	if (string_equal(full_path, "/dev/tty") ||
-	    string_equal(full_path, "/dev/console") ||
-	    string_equal(full_path, "/dev/null") ||
-	    string_equal(full_path, "/dev/zero") ||
-	    string_equal(full_path, "/dev/random") ||
-	    string_equal(full_path, "/dev/urandom") ||
-	    is_utmp_path(full_path)) {
+	virtual_path = linux_virtual_path_find(full_path);
+	if (virtual_path != 0) {
 		return 0;
 	}
 	if (linux_vfs_path_call_flags(process, BUNIX_VFS_ACCESS_BUFFER,
@@ -2869,6 +2899,7 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
+	const struct linux_virtual_path *virtual_path;
 
 	if (path_buffer == 0 || path_len == 0 || path_len > sizeof(path) ||
 	    bunix_buffer_read(path_buffer, 0, path, path_len) != 0 ||
@@ -2884,32 +2915,9 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 	if (path_normalize(process->cwd, path, full_path) != 0) {
 		return -LINUX_EINVAL;
 	}
-	if (string_equal(full_path, "/dev/tty") ||
-	    string_equal(full_path, "/dev/console")) {
-		out->words[1] = 0;
-		out->words[2] = LINUX_S_IFCHR | 0600;
-		out->words[3] = 0;
-		return 0;
-	}
-	if (string_equal(full_path, "/dev/null")) {
-		out->words[1] = 0;
-		out->words[2] = LINUX_S_IFCHR | 0666;
-		out->words[3] = 0;
-		return 0;
-	}
-	if (string_equal(full_path, "/dev/zero") ||
-	    string_equal(full_path, "/dev/random") ||
-	    string_equal(full_path, "/dev/urandom")) {
-		out->words[1] = 0;
-		out->words[2] = LINUX_S_IFCHR | 0666;
-		out->words[3] = 0;
-		return 0;
-	}
-	if (is_utmp_path(full_path)) {
-		out->words[1] = linux_user_session_count() *
-				LINUX_UTMP_RECORD_SIZE;
-		out->words[2] = ((u64)BUNIX_VFS_TYPE_REGULAR << 32) | 0444;
-		out->words[3] = 0;
+	virtual_path = linux_virtual_path_find(full_path);
+	if (virtual_path != 0) {
+		linux_virtual_path_meta(virtual_path, out);
 		return 0;
 	}
 	if (linux_vfs_path_call_flags(process, BUNIX_VFS_STAT_PATH_META_BUFFER,
