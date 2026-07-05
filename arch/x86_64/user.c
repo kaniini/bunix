@@ -349,6 +349,11 @@ struct elf64_dyn {
 	u64 value;
 } __attribute__((packed));
 
+struct linux_exec_image {
+	struct elf64_ehdr ehdr;
+	struct elf64_phdr *phdrs;
+};
+
 struct linux_exec_args {
 	u64 argc;
 	u64 envc;
@@ -1015,15 +1020,27 @@ static int linux_mmap_file_into_task(struct task *task, struct ipc_port *linux,
 	return 0;
 }
 
+static void linux_exec_image_free(struct linux_exec_image *exec)
+{
+	if (exec == 0) {
+		return;
+	}
+	slab_free(exec->phdrs);
+	exec->phdrs = 0;
+	mem_zero((u8 *)&exec->ehdr, sizeof(exec->ehdr));
+}
+
 static int linux_exec_validate(const u8 *image, u64 image_size,
-			       const struct elf64_ehdr **ehdr_out)
+			       struct linux_exec_image *exec)
 {
 	const struct elf64_ehdr *ehdr;
 	u64 phdr_bytes;
+	u64 phdr_size;
 
-	if (image == 0 || ehdr_out == 0 || image_size < ELF_EHDR_SIZE) {
+	if (image == 0 || exec == 0 || image_size < ELF_EHDR_SIZE) {
 		return -1;
 	}
+	mem_zero((u8 *)exec, sizeof(*exec));
 
 	ehdr = (const struct elf64_ehdr *)image;
 	phdr_bytes = ehdr->phoff + (u64)ehdr->phnum * ehdr->phentsize;
@@ -1042,11 +1059,19 @@ static int linux_exec_validate(const u8 *image, u64 image_size,
 	    phdr_bytes > image_size) {
 		return -1;
 	}
+	phdr_size = (u64)ehdr->phnum * sizeof(exec->phdrs[0]);
+	if (ehdr->phnum != phdr_size / sizeof(exec->phdrs[0])) {
+		return -1;
+	}
+	exec->phdrs = (struct elf64_phdr *)slab_alloc(phdr_size);
+	if (exec->phdrs == 0) {
+		return -2;
+	}
+	exec->ehdr = *ehdr;
+	mem_copy((u8 *)exec->phdrs, image + ehdr->phoff, phdr_size);
 
-	for (u64 i = 0; i < ehdr->phnum; i++) {
-		const struct elf64_phdr *phdr =
-			(const struct elf64_phdr *)(image + ehdr->phoff +
-						    i * ehdr->phentsize);
+	for (u64 i = 0; i < exec->ehdr.phnum; i++) {
+		const struct elf64_phdr *phdr = &exec->phdrs[i];
 
 		if (phdr->type != ELF_PH_LOAD) {
 			continue;
@@ -1056,26 +1081,24 @@ static int linux_exec_validate(const u8 *image, u64 image_size,
 		    phdr->offset + phdr->filesz > image_size ||
 		    phdr->vaddr + phdr->memsz < phdr->vaddr ||
 		    phdr->memsz == 0) {
+			linux_exec_image_free(exec);
 			return -1;
 		}
 	}
 
-	*ehdr_out = ehdr;
 	return 0;
 }
 
-static int linux_exec_vaddr_to_offset(const struct elf64_ehdr *ehdr,
+static int linux_exec_vaddr_to_offset(const struct linux_exec_image *exec,
 				      u64 vaddr, u64 len, u64 *offset)
 {
-	if (ehdr == 0 || offset == 0 || vaddr + len < vaddr) {
+	if (exec == 0 || exec->phdrs == 0 || offset == 0 ||
+	    vaddr + len < vaddr) {
 		return -1;
 	}
 
-	for (u64 i = 0; i < ehdr->phnum; i++) {
-		const struct elf64_phdr *phdr =
-			(const struct elf64_phdr *)((const u8 *)ehdr +
-						    ehdr->phoff +
-						    i * ehdr->phentsize);
+	for (u64 i = 0; i < exec->ehdr.phnum; i++) {
+		const struct elf64_phdr *phdr = &exec->phdrs[i];
 
 		if (phdr->type == ELF_PH_LOAD &&
 		    vaddr >= phdr->vaddr &&
@@ -1089,12 +1112,12 @@ static int linux_exec_vaddr_to_offset(const struct elf64_ehdr *ehdr,
 }
 
 static int linux_exec_apply_relr_one(u8 *image,
-				     const struct elf64_ehdr *ehdr,
+				     const struct linux_exec_image *exec,
 				     u64 load_bias, u64 reloc_vaddr)
 {
 	u64 offset = 0;
 
-	if (linux_exec_vaddr_to_offset(ehdr, reloc_vaddr, sizeof(u64),
+	if (linux_exec_vaddr_to_offset(exec, reloc_vaddr, sizeof(u64),
 				       &offset) != 0) {
 		return -1;
 	}
@@ -1104,7 +1127,7 @@ static int linux_exec_apply_relr_one(u8 *image,
 }
 
 static int linux_exec_apply_relative_relocations(u8 *image,
-						 const struct elf64_ehdr *ehdr,
+						 const struct linux_exec_image *exec,
 						 u64 image_size, u64 load_bias)
 {
 	u64 relr = 0;
@@ -1115,10 +1138,8 @@ static int linux_exec_apply_relative_relocations(u8 *image,
 		return 0;
 	}
 
-	for (u64 i = 0; i < ehdr->phnum; i++) {
-		const struct elf64_phdr *phdr =
-			(const struct elf64_phdr *)(image + ehdr->phoff +
-						    i * ehdr->phentsize);
+	for (u64 i = 0; i < exec->ehdr.phnum; i++) {
+		const struct elf64_phdr *phdr = &exec->phdrs[i];
 
 		if (phdr->type != ELF_PH_DYNAMIC) {
 			continue;
@@ -1156,7 +1177,7 @@ static int linux_exec_apply_relative_relocations(u8 *image,
 	}
 
 	u64 relr_offset = 0;
-	if (linux_exec_vaddr_to_offset(ehdr, relr, relrsz, &relr_offset) != 0 ||
+	if (linux_exec_vaddr_to_offset(exec, relr, relrsz, &relr_offset) != 0 ||
 	    relr_offset + relrsz < relr_offset ||
 	    relr_offset + relrsz > image_size) {
 		return -1;
@@ -1170,7 +1191,7 @@ static int linux_exec_apply_relative_relocations(u8 *image,
 
 		if ((entry & 1) == 0) {
 			reloc_vaddr = entry;
-			if (linux_exec_apply_relr_one(image, ehdr, load_bias,
+			if (linux_exec_apply_relr_one(image, exec, load_bias,
 						      reloc_vaddr) != 0) {
 				return -1;
 			}
@@ -1180,7 +1201,7 @@ static int linux_exec_apply_relative_relocations(u8 *image,
 
 		for (u64 bit = 1; bit < 64; bit++) {
 			if ((entry & (1ull << bit)) != 0 &&
-			    linux_exec_apply_relr_one(image, ehdr, load_bias,
+			    linux_exec_apply_relr_one(image, exec, load_bias,
 						      reloc_vaddr) != 0) {
 				return -1;
 			}
@@ -1192,17 +1213,16 @@ static int linux_exec_apply_relative_relocations(u8 *image,
 }
 
 static int linux_exec_interp_path(const u8 *image,
-				  const struct elf64_ehdr *ehdr,
+				  const struct linux_exec_image *exec,
 				  u64 image_size, char *path, u64 path_size)
 {
-	if (image == 0 || ehdr == 0 || path == 0 || path_size == 0) {
+	if (image == 0 || exec == 0 || exec->phdrs == 0 ||
+	    path == 0 || path_size == 0) {
 		return -1;
 	}
 	path[0] = '\0';
-	for (u64 i = 0; i < ehdr->phnum; i++) {
-		const struct elf64_phdr *phdr =
-			(const struct elf64_phdr *)(image + ehdr->phoff +
-						    i * ehdr->phentsize);
+	for (u64 i = 0; i < exec->ehdr.phnum; i++) {
+		const struct elf64_phdr *phdr = &exec->phdrs[i];
 
 		if (phdr->type != ELF_PH_INTERP) {
 			continue;
@@ -2567,7 +2587,7 @@ static int linux_exec_collect_env(u64 user_envp, struct linux_exec_args *args)
 
 static int linux_exec_build_stack(const char *path,
 				  const struct linux_exec_args *args,
-				  const struct elf64_ehdr *ehdr,
+				  const struct linux_exec_image *exec,
 				  u64 load_bias, u64 program_entry,
 				  u64 interpreter_base,
 				  u8 *stack_image, u64 stack_size,
@@ -2580,8 +2600,9 @@ static int linux_exec_build_stack(const char *path,
 	u64 sp = stack_size;
 	int result = -1;
 
-	if (path == 0 || args == 0 || ehdr == 0 || stack_image == 0 ||
-	    new_sp == 0 || stack_size == 0 || args->argc == 0) {
+	if (path == 0 || args == 0 || exec == 0 || exec->phdrs == 0 ||
+	    stack_image == 0 || new_sp == 0 || stack_size == 0 ||
+	    args->argc == 0) {
 		return -1;
 	}
 
@@ -2630,16 +2651,13 @@ static int linux_exec_build_stack(const char *path,
 	mem_copy(stack_image + sp, random_bytes, sizeof(random_bytes));
 	const u64 random_addr = stack_base + sp;
 
-	const u64 phdr_bytes = ehdr->phnum * sizeof(struct elf64_phdr);
+	const u64 phdr_bytes = exec->ehdr.phnum * sizeof(struct elf64_phdr);
 	if (sp < phdr_bytes) {
 		goto out;
 	}
 	sp = align_down(sp - phdr_bytes, 8);
-	for (u64 i = 0; i < ehdr->phnum; i++) {
-		const struct elf64_phdr *phdr =
-			(const struct elf64_phdr *)((const u8 *)ehdr +
-						    ehdr->phoff +
-						    i * ehdr->phentsize);
+	for (u64 i = 0; i < exec->ehdr.phnum; i++) {
+		const struct elf64_phdr *phdr = &exec->phdrs[i];
 		struct elf64_phdr aux_phdr = *phdr;
 
 		aux_phdr.vaddr += load_bias;
@@ -2649,7 +2667,7 @@ static int linux_exec_build_stack(const char *path,
 	}
 	const u64 copied_phdr_addr = stack_base + sp;
 	const u64 phdr_addr = interpreter_base != 0 ?
-			       load_bias + ehdr->phoff : copied_phdr_addr;
+			       load_bias + exec->ehdr.phoff : copied_phdr_addr;
 
 	sp = align_down(sp, 16);
 	const u64 words = 1 + args->argc + 1 + args->envc + 1 +
@@ -2681,9 +2699,9 @@ static int linux_exec_build_stack(const char *path,
 	stack_words[word++] = LINUX_AT_PHDR;
 	stack_words[word++] = phdr_addr;
 	stack_words[word++] = LINUX_AT_PHENT;
-	stack_words[word++] = ehdr->phentsize;
+	stack_words[word++] = exec->ehdr.phentsize;
 	stack_words[word++] = LINUX_AT_PHNUM;
-	stack_words[word++] = ehdr->phnum;
+	stack_words[word++] = exec->ehdr.phnum;
 	stack_words[word++] = LINUX_AT_EXECFN;
 	stack_words[word++] = execfn;
 	stack_words[word++] = LINUX_AT_RANDOM;
@@ -2725,8 +2743,8 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	struct linux_exec_args args;
 	u64 image_size = 0;
 	u64 interp_size = 0;
-	const struct elf64_ehdr *ehdr;
-	const struct elf64_ehdr *interp_ehdr = 0;
+	struct linux_exec_image exec;
+	struct linux_exec_image interp_exec;
 	u8 *stack_image = 0;
 	u8 *image = 0;
 	u8 *interp_image = 0;
@@ -2743,6 +2761,8 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	int arg_result;
 	const u64 stack_size = LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE;
 
+	mem_zero((u8 *)&exec, sizeof(exec));
+	mem_zero((u8 *)&interp_exec, sizeof(interp_exec));
 	path_result = copy_cstr_from_user_errno(path, user_path, sizeof(path));
 	if (path_result != 0) {
 		return (u64)path_result;
@@ -2763,20 +2783,24 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		       (read_result == -1 ? (u64)-LINUX_EIO :
 			(u64)read_result);
 	}
-	if (linux_exec_validate(image, image_size, &ehdr) != 0) {
+	const int validate_result = linux_exec_validate(image, image_size,
+						       &exec);
+	if (validate_result != 0) {
 		slab_free(image);
 		linux_exec_args_free(&args);
-		return linux_einval_u64(__func__, __LINE__);
+		return validate_result == -2 ? (u64)-LINUX_ENOMEM :
+		       linux_einval_u64(__func__, __LINE__);
 	}
 
-	load_bias = ehdr->type == ELF_TYPE_DYN ? LINUX_EXEC_DYN_LOAD_BIAS : 0;
-	program_entry = ehdr->entry + load_bias;
+	load_bias = exec.ehdr.type == ELF_TYPE_DYN ? LINUX_EXEC_DYN_LOAD_BIAS : 0;
+	program_entry = exec.ehdr.entry + load_bias;
 	entry = program_entry;
 
-	const int interp = linux_exec_interp_path(image, ehdr, image_size,
+	const int interp = linux_exec_interp_path(image, &exec, image_size,
 						 interp_path,
 						 sizeof(interp_path));
 	if (interp < 0) {
+		linux_exec_image_free(&exec);
 		slab_free(image);
 		linux_exec_args_free(&args);
 		return linux_einval_u64(__func__, __LINE__);
@@ -2786,25 +2810,32 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 						  &interp_image, 0,
 						  &interp_size);
 		if (read_result != 0) {
+			linux_exec_image_free(&exec);
 			slab_free(image);
 			linux_exec_args_free(&args);
 			return read_result == -2 ? (u64)-LINUX_ENOMEM :
 			       (read_result == -1 ? (u64)-LINUX_EIO :
 				(u64)read_result);
 		}
-		if (linux_exec_validate(interp_image, interp_size,
-					&interp_ehdr) != 0) {
+		const int interp_validate_result =
+			linux_exec_validate(interp_image, interp_size,
+					    &interp_exec);
+		if (interp_validate_result != 0) {
+			linux_exec_image_free(&exec);
 			slab_free(interp_image);
 			slab_free(image);
 			linux_exec_args_free(&args);
-			return linux_einval_u64(__func__, __LINE__);
+			return interp_validate_result == -2 ? (u64)-LINUX_ENOMEM :
+			       linux_einval_u64(__func__, __LINE__);
 		}
-		interp_bias = interp_ehdr->type == ELF_TYPE_DYN ?
+		interp_bias = interp_exec.ehdr.type == ELF_TYPE_DYN ?
 			      LINUX_EXEC_INTERP_LOAD_BIAS : 0;
-		entry = interp_ehdr->entry + interp_bias;
+		entry = interp_exec.ehdr.entry + interp_bias;
 	}
 	stack_image = (u8 *)slab_alloc(stack_size);
 	if (stack_image == 0) {
+		linux_exec_image_free(&interp_exec);
+		linux_exec_image_free(&exec);
 		if (interp_image != 0) {
 			slab_free(interp_image);
 		}
@@ -2813,12 +2844,14 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		return (u64)-LINUX_ENOMEM;
 	}
 	if ((interp_image == 0 &&
-	     linux_exec_apply_relative_relocations(image, ehdr, image_size,
+	     linux_exec_apply_relative_relocations(image, &exec, image_size,
 						  load_bias) != 0) ||
-	    linux_exec_build_stack(path, &args, ehdr, load_bias, program_entry,
+	    linux_exec_build_stack(path, &args, &exec, load_bias, program_entry,
 				   interp_bias, stack_image, stack_size,
 				   &new_sp) != 0) {
 		slab_free(stack_image);
+		linux_exec_image_free(&interp_exec);
+		linux_exec_image_free(&exec);
 		if (interp_image != 0) {
 			slab_free(interp_image);
 		}
@@ -2829,6 +2862,8 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 
 	if (linux_exec_unmap_current(task) != 0) {
 		slab_free(stack_image);
+		linux_exec_image_free(&interp_exec);
+		linux_exec_image_free(&exec);
 		if (interp_image != 0) {
 			slab_free(interp_image);
 		}
@@ -2837,15 +2872,14 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		return linux_einval_u64(__func__, __LINE__);
 	}
 
-	for (u64 i = 0; i < ehdr->phnum; i++) {
-		const struct elf64_phdr *phdr =
-			(const struct elf64_phdr *)(image +
-						    ehdr->phoff +
-						    i * ehdr->phentsize);
+	for (u64 i = 0; i < exec.ehdr.phnum; i++) {
+		const struct elf64_phdr *phdr = &exec.phdrs[i];
 
 		if (phdr->type == ELF_PH_LOAD &&
 		    linux_exec_map_segment(task, image, phdr, load_bias) != 0) {
 			slab_free(stack_image);
+			linux_exec_image_free(&interp_exec);
+			linux_exec_image_free(&exec);
 			if (interp_image != 0) {
 				slab_free(interp_image);
 			}
@@ -2855,16 +2889,15 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		}
 	}
 	if (interp_image != 0) {
-		for (u64 i = 0; i < interp_ehdr->phnum; i++) {
-			const struct elf64_phdr *phdr =
-				(const struct elf64_phdr *)(interp_image +
-							    interp_ehdr->phoff +
-							    i * interp_ehdr->phentsize);
+		for (u64 i = 0; i < interp_exec.ehdr.phnum; i++) {
+			const struct elf64_phdr *phdr = &interp_exec.phdrs[i];
 
 			if (phdr->type == ELF_PH_LOAD &&
 			    linux_exec_map_segment(task, interp_image, phdr,
 						   interp_bias) != 0) {
 				slab_free(stack_image);
+				linux_exec_image_free(&interp_exec);
+				linux_exec_image_free(&exec);
 				slab_free(interp_image);
 				slab_free(image);
 				linux_exec_args_free(&args);
@@ -2884,6 +2917,8 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	    vm_write_user(task_vm_space(task), stack_base, stack_image,
 			  stack_size) != 0) {
 		slab_free(stack_image);
+		linux_exec_image_free(&interp_exec);
+		linux_exec_image_free(&exec);
 		if (interp_image != 0) {
 			slab_free(interp_image);
 		}
@@ -2898,6 +2933,8 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	frame->user_rsp = new_sp;
 	const u64 exec_result = linux_exec_process(task);
 	if ((i64)exec_result < 0) {
+		linux_exec_image_free(&interp_exec);
+		linux_exec_image_free(&exec);
 		if (interp_image != 0) {
 			slab_free(interp_image);
 		}
@@ -2913,6 +2950,8 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	if (interp_image != 0) {
 		slab_free(interp_image);
 	}
+	linux_exec_image_free(&interp_exec);
+	linux_exec_image_free(&exec);
 	slab_free(image);
 	linux_exec_args_free(&args);
 	return 0;
