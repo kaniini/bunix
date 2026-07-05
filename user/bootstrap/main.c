@@ -216,12 +216,6 @@ struct boot_path_command {
 	u64 path_count;
 };
 
-struct boot_spawn {
-	const char *path;
-	const char *spawned_log;
-	const char *done_log;
-};
-
 static long vfs_read_text(u64 vfs, const char *path, char *out, u64 out_size)
 {
 	const long buffer = bunix_buffer_create(out_size);
@@ -301,7 +295,27 @@ static long register_proc_execs(u64 proc, u64 vfs)
 	return count != 0 ? 0 : -1;
 }
 
-static long proc_spawn_wait(u64 proc, const struct boot_spawn *spawn)
+static void log_path_line(const char *prefix, const char *path)
+{
+	char line[160];
+	u64 cursor = 0;
+
+	for (u64 i = 0; prefix[i] != '\0' && cursor < sizeof(line); i++) {
+		line[cursor++] = prefix[i];
+	}
+	if (path != 0) {
+		for (u64 i = 0; path[i] != '\0' && cursor + 1 < sizeof(line);
+		     i++) {
+			line[cursor++] = path[i];
+		}
+	}
+	if (cursor < sizeof(line)) {
+		line[cursor++] = '\n';
+	}
+	bunix_console_log(line, cursor);
+}
+
+static long proc_spawn_wait(u64 proc, const char *path)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_PROC,
@@ -312,18 +326,15 @@ static long proc_spawn_wait(u64 proc, const struct boot_spawn *spawn)
 	};
 	struct bunix_msg reply;
 
-	if (spawn == 0 || spawn->path == 0) {
+	if (path == 0) {
 		return -1;
 	}
-	pack_path(&request.words[0], spawn->path);
+	pack_path(&request.words[0], path);
 	if (bunix_ipc_call(proc, &request, &reply) != 0 ||
 	    reply.words[0] != 0) {
 		return -1;
 	}
-	if (spawn->spawned_log != 0) {
-		bunix_console_log(spawn->spawned_log,
-				  str_len(spawn->spawned_log));
-	}
+	log_path_line("bootstrap: spawned ", path);
 	request.type = BUNIX_PROC_WAIT;
 	request.words[0] = reply.words[1];
 	request.words[1] = 0;
@@ -333,29 +344,40 @@ static long proc_spawn_wait(u64 proc, const struct boot_spawn *spawn)
 	    reply.words[0] != 0) {
 		return -1;
 	}
-	if (spawn->done_log != 0) {
-		bunix_console_log(spawn->done_log, str_len(spawn->done_log));
-	}
+	log_path_line("bootstrap: exited ", path);
 	return 0;
 }
 
-static long run_boot_spawns(u64 proc)
+static long run_boot_spawns(u64 proc, u64 vfs)
 {
-	const struct boot_spawn spawns[] = {
-		{ "/bin/first", 0, "bootstrap: first process exited\n" },
-		{ "/bin/ipcstress", 0, "bootstrap: ipcstress exited\n" },
-		{ "/bin/lxtest", "bootstrap: linux process spawned\n",
-		  "bootstrap: linux process exited\n" },
-		{ "/bin/musl-hello", "bootstrap: musl process spawned\n",
-		  "bootstrap: musl process exited\n" },
-	};
+	char text[BOOT_EXECS_MAX];
+	u64 pos = 0;
+	u64 count = 0;
 
-	for (u64 i = 0; i < sizeof(spawns) / sizeof(spawns[0]); i++) {
-		if (proc_spawn_wait(proc, &spawns[i]) != 0) {
+	if (vfs_read_text(vfs, "/etc/spawns", text, sizeof(text)) != 0) {
+		return -1;
+	}
+	while (text[pos] != '\0') {
+		char path[BOOT_TOKEN_MAX];
+
+		while (is_space(text[pos])) {
+			pos++;
+		}
+		if (text[pos] == '#') {
+			skip_line(text, &pos);
+			continue;
+		}
+		if (text[pos] == '\0') {
+			break;
+		}
+		if (read_token(text, &pos, path, sizeof(path)) != 0 ||
+		    proc_spawn_wait(proc, path) != 0) {
 			return -1;
 		}
+		count++;
+		skip_line(text, &pos);
 	}
-	return 0;
+	return count != 0 ? 0 : -1;
 }
 
 static long send_path_command(u64 service,
@@ -673,7 +695,7 @@ int main(void)
 	}
 	bunix_console_log(linux_init_exec, sizeof(linux_init_exec) - 1);
 
-	if (run_boot_spawns(proc) != 0) {
+	if (run_boot_spawns(proc, vfs) != 0) {
 		return 1;
 	}
 
