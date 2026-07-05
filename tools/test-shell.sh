@@ -134,7 +134,7 @@ while ! grep -F "TMP_CHOWN_DENY_OK" "$log" >/dev/null 2>&1; do
 	sleep 1
 done
 printf 'busybox head -c 8192 /dev/zero > /tmp/linux-big-write.bin\nbusybox test "$(busybox stat -c "%%s" /tmp/linux-big-write.bin)" = "8192" && echo LINUX_BIG_WRITE_OK\n' >&3
-printf '/bin/mmapbig && echo MMAPBIG_OK\n/bin/readbig && echo READBIG_OK\n' >&3
+printf '/bin/mmapbig && echo MMAPBIG_OK\n/bin/mmaphuge\n/bin/readbig && echo READBIG_OK\n' >&3
 i=0
 while ! grep -F "READBIG_OK" "$log" >/dev/null 2>&1; do
 	i=$((i + 1))
@@ -479,6 +479,7 @@ TMP_SYMLINK_LS_OK
 LINUX_BIG_WRITE_OK
 linux mmapbig ok
 MMAPBIG_OK
+linux mmaphuge ok
 linux readbig ok
 READBIG_OK
 RUN_WRITE_OK

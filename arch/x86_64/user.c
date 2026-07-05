@@ -231,7 +231,6 @@ enum {
 	LINUX_MAP_FIXED_MIN = 0x10000,
 	LINUX_MMAP_BASE = 0x10000000,
 	LINUX_MMAP_LIMIT = 0x20000000,
-	LINUX_MAX_MMAP_SIZE = 0x1000000,
 	LINUX_EXEC_MAX_POINTERS = LINUX_EXEC_MAX_STRING_BYTES / 8,
 	LINUX_PROT_READ = 0x1,
 	LINUX_PROT_WRITE = 0x2,
@@ -3428,8 +3427,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		u64 base = arg0;
 		u64 len = arg1;
 
-		if (len == 0 || len > LINUX_MAX_MMAP_SIZE ||
-		    (flags & LINUX_MAP_PRIVATE) == 0 ||
+		if (len == 0 || (flags & LINUX_MAP_PRIVATE) == 0 ||
 		    len + VM_PAGE_SIZE - 1 < len ||
 		    (!anonymous && (offset & (VM_PAGE_SIZE - 1)) != 0)) {
 			return linux_einval_u64(__func__, __LINE__);
