@@ -6,9 +6,13 @@ enum {
 	TMPFS_HANDLE_NAMES = 3,
 	TMPFS_MAX_PATH = 256,
 	TMPFS_MAX_NAME = 64,
-	TMPFS_ROOT_COUNT = 3,
 	TMPFS_OPEN_DIR = 1,
 	TMPFS_OPEN_FILE = 2,
+};
+
+struct tmpfs_root {
+	struct bunix_tree_node node;
+	char *path;
 };
 
 struct tmpfs_file {
@@ -33,11 +37,7 @@ struct tmpfs_open {
 	char path[TMPFS_MAX_PATH];
 };
 
-static const char *tmpfs_roots[TMPFS_ROOT_COUNT] = {
-	"/tmp",
-	"/run",
-	"/var/tmp",
-};
+static struct bunix_tree roots;
 static struct bunix_tree files;
 static struct bunix_u64_tree open_files;
 static u64 next_open_id = 1;
@@ -51,16 +51,6 @@ static u64 str_len(const char *text)
 		len++;
 	}
 	return len;
-}
-
-static int str_eq(const char *left, const char *right)
-{
-	while (*left != '\0' && *right != '\0') {
-		if (*left++ != *right++) {
-			return 0;
-		}
-	}
-	return *left == '\0' && *right == '\0';
 }
 
 static char *str_dup(const char *text)
@@ -96,12 +86,7 @@ static int path_has_prefix_child(const char *path, const char *prefix)
 
 static int path_is_root(const char *path)
 {
-	for (u64 i = 0; i < TMPFS_ROOT_COUNT; i++) {
-		if (str_eq(path, tmpfs_roots[i])) {
-			return 1;
-		}
-	}
-	return 0;
+	return bunix_tree_get(&roots, path) != 0;
 }
 
 static int path_parent_path(const char *path, char *parent)
@@ -639,22 +624,55 @@ static long mount_path(u64 vfs, const char *path)
 	       reply.words[0] == 0 ? 0 : -1;
 }
 
+static long mount_root(u64 vfs, const char *path)
+{
+	struct tmpfs_root *root;
+
+	if (path == 0 || path[0] != '/' || bunix_tree_get(&roots, path) != 0) {
+		return -1;
+	}
+	root = (struct tmpfs_root *)bunix_calloc(1, sizeof(*root));
+	if (root == 0) {
+		return -1;
+	}
+	root->path = str_dup(path);
+	if (root->path == 0) {
+		bunix_free(root);
+		return -1;
+	}
+	if (mount_path(vfs, root->path) != 0 ||
+	    bunix_tree_insert_node(&roots, &root->node, root->path,
+				   (u64)root) != 0) {
+		bunix_free(root->path);
+		bunix_free(root);
+		return -1;
+	}
+	return 0;
+}
+
 int main(void)
 {
 	const char online[] = "tmpfs: online\n";
 	const char mounted[] = "tmpfs: mounted\n";
+	const char *default_roots[] = {
+		"/tmp",
+		"/run",
+		"/var/tmp",
+	};
 	struct bunix_msg message;
 	const u64 vfs = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
 
 	bunix_console_log(online, sizeof(online) - 1);
+	bunix_tree_init(&roots);
 	bunix_tree_init(&files);
 	bunix_u64_tree_init(&open_files);
 	next_open_id = 1;
 	if (vfs == 0) {
 		return 1;
 	}
-	for (u64 i = 0; i < TMPFS_ROOT_COUNT; i++) {
-		if (mount_path(vfs, tmpfs_roots[i]) != 0) {
+	for (u64 i = 0; i < sizeof(default_roots) / sizeof(default_roots[0]);
+	     i++) {
+		if (mount_root(vfs, default_roots[i]) != 0) {
 			return 1;
 		}
 	}
