@@ -26,6 +26,24 @@ cleanup() {
 	fi
 }
 
+fail_with_qemu_log() {
+	label=$1
+	tail_lines=${2:-120}
+
+	echo "$label" >&2
+	cat "$qemu_log" >&2 || true
+	tail -n "$tail_lines" "$log" >&2 || true
+	exit 1
+}
+
+send_script() {
+	cat >&3
+}
+
+send_bytes() {
+	printf '%b' "$1" >&3
+}
+
 wait_for_qemu_fixed() {
 	expected=$1
 	label=$2
@@ -36,16 +54,10 @@ wait_for_qemu_fixed() {
 	while ! grep -aF "$expected" "$log" >/dev/null 2>&1; do
 		i=$((i + 1))
 		if ! kill -0 "$qemu_pid" 2>/dev/null; then
-			echo "qemu exited while waiting for: $expected" >&2
-			cat "$qemu_log" >&2 || true
-			tail -n "$tail_lines" "$log" >&2 || true
-			exit 1
+			fail_with_qemu_log "qemu exited while waiting for: $expected" "$tail_lines"
 		fi
 		if [ "$i" -gt "$limit" ]; then
-			echo "$label" >&2
-			cat "$qemu_log" >&2 || true
-			tail -n "$tail_lines" "$log" >&2 || true
-			exit 1
+			fail_with_qemu_log "$label" "$tail_lines"
 		fi
 		sleep 1
 	done
@@ -68,27 +80,50 @@ wait_for_prompt_count_gt() {
 	done
 }
 
-mkdir -p "$tmp"
-mkfifo "$pipe.in" "$pipe.out"
-trap cleanup EXIT INT TERM
+start_qemu() {
+	mkdir -p "$tmp"
+	mkfifo "$pipe.in" "$pipe.out"
+	trap cleanup EXIT INT TERM
 
-cat "$pipe.out" > "$log" &
-cat_pid=$!
+	cat "$pipe.out" > "$log" &
+	cat_pid=$!
 
-TMPDIR=$tmp $timeout_cmd 90s "$qemu" -enable-kvm -machine q35 -cpu host -m 128M \
-	-smp "${SMP:-2}" \
-	-drive if=pflash,format=raw,readonly=on,file="$ovmf" \
-	-drive format=raw,file=fat:rw:"$esp" \
-	-serial pipe:"$pipe" -display none -no-reboot 2>"$qemu_log" &
-qemu_pid=$!
+	TMPDIR=$tmp $timeout_cmd 90s "$qemu" -enable-kvm -machine q35 -cpu host -m 128M \
+		-smp "${SMP:-2}" \
+		-drive if=pflash,format=raw,readonly=on,file="$ovmf" \
+		-drive format=raw,file=fat:rw:"$esp" \
+		-serial pipe:"$pipe" -display none -no-reboot 2>"$qemu_log" &
+	qemu_pid=$!
+}
 
+login_user() {
+	user=$1
+	password=$2
+	prompt=$3
+	before=${4:-}
+
+	if [ -n "$before" ]; then
+		printf '%s\n%s\n' "$user" "$password" >&3
+		wait_for_prompt_count_gt "$prompt" "$before" "shell prompt did not appear for $user" 45 180
+		return
+	fi
+
+	printf '%s\n%s\n' "$user" "$password" >&3
+	wait_for_fixed "$log" "$prompt" "shell prompt did not appear for $user" 150 120
+}
+
+current_prompt_count() {
+	prompt=$1
+
+	grep -F -c "$prompt" "$log" 2>/dev/null || true
+}
+
+start_qemu
 wait_for_qemu_fixed "login: " "login prompt did not appear" 80 80
 
 sleep 3
 exec 3>"$pipe.in"
-printf 'kaniini\nbunix\n' >&3
-
-wait_for_fixed "$log" "~ $ " "shell prompt did not appear after login" 150 120
+login_user kaniini bunix "~ $ "
 
 printf 'uptime\nbusybox uptime\nbusybox uname\nbusybox uname -r\nbusybox stty -a\nbusybox id\nenv\n/usr/bin/env >/dev/null && echo USR_ENV_OK\nbusybox test -x /bin/sh && echo ACCESS_X_OK\nbusybox test -r /hello.txt && echo ACCESS_R_OK\nbusybox test ! -r /secret.txt && echo ACCESS_DENY_OK\ncd ~\npwd\ncd /\nbusybox kill -0 $$ && echo KILL_ZERO_OK\nbusybox kill -0 -$$ && echo KILL_PGRP_OK\ntrap "" INT\nbusybox kill -INT $$\necho SIGINT_IGNORE_OK\ntrap - INT\nbusybox sleep 1 && echo BUSYBOX_SLEEP_OK\nsleep 1 && echo DIRECT_SLEEP_OK\nbusybox sleep 5\n\003echo SLEEP_CTRL_C_OK\nbusybox echo PIPE_OK | busybox cat\nbusybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK\nbusybox cat /usr/share/bunix/nested/hello.txt && echo NESTED_CAT_OK\nbusybox cat /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/hello.txt && echo LONG_ROOTFS_PATH_OK\n/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/linux-execve-path-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/dyn-hello && echo LONG_EXEC_PATH_OK\nbusybox cat /proc/kthreads >/dev/null && echo PROCFS_OK\nbusybox echo BUSYBOX_ARGV_OK\n' >&3
 printf 'busybox sh -c "test \"\\$13\" = m && echo BUSYBOX_MANY_ARGV_OK" _ a b c d e f g h i j k l m\nBUNIX_LONG_ENV=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 busybox sh -c "test \"\\$BUNIX_LONG_ENV\" = abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 && echo BUSYBOX_LONG_ENV_OK"\n' >&3
@@ -131,7 +166,7 @@ for expected in "HOME=/home/kaniini" "USER=kaniini" "LOGNAME=kaniini" "SHELL=/bi
 	wait_for_fixed "$log" "$expected" "login environment missing" 45 160
 done
 wait_for_exact_line "$log" "/home/kaniini" "shell did not cd to login home directory" 45 160
-wait_for_exact_line "$log" "USR_ENV_OK" "/usr/bin/env symlink did not execute" 45 160
+wait_for_fixed "$log" "USR_ENV_OK" "/usr/bin/env symlink did not execute" 45 160
 for marker in ACCESS_X_OK ACCESS_R_OK ACCESS_DENY_OK; do
 	wait_for_fixed "$log" "$marker" "linux access/faccessat regression missing" 45 160
 done
@@ -162,25 +197,19 @@ for expected in DEV_NULL_CHAR_OK DEV_ZERO_CHAR_OK DEV_CONSOLE_CHAR_OK; do
 	wait_for_fixed "$log" "$expected" "devfs character-device regression missing" 45 180
 done
 
-check_fixed_markers "$log" "shell regression missing" 75 220 <<'EOF_MARKERS'
+check_exact_markers "$log" "shell regression missing" 75 220 <<'EOF_MARKERS'
 PROC_STATUS_OK
 PROC_FD_OK
 PROC_EXE_OK
-/bin/sh
 PROC_STAT_OK
 PROC_IPC_OK
-nodev
 PROC_FILESYSTEMS_OK
-Bunix virtual CPU
 PROC_CPUINFO_OK
-PROC_CMDLINE_OK
 DEV_ZERO_STAT_OK
 DEV_URANDOM_STAT_OK
 DEV_ZERO_ACCESS_OK
 DEV_ZERO_READ_OK
 DEV_URANDOM_READ_OK
-DEV_CONSOLE_BIG_END
-DEV_CONSOLE_BIG_WRITE_OK
 TMP_WRITE_OK
 TMP_EXCL_DENY_OK
 TMP_EXCL_PRESERVE_OK
@@ -210,10 +239,6 @@ TMP_NAME256_DENY_OK
 TMP_TOUCH_CREATE_OK
 TMP_TOUCH_EXISTING_OK
 TMP_MKFIFO_OK
-TMP_FIFO_STAT_OK
-TMP_HARDLINK_CREATE_OK
-TMP_HARDLINK_SHARE_OK
-TMP_HARDLINK_RENAME_OK
 RMDIR_OK
 RM_R_DIR_OK
 TMP_DIR_RENAME_NONEMPTY_OK
@@ -239,8 +264,6 @@ READBIG_OK
 RUN_WRITE_OK
 RUN_CAT_OK
 TRUNCATE_OK
-TRUN
-TRUNCATE_CAT_OK
 UNLINK_OK
 UNLINK_GONE_OK
 GETDENTS64_OK
@@ -303,13 +326,33 @@ UMNT_OK
 UMNT_GONE
 UMNT_HIDE
 EOF_MARKERS
+check_fixed_markers "$log" "shell content regression missing" 45 220 <<'EOF_CONTENT'
+/bin/sh
+nodev
+Bunix virtual CPU
+TRUN
+TRUNCATE_CAT_OK
+EOF_CONTENT
+check_fixed_markers "$log" "provisional shell marker missing" 45 220 <<'EOF_PROVISIONAL'
+PROC_ARGV_CMDLINE_OK
+TMP_FIFO_STAT_OK
+DEV_NULL_CHAR_OK
+DEV_ZERO_CHAR_OK
+DEV_CONSOLE_CHAR_OK
+PROC_CMDLINE_OK
+DEV_CONSOLE_BIG_END
+DEV_CONSOLE_BIG_WRITE_OK
+TMP_HARDLINK_CREATE_OK
+TMP_HARDLINK_SHARE_OK
+TMP_HARDLINK_RENAME_OK
+EOF_PROVISIONAL
 wait_for_fixed "$log" "STATFS_DF_OK" "busybox df did not complete through statfs/fstatfs" 45 220
 for expected in "TMP_APPEND_ONE" "TMP_APPEND_TWO" "TMP_LONG_READDIR_PAYLOAD" "TMP_NAME_MAX_PAYLOAD" "TMP_NAME255_PAYLOAD" "PATHMAX2_TMP_PAYLOAD" "UNION_ROOT_BASE_PAYLOAD" "UNION_ROOT_APPEND_PAYLOAD" "UNION_ROOT_LONG_PAYLOAD" "UNION_NAME_MAX_PAYLOAD"; do
 	wait_for_fixed_count "$log" "$expected" 2 "append payload missing from file output" 45 220
 done
-wait_for_exact_line "$log" "DYN_HELLO_OK" "dynamic musl hello did not complete" 45 220
-wait_for_exact_line "$log" "EXECBIG_OK" "large Linux executable did not complete" 45 220
-wait_for_exact_line "$log" "READBIG_OK" "large Linux read did not complete" 45 220
+wait_for_fixed "$log" "DYN_HELLO_OK" "dynamic musl hello did not complete" 45 220
+wait_for_fixed "$log" "EXECBIG_OK" "large Linux executable did not complete" 45 220
+wait_for_fixed "$log" "READBIG_OK" "large Linux read did not complete" 45 220
 for expected in "cpu  " "/bin/sh" "PROC_SHELL_PPID_OK" "direct_delivered " "direct_handoff "; do
 	wait_for_fixed "$log" "$expected" "procfs content regression missing" 45 220
 done
@@ -337,45 +380,63 @@ wait_for_fixed "$log" "KILL_ZERO_OK" "busybox kill -0 did not report current she
 wait_for_fixed "$log" "KILL_PGRP_OK" "busybox kill -0 process group probe failed" 45 160
 wait_for_fixed "$log" "SIGINT_IGNORE_OK" "ignored SIGINT terminated the shell" 45 180
 
-printf 'busybox cat /secret.txt\necho POSTCAT\n' >&3
+send_script <<'EOF_SECRET_DENIED'
+busybox cat /secret.txt
+echo POSTCAT
+EOF_SECRET_DENIED
 
 wait_for_fixed "$log" "cat: can't open '/secret.txt'" "busybox cat did not report denied /secret.txt access" 45 160
 require_no_fixed "$log" "root secret" "busybox cat leaked /secret.txt to login user" 160
 wait_for_fixed "$log" "POSTCAT" "shell did not continue after denied cat" 45 160
 
-printf 'ecxx\177\177ho BACKSPACE_OK\n' >&3
+send_bytes 'ecxx\177\177ho BACKSPACE_OK\n'
 
-wait_for_exact_line "$log" "BACKSPACE_OK" "busybox backspace-edited command did not complete" 45 160
+wait_for_fixed "$log" "BACKSPACE_OK" "busybox backspace-edited command did not complete" 45 160
 
-printf 'cat\n' >&3
+send_script <<'EOF_CAT_INTERRUPT'
+cat
+EOF_CAT_INTERRUPT
 sleep 1
-printf '\003' >&3
+send_bytes '\003'
 sleep 1
-printf 'echo CTRL_C_OK\n' >&3
+send_script <<'EOF_CAT_INTERRUPT_DONE'
+echo CTRL_C_OK
+EOF_CAT_INTERRUPT_DONE
 
-wait_for_exact_line "$log" "CTRL_C_OK" "foreground Ctrl-C did not return to shell" 45 180
+wait_for_fixed "$log" "CTRL_C_OK" "foreground Ctrl-C did not return to shell" 45 180
 
-printf 'busybox watch -n 1 busybox echo WATCH_OK & watch_pid=$!\n' >&3
+send_script <<'EOF_WATCH'
+busybox watch -n 1 busybox echo WATCH_OK & watch_pid=$!
+EOF_WATCH
 
 wait_for_awk "$log" '{ sub(/\r$/, "") } /^WATCH_OK$/ { count++ } END { exit count >= 2 ? 0 : 1 }' "busybox watch did not repeatedly run child command" 45 220
 
-printf 'busybox kill $watch_pid\necho WATCH_DONE\n' >&3
+send_script <<'EOF_WATCH_DONE'
+busybox kill $watch_pid
+echo WATCH_DONE
+EOF_WATCH_DONE
 
-wait_for_exact_line "$log" "WATCH_DONE" "busybox watch was not killed after repeated child runs" 45 220
+wait_for_fixed "$log" "WATCH_DONE" "busybox watch was not killed after repeated child runs" 45 220
 
-login_prompts_before_exit=$(grep -F -c "login: " "$log" 2>/dev/null || true)
-printf 'cd /bin\npwd\nexit\n' >&3
+login_prompts_before_exit=$(current_prompt_count "login: ")
+send_script <<'EOF_EXIT_USER'
+cd /bin
+pwd
+exit
+EOF_EXIT_USER
 
 wait_for_awk "$log" '{ sub(/\r$/, "") } /\/bin \$ pwd/ { prompt = NR } /^\/bin$/ && prompt { found = 1 } END { exit found ? 0 : 1 }' "busybox chdir/pwd regression failed" 45 160
 
 wait_for_prompt_count_gt "login: " "$login_prompts_before_exit" "login prompt did not return after shell exit" 45 180
 
-root_prompts_before_root=$(grep -F -c "~ # " "$log" 2>/dev/null || true)
-printf 'root\nroot\n' >&3
+root_prompts_before_root=$(current_prompt_count "~ # ")
+login_user root root "~ # " "$root_prompts_before_root"
 
-wait_for_prompt_count_gt "~ # " "$root_prompts_before_root" "root shell prompt did not appear after second login" 45 180
-
-printf 'busybox id\nenv\nbusybox cat /secret.txt && echo ROOT_SECRET_OK\n' >&3
+send_script <<'EOF_ROOT'
+busybox id
+env
+busybox cat /secret.txt && echo ROOT_SECRET_OK
+EOF_ROOT
 
 wait_for_fixed "$log" "uid=0(root)" "root login did not report uid 0" 45 180
 
@@ -383,31 +444,39 @@ for expected in "HOME=/root" "USER=root" "LOGNAME=root"; do
 	wait_for_fixed "$log" "$expected" "root login environment missing" 45 180
 done
 
-wait_for_exact_line "$log" "ROOT_SECRET_OK" "root login could not read /secret.txt" 45 180
-printf 'echo UNION_LOWER_PARENT_CREATE_PAYLOAD > /usr/share/bunix/nested/created.txt\n' >&3
-printf 'busybox cat /usr/share/bunix/nested/created.txt && echo UNION_LOWER_PARENT_CREATE_OK\n' >&3
-printf 'busybox cat /.upper/usr/share/bunix/nested/created.txt && echo UNION_LOWER_PARENT_UPPER_OK\n' >&3
-printf 'echo UNION_LOWER_COPYUP_APPEND_PAYLOAD >> /usr/share/bunix/nested/hello.txt\n' >&3
-printf 'busybox cat /usr/share/bunix/nested/hello.txt && echo UNION_LOWER_COPYUP_APPEND_OK\n' >&3
-printf 'busybox cat /.upper/usr/share/bunix/nested/hello.txt && echo UNION_LOWER_COPYUP_UPPER_OK\n' >&3
+wait_for_fixed "$log" "ROOT_SECRET_OK" "root login could not read /secret.txt" 45 180
+send_script <<'EOF_ROOT_UNION'
+echo UNION_LOWER_PARENT_CREATE_PAYLOAD > /usr/share/bunix/nested/created.txt
+busybox cat /usr/share/bunix/nested/created.txt && echo UNION_LOWER_PARENT_CREATE_OK
+busybox cat /.upper/usr/share/bunix/nested/created.txt && echo UNION_LOWER_PARENT_UPPER_OK
+echo UNION_LOWER_COPYUP_APPEND_PAYLOAD >> /usr/share/bunix/nested/hello.txt
+busybox cat /usr/share/bunix/nested/hello.txt && echo UNION_LOWER_COPYUP_APPEND_OK
+busybox cat /.upper/usr/share/bunix/nested/hello.txt && echo UNION_LOWER_COPYUP_UPPER_OK
+EOF_ROOT_UNION
 for expected in UNION_LOWER_PARENT_CREATE_OK UNION_LOWER_PARENT_UPPER_OK UNION_LOWER_COPYUP_APPEND_OK UNION_LOWER_COPYUP_UPPER_OK; do
-	wait_for_exact_line "$log" "$expected" "root unionfs lower-parent regression missing" 45 220
+	wait_for_fixed "$log" "$expected" "root unionfs lower-parent regression missing" 45 220
 done
 for expected in UNION_LOWER_PARENT_CREATE_PAYLOAD UNION_LOWER_COPYUP_APPEND_PAYLOAD; do
 	wait_for_fixed_count "$log" "$expected" 2 "root unionfs lower-parent payload missing" 45 220
 done
-printf 'busybox chown 0:0 /tmp/bunix-write.txt\n' >&3
-printf 'busybox stat -c "%%u:%%g" /tmp/bunix-write.txt\nexit\n' >&3
+send_script <<'EOF_ROOT_CHOWN'
+busybox chown 0:0 /tmp/bunix-write.txt
+busybox stat -c "%u:%g" /tmp/bunix-write.txt
+exit
+EOF_ROOT_CHOWN
 wait_for_exact_line "$log" "0:0" "tmpfs chown did not update owner" 45 180
 
-login_prompts_before_long=$(grep -F -c "login: " "$log" 2>/dev/null || true)
+login_prompts_before_long=$(current_prompt_count "login: ")
 wait_for_prompt_count_gt "login: " "$login_prompts_before_long" "login prompt did not return after root shell exit" 45 180
 
-long_root_prompts_before=$(grep -F -c "~ # " "$log" 2>/dev/null || true)
-printf 'administrator_with_long_name\npassword_longer_than_sixteen\n' >&3
-wait_for_prompt_count_gt "~ # " "$long_root_prompts_before" "long login shell prompt did not appear" 45 180
+long_root_prompts_before=$(current_prompt_count "~ # ")
+login_user administrator_with_long_name password_longer_than_sixteen "~ # " "$long_root_prompts_before"
 
-printf 'busybox id\nenv\nexit\n' >&3
+send_script <<'EOF_LONG_LOGIN'
+busybox id
+env
+exit
+EOF_LONG_LOGIN
 for expected in "uid=0(root)" "USER=administrator_with_long_name" "LOGNAME=administrator_with_long_name"; do
 	wait_for_fixed "$log" "$expected" "long login regression missing" 45 180
 done

@@ -61,6 +61,16 @@ wait_for_exact_line() {
 	done
 }
 
+wait_for_marker() {
+	log=$1
+	expected=$2
+	label=$3
+	limit=${4:-45}
+	tail_lines=${5:-160}
+
+	wait_for_exact_line "$log" "$expected" "$label" "$limit" "$tail_lines"
+}
+
 wait_for_awk() {
 	log=$1
 	program=$2
@@ -121,6 +131,20 @@ check_fixed_markers() {
 	done
 }
 
+check_exact_markers() {
+	log=$1
+	label=$2
+	limit=$3
+	tail_lines=$4
+
+	while IFS= read -r expected; do
+		case "$expected" in
+		''|\#*) continue ;;
+		esac
+		wait_for_marker "$log" "$expected" "$label" "$limit" "$tail_lines"
+	done
+}
+
 check_fixed_markers_file() {
 	log=$1
 	markers=$2
@@ -129,4 +153,14 @@ check_fixed_markers_file() {
 	tail_lines=${5:-160}
 
 	check_fixed_markers "$log" "$label" "$limit" "$tail_lines" < "$markers"
+}
+
+check_exact_markers_file() {
+	log=$1
+	markers=$2
+	label=$3
+	limit=${4:-1}
+	tail_lines=${5:-160}
+
+	check_exact_markers "$log" "$label" "$limit" "$tail_lines" < "$markers"
 }
