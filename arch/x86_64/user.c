@@ -1534,6 +1534,51 @@ static u64 linux_forward_fixed_output_buffer(struct ipc_port *linux,
 	return result;
 }
 
+static u64 linux_forward_two_u32_out(struct ipc_port *linux,
+				     struct ipc_port *reply_port,
+				     struct ipc_message *request,
+				     u64 user_out)
+{
+	struct ipc_message reply;
+	u32 values[2];
+
+	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		return (u64)-LINUX_ENOSYS;
+	}
+	if ((i64)reply.words[0] < 0) {
+		return reply.words[0];
+	}
+	values[0] = (u32)reply.words[1];
+	values[1] = (u32)reply.words[2];
+	return write_current_user(user_out, values, sizeof(values)) == 0 ?
+	       reply.words[0] : (u64)-LINUX_EINVAL;
+}
+
+static u64 linux_forward_groups_out(struct task *task, struct ipc_port *linux,
+				    struct ipc_port *reply_port,
+				    struct ipc_message *request,
+				    u64 count, u64 user_out)
+{
+	struct ipc_message reply;
+	u32 groups[2];
+
+	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		return (u64)-LINUX_ENOSYS;
+	}
+	if ((i64)reply.words[0] > 0 && count != 0) {
+		if (reply.words[0] > 2) {
+			return (u64)-LINUX_EINVAL;
+		}
+		groups[0] = (u32)reply.words[1];
+		groups[1] = (u32)reply.words[2];
+		if (vm_write_user(task_vm_space(task), user_out, groups,
+				  reply.words[0] * sizeof(groups[0])) != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+	}
+	return reply.words[0];
+}
+
 static int linux_exec_map_segment(struct task *task, const u8 *image,
 				  const struct elf64_phdr *phdr,
 				  u64 load_bias)
@@ -3076,8 +3121,6 @@ poll_again:
 	}
 	case LINUX_SYSCALL_PIPE:
 	case LINUX_SYSCALL_PIPE2: {
-		int fds[2];
-
 		if (arg0 == 0) {
 			return (u64)-LINUX_EINVAL;
 		}
@@ -3087,16 +3130,8 @@ poll_again:
 		request.words[1] = 0;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			return (u64)-LINUX_ENOSYS;
-		}
-		if ((i64)reply.words[0] < 0) {
-			return reply.words[0];
-		}
-		fds[0] = (int)reply.words[1];
-		fds[1] = (int)reply.words[2];
-		return write_current_user(arg0, fds, sizeof(fds)) == 0 ?
-		       0 : (u64)-LINUX_EINVAL;
+		return linux_forward_two_u32_out(linux, reply_port, &request,
+						 arg0);
 	}
 	case LINUX_SYSCALL_CONNECT: {
 		const u64 len = arg2 > LINUX_MAX_SOCKADDR ?
@@ -3199,23 +3234,8 @@ poll_again:
 		request.words[1] = 0;
 		request.words[2] = 0;
 		request.words[3] = 0;
-		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
-			return (u64)-LINUX_ENOSYS;
-		}
-		if ((i64)reply.words[0] > 0 && arg0 != 0) {
-			u32 groups[2];
-
-			if (reply.words[0] > 2) {
-				return (u64)-LINUX_EINVAL;
-			}
-			groups[0] = (u32)reply.words[1];
-			groups[1] = (u32)reply.words[2];
-			if (vm_write_user(task_vm_space(task), arg1, groups,
-					  reply.words[0] * sizeof(groups[0])) != 0) {
-				return (u64)-LINUX_EFAULT;
-			}
-		}
-		return reply.words[0];
+		return linux_forward_groups_out(task, linux, reply_port,
+						&request, arg0, arg1);
 	case LINUX_SYSCALL_SETGROUPS: {
 		u32 groups[2] = { 0, 0 };
 
