@@ -6,6 +6,7 @@ enum {
 	UNIONFS_HANDLE_NAMES = 3,
 	ROOTFS_MAGIC = 0x30534652,
 	ROOTFS_MAX_PATH = 128,
+	ROOTFS_MAX_SYMLINKS = 8,
 	UNIONFS_MAX_PATH = 256,
 	UNIONFS_OPEN_LOWER = 1,
 	UNIONFS_OPEN_UPPER = 2,
@@ -63,8 +64,11 @@ static u64 next_open_id = 1;
 static u64 vfs_service;
 static u64 tmpfs_service;
 static u64 block_service;
+static u64 user_service;
 static char unionfs_mount_path[UNIONFS_MAX_PATH];
 static char unionfs_upper_path[UNIONFS_MAX_PATH];
+
+static int set_path(char *target, const char *path);
 
 static u64 str_len(const char *text)
 {
@@ -350,6 +354,42 @@ static u64 resolve_service(u64 service, unsigned int rights)
 	return reply.cap;
 }
 
+static u64 service_user(void)
+{
+	if (user_service == 0) {
+		user_service = resolve_service(BUNIX_SERVICE_USER,
+					       BUNIX_RIGHT_SEND);
+	}
+	return user_service;
+}
+
+static int task_can_access(u64 task, const struct rootfs_entry *entry, u64 mask)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_CAN_ACCESS,
+		.words = { task, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = service_user();
+
+	if (entry == 0) {
+		return 0;
+	}
+	if (task == 0 || mask == 0) {
+		return 1;
+	}
+	request.words[1] = entry->uid;
+	request.words[2] = entry->gid;
+	request.words[3] = ((u64)entry->mode << 32) | mask;
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return 0;
+	}
+	return reply.words[1] != 0;
+}
+
 static long register_service(u64 service, u64 handle)
 {
 	struct bunix_msg request = {
@@ -476,6 +516,41 @@ static const struct rootfs_entry *rootfs_find(const char *path)
 {
 	return (const struct rootfs_entry *)bunix_tree_get(&rootfs_by_path,
 							   path);
+}
+
+static int rootfs_read_text(const struct rootfs_entry *entry, char *out, u64 max)
+{
+	if (entry == 0 || out == 0 || max == 0 ||
+	    entry->size + 1 > max ||
+	    block_read_bytes(entry->offset, (unsigned char *)out,
+			     entry->size) != 0) {
+		return -1;
+	}
+	out[entry->size] = '\0';
+	return 0;
+}
+
+static const struct rootfs_entry *rootfs_resolve(const char *path)
+{
+	char current[UNIONFS_MAX_PATH];
+
+	if (path == 0 || path[0] != '/' || set_path(current, path) != 0) {
+		return 0;
+	}
+	for (u64 depth = 0; depth < ROOTFS_MAX_SYMLINKS; depth++) {
+		const struct rootfs_entry *entry = rootfs_find(current);
+		char target[UNIONFS_MAX_PATH];
+
+		if (entry == 0 || entry->type != BUNIX_VFS_TYPE_SYMLINK) {
+			return entry;
+		}
+		if (rootfs_read_text(entry, target, sizeof(target)) != 0 ||
+		    target[0] != '/' ||
+		    set_path(current, target) != 0) {
+			return 0;
+		}
+	}
+	return 0;
 }
 
 static int path_is_child_of(const char *path, const char *directory)
@@ -829,6 +904,8 @@ static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 	if (mounted_relative_path(path, relative) != 0 ||
 	    compose_upper_path(relative, upper) != 0 ||
 	    compose_lower_path(relative, lower) != 0) {
+		bunix_console_log("unionfs: open path failed\n",
+				  sizeof("unionfs: open path failed\n") - 1);
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
 		return;
 	}
@@ -841,15 +918,34 @@ static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
 		return;
 	}
-	const struct rootfs_entry *entry = rootfs_find(lower);
+	const int nofollow = message->type == BUNIX_VFS_READLINK_BUFFER ||
+			     (((message->words[3] >> 32) & 1) != 0 &&
+			      message->type == BUNIX_VFS_STAT_PATH_META_BUFFER);
+	const struct rootfs_entry *entry = nofollow ? rootfs_find(lower) :
+					   rootfs_resolve(lower);
 	if (entry == 0) {
 		if (str_eq(lower, "/")) {
 			stat_root_dir(reply);
 		} else {
 			reply->words[0] = BUNIX_VFS_ERR_NOENT;
 		}
-	} else if (message->type == BUNIX_VFS_ACCESS_BUFFER) {
+	} else if (message->type == BUNIX_VFS_READLINK_BUFFER) {
+		char target[UNIONFS_MAX_PATH];
+
+		if (entry->type != BUNIX_VFS_TYPE_SYMLINK ||
+		    rootfs_read_text(entry, target, sizeof(target)) != 0) {
+			reply->words[0] = (u64)-1;
+			return;
+		}
 		reply->words[0] = 0;
+		reply->words[1] = str_len(target);
+		pack_bytes(&reply->words[2], (const unsigned char *)target,
+			   str_len(target) + 1);
+	} else if (message->type == BUNIX_VFS_ACCESS_BUFFER) {
+		reply->words[0] = task_can_access(message->words[3] &
+						  0xffffffff, entry,
+						  message->words[3] >> 32) ?
+				  0 : BUNIX_VFS_ERR_ACCESS;
 	} else {
 		stat_lower(reply, entry);
 	}
@@ -879,17 +975,29 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 			      message->words[3], &layer_reply) != 0 ||
 	    layer_reply.words[0] != 0) {
 		if (whiteout_exists(relative)) {
+			bunix_console_log("unionfs: open whiteout\n",
+					  sizeof("unionfs: open whiteout\n") - 1);
 			reply->words[0] = BUNIX_VFS_ERR_NOENT;
 			return;
 		}
-		entry = rootfs_find(lower);
+		entry = rootfs_resolve(lower);
 		if (entry == 0) {
+			bunix_console_log("unionfs: open lower missing\n",
+					  sizeof("unionfs: open lower missing\n") - 1);
 			reply->words[0] = BUNIX_VFS_ERR_NOENT;
+			return;
+		}
+		if (!task_can_access(message->words[3], entry,
+				     entry->type == BUNIX_VFS_TYPE_DIRECTORY ?
+				     05 : 04)) {
+			reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 			return;
 		}
 		if (entry->type == BUNIX_VFS_TYPE_DIRECTORY) {
 			handle = remember_dir_open(relative, 0);
 			if (handle == 0) {
+				bunix_console_log("unionfs: open dir handle\n",
+						  sizeof("unionfs: open dir handle\n") - 1);
 				reply->words[0] = (u64)-1;
 				return;
 			}
@@ -901,6 +1009,8 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 		}
 		handle = remember_lower_open(entry);
 		if (handle == 0) {
+			bunix_console_log("unionfs: open lower handle\n",
+					  sizeof("unionfs: open lower handle\n") - 1);
 			reply->words[0] = (u64)-1;
 			return;
 		}

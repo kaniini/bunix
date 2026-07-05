@@ -408,8 +408,8 @@ test: $(EFI_BOOT_APP)
 	grep -F "user: forked" $(BUILD_DIR)/serial.log
 	grep -F "proc: online" $(BUILD_DIR)/serial.log
 	grep -F "proc: ready" $(BUILD_DIR)/serial.log
-	grep -F "vfs: open" $(BUILD_DIR)/serial.log
-	grep -F "vfs: close" $(BUILD_DIR)/serial.log
+	grep -F "unionfs: online" $(BUILD_DIR)/serial.log
+	grep -F "unionfs: mounted" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /sbin/init" $(BUILD_DIR)/serial.log
 	grep -F "proc: exec /bin/first" $(BUILD_DIR)/serial.log
 	grep -F "proc: spawned pid=1" $(BUILD_DIR)/serial.log
@@ -438,7 +438,7 @@ test: $(EFI_BOOT_APP)
 	grep -F "devfs: mounted" $(BUILD_DIR)/serial.log
 	grep -F "utmpfs: online" $(BUILD_DIR)/serial.log
 	grep -F "utmpfs: mounted" $(BUILD_DIR)/serial.log
-	grep -F "vfs: mounted block" $(BUILD_DIR)/serial.log
+	grep -F "vfs: ready" $(BUILD_DIR)/serial.log
 	grep -F "vfs: mounted translator" $(BUILD_DIR)/serial.log
 	grep -F "bootstrap: launching servers" $(BUILD_DIR)/serial.log
 	grep -F "bootstrap: names ready" $(BUILD_DIR)/serial.log

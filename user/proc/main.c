@@ -1002,29 +1002,54 @@ static long exec_path(u64 vfs, struct process *process,
 	long bunix_id = 0;
 
 	io_buffer = bunix_buffer_create(PROC_SEGMENT_MAX);
-	if (io_buffer <= 0 ||
-	    vfs_open(vfs, path, &file) != 0 ||
-	    vfs_stat(vfs, &file) != 0 ||
-	    vfs_read_file(vfs, file.handle, file.size, 0,
+	if (io_buffer <= 0) {
+		bunix_console_log("proc: exec buffer failed\n",
+				  sizeof("proc: exec buffer failed\n") - 1);
+		return -1;
+	}
+	if (vfs_open(vfs, path, &file) != 0) {
+		bunix_console_log("proc: exec open failed\n",
+				  sizeof("proc: exec open failed\n") - 1);
+		bunix_handle_close((u64)io_buffer);
+		return -1;
+	}
+	if (vfs_stat(vfs, &file) != 0) {
+		bunix_console_log("proc: exec stat failed\n",
+				  sizeof("proc: exec stat failed\n") - 1);
+		vfs_close(vfs, file.handle);
+		bunix_handle_close((u64)io_buffer);
+		return -1;
+	}
+	if (vfs_read_file(vfs, file.handle, file.size, 0,
 			  (unsigned char *)&ehdr, sizeof(ehdr),
-			  (u64)io_buffer) != 0 ||
-	    read_magic(ehdr.ident) != ELF_MAGIC ||
+			  (u64)io_buffer) != 0) {
+		bunix_console_log("proc: exec ehdr read failed\n",
+				  sizeof("proc: exec ehdr read failed\n") - 1);
+		vfs_close(vfs, file.handle);
+		bunix_handle_close((u64)io_buffer);
+		return -1;
+	}
+	if (read_magic(ehdr.ident) != ELF_MAGIC ||
 	    ehdr.ident[4] != ELFCLASS64 ||
 	    ehdr.ident[5] != ELFDATA2LSB ||
 	    (ehdr.type != ET_EXEC && ehdr.type != ET_DYN) ||
 	    ehdr.machine != EM_X86_64 ||
 	    ehdr.phnum > PROC_MAX_PHDRS ||
-	    ehdr.phentsize != sizeof(phdrs[0]) ||
-	    vfs_read_file(vfs, file.handle, file.size, ehdr.phoff,
+	    ehdr.phentsize != sizeof(phdrs[0])) {
+		bunix_console_log("proc: exec elf invalid\n",
+				  sizeof("proc: exec elf invalid\n") - 1);
+		vfs_close(vfs, file.handle);
+		bunix_handle_close((u64)io_buffer);
+		return -1;
+	}
+	if (vfs_read_file(vfs, file.handle, file.size, ehdr.phoff,
 			  (unsigned char *)phdrs,
 			  (u64)ehdr.phnum * sizeof(phdrs[0]),
 			  (u64)io_buffer) != 0) {
-		if (file.handle != 0) {
-			vfs_close(vfs, file.handle);
-		}
-		if (io_buffer > 0) {
-			bunix_handle_close((u64)io_buffer);
-		}
+		bunix_console_log("proc: exec phdr read failed\n",
+				  sizeof("proc: exec phdr read failed\n") - 1);
+		vfs_close(vfs, file.handle);
+		bunix_handle_close((u64)io_buffer);
 		return -1;
 	}
 	load_bias = ehdr.type == ET_DYN ? PROC_DYN_LOAD_BIAS : 0;
@@ -1456,6 +1481,8 @@ int main(void)
 				log_pid_line("proc: spawned pid=", pid);
 			} else {
 				reply.words[0] = (u64)-1;
+				bunix_console_log("proc: spawn failed\n",
+						  sizeof("proc: spawn failed\n") - 1);
 			}
 			break;
 		}

@@ -121,11 +121,10 @@ Multiboot2 data module. The kernel assigns that
 boot module only to the block server. Init launches a block server and a VFS
 server with only console and names capabilities. The block server registers
 `BLK0` in the root namespace and serves read-only bytes from its assigned disk
-image. VFS resolves `BLK0`, registers `VFS0`, parses the generated rootfs entry
-table for bootstrap access, and then delegates mounted paths to user-space
-filesystem translators. Procfs attaches at `/proc`, tmpfs attaches at `/tmp`,
-`/run`, and `/var/tmp`, and unionfs attaches at `/` so the read-only rootfs
-image is visible through a writable tmpfs-backed upper layer.
+image. VFS registers `VFS0` and delegates paths to user-space filesystem
+translators. Procfs attaches at `/proc`, tmpfs attaches at `/tmp`, `/run`, and
+`/var/tmp`, and unionfs attaches at `/` so the read-only rootfs image is visible
+through a writable tmpfs-backed upper layer.
 
 This is intentionally not a real disk filesystem yet. The useful primitive is
 the capability-shaped chain `init/proc -> names -> vfs -> unionfs -> block +
