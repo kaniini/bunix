@@ -189,7 +189,6 @@ enum {
 	LINUX_EXEC_MAX_PATH = 4096,
 	LINUX_EXEC_MAX_STRING = 4096,
 	LINUX_EXEC_MAX_STRING_BYTES = 128 * 1024,
-	LINUX_EXEC_MAX_PHDRS = 16,
 	LINUX_MAX_GROUPS = 64,
 	LINUX_EXEC_DYN_LOAD_BIAS = 0x400000,
 	LINUX_EXEC_INTERP_LOAD_BIAS = 0x600000,
@@ -954,7 +953,6 @@ static int linux_exec_validate(const u8 *image, u64 image_size,
 	    ehdr->ehsize != ELF_EHDR_SIZE ||
 	    ehdr->phentsize != ELF_PHDR_SIZE ||
 	    ehdr->phnum == 0 ||
-	    ehdr->phnum > LINUX_EXEC_MAX_PHDRS ||
 	    phdr_bytes > image_size) {
 		return -1;
 	}
@@ -2061,7 +2059,6 @@ static int linux_exec_build_stack(const char *path,
 				  u8 *stack_image, u64 stack_size,
 				  u64 *new_sp)
 {
-	struct elf64_phdr aux_phdrs[LINUX_EXEC_MAX_PHDRS];
 	const u64 aux_pairs = interpreter_base == 0 ? 15 : 16;
 	const u64 stack_base = LINUX_EXEC_STACK_TOP - stack_size;
 	u64 *argv_addrs;
@@ -2070,8 +2067,7 @@ static int linux_exec_build_stack(const char *path,
 	int result = -1;
 
 	if (path == 0 || args == 0 || ehdr == 0 || stack_image == 0 ||
-	    new_sp == 0 || stack_size == 0 || args->argc == 0 ||
-	    ehdr->phnum > LINUX_EXEC_MAX_PHDRS) {
+	    new_sp == 0 || stack_size == 0 || args->argc == 0) {
 		return -1;
 	}
 
@@ -2120,22 +2116,23 @@ static int linux_exec_build_stack(const char *path,
 	mem_copy(stack_image + sp, random_bytes, sizeof(random_bytes));
 	const u64 random_addr = stack_base + sp;
 
-	const u64 phdr_bytes = ehdr->phnum * sizeof(aux_phdrs[0]);
+	const u64 phdr_bytes = ehdr->phnum * sizeof(struct elf64_phdr);
 	if (sp < phdr_bytes) {
 		goto out;
 	}
+	sp = align_down(sp - phdr_bytes, 8);
 	for (u64 i = 0; i < ehdr->phnum; i++) {
 		const struct elf64_phdr *phdr =
 			(const struct elf64_phdr *)((const u8 *)ehdr +
 						    ehdr->phoff +
 						    i * ehdr->phentsize);
+		struct elf64_phdr aux_phdr = *phdr;
 
-		aux_phdrs[i] = *phdr;
-		aux_phdrs[i].vaddr += load_bias;
-		aux_phdrs[i].paddr += load_bias;
+		aux_phdr.vaddr += load_bias;
+		aux_phdr.paddr += load_bias;
+		mem_copy(stack_image + sp + i * sizeof(aux_phdr),
+			 (const u8 *)&aux_phdr, sizeof(aux_phdr));
 	}
-	sp = align_down(sp - phdr_bytes, 8);
-	mem_copy(stack_image + sp, (const u8 *)aux_phdrs, phdr_bytes);
 	const u64 copied_phdr_addr = stack_base + sp;
 	const u64 phdr_addr = interpreter_base != 0 ?
 			       load_bias + ehdr->phoff : copied_phdr_addr;

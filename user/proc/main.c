@@ -9,7 +9,6 @@ enum {
 	PROC_SEGMENT_MAX = 4096,
 	PROC_INIT_STACK_MAX = 256 * 1024,
 	PROC_SPAWN_BUFFER_MAX = 512 * 1024,
-	PROC_MAX_PHDRS = 16,
 	USER_STACK_TOP = 0x800000,
 	ELF_MAGIC = 0x464c457f,
 	ELFCLASS64 = 2,
@@ -1261,6 +1260,23 @@ static long apply_login_to_task(u64 task, u64 login_uid)
 	return 0;
 }
 
+static int elf_phdr_table_size(const struct elf64_ehdr *ehdr, u64 file_size,
+			       u64 *bytes)
+{
+	if (ehdr == 0 || bytes == 0 ||
+	    ehdr->phnum == 0 ||
+	    ehdr->phentsize != sizeof(struct elf64_phdr)) {
+		return -1;
+	}
+
+	*bytes = (u64)ehdr->phnum * sizeof(struct elf64_phdr);
+	if (ehdr->phoff > file_size || *bytes > file_size - ehdr->phoff) {
+		return -1;
+	}
+
+	return 0;
+}
+
 static long exec_path(u64 vfs, struct process *process,
 		      const char *path, const char *task_name,
 		      u64 linux_parent_pid, u64 login_uid, int set_login,
@@ -1275,13 +1291,15 @@ static long exec_path(u64 vfs, struct process *process,
 	};
 	struct elf64_ehdr ehdr;
 	struct elf64_ehdr interp_ehdr;
-	struct elf64_phdr phdrs[PROC_MAX_PHDRS];
-	struct elf64_phdr interp_phdrs[PROC_MAX_PHDRS];
-	struct elf64_phdr aux_phdrs[PROC_MAX_PHDRS];
+	struct elf64_phdr *phdrs = 0;
+	struct elf64_phdr *interp_phdrs = 0;
+	struct elf64_phdr *aux_phdrs = 0;
 	struct exec_info exec;
 	struct vfs_file file = { 0, 0, 0 };
 	struct vfs_file interp_file = { 0, 0, 0 };
 	char interp_path[PROC_EXEC_PATH_MAX];
+	u64 phdr_bytes = 0;
+	u64 interp_phdr_bytes = 0;
 	long io_buffer;
 	long task;
 	u64 stack = 0;
@@ -1323,20 +1341,31 @@ static long exec_path(u64 vfs, struct process *process,
 	    ehdr.ident[5] != ELFDATA2LSB ||
 	    (ehdr.type != ET_EXEC && ehdr.type != ET_DYN) ||
 	    ehdr.machine != EM_X86_64 ||
-	    ehdr.phnum > PROC_MAX_PHDRS ||
-	    ehdr.phentsize != sizeof(phdrs[0])) {
+	    elf_phdr_table_size(&ehdr, file.size, &phdr_bytes) != 0) {
 		bunix_console_log("proc: exec elf invalid\n",
 				  sizeof("proc: exec elf invalid\n") - 1);
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
 		return -1;
 	}
+	phdrs = (struct elf64_phdr *)bunix_alloc(phdr_bytes);
+	aux_phdrs = (struct elf64_phdr *)bunix_alloc(phdr_bytes);
+	if (phdrs == 0 || aux_phdrs == 0) {
+		bunix_console_log("proc: exec phdr alloc failed\n",
+				  sizeof("proc: exec phdr alloc failed\n") - 1);
+		bunix_free(phdrs);
+		bunix_free(aux_phdrs);
+		vfs_close(vfs, file.handle);
+		bunix_handle_close((u64)io_buffer);
+		return -1;
+	}
 	if (vfs_read_file(vfs, file.handle, file.size, ehdr.phoff,
-			  (unsigned char *)phdrs,
-			  (u64)ehdr.phnum * sizeof(phdrs[0]),
+			  (unsigned char *)phdrs, phdr_bytes,
 			  (u64)io_buffer) != 0) {
 		bunix_console_log("proc: exec phdr read failed\n",
 				  sizeof("proc: exec phdr read failed\n") - 1);
+		bunix_free(phdrs);
+		bunix_free(aux_phdrs);
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
 		return -1;
@@ -1358,6 +1387,8 @@ static long exec_path(u64 vfs, struct process *process,
 					     interp_path, sizeof(interp_path),
 					     (u64)io_buffer);
 	if (interp < 0) {
+		bunix_free(phdrs);
+		bunix_free(aux_phdrs);
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
 		return -1;
@@ -1374,17 +1405,30 @@ static long exec_path(u64 vfs, struct process *process,
 		    (interp_ehdr.type != ET_EXEC &&
 		     interp_ehdr.type != ET_DYN) ||
 		    interp_ehdr.machine != EM_X86_64 ||
-		    interp_ehdr.phnum > PROC_MAX_PHDRS ||
-		    interp_ehdr.phentsize != sizeof(interp_phdrs[0]) ||
+		    elf_phdr_table_size(&interp_ehdr, interp_file.size,
+					&interp_phdr_bytes) != 0) {
+			if (interp_file.handle != 0) {
+				vfs_close(vfs, interp_file.handle);
+			}
+			bunix_free(phdrs);
+			bunix_free(aux_phdrs);
+			vfs_close(vfs, file.handle);
+			bunix_handle_close((u64)io_buffer);
+			return -1;
+		}
+		interp_phdrs = (struct elf64_phdr *)bunix_alloc(interp_phdr_bytes);
+		if (interp_phdrs == 0 ||
 		    vfs_read_file(vfs, interp_file.handle, interp_file.size,
 				  interp_ehdr.phoff,
 				  (unsigned char *)interp_phdrs,
-				  (u64)interp_ehdr.phnum *
-				  sizeof(interp_phdrs[0]),
+				  interp_phdr_bytes,
 				  (u64)io_buffer) != 0) {
 			if (interp_file.handle != 0) {
 				vfs_close(vfs, interp_file.handle);
 			}
+			bunix_free(interp_phdrs);
+			bunix_free(phdrs);
+			bunix_free(aux_phdrs);
 			vfs_close(vfs, file.handle);
 			bunix_handle_close((u64)io_buffer);
 			return -1;
@@ -1399,6 +1443,9 @@ static long exec_path(u64 vfs, struct process *process,
 		if (interp_file.handle != 0) {
 			vfs_close(vfs, interp_file.handle);
 		}
+		bunix_free(interp_phdrs);
+		bunix_free(phdrs);
+		bunix_free(aux_phdrs);
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
 		return -1;
@@ -1410,6 +1457,9 @@ static long exec_path(u64 vfs, struct process *process,
 		if (interp_file.handle != 0) {
 			vfs_close(vfs, interp_file.handle);
 		}
+		bunix_free(interp_phdrs);
+		bunix_free(phdrs);
+		bunix_free(aux_phdrs);
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
 		bunix_handle_close((u64)task);
@@ -1424,6 +1474,9 @@ static long exec_path(u64 vfs, struct process *process,
 			if (interp_file.handle != 0) {
 				vfs_close(vfs, interp_file.handle);
 			}
+			bunix_free(interp_phdrs);
+			bunix_free(phdrs);
+			bunix_free(aux_phdrs);
 			vfs_close(vfs, file.handle);
 			bunix_handle_close((u64)io_buffer);
 			bunix_handle_close((u64)task);
@@ -1439,6 +1492,9 @@ static long exec_path(u64 vfs, struct process *process,
 		if (interp_file.handle != 0) {
 			vfs_close(vfs, interp_file.handle);
 		}
+		bunix_free(interp_phdrs);
+		bunix_free(phdrs);
+		bunix_free(aux_phdrs);
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
 		bunix_handle_close((u64)task);
@@ -1452,6 +1508,9 @@ static long exec_path(u64 vfs, struct process *process,
 		if (interp_file.handle != 0) {
 			vfs_close(vfs, interp_file.handle);
 		}
+		bunix_free(interp_phdrs);
+		bunix_free(phdrs);
+		bunix_free(aux_phdrs);
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
 		bunix_handle_close((u64)task);
@@ -1463,6 +1522,9 @@ static long exec_path(u64 vfs, struct process *process,
 		if (interp_file.handle != 0) {
 			vfs_close(vfs, interp_file.handle);
 		}
+		bunix_free(interp_phdrs);
+		bunix_free(phdrs);
+		bunix_free(aux_phdrs);
 		vfs_close(vfs, file.handle);
 		bunix_handle_close((u64)io_buffer);
 		bunix_handle_close((u64)task);
@@ -1473,6 +1535,9 @@ static long exec_path(u64 vfs, struct process *process,
 	}
 	vfs_close(vfs, file.handle);
 	bunix_handle_close((u64)io_buffer);
+	bunix_free(interp_phdrs);
+	bunix_free(phdrs);
+	bunix_free(aux_phdrs);
 	if (is_linux_path(path)) {
 		if (register_linux_process((u64)bunix_id, process->pid,
 					   linux_parent_pid, session_id,
