@@ -273,6 +273,20 @@ static int proc_info_by_task(u64 task, struct proc_info *info)
 	return 0;
 }
 
+static int proc_info_by_linux_pid(u64 linux_pid, struct proc_info *info)
+{
+	struct bunix_msg reply;
+
+	if (linux_pid == 0 || info == 0 ||
+	    proc_call(BUNIX_PROC_INFO_BY_LINUX_PID, linux_pid, &reply) != 0) {
+		return -1;
+	}
+	info->pid = reply.words[1];
+	info->task_id = reply.words[2];
+	info->linux_pid = reply.words[3];
+	return 0;
+}
+
 static int proc_at(u64 index, struct proc_info *info)
 {
 	struct bunix_msg reply;
@@ -361,7 +375,13 @@ static u64 proc_path_pid(u64 pid, u64 caller_task)
 	if (pid == 0) {
 		pid = proc_self_pid(caller_task);
 	}
-	return proc_info(pid, &info) == 0 ? pid : 0;
+	if (proc_info(pid, &info) == 0) {
+		return pid;
+	}
+	if (proc_info_by_linux_pid(pid, &info) == 0) {
+		return info.pid;
+	}
+	return 0;
 }
 
 static long mount_procfs(const char *path)
@@ -490,7 +510,8 @@ static u64 file_for_path(const char *path, u64 caller_task)
 		if (parse_u64_component(&cursor, &pid) != 0 || pid == 0) {
 			return 0;
 		}
-		if (proc_path_pid(pid, caller_task) == 0) {
+		pid = proc_path_pid(pid, caller_task);
+		if (pid == 0) {
 			return 0;
 		}
 		if (*cursor == '\0') {

@@ -2090,6 +2090,20 @@ int main(void)
 			}
 			break;
 		}
+		case BUNIX_PROC_INFO_BY_LINUX_PID: {
+			struct process *process =
+				process_find_linux_pid(message.words[0]);
+
+			if (process == 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				reply.words[0] = 0;
+				reply.words[1] = process->pid;
+				reply.words[2] = process->task_id;
+				reply.words[3] = process->linux_pid;
+			}
+			break;
+		}
 		case BUNIX_PROC_AT: {
 			struct process *process = process_at(message.words[0]);
 

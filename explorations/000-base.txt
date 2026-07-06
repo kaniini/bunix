@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 013-uptime-accounting.txt
+The current exploration is: 014-utmp-session-leak.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.

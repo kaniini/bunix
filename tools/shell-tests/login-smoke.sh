@@ -4,6 +4,7 @@ run_login_smoke() {
 	send_script <<'EOF_LOGIN_SMOKE'
 uptime
 busybox uptime
+/bin/uptimetest
 busybox uname
 busybox uname -r
 busybox stty -a
@@ -43,6 +44,7 @@ EOF_LOGIN_SMOKE_INTERRUPT
 check_login_smoke() {
 	wait_for_fixed "$log" "load average" "busybox uptime did not run through applet argv" 45 120
 	wait_for_fixed "$log" " 1 users" "busybox uptime did not report login session" 45 160
+	wait_for_fixed "$log" "uptimetest ok" "Linux uptime sources did not advance together" 45 160
 	wait_for_fixed "$log" "Bunix" "busybox uname did not report Bunix" 45 120
 	wait_for_fixed "$log" "0.1" "busybox uname -r did not report 0.1" 45 120
 	wait_for_fixed "$log" "uid=1000" "busybox id did not report login identity" 45 120

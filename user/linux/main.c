@@ -5333,7 +5333,7 @@ static long linux_sysinfo(u64 buffer)
 		return -LINUX_EFAULT;
 	}
 	zero_bytes(info, sizeof(info));
-	store_u64(info, 0, bunix_timer_ticks() / 1000000000ull);
+	store_u64(info, 0, bunix_clock_monotonic_ns() / 1000000000ull);
 	store_u64(info, 32, 128ull * 1024ull * 1024ull);
 	store_u64(info, 40, 64ull * 1024ull * 1024ull);
 	store_u16(info, 80, 1);
@@ -5368,7 +5368,7 @@ static long linux_getrandom(u64 len, u64 buffer)
 static long linux_clock_gettime(u64 buffer)
 {
 	char timespec[LINUX_TIMESPEC_SIZE];
-	const u64 ns = bunix_timer_ticks();
+	const u64 ns = bunix_clock_monotonic_ns();
 
 	if (buffer == 0) {
 		return -LINUX_EFAULT;
@@ -5383,7 +5383,7 @@ static long linux_clock_gettime(u64 buffer)
 static long linux_gettimeofday(u64 buffer)
 {
 	char timeval[LINUX_TIMEVAL_SIZE];
-	const u64 ns = bunix_timer_ticks();
+	const u64 ns = bunix_clock_monotonic_ns();
 
 	if (buffer == 0) {
 		return 0;
@@ -5398,7 +5398,7 @@ static long linux_gettimeofday(u64 buffer)
 static long linux_time(u64 buffer, u64 *seconds_out)
 {
 	char time_value[LINUX_TIME_T_SIZE];
-	const u64 seconds = bunix_timer_ticks() / 1000000000ull;
+	const u64 seconds = bunix_clock_monotonic_ns() / 1000000000ull;
 
 	if (seconds_out != 0) {
 		*seconds_out = seconds;
