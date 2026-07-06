@@ -1,0 +1,56 @@
+Implement SIGSEGV and SIGBUS delivery for Linux-personality processes.
+
+Problem:
+
+- User faults currently behave like kernel-facing task failures instead of
+  Linux-compatible synchronous signals.
+- Real userland expects invalid memory accesses, protection violations, and
+  bus errors to be reported through `SIGSEGV`/`SIGBUS` with useful `siginfo_t`
+  contents and default process termination semantics.
+- Debugging and shell behavior will remain rough until crashes look like
+  Linux process crashes rather than unexplained task death or kernel logging.
+
+Constraints:
+
+- Keep task faults and Linux process signals conceptually separate: Bunix tasks
+  are lower-level execution objects, while Linux PIDs are process-level objects
+  managed by the Linux/proc servers.
+- Signal delivery should be implemented through the Linux personality server
+  wherever practical.  Kernel architecture code should classify faults, capture
+  machine context, and hand off enough structured state to deliver the signal.
+- Preserve native observability.  Native Bunix programs should still be able to
+  see low-level task fault information without pretending every task is a Linux
+  process.
+- Do not bake x86-only signal-frame assumptions into generic Linux-server
+  policy.  Keep architecture-specific frame construction isolated so ARM can
+  supply its own frame shape later.
+
+Tasks:
+
+- [ ] Inventory current exception, page-fault, task-kill, Linux process-exit,
+      wait-status, and strace/debug logging paths.
+- [ ] Define a generic task-fault event record that can carry trap number,
+      error code, fault address, instruction pointer, stack pointer, access
+      type, protection-vs-mapping classification, and architecture-specific
+      details.
+- [ ] Route user-mode page faults and relevant synchronous CPU exceptions into
+      process-level Linux signal delivery instead of unconditional task death.
+- [ ] Implement SIGSEGV default termination and wait-status reporting,
+      including the expected signal number and core-dump bit policy.
+- [ ] Implement SIGBUS default termination for address errors that should not
+      be reported as SIGSEGV, including file-backed mapping holes once the VFS
+      mmap path can distinguish them.
+- [ ] Add Linux `sigaction`, signal-mask, pending-signal, and return-frame
+      support sufficient for catching SIGSEGV/SIGBUS in a static musl or
+      BusyBox-compatible test program.
+- [ ] Populate `siginfo_t` fields for delivered SIGSEGV/SIGBUS: signal number,
+      code, and faulting address at minimum.
+- [ ] Add architecture-specific x86_64 signal-frame construction and
+      `rt_sigreturn` restoration behind a narrow interface that can later be
+      implemented on ARM.
+- [ ] Add tests for default SIGSEGV termination, caught SIGSEGV, default
+      SIGBUS, caught SIGBUS, wait-status reporting, and shell-visible exit
+      behavior.
+- [ ] Document the remaining signal roadmap after SIGSEGV/SIGBUS, including
+      asynchronous signals, job-control signals, timers, and ptrace/strace
+      interactions.
