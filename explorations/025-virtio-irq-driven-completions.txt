@@ -1,0 +1,52 @@
+Implement generic device IRQ delivery and use it for VirtIO block completions.
+
+Problem:
+
+- Exploration 016 now has modern VirtIO PCI discovery, resource grants, feature
+  negotiation, split virtqueue setup, queue notification, ISR acknowledgement,
+  polling block completions, and a VirtIO-backed rootfs boot path.
+- The remaining correctness gap is that block completions are still polled with
+  bounded sleeps.  The `DEV0 ACK_INTERRUPT` RPC can acknowledge the VirtIO ISR
+  byte, but Bunix does not yet route hardware device interrupts to userspace
+  drivers.
+- Without generic IRQ binding/delivery, a test claiming interrupt-driven VirtIO
+  completions would only exercise polling.
+
+Constraints:
+
+- Keep device drivers in userspace.  Kernel/arch code may discover, route, mask,
+  unmask, and acknowledge interrupt controller state, but class drivers should
+  receive device events over capability-scoped IPC or wait objects.
+- Preserve OCAP shape: a driver may bind only IRQ resources granted by the
+  device/bus manager, and the event handle should not imply unrelated hardware
+  authority.
+- Start with deterministic x86_64 QEMU modern VirtIO PCI.  Keep the API
+  transport-neutral enough that ARM GIC plus VirtIO MMIO can later reuse the
+  same driver-facing event model.
+- Avoid making MSI/MSI-X a prerequisite if legacy INTx through IOAPIC is enough
+  for the first interrupt-driven completion test, but document the chosen path.
+
+Tasks:
+
+- [ ] Inventory existing IRQ resource handles, arch interrupt controller code,
+      ACPI MADT parsing, PCI interrupt metadata, and any devfs/driver event
+      protocols from the TTY driver work.
+- [ ] Define a generic userspace IRQ API: bind, wait/receive event, mask,
+      unmask, acknowledge, close, and error semantics.
+- [ ] Decide the first x86_64 routing path for VirtIO PCI interrupts: legacy
+      INTx via IOAPIC, MSI, or MSI-X.  Prefer the smallest path that can be made
+      correct and later extended.
+- [ ] Extend `virtio-bus.server` discovery/resource records to expose usable IRQ
+      resources for the deterministic `virtio-blk-pci` test device.
+- [ ] Implement kernel/arch IRQ binding and event delivery for granted IRQ
+      resources, including masking or coalescing behavior while a userspace
+      driver has not acknowledged an event.
+- [ ] Teach `virtio-blk.server` to wait for completion events instead of polling
+      the used ring in interrupt mode, then call `DEV0 ACK_INTERRUPT` and drain
+      all completed used-ring entries.
+- [ ] Add a dedicated `test-boot-virtio-blk-irq` target that proves read, write,
+      flush, and rootfs backend boot can complete through interrupt delivery.
+- [ ] Keep the existing polling tests as fallback coverage and document when the
+      driver uses polling versus IRQ mode.
+- [ ] Document the ARM porting shape for the same IRQ API with GIC and VirtIO
+      MMIO interrupt resources.
