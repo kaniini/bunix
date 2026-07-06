@@ -36,7 +36,7 @@ Tasks:
       request queueing, completion handling, and error translation.
 - [x] Connect VirtIO block to the existing block server or replace the current
       block backend behind the same VFS-facing protocol.
-- [ ] Define the VirtIO timer requirement precisely.  If standard VirtIO does
+- [x] Define the VirtIO timer requirement precisely.  If standard VirtIO does
       not provide the desired timer device, decide whether the right target is
       virtio-rng/console, HPET/APIC timer abstraction, or a platform timer
       server that shares the same driver framework.
@@ -44,7 +44,7 @@ Tasks:
       device topology.
 - [ ] Add tests for bus enumeration, feature negotiation failures, block reads,
       block writes, flushes, interrupt-driven completions, and clean poweroff.
-- [ ] Document the ARM porting shape for VirtIO MMIO transport and timer
+- [x] Document the ARM porting shape for VirtIO MMIO transport and timer
       selection.
 
 Inventory:
@@ -249,3 +249,19 @@ Progress:
   `virtio-blk.server` with a single-sector cache; small metadata and symlink
   reads remain fast, but the adapter no longer issues large cached DMA reads
   before the driver has a real contiguous-DMA contract.
+- Timer decision: there is no standard VirtIO timer device that should replace
+  the scheduler clock.  Treat timers as platform clocksource/clockevent
+  resources under the same device-driver authority model: x86 should move from
+  the current PIT/LAPIC bringup path toward an ACPI-described HPET/LAPIC or
+  APIC-deadline timer server, while ARM should use the architecture generic
+  timer discovered through ACPI GTDT or device tree.  The device framework
+  should grant timer MMIO/system-register/IRQ authority to the timer owner, but
+  the exported time API should stay independent of VirtIO.
+- ARM porting shape: keep class drivers such as `virtio-blk.server`
+  transport-neutral by consuming `DEV0` device/resource/queue RPCs only.  Add a
+  `virtio-mmio` transport backend that discovers MMIO VirtIO ranges from ARM
+  firmware, publishes the same common device identity and resource records as
+  PCI transport, grants attenuated MMIO and IRQ handles, and uses the same DMA
+  buffer contract once the contiguous-DMA/bounce-buffer story is implemented.
+  The ARM timer path should be a platform timer server, not a VirtIO class
+  driver.
