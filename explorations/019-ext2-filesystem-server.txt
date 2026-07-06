@@ -202,6 +202,11 @@ Implementation notes:
   create/unlink, hardlink/unlink, and mkdir/rmdir.  The normal boot-module
   ext2 test continues to cover absolute symlink traversal and directory rename
   in the full root/unionfs environment.
+- `ext2-root-test` now selects ext2 as the root filesystem by mounting
+  `ext2.server` at `/`, proving `/hello.txt` is visible through the root VFS
+  path, and powering off.  This is not a full Linux rootfs boot yet, but it
+  makes ext2 root selection explicit and testable while block/VirtIO-backed
+  root images mature.
 
 Tasks:
 
@@ -224,5 +229,5 @@ Tasks:
       unlink, mkdir/rmdir, rename, chmod/chown, symlink, and hardlink.
 - [x] Add fsck-compatible image tests after write support, using host tools to
       verify the resulting image.
-- [ ] Integrate ext2 with root selection so an ext2-backed rootfs can be tried
+- [x] Integrate ext2 with root selection so an ext2-backed rootfs can be tried
       once block/VirtIO block are ready.

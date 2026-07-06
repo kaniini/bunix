@@ -1,0 +1,22 @@
+kernel: log level info
+interrupts: idt loaded
+timer: pit 100hz
+user: gdt/tss/syscall ready
+multiboot2: acpi rsdp=
+smp: discovered cpus=2
+sched: init cpus=2 boot_cpu=0
+names: init dynamic
+buffer: init max=2097152
+vm-server: memory authority online
+names: online
+console: driver online
+time: online
+user: online
+proc: online
+vfs: online
+tmpfs: online
+devfs: online
+utmpfs: online
+ext2: online
+ext2: super ok
+machine: poweroff

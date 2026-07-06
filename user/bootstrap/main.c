@@ -2305,7 +2305,9 @@ int main(void)
 	const char net_packet_ok[] = "bootstrap: net packet iface ok\n";
 	const char net_route_ok[] = "bootstrap: net route ok\n";
 	const char ext2_ok[] = "bootstrap: ext2 readonly ok\n";
+	const char ext2_root_ok[] = "bootstrap: ext2 root ok\n";
 	char file[17];
+	char ext2_root_text[32];
 	u64 console;
 	u64 vm;
 	u64 time = 0;
@@ -2315,6 +2317,7 @@ int main(void)
 	u64 vfs = 0;
 	u64 vfs_launch = 0;
 	u64 fs_namespace = 0;
+	const int ext2_root_mode = bunix_cmdline_has("ext2-root-test") > 0;
 	const struct bunix_launch_cap bad_caps[] = {
 		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND | BUNIX_RIGHT_RECV, 0 },
 	};
@@ -2505,19 +2508,45 @@ int main(void)
 		for (;;) {
 		}
 	}
-	bunix_launch_module_with_caps("rootfs", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
-	{
-		u64 rootfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
-						       BUNIX_SERVICE_ROOTFS,
-						       BUNIX_RIGHT_SEND);
+	if (ext2_root_mode) {
+		u64 ext2;
 
-		if (rootfs == 0 ||
-		    send_path_command(rootfs, BUNIX_PROTO_ROOTFS,
-				      BUNIX_ROOTFS_MOUNT_PATH, "/.lower") != 0 ||
-		    vfs_mount_service(vfs, "/.lower",
-				      BUNIX_SERVICE_ROOTFS) != 0) {
+		bunix_launch_module_with_caps("ext2", fs_caps,
+					      sizeof(fs_caps) /
+						      sizeof(fs_caps[0]));
+		ext2 = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						  BUNIX_SERVICE_EXT2,
+						  BUNIX_RIGHT_SEND);
+		if (ext2 == 0 ||
+		    vfs_mount_service(vfs, "/", BUNIX_SERVICE_EXT2) != 0) {
 			return 1;
+		}
+		if (vfs_read_text(vfs, "/hello.txt", ext2_root_text,
+				  sizeof(ext2_root_text)) != 0 ||
+		    !str_eq(ext2_root_text, "ext2 hello\n")) {
+			return 1;
+		}
+		bunix_console_log(ext2_root_ok, sizeof(ext2_root_ok) - 1);
+		(void)bunix_machine_poweroff(0);
+		for (;;) {
+		}
+	} else {
+		bunix_launch_module_with_caps("rootfs", fs_caps,
+					      sizeof(fs_caps) /
+						      sizeof(fs_caps[0]));
+		{
+			u64 rootfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+							       BUNIX_SERVICE_ROOTFS,
+							       BUNIX_RIGHT_SEND);
+
+			if (rootfs == 0 ||
+			    send_path_command(rootfs, BUNIX_PROTO_ROOTFS,
+					      BUNIX_ROOTFS_MOUNT_PATH,
+					      "/.lower") != 0 ||
+			    vfs_mount_service(vfs, "/.lower",
+					      BUNIX_SERVICE_ROOTFS) != 0) {
+				return 1;
+			}
 		}
 	}
 	bunix_launch_module_with_caps("unionfs", fs_caps,
