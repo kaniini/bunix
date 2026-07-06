@@ -7,6 +7,7 @@ esp=${ESP_DIR:-build/esp}
 timeout_cmd=${TIMEOUT:-timeout}
 qemu_timeout=${QEMU_TIMEOUT:-180s}
 qemu_memory=${QEMU_MEMORY:-128M}
+qemu_extra_args=${QEMU_EXTRA_ARGS:-}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-shell-test.$run_id}
 log=$tmp/serial.log
@@ -130,7 +131,7 @@ start_qemu() {
 		-smp "${SMP:-2}" \
 		-drive if=pflash,format=raw,readonly=on,file="$ovmf" \
 		-drive format=raw,file=fat:rw:"$runtime_esp" \
-		-serial pipe:"$pipe" -display none -no-reboot 2>"$qemu_log" &
+		-serial pipe:"$pipe" -display none -no-reboot $qemu_extra_args 2>"$qemu_log" &
 	qemu_pid=$!
 }
 

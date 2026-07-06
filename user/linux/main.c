@@ -162,6 +162,14 @@ enum {
 	LINUX_F_SETLKW = 7,
 	LINUX_F_DUPFD_CLOEXEC = 1030,
 	LINUX_UTMP_RECORD_SIZE = 400,
+	LINUX_REBOOT_MAGIC1 = 0xfee1dead,
+	LINUX_REBOOT_MAGIC2 = 672274793,
+	LINUX_REBOOT_MAGIC2A = 85072278,
+	LINUX_REBOOT_MAGIC2B = 369367448,
+	LINUX_REBOOT_MAGIC2C = 537993216,
+	LINUX_REBOOT_CMD_RESTART = 0x01234567,
+	LINUX_REBOOT_CMD_HALT = 0xcdef0123,
+	LINUX_REBOOT_CMD_POWER_OFF = 0x4321fedc,
 };
 
 struct linux_fd {
@@ -4912,8 +4920,36 @@ int main(void)
 			}
 			break;
 		case BUNIX_LINUX_REBOOT:
-			reply.words[0] = 0;
+		{
+			const long euid =
+				linux_user_credential(process, BUNIX_LINUX_GETEUID);
+
+			if (message.words[0] != LINUX_REBOOT_MAGIC1 ||
+			    (message.words[1] != LINUX_REBOOT_MAGIC2 &&
+			     message.words[1] != LINUX_REBOOT_MAGIC2A &&
+			     message.words[1] != LINUX_REBOOT_MAGIC2B &&
+			     message.words[1] != LINUX_REBOOT_MAGIC2C)) {
+				reply.words[0] = (u64)-LINUX_EINVAL;
+				break;
+			}
+			if (euid < 0) {
+				reply.words[0] = (u64)euid;
+				break;
+			}
+			if (euid != 0) {
+				reply.words[0] = (u64)-LINUX_EPERM;
+				break;
+			}
+			if (message.words[2] == LINUX_REBOOT_CMD_POWER_OFF ||
+			    message.words[2] == LINUX_REBOOT_CMD_HALT ||
+			    message.words[2] == LINUX_REBOOT_CMD_RESTART) {
+				reply.words[0] =
+					(u64)bunix_machine_poweroff(0);
+				break;
+			}
+			reply.words[0] = (u64)-LINUX_EINVAL;
 			break;
+		}
 		case BUNIX_LINUX_GETPPID:
 			reply.words[0] = process->ppid;
 			break;

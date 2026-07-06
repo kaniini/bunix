@@ -1,5 +1,19 @@
-First, build a series of explorations to build out a working `poweroff` command, and then
-migrate the tests to use it (so we do not have to wait on timeouts anymore).
+Build the remaining multiuser/OpenRC base in small slices.
 
-After this, build a series of explorations to build the remaining components necessary
-in order to achieve an Alpine base image booting with OpenRC.
+Poweroff and deterministic test exit:
+
+- [x] Define a guest poweroff contract for tests using ACPI S5 shutdown.
+- [x] Add a native machine shutdown syscall with an x86_64 arch power backend.
+- [x] Make the Linux server implement `reboot(..., LINUX_REBOOT_CMD_POWER_OFF)`.
+- [x] Add BusyBox `poweroff`, `halt`, and `reboot` symlinks to the rootfs image.
+- [x] Add a focused poweroff test path that waits for QEMU to exit through the guest.
+- [ ] Migrate shell/command tests to request guest poweroff after success.
+- [ ] Migrate boot tests away from timeout-as-success.
+
+OpenRC/Alpine boot preparation:
+
+- [ ] Build the minimal Alpine rootfs image as a test fixture.
+- [ ] Add the remaining device nodes and procfs/sysfs/devfs surfaces OpenRC expects.
+- [ ] Fill in Linux compatibility gaps discovered by OpenRC startup.
+- [ ] Boot `/sbin/init` from the Alpine image and capture service startup logs.
+- [ ] Add sharded regression coverage for the OpenRC boot path.

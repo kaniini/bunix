@@ -9,6 +9,7 @@
 #include "types.h"
 #include "vm.h"
 #include <arch/interrupts.h>
+#include <arch/power.h>
 #include <arch/smp.h>
 #include <arch/user.h>
 #include "../servers/vm/vm_server.h"
@@ -73,6 +74,7 @@ void kernel_main(u32 magic, u64 multiboot_info)
 	slab_init();
 	buffer_init();
 	vm_self_test();
+	arch_power_init(multiboot_info);
 	arch_interrupts_init();
 	arch_user_init();
 	arch_smp_init(multiboot_info);

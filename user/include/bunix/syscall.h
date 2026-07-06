@@ -37,6 +37,7 @@ enum {
 	BUNIX_SYSCALL_EARLY_CONSOLE_LOGS_TO_RING = -58,
 	BUNIX_SYSCALL_IPC_STATS = -60,
 	BUNIX_SYSCALL_VM_STATS = -62,
+	BUNIX_SYSCALL_MACHINE_POWER = -64,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
@@ -678,6 +679,11 @@ static inline long bunix_ipc_stats(struct bunix_ipc_stats *stats)
 static inline long bunix_vm_stats(struct bunix_vm_stats *stats)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_VM_STATS, (u64)stats);
+}
+
+static inline long bunix_machine_poweroff(u64 code)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_MACHINE_POWER, code);
 }
 
 #endif

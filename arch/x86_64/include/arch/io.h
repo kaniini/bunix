@@ -8,6 +8,11 @@ static inline void arch_outb(u16 port, u8 value)
 	__asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
 }
 
+static inline void arch_outw(u16 port, u16 value)
+{
+	__asm__ volatile ("outw %0, %1" : : "a"(value), "Nd"(port));
+}
+
 static inline u8 arch_inb(u16 port)
 {
 	u8 value;

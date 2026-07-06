@@ -118,7 +118,11 @@ ROOTFS_BUSYBOX_LINKS := \
 	--symlink /bin/echo /bin/busybox \
 	--symlink /bin/env /bin/busybox \
 	--symlink /bin/stty /bin/busybox \
-	--symlink /bin/pwd /bin/busybox
+	--symlink /bin/pwd /bin/busybox \
+	--symlink /bin/poweroff /bin/busybox \
+	--symlink /sbin/poweroff /bin/busybox \
+	--symlink /sbin/halt /bin/busybox \
+	--symlink /sbin/reboot /bin/busybox
 
 CC ?= gcc
 MUSL_CC ?= x86_64-alpine-linux-musl-gcc
@@ -150,6 +154,7 @@ KERNEL_SRCS := \
 	arch/$(ARCH)/boot/multiboot2.S \
 	arch/$(ARCH)/ap_trampoline.S \
 	arch/$(ARCH)/interrupts.c \
+	arch/$(ARCH)/power.c \
 	arch/$(ARCH)/smp.c \
 	arch/$(ARCH)/interrupts.S \
 	arch/$(ARCH)/thread.c \

@@ -1,5 +1,6 @@
 #include <arch/user.h>
 #include <arch/io.h>
+#include <arch/power.h>
 #include <arch/smp.h>
 #include <arch/thread.h>
 #include "buffer.h"
@@ -56,6 +57,7 @@ enum {
 	SYSCALL_EARLY_CONSOLE_LOGS_TO_RING = -58,
 	SYSCALL_IPC_STATS = -60,
 	SYSCALL_VM_STATS = -62,
+	SYSCALL_MACHINE_POWER = -64,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -5389,6 +5391,13 @@ static u64 native_sys_vm_stats(const struct native_syscall_args *args)
 	       0 : (u64)-1;
 }
 
+static u64 native_sys_machine_power(const struct native_syscall_args *args)
+{
+	(void)args;
+
+	arch_poweroff();
+}
+
 static u64 native_sys_ipc_send(const struct native_syscall_args *args)
 {
 	struct user_ipc_message user_message;
@@ -5519,6 +5528,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	  native_sys_early_console_logs_to_ring },
 	{ SYSCALL_IPC_STATS, "ipc_stats", native_sys_ipc_stats },
 	{ SYSCALL_VM_STATS, "vm_stats", native_sys_vm_stats },
+	{ SYSCALL_MACHINE_POWER, "machine_power", native_sys_machine_power },
 };
 
 static const struct native_syscall_entry *native_syscall_lookup(i64 number)

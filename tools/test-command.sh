@@ -7,6 +7,7 @@ esp=${ESP_DIR:-build/esp}
 timeout_cmd=${TIMEOUT:-timeout}
 qemu_timeout=${QEMU_TIMEOUT:-120s}
 qemu_memory=${QEMU_MEMORY:-128M}
+qemu_extra_args=${QEMU_EXTRA_ARGS:-}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-command-test.$run_id}
 log=$tmp/serial.log
@@ -26,6 +27,7 @@ export BUNIX_COLLECT_FAILURES BUNIX_FAILURE_DIR BUNIX_QEMU_LOG BUNIX_TEST_HARNES
 command_text=${BUNIX_CMD:-${CMD:-}}
 command_file=${BUNIX_CMD_FILE:-}
 marker=${BUNIX_MARKER:-__BUNIX_COMMAND_OK__}
+expect_qemu_exit=${BUNIX_EXPECT_QEMU_EXIT:-0}
 user=${BUNIX_USER:-kaniini}
 password=${BUNIX_PASSWORD:-bunix}
 prompt=${BUNIX_PROMPT:-~ $ }
@@ -113,7 +115,7 @@ start_qemu() {
 		-smp "${SMP:-2}" \
 		-drive if=pflash,format=raw,readonly=on,file="$ovmf" \
 		-drive format=raw,file=fat:rw:"$runtime_esp" \
-		-serial pipe:"$pipe" -display none -no-reboot 2>"$qemu_log" &
+		-serial pipe:"$pipe" -display none -no-reboot $qemu_extra_args 2>"$qemu_log" &
 	qemu_pid=$!
 }
 
@@ -133,6 +135,18 @@ if [ -n "$command_file" ]; then
 else
 	printf '%s\n' "$command_text" >&3
 fi
+
+if [ "$expect_qemu_exit" = 1 ]; then
+	if wait "$qemu_pid"; then
+		qemu_pid=
+		echo "command qemu-exit regression ok"
+		exit 0
+	fi
+	qemu_status=$?
+	qemu_pid=
+	fail_command "qemu exited with status $qemu_status" 220
+fi
+
 send_script <<EOF_COMMAND_DONE
 status=\$?
 echo __BUNIX_COMMAND_STATUS__=\$status
