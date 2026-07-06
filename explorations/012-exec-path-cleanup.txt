@@ -20,11 +20,11 @@ Additional finding:
   startup behavior, but make the exec refactor address this loader allocation
   shape rather than baking it in.
 
-- [ ] Inventory the current `arch/x86_64/user.c` exec path and separate
+- [x] Inventory the current `arch/x86_64/user.c` exec path and separate
       architecture mechanics from Linux personality policy.
 - [ ] Define an exec request/reply protocol between the syscall entry path,
       Linux server, proc server, and VM/task primitives.
-- [ ] Move shebang parsing and argv rewriting out of arch code while keeping
+- [x] Move shebang parsing and argv rewriting out of arch code while keeping
       Linux-compatible interpreter argument semantics.
 - [ ] Move ELF and PT_INTERP policy toward shared proc/Linux-server helpers,
       leaving arch code responsible only for final register/stack activation
@@ -34,7 +34,28 @@ Additional finding:
       slab allocations.
 - [ ] Preserve `AT_EXECFN`, argv, envp, auxv, credentials, process identity,
       and Bunix task/Linux PID mappings across the refactor.
-- [ ] Add regression tests covering ELF exec, dynamic PT_INTERP exec,
+- [x] Add regression tests covering ELF exec, dynamic PT_INTERP exec,
       shebang exec with interpreter arguments, recursive shebang limits, and
       invalid script diagnostics.
 - [ ] Keep the resulting design portable enough for the future ARM port.
+
+Progress:
+
+- Current arch Linux `execve()` still owns argv/env collection, full-file ELF
+  reads, ELF/PT_INTERP parsing, stack/auxv construction, address-space
+  replacement, final RIP/RSP activation, Linux process registration, cmdline
+  publication, and vfork completion.
+- `user/proc/main.c` already has a segment-oriented ELF loader for spawned
+  processes, so the remaining refactor should converge syscall `execve()` on
+  that model instead of growing another loader.
+- Added `BUNIX_LINUX_EXEC_PREPARE`: arch serializes the current load path,
+  shebang-sized image prefix, argv, and envp into a bounded buffer; the Linux
+  server parses shebang policy and rewrites argv/load path; arch consumes the
+  rewritten vector for the existing loader.  This is intentionally a first
+  protocol boundary, not the final proc/VM exec protocol.
+
+Validation so far:
+
+- `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part`
+- `BUNIX_SHELL_PART=tmpfs-basic-linux-tests make test-shell-part`
+- `BUNIX_TEST_SET=openrc make test-parallel`
