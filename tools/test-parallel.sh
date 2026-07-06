@@ -6,6 +6,7 @@ test_set=${BUNIX_TEST_SET:-${BUNIX_SHELL_PART:-all}}
 run_root=${BUNIX_TEST_RUN_ROOT:-build/test-runs}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 make_cmd=${MAKE:-make}
+run_dir=$run_root/$run_id
 
 default_jobs() {
 	cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
@@ -41,8 +42,8 @@ if [ ! -r "$manifest" ]; then
 	exit 2
 fi
 
-mkdir -p "$run_root/$run_id"
-echo "test-parallel status=plan run_id=$run_id jobs=$jobs set=$test_set artifact=$run_root/$run_id"
+mkdir -p "$run_dir"
+echo "test-parallel status=plan run_id=$run_id jobs=$jobs set=$test_set artifact=$run_dir"
 
 selected_shards() {
 	awk -F '\t' -v set="$test_set" '
@@ -141,7 +142,7 @@ run_worker() {
 	worker_memory=${BUNIX_VM_MEMORY_OVERRIDE:-$memory}
 	worker_timeout=$(effective_timeout "$timeout_seconds")
 	parts=$(worker_parts "$name")
-	worker_dir=$run_root/$run_id/$name
+	worker_dir=$run_dir/$name
 	start=$(date +%s)
 
 	mkdir -p "$worker_dir"
@@ -166,6 +167,11 @@ run_worker() {
 	seconds=$((now - start))
 	echo "$status" > "$worker_dir/status"
 	echo "$seconds" > "$worker_dir/seconds"
+	if [ "$status" != ok ]; then
+		sed -n '1p' "$worker_dir/stderr.log" | tr '\t' ' ' > "$worker_dir/reason"
+	else
+		: > "$worker_dir/reason"
+	fi
 	echo "test-parallel name=$name status=$status seconds=$seconds artifact=$worker_dir"
 	return "$rc"
 }
@@ -192,10 +198,16 @@ while IFS='	' read -r name smp memory timeout_seconds cost clean_boot; do
 	fi
 	if [ "$name" = root-mount-soak ]; then
 		echo "test-parallel name=$name status=skip reason=unimplemented"
+		mkdir -p "$run_dir/$name"
+		echo skip > "$run_dir/$name/status"
+		echo 0 > "$run_dir/$name/seconds"
+		echo unimplemented > "$run_dir/$name/reason"
+		echo "$name" >> "$run_dir/shards.txt"
 		skipped=$((skipped + 1))
 		continue
 	fi
 
+	echo "$name" >> "$run_dir/shards.txt"
 	run_worker "$name" "$smp" "$memory" "$timeout_seconds" "$cost" "$clean_boot" &
 	pids="$pids $!"
 	count=$((count + 1))
@@ -225,5 +237,16 @@ if [ "$launched" -eq 0 ]; then
 	exit 2
 fi
 
-echo "test-parallel status=done run_id=$run_id launched=$launched skipped=$skipped artifact=$run_root/$run_id"
+summary=$run_dir/summary.tsv
+printf 'name\tstatus\tseconds\tartifact\treason\n' > "$summary"
+while IFS= read -r name; do
+	worker_dir=$run_dir/$name
+	status=$(cat "$worker_dir/status" 2>/dev/null || echo missing)
+	seconds=$(cat "$worker_dir/seconds" 2>/dev/null || echo 0)
+	reason=$(cat "$worker_dir/reason" 2>/dev/null || echo '')
+	printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$status" "$seconds" "$worker_dir" "$reason" >> "$summary"
+done < "$run_dir/shards.txt"
+
+echo "test-parallel summary=$summary"
+echo "test-parallel status=done run_id=$run_id launched=$launched skipped=$skipped artifact=$run_dir"
 exit "$overall"

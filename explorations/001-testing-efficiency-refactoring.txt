@@ -312,7 +312,7 @@ Plan:
 
    - CPU affinity remains a later tuning knob if host scheduling gets noisy.
 
-16. Add isolated artifact and summary output
+16. Add isolated artifact and summary output [DONE]
    Each worker should write under a unique directory such as:
 
    build/test-runs/<run-id>/<shard>/
@@ -320,6 +320,15 @@ Plan:
    The top-level summary should include shard name, status, seconds, artifact
    path, and failing marker/reason. A failed parallel run should preserve every
    failed shard bundle, not just the first failure.
+
+   Result:
+
+   - `tools/test-parallel.sh` writes each worker under
+     `build/test-runs/<run-id>/<shard>/`.
+   - Each worker writes `status`, `seconds`, `stdout.log`, `stderr.log`, and a
+     one-line `reason`.
+   - The run directory gets `summary.tsv` with shard name, status, seconds,
+     artifact path, and reason after all active workers finish.
 
 17. Add stop policy and retry policy
    Support:
