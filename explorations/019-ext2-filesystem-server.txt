@@ -17,11 +17,79 @@ Constraints:
   modes before journaling-like behavior or aggressive caching.
 - Do not put ext2 parsing policy in the kernel.
 
+Interface inventory:
+
+- VFS translators are mounted by sending `BUNIX_VFS_MOUNT_BUFFER` to the VFS
+  service with a path buffer and a service FourCC in `words[1]`.  VFS resolves
+  the service through names, records the translator path, stores the filesystem
+  type as that FourCC, and forwards path operations to the longest matching
+  mount.
+- Existing filesystem servers register their own service FourCC, then mount
+  themselves through VFS.  `tmpfs.server` is the writable path-operation model;
+  `rootfs.server` is the readonly block-backed model; `unionfs.server` shows
+  route pinning and mount layering, but ext2 does not need that for the first
+  slice.
+- Translator path operations use caller-owned buffers:
+  `OPEN_BUFFER`, `STAT_PATH_META_BUFFER`, `READLINK_BUFFER`, `ACCESS_BUFFER`,
+  `CREATE_BUFFER`, `MKDIR_BUFFER`, `MKNOD_BUFFER`, `SYMLINK_BUFFER`,
+  `RENAME_BUFFER`, `LINK_BUFFER`, `UNLINK_BUFFER`, and `RMDIR_BUFFER`.
+  Open-handle operations use server-local handles returned by `OPEN_BUFFER`:
+  `STAT_META`, `READ_FILE_BUFFER`, `WRITE_FILE_BUFFER`, `TRUNCATE`, `CHMOD`,
+  `CHOWN`, `READDIR_BUFFER`, and `CLOSE`.
+- Stat metadata is the shared `BUNIX_VFS_STAT_BYTES` record written with
+  `bunix_vfs_stat_pack()`: size, mode plus VFS type, uid/gid, device id,
+  inode, link count, rdev, block size, and 512-byte block count.
+- `READDIR_BUFFER` returns one directory entry per call.  `words[1]` contains
+  the next cookie in the low 32 bits and the VFS file type in the high 32 bits;
+  `words[2]` is the full name length; `words[3]` is the byte count written to
+  the caller buffer.
+- VFS mount routes can be resolved or pinned through
+  `RESOLVE_MOUNT_BUFFER`, `PIN_ROUTE_BUFFER`, and `UNPIN_ROUTE`.  That is
+  useful for future layered filesystems and block-capability handoff, but the
+  first ext2 server can use the direct names service/block service path.
+- The current block protocol is byte-offset based.  `GET_INFO` returns total
+  backing bytes in `words[1]` and an advertised granularity in `words[2]`;
+  `READ` returns small inline payloads; `READ_BUFFER` copies up to 128 KiB into
+  a supplied buffer capability.  It is transport-neutral enough for ext2 to
+  consume the current block server first and a VirtIO block-backed service
+  later.
+
+Initial ext2 mount contract:
+
+- Add an `EXT2` FourCC service and userspace `ext2.server`.  The server owns
+  ext2 parsing and exposes only the normal VFS translator protocol to clients.
+- The first implementation mounts readonly.  Mutating VFS operations must fail
+  with access/invalid errors until explicit write-support slices implement
+  allocation, metadata updates, and fsck-compatible persistence.
+- The server consumes an explicit block-device capability.  For the first
+  boot/test path it may resolve `BUNIX_SERVICE_BLOCK`; the server API should
+  still keep the block handle in per-mount state so tests and later VirtIO
+  block mounts can supply a different handle without changing VFS behavior.
+- A mount request validates the superblock before registering the VFS
+  translator.  Mount state records the VFS mount path, block handle, readonly
+  flag, device id, superblock fields, block-group table, root inode, and any
+  feature diagnostics needed for logs/tests.
+- Support ext2 block sizes 1024, 2048, and 4096 initially.  Reject unsupported
+  block sizes, non-power-of-two values, impossible image sizes, bad group
+  counts, corrupt inode sizes, and on-disk offsets that overflow the backing
+  block-device byte length.
+- Root inode is ext2 inode 2.  Directory lookup starts from that inode and maps
+  ext2 file types to Bunix VFS types for regular files, directories, symlinks,
+  FIFOs, and character devices.
+- Feature policy for the readonly slice: accept only ext2 revisions and
+  compatible/readonly-compatible features that are explicitly decoded.  Reject
+  unsupported incompat features and unsupported ro-compat features with clear
+  diagnostics rather than silently mounting a filesystem whose metadata cannot
+  be interpreted correctly.
+- Architecture and kernel code remain uninvolved.  Kernel faults, page tables,
+  and block-device discovery are outside the ext2 parser; the only kernel-facing
+  behavior is ordinary userspace IPC and buffer copying.
+
 Tasks:
 
-- [ ] Inventory the current VFS translator protocol, block server protocol,
+- [x] Inventory the current VFS translator protocol, block server protocol,
       tmpfs/rootfs/unionfs server patterns, and mount lifecycle.
-- [ ] Define the ext2 server mount contract: block device capability, readonly
+- [x] Define the ext2 server mount contract: block device capability, readonly
       versus read-write mode, block size support, feature flags, and root inode.
 - [ ] Implement superblock parsing and validation, including unsupported
       incompat/ro-compat feature diagnostics.
