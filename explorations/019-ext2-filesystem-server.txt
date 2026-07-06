@@ -125,6 +125,13 @@ Implementation notes:
   512-byte block count, device identity, rdev, block size, and timestamps into
   Linux stat/statx through the Linux server.  Filesystems that use the older
   stat helper continue to emit zero timestamps.
+- Readonly boot coverage now builds a generated ext2 image as a Multiboot2
+  data module named `ext2disk`, launches `ext2.server` only for the
+  `ext2-test` command-line mode, mounts it at `/mnt/ext2`, and exercises
+  regular-file reads, VFS symlink following, hardlink inode/link metadata,
+  long-name readdir, and sparse-ish file size metadata before continuing to the
+  normal login path.  The fixture is intentionally small enough to avoid GRUB
+  standalone relocator pressure while still being verified by host `e2fsck`.
 
 Tasks:
 
@@ -141,7 +148,7 @@ Tasks:
       triply indirect blocks as needed by realistic images.
 - [x] Implement metadata mapping into Linux stat/statx fields: inode number,
       mode, uid/gid, size, link count, timestamps, blocks, and device identity.
-- [ ] Add readonly mount tests using a generated ext2 image with files,
+- [x] Add readonly mount tests using a generated ext2 image with files,
       directories, symlinks, hardlinks, long names, and sparse-ish files.
 - [ ] Implement write support in staged slices: create, write, truncate,
       unlink, mkdir/rmdir, rename, chmod/chown, symlink, and hardlink.

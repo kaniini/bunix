@@ -28,6 +28,7 @@ static const struct server boot_servers[] = {
 	{ "utmpfs", 0 },
 	{ "rootfs", 0 },
 	{ "unionfs", 0 },
+	{ "ext2", 0 },
 	{ "block", 0 },
 	{ "virtio-bus", 0 },
 	{ "virtio-blk", 0 },
@@ -58,6 +59,7 @@ struct boot_data_module {
 
 static struct tree module_starts_by_name;
 static struct boot_data_module disk0_module;
+static struct boot_data_module ext2disk_module;
 
 struct task_start {
 	u64 entry;
@@ -812,22 +814,29 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 
 	const struct server *server = find_boot_server(module->cmdline);
 	if (server == 0) {
-		if (str_eq(module->cmdline, "disk0")) {
+		if (str_eq(module->cmdline, "disk0") ||
+		    str_eq(module->cmdline, "ext2disk")) {
+			struct boot_data_module *data =
+				str_eq(module->cmdline, "disk0") ?
+				&disk0_module : &ext2disk_module;
+			const char *server_name =
+				str_eq(module->cmdline, "disk0") ?
+				"block" : "ext2";
 			const u64 copy = copy_boot_module(module, "data");
 			const u64 size = module->end - module->start;
 
-			disk0_module.name = module->cmdline;
-			disk0_module.start = copy != 0 ? copy : module->start;
-			disk0_module.end = disk0_module.start + size;
-			console_printf("kernel: recorded data module disk0 image=%p-%p size=%u\n",
-				       (const void *)disk0_module.start,
-				       (const void *)disk0_module.end,
+			data->name = module->cmdline;
+			data->start = copy != 0 ? copy : module->start;
+			data->end = data->start + size;
+			console_printf("kernel: recorded data module %s image=%p-%p size=%u\n",
+				       data->name, (const void *)data->start,
+				       (const void *)data->end,
 				       (u32)size);
-			struct module_server_start *block =
-				module_start_find("block");
-			if (block != 0) {
-				block->data_start = disk0_module.start;
-				block->data_end = disk0_module.end;
+			struct module_server_start *start =
+				module_start_find(server_name);
+			if (start != 0) {
+				start->data_start = data->start;
+				start->data_end = data->end;
 			}
 			return;
 		}
@@ -852,6 +861,9 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 	if (str_eq(server->name, "block")) {
 		start->data_start = disk0_module.start;
 		start->data_end = disk0_module.end;
+	} else if (str_eq(server->name, "ext2")) {
+		start->data_start = ext2disk_module.start;
+		start->data_end = ext2disk_module.end;
 	}
 	start->space = 0;
 	start->stack = 0;

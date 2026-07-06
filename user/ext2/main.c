@@ -27,6 +27,7 @@ enum {
 	EXT2_FT_DIR = 2,
 	EXT2_FT_CHRDEV = 3,
 	EXT2_FT_FIFO = 5,
+	EXT2_FT_SYMLINK = 7,
 	EXT2_MAGIC = 0xef53,
 	EXT2_GOOD_OLD_REV = 0,
 	EXT2_DYNAMIC_REV = 1,
@@ -81,6 +82,7 @@ struct ext2_inode {
 	u64 links_count;
 	u64 blocks;
 	u64 block[15];
+	unsigned char block_bytes[60];
 };
 
 struct ext2_dirent {
@@ -95,6 +97,7 @@ struct ext2_dirent {
 struct ext2_mount {
 	u64 block;
 	u64 image_size;
+	u64 use_boot_data;
 	struct ext2_super super;
 	struct ext2_group *groups;
 };
@@ -250,6 +253,22 @@ static int text_eq(const char *left, const char *right)
 	return left != 0 && right != 0 && left[i] == right[i];
 }
 
+static int text_starts_with(const char *text, const char *prefix)
+{
+	u64 i = 0;
+
+	if (text == 0 || prefix == 0) {
+		return 0;
+	}
+	while (prefix[i] != 0) {
+		if (text[i] != prefix[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return 1;
+}
+
 static u64 div_round_up(u64 value, u64 divisor)
 {
 	return divisor == 0 ? 0 : (value + divisor - 1) / divisor;
@@ -364,6 +383,20 @@ static long block_read_bytes(u64 block, u64 offset, unsigned char *out, u64 len)
 		done += chunk;
 	}
 	return 0;
+}
+
+static long mount_read_bytes(const struct ext2_mount *mount, u64 offset,
+			     unsigned char *out, u64 len)
+{
+	if (mount == 0 || out == 0 ||
+	    offset > mount->image_size ||
+	    len > mount->image_size - offset) {
+		return -1;
+	}
+	if (mount->use_boot_data != 0) {
+		return bunix_boot_module_read(offset, out, len);
+	}
+	return block_read_bytes(mount->block, offset, out, len);
 }
 
 static long parse_super(const unsigned char *raw, u64 image_size,
@@ -514,7 +547,7 @@ static long load_group_descriptors(struct ext2_mount *mount)
 	mount->groups = (struct ext2_group *)
 		bunix_calloc(mount->super.groups_count, sizeof(mount->groups[0]));
 	if (raw == 0 || mount->groups == 0 ||
-	    block_read_bytes(mount->block, table_offset, raw, table_size) != 0) {
+	    mount_read_bytes(mount, table_offset, raw, table_size) != 0) {
 		bunix_free(raw);
 		bunix_free(mount->groups);
 		mount->groups = 0;
@@ -571,7 +604,7 @@ static long read_inode(const struct ext2_mount *mount, u64 ino,
 	offset += inode_index * mount->super.inode_size;
 	if (offset > mount->image_size ||
 	    sizeof(raw) > mount->image_size - offset ||
-	    block_read_bytes(mount->block, offset, raw, sizeof(raw)) != 0) {
+	    mount_read_bytes(mount, offset, raw, sizeof(raw)) != 0) {
 		return -1;
 	}
 	inode->mode = load_le16(raw, 0);
@@ -585,6 +618,9 @@ static long read_inode(const struct ext2_mount *mount, u64 ino,
 	inode->blocks = load_le32(raw, 28);
 	for (u64 i = 0; i < 15; i++) {
 		inode->block[i] = load_le32(raw, 40 + i * 4);
+	}
+	for (u64 i = 0; i < sizeof(inode->block_bytes); i++) {
+		inode->block_bytes[i] = raw[40 + i];
 	}
 	if ((inode->mode & EXT2_S_IFMT) == EXT2_S_IFREG) {
 		inode->size |= load_le32(raw, 108) << 32;
@@ -607,7 +643,7 @@ static long bitmap_bit_is_set(const struct ext2_mount *mount, u64 bitmap_block,
 	if (offset == (u64)-1 ||
 	    offset > mount->image_size ||
 	    bit / 8 >= mount->image_size - offset ||
-	    block_read_bytes(mount->block, offset + bit / 8, &value, 1) != 0) {
+	    mount_read_bytes(mount, offset + bit / 8, &value, 1) != 0) {
 		return -1;
 	}
 	*set = (value & (1u << (bit % 8))) != 0;
@@ -666,6 +702,8 @@ static u64 ext2_dirent_vfs_type(u64 file_type)
 		return BUNIX_VFS_TYPE_CHARACTER;
 	case EXT2_FT_FIFO:
 		return BUNIX_VFS_TYPE_FIFO;
+	case EXT2_FT_SYMLINK:
+		return BUNIX_VFS_TYPE_SYMLINK;
 	default:
 		return 0;
 	}
@@ -690,8 +728,8 @@ static long read_block_u32(const struct ext2_mount *mount, u64 block,
 	    offset > mount->image_size ||
 	    entry_offset > mount->image_size - offset ||
 	    sizeof(raw) > mount->image_size - offset - entry_offset ||
-	    block_read_bytes(mount->block, offset + entry_offset,
-			     raw, sizeof(raw)) != 0) {
+	    mount_read_bytes(mount, offset + entry_offset, raw,
+			     sizeof(raw)) != 0) {
 		return -1;
 	}
 	*value = load_le32(raw, 0);
@@ -803,7 +841,7 @@ static long read_mapped_block(const struct ext2_mount *mount,
 	if (offset == (u64)-1 ||
 	    offset > mount->image_size ||
 	    mount->super.block_size > mount->image_size - offset ||
-	    block_read_bytes(mount->block, offset, out,
+	    mount_read_bytes(mount, offset, out,
 			     mount->super.block_size) != 0) {
 		return -1;
 	}
@@ -1006,6 +1044,8 @@ static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
 static int read_resolved_path(const struct bunix_msg *message, char *path)
 {
 	char cwd[EXT2_MAX_PATH];
+	const char mount_prefix[] = "/mnt/ext2";
+	const u64 mount_prefix_len = sizeof(mount_prefix) - 1;
 
 	if (message == 0 ||
 	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
@@ -1015,6 +1055,21 @@ static int read_resolved_path(const struct bunix_msg *message, char *path)
 	    !text_eq(cwd, "/") ||
 	    path[0] != '/') {
 		return -1;
+	}
+	if (text_starts_with(path, mount_prefix) &&
+	    (path[mount_prefix_len] == '\0' ||
+	     path[mount_prefix_len] == '/')) {
+		if (path[mount_prefix_len] == '\0') {
+			path[0] = '/';
+			path[1] = '\0';
+			return 0;
+		}
+		for (u64 i = 0; i < EXT2_MAX_PATH; i++) {
+			path[i] = path[mount_prefix_len + i];
+			if (path[i] == '\0') {
+				break;
+			}
+		}
 	}
 	return 0;
 }
@@ -1077,6 +1132,91 @@ static void reply_path_stat(const struct bunix_msg *message,
 		return;
 	}
 	reply_stat_inode(message, reply, ino, &inode);
+}
+
+static long read_inode_bytes(const struct ext2_inode *inode, u64 offset,
+			     unsigned char *out, u64 len)
+{
+	u64 done = 0;
+
+	if (inode == 0 || out == 0 ||
+	    offset > inode->size ||
+	    len > inode->size - offset) {
+		return -1;
+	}
+	while (done < len) {
+		const u64 file_offset = offset + done;
+		const u64 logical = file_offset / root_mount.super.block_size;
+		const u64 block_offset = file_offset % root_mount.super.block_size;
+		u64 chunk = root_mount.super.block_size - block_offset;
+		unsigned char *block;
+
+		if (chunk > len - done) {
+			chunk = len - done;
+		}
+		block = (unsigned char *)bunix_calloc(1,
+						      root_mount.super.block_size);
+		if (block == 0 ||
+		    read_mapped_block(&root_mount, inode, logical, block) != 0) {
+			bunix_free(block);
+			return -1;
+		}
+		for (u64 i = 0; i < chunk; i++) {
+			out[done + i] = block[block_offset + i];
+		}
+		bunix_free(block);
+		done += chunk;
+	}
+	return 0;
+}
+
+static void reply_readlink(const struct bunix_msg *message,
+			   struct bunix_msg *reply, const char *path)
+{
+	struct ext2_inode inode;
+	unsigned char target[EXT2_MAX_PATH];
+	u64 ino;
+	u64 written;
+	const u64 out_cap = message->words[3] >> 32;
+	const u64 out_offset = message->words[0] + message->words[1];
+
+	if (!root_mount_ready ||
+	    lookup_path(&root_mount, path, &ino, &inode) != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	if (ext2_inode_vfs_type(&inode) != BUNIX_VFS_TYPE_SYMLINK ||
+	    inode.size >= sizeof(target)) {
+		reply->words[0] = BUNIX_VFS_ERR_INVAL;
+		return;
+	}
+	if (inode.size <= sizeof(inode.block_bytes) && inode.blocks == 0) {
+		for (u64 i = 0; i < inode.size; i++) {
+			target[i] = inode.block_bytes[i];
+		}
+	} else if (read_inode_bytes(&inode, 0, target, inode.size) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = inode.size;
+	if (out_cap == 0) {
+		return;
+	}
+	written = inode.size;
+	if (written > out_cap) {
+		written = out_cap;
+	}
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0 ||
+	    (written != 0 &&
+	     bunix_buffer_write(message->cap, out_offset, target,
+				written) != 0)) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[2] = inode.size;
+	reply->words[3] = written;
 }
 
 static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
@@ -1219,18 +1359,17 @@ static void reply_read_file(struct ext2_open *open,
 	reply->words[1] = done;
 }
 
-static long load_initial_mount(u64 block, struct ext2_mount *mount)
+static long load_initial_mount(struct ext2_mount *mount)
 {
 	unsigned char raw[EXT2_SUPER_SIZE];
 	struct ext2_inode root_inode;
 	struct ext2_dirent self;
 	u64 root_allocated = 0;
 
-	mount->block = block;
-	mount->image_size = 0;
 	mount->groups = 0;
-	if (block_get_size(block, &mount->image_size) != 0 ||
-	    block_read_bytes(block, EXT2_SUPER_OFFSET, raw, sizeof(raw)) != 0 ||
+	if ((mount->use_boot_data == 0 &&
+	     block_get_size(mount->block, &mount->image_size) != 0) ||
+	    mount_read_bytes(mount, EXT2_SUPER_OFFSET, raw, sizeof(raw)) != 0 ||
 	    parse_super(raw, mount->image_size, &mount->super) != 0 ||
 	    load_group_descriptors(mount) != 0 ||
 	    inode_is_allocated(mount, EXT2_ROOT_INO, &root_allocated) != 0 ||
@@ -1253,14 +1392,25 @@ int main(void)
 	struct bunix_msg message;
 	const char online[] = "ext2: online\n";
 	u64 block;
+	u64 ext2_size;
 
 	bunix_console_log(online, sizeof(online) - 1);
 	bunix_u64_tree_init(&open_files);
-	block = resolve_service(BUNIX_SERVICE_BLOCK, BUNIX_RIGHT_SEND);
-	if (block == 0) {
-		log_text("ext2: block service unavailable\n");
-	} else if (load_initial_mount(block, &root_mount) == 0) {
+	ext2_size = bunix_boot_module_size();
+	root_mount.image_size = ext2_size;
+	root_mount.use_boot_data = ext2_size != 0;
+	if (root_mount.use_boot_data != 0 &&
+	    load_initial_mount(&root_mount) == 0) {
 		root_mount_ready = 1;
+	} else if (root_mount.use_boot_data == 0 &&
+		   (block = resolve_service(BUNIX_SERVICE_BLOCK,
+					    BUNIX_RIGHT_SEND)) != 0) {
+		root_mount.block = block;
+		if (load_initial_mount(&root_mount) == 0) {
+			root_mount_ready = 1;
+		}
+	} else {
+		log_text("ext2: block service unavailable\n");
 	}
 	if (register_service(BUNIX_SERVICE_EXT2, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
@@ -1295,6 +1445,13 @@ int main(void)
 					reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				} else {
 					reply_path_stat(&message, &reply, path);
+				}
+				break;
+			case BUNIX_VFS_READLINK_BUFFER:
+				if (read_resolved_path(&message, path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply_readlink(&message, &reply, path);
 				}
 				break;
 			case BUNIX_VFS_STAT_META: {
