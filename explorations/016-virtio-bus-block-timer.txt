@@ -22,7 +22,7 @@ Constraints:
 
 Tasks:
 
-- [ ] Inventory current block, timer, interrupt, PCI/platform discovery, and
+- [x] Inventory current block, timer, interrupt, PCI/platform discovery, and
       hardware-access paths.
 - [ ] Define a generic device-resource model for userspace drivers: MMIO/PIO
       ranges, IRQs, DMA windows, feature bits, queue memory, and reset.
@@ -46,3 +46,46 @@ Tasks:
       block writes, flushes, interrupt-driven completions, and clean poweroff.
 - [ ] Document the ARM porting shape for VirtIO MMIO transport and timer
       selection.
+
+Inventory:
+
+- Block storage is currently a boot-module-backed userspace `block.server`.
+  `kernel/server.c` records the GRUB `disk0` module and attaches its copied
+  data range to the `block` module start record.  `user/block/main.c` exposes
+  `BLK0` `GET_INFO`, small inline `READ`, and `READ_BUFFER` RPCs by copying
+  from that boot module through `bunix_boot_module_read()`.
+- The block protocol is read-only today.  There are no write, flush, discard,
+  capacity-change, or completion/status operations, so VirtIO block needs either
+  protocol extensions behind the existing VFS-facing service name or a new
+  block-device protocol that `block.server` adapts.
+- `user/rootfs/main.c` and `user/vfs/main.c` consume `BUNIX_SERVICE_BLOCK`
+  synchronously.  They assume reads complete during the RPC call, and rootfs
+  mounting depends on offset-addressed byte reads from one root block service.
+- Timekeeping is kernel-owned.  `arch/x86_64/interrupts.c` programs PIT channel
+  0 at 100 Hz, increments a global tick counter on vector 32, wakes sleepers,
+  and invokes preemption from user-mode interrupt returns.  APs also receive
+  periodic LAPIC timer interrupts on vector 65, but the global monotonic clock
+  still comes from the PIT tick counter.
+- The `time.server` is a thin userspace facade over native clock/sleep syscalls.
+  It does not own timer hardware, deadlines, clocksource selection, or interrupt
+  routing.
+- Interrupt handling is fixed and architecture-local.  The IDT installs CPU
+  exception stubs plus vectors 32, 64, and 65.  There is no generic IRQ
+  allocator, no userspace IRQ bind/ack/mask implementation, no IOAPIC/MSI/MSI-X
+  routing, and no event delivery path for device interrupts yet.
+- ACPI parsing currently exists only for SMP MADT discovery in
+  `arch/x86_64/smp.c`.  There is no PCI/PCIe/ECAM scanner, no PCI config-space
+  access, no BAR discovery, no VirtIO vendor/device probing, and no platform
+  bus manager.
+- Hardware capability plumbing exists from the userspace console work:
+  `TASK_HW_RESOURCE_PORT`, `TASK_HW_RESOURCE_MMIO`, and `TASK_HW_RESOURCE_IRQ`
+  handles carry base/length/op masks and can be inherited/attenuated through
+  task handles.  Only 8-bit PIO read/write syscalls are implemented, and the
+  only boot-time grant is a static COM1 port range for `consoled`.
+- DMA has no explicit resource model yet.  Drivers can receive normal shared
+  buffer handles, but there is no DMA window object, physical-contiguous queue
+  allocation contract, bounce-buffer support, or kernel validation tying device
+  DMA to a driver-owned capability.
+- QEMU run and test modes use `-machine q35`, KVM, OVMF pflash, and a FAT ESP
+  drive containing GRUB modules.  No `virtio-blk`, `virtio-mmio`, deterministic
+  PCI topology, or device-specific test mode exists yet.
