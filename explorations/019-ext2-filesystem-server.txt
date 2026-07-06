@@ -153,6 +153,12 @@ Implementation notes:
   `CHOWN_BUFFER` uid payload for mounted translators, and the ext2 boot
   selftest verifies changed mode and owner through the hardlink path so the
   check proves inode metadata mutation rather than path-local state.
+- `CREATE_BUFFER` now supports empty regular-file creation when the parent
+  directory already has reusable directory-entry space.  The server allocates
+  an inode, updates inode bitmap and free-inode counts in the group descriptor
+  and superblock, writes a zero-length regular inode, inserts the directory
+  entry, and rolls back the inode allocation if insertion fails.  File data
+  block allocation and directory growth are still follow-up write slices.
 
 Tasks:
 

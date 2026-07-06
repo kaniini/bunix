@@ -51,6 +51,8 @@ enum {
 struct ext2_super {
 	u64 inodes_count;
 	u64 blocks_count;
+	u64 free_blocks_count;
+	u64 free_inodes_count;
 	u64 first_data_block;
 	u64 log_block_size;
 	u64 blocks_per_group;
@@ -69,6 +71,9 @@ struct ext2_group {
 	u64 block_bitmap;
 	u64 inode_bitmap;
 	u64 inode_table;
+	u64 free_blocks_count;
+	u64 free_inodes_count;
+	u64 used_dirs_count;
 };
 
 struct ext2_inode {
@@ -503,6 +508,8 @@ static long parse_super(const unsigned char *raw, u64 image_size,
 
 	super->inodes_count = load_le32(raw, 0);
 	super->blocks_count = load_le32(raw, 4);
+	super->free_blocks_count = load_le32(raw, 12);
+	super->free_inodes_count = load_le32(raw, 16);
 	super->first_data_block = load_le32(raw, 20);
 	super->log_block_size = load_le32(raw, 24);
 	super->blocks_per_group = load_le32(raw, 32);
@@ -656,6 +663,9 @@ static long load_group_descriptors(struct ext2_mount *mount)
 		group->block_bitmap = load_le32(raw, offset);
 		group->inode_bitmap = load_le32(raw, offset + 4);
 		group->inode_table = load_le32(raw, offset + 8);
+		group->free_blocks_count = load_le16(raw, offset + 12);
+		group->free_inodes_count = load_le16(raw, offset + 14);
+		group->used_dirs_count = load_le16(raw, offset + 16);
 		if (!block_range_valid(mount, group->block_bitmap, 1) ||
 		    !block_range_valid(mount, group->inode_bitmap, 1) ||
 		    !block_range_valid(mount, group->inode_table,
@@ -803,6 +813,74 @@ static long write_inode_owner(struct ext2_mount *mount, u64 ino,
 	return 0;
 }
 
+static long write_inode_new(struct ext2_mount *mount, u64 ino,
+			    const struct ext2_inode *inode)
+{
+	unsigned char raw[EXT2_INODE_MIN_SIZE];
+	u64 offset;
+
+	if (mount == 0 || inode == 0 ||
+	    inode_disk_offset(mount, ino, &offset) != 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < sizeof(raw); i++) {
+		raw[i] = 0;
+	}
+	store_le16(raw, 0, inode->mode);
+	store_le16(raw, 2, inode->uid);
+	store_le32(raw, 4, inode->size);
+	store_le32(raw, 8, inode->atime);
+	store_le32(raw, 12, inode->ctime);
+	store_le32(raw, 16, inode->mtime);
+	store_le16(raw, 24, inode->gid);
+	store_le16(raw, 26, inode->links_count);
+	store_le32(raw, 28, inode->blocks);
+	for (u64 i = 0; i < 15; i++) {
+		store_le32(raw, 40 + i * 4, inode->block[i]);
+	}
+	return mount_write_bytes(mount, offset, raw, sizeof(raw));
+}
+
+static u64 group_desc_offset(const struct ext2_mount *mount, u64 group_index)
+{
+	const u64 table_block = mount->super.block_size == 1024 ? 2 : 1;
+	const u64 table_offset = table_block * mount->super.block_size;
+
+	if (mount == 0 || group_index >= mount->super.groups_count ||
+	    group_index > ((u64)-1) / EXT2_GROUP_DESC_SIZE ||
+	    table_offset > (u64)-1 - group_index * EXT2_GROUP_DESC_SIZE) {
+		return (u64)-1;
+	}
+	return table_offset + group_index * EXT2_GROUP_DESC_SIZE;
+}
+
+static long write_super_count32(struct ext2_mount *mount, u64 field_offset,
+				u64 value)
+{
+	unsigned char raw[4];
+
+	if (mount == 0) {
+		return -1;
+	}
+	store_le32(raw, 0, value);
+	return mount_write_bytes(mount, EXT2_SUPER_OFFSET + field_offset,
+				 raw, sizeof(raw));
+}
+
+static long write_group_count16(struct ext2_mount *mount, u64 group_index,
+				u64 field_offset, u64 value)
+{
+	unsigned char raw[2];
+	const u64 offset = group_desc_offset(mount, group_index);
+
+	if (offset == (u64)-1) {
+		return -1;
+	}
+	store_le16(raw, 0, value);
+	return mount_write_bytes(mount, offset + field_offset, raw,
+				 sizeof(raw));
+}
+
 static long bitmap_bit_is_set(const struct ext2_mount *mount, u64 bitmap_block,
 			      u64 bit, u64 *set)
 {
@@ -825,6 +903,34 @@ static long bitmap_bit_is_set(const struct ext2_mount *mount, u64 bitmap_block,
 	return 0;
 }
 
+static long bitmap_set_bit(struct ext2_mount *mount, u64 bitmap_block,
+			   u64 bit, int set)
+{
+	unsigned char value;
+	unsigned char updated;
+	u64 offset;
+
+	if (mount == 0 ||
+	    bit >= mount->super.block_size * 8 ||
+	    !block_range_valid(mount, bitmap_block, 1)) {
+		return -1;
+	}
+	offset = block_to_offset(mount, bitmap_block);
+	if (offset == (u64)-1 ||
+	    offset > mount->image_size ||
+	    bit / 8 >= mount->image_size - offset ||
+	    mount_read_bytes(mount, offset + bit / 8, &value, 1) != 0) {
+		return -1;
+	}
+	updated = set != 0 ?
+		  (unsigned char)(value | (1u << (bit % 8))) :
+		  (unsigned char)(value & ~(1u << (bit % 8)));
+	if (updated == value) {
+		return 0;
+	}
+	return mount_write_bytes(mount, offset + bit / 8, &updated, 1);
+}
+
 static long inode_is_allocated(const struct ext2_mount *mount, u64 ino,
 			       u64 *allocated)
 {
@@ -843,6 +949,89 @@ static long inode_is_allocated(const struct ext2_mount *mount, u64 ino,
 	return bitmap_bit_is_set(mount,
 				 mount->groups[group_index].inode_bitmap,
 				 inode_index, allocated);
+}
+
+static long allocate_inode(struct ext2_mount *mount, u64 *ino_out)
+{
+	if (mount == 0 || ino_out == 0 ||
+	    mount->super.free_inodes_count == 0) {
+		return -1;
+	}
+	for (u64 group_index = 0; group_index < mount->super.groups_count;
+	     group_index++) {
+		struct ext2_group *group = &mount->groups[group_index];
+
+		if (group->free_inodes_count == 0) {
+			continue;
+		}
+		for (u64 bit = 0; bit < mount->super.inodes_per_group; bit++) {
+			const u64 ino = group_index *
+					mount->super.inodes_per_group + bit + 1;
+			u64 allocated = 0;
+
+			if (ino < mount->super.first_ino ||
+			    ino > mount->super.inodes_count) {
+				continue;
+			}
+			if (bitmap_bit_is_set(mount, group->inode_bitmap, bit,
+					      &allocated) != 0) {
+				return -1;
+			}
+			if (allocated != 0) {
+				continue;
+			}
+			if (bitmap_set_bit(mount, group->inode_bitmap, bit,
+					   1) != 0 ||
+			    group->free_inodes_count == 0 ||
+			    mount->super.free_inodes_count == 0) {
+				return -1;
+			}
+			group->free_inodes_count--;
+			mount->super.free_inodes_count--;
+			if (write_group_count16(mount, group_index, 14,
+						group->free_inodes_count) != 0 ||
+			    write_super_count32(mount, 16,
+						mount->super.free_inodes_count) != 0) {
+				return -1;
+			}
+			*ino_out = ino;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+static long free_inode(struct ext2_mount *mount, u64 ino)
+{
+	u64 group_index;
+	u64 inode_index;
+	u64 allocated = 0;
+	struct ext2_group *group;
+
+	if (mount == 0 || ino == 0 ||
+	    ino > mount->super.inodes_count ||
+	    (ino - 1) / mount->super.inodes_per_group >=
+		    mount->super.groups_count) {
+		return -1;
+	}
+	group_index = (ino - 1) / mount->super.inodes_per_group;
+	inode_index = (ino - 1) % mount->super.inodes_per_group;
+	group = &mount->groups[group_index];
+	if (bitmap_bit_is_set(mount, group->inode_bitmap, inode_index,
+			      &allocated) != 0 ||
+	    allocated == 0 ||
+	    bitmap_set_bit(mount, group->inode_bitmap, inode_index, 0) != 0) {
+		return -1;
+	}
+	group->free_inodes_count++;
+	mount->super.free_inodes_count++;
+	if (write_group_count16(mount, group_index, 14,
+				group->free_inodes_count) != 0 ||
+	    write_super_count32(mount, 16,
+				mount->super.free_inodes_count) != 0) {
+		return -1;
+	}
+	return 0;
 }
 
 static u64 ext2_inode_vfs_type(const struct ext2_inode *inode)
@@ -1182,6 +1371,147 @@ static long lookup_path(const struct ext2_mount *mount, const char *path,
 	return 0;
 }
 
+static u64 ext2_dirent_min_len(u64 name_len)
+{
+	return (8 + name_len + 3) & ~3ull;
+}
+
+static long split_parent_name(const char *path, char *parent, char *name)
+{
+	u64 len;
+	u64 slash = 0;
+	u64 name_len;
+
+	if (path == 0 || parent == 0 || name == 0 || path[0] != '/') {
+		return -1;
+	}
+	len = text_len(path);
+	if (len <= 1 || len >= EXT2_MAX_PATH) {
+		return -1;
+	}
+	for (u64 i = 1; i < len; i++) {
+		if (path[i] == '/') {
+			slash = i;
+		}
+	}
+	name_len = len - slash - 1;
+	if (name_len == 0 || name_len > EXT2_NAME_MAX) {
+		return -1;
+	}
+	if (slash == 0) {
+		parent[0] = '/';
+		parent[1] = '\0';
+	} else {
+		for (u64 i = 0; i < slash; i++) {
+			parent[i] = path[i];
+		}
+		parent[slash] = '\0';
+	}
+	for (u64 i = 0; i < name_len; i++) {
+		name[i] = path[slash + 1 + i];
+	}
+	name[name_len] = '\0';
+	return 0;
+}
+
+static void write_dirent(unsigned char *block, u64 offset, u64 ino,
+			 u64 rec_len, u64 name_len, u64 file_type,
+			 const char *name)
+{
+	store_le32(block, offset, ino);
+	store_le16(block, offset + 4, rec_len);
+	block[offset + 6] = (unsigned char)name_len;
+	block[offset + 7] = (unsigned char)file_type;
+	for (u64 i = 0; i < rec_len - 8; i++) {
+		block[offset + 8 + i] = 0;
+	}
+	for (u64 i = 0; i < name_len; i++) {
+		block[offset + 8 + i] = (unsigned char)name[i];
+	}
+}
+
+static long insert_dirent_existing_space(struct ext2_mount *mount,
+					 const struct ext2_inode *directory,
+					 u64 ino, const char *name,
+					 u64 file_type)
+{
+	const u64 name_len = text_len(name);
+	const u64 need = ext2_dirent_min_len(name_len);
+	unsigned char *block;
+
+	if (mount == 0 || directory == 0 || name == 0 ||
+	    name_len == 0 || name_len > EXT2_NAME_MAX ||
+	    ext2_inode_vfs_type(directory) != BUNIX_VFS_TYPE_DIRECTORY ||
+	    need > mount->super.block_size) {
+		return -1;
+	}
+	block = (unsigned char *)bunix_calloc(1, mount->super.block_size);
+	if (block == 0) {
+		return -1;
+	}
+	for (u64 block_index = 0;
+	     block_index * mount->super.block_size < directory->size;
+	     block_index++) {
+		u64 offset = 0;
+
+		if (read_mapped_block(mount, directory, block_index,
+				      block) != 0) {
+			bunix_free(block);
+			return -1;
+		}
+		while (offset + 8 <= mount->super.block_size &&
+		       block_index * mount->super.block_size + offset <
+			       directory->size) {
+			const u64 entry_ino = load_le32(block, offset);
+			const u64 rec_len = load_le16(block, offset + 4);
+			const u64 existing_name_len = block[offset + 6];
+			const u64 actual = entry_ino == 0 ? 8 :
+					   ext2_dirent_min_len(existing_name_len);
+
+			if (rec_len < 8 ||
+			    (rec_len & 3) != 0 ||
+			    rec_len > mount->super.block_size - offset ||
+			    existing_name_len > rec_len - 8 ||
+			    actual > rec_len) {
+				bunix_free(block);
+				return -1;
+			}
+			if (entry_ino == 0 && rec_len >= need) {
+				write_dirent(block, offset, ino, rec_len,
+					     name_len, file_type, name);
+				if (write_mapped_block(mount, directory,
+						       block_index,
+						       block) != 0) {
+					bunix_free(block);
+					return -1;
+				}
+				bunix_free(block);
+				return 0;
+			}
+			if (entry_ino != 0 && rec_len >= actual + need) {
+				const u64 new_offset = offset + actual;
+				const u64 new_rec_len = rec_len - actual;
+
+				store_le16(block, offset + 4, actual);
+				write_dirent(block, new_offset, ino,
+					     new_rec_len, name_len, file_type,
+					     name);
+				if (write_mapped_block(mount, directory,
+						       block_index,
+						       block) != 0) {
+					bunix_free(block);
+					return -1;
+				}
+				bunix_free(block);
+				return 0;
+			}
+			offset += rec_len;
+		}
+	}
+	bunix_free(block);
+	return -1;
+}
+
 static u64 remember_open(u64 ino, const struct ext2_inode *inode)
 {
 	struct ext2_open *open;
@@ -1363,6 +1693,61 @@ static void reply_path_chown(struct bunix_msg *reply, const char *path,
 	}
 	if (ext2_inode_vfs_type(&inode) == 0 ||
 	    write_inode_owner(&root_mount, ino, &inode, uid, gid) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+}
+
+static void reply_create(struct bunix_msg *reply, const char *path, u64 mode)
+{
+	char parent_path[EXT2_MAX_PATH];
+	char name[EXT2_NAME_MAX + 1];
+	struct ext2_inode parent_inode;
+	struct ext2_inode existing;
+	struct ext2_inode inode;
+	u64 parent_ino;
+	u64 existing_ino;
+	u64 ino = 0;
+
+	if (!root_mount_ready) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	if (lookup_path(&root_mount, path, &existing_ino, &existing) == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_EXIST;
+		return;
+	}
+	if (split_parent_name(path, parent_path, name) != 0 ||
+	    lookup_path(&root_mount, parent_path, &parent_ino,
+			&parent_inode) != 0 ||
+	    ext2_inode_vfs_type(&parent_inode) != BUNIX_VFS_TYPE_DIRECTORY) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	for (u64 i = 0; i < sizeof(inode.block) / sizeof(inode.block[0]); i++) {
+		inode.block[i] = 0;
+	}
+	for (u64 i = 0; i < sizeof(inode.block_bytes); i++) {
+		inode.block_bytes[i] = 0;
+	}
+	inode.mode = EXT2_S_IFREG | (mode & 07777);
+	inode.uid = 0;
+	inode.size = 0;
+	inode.atime = 0;
+	inode.ctime = 0;
+	inode.mtime = 0;
+	inode.gid = 0;
+	inode.links_count = 1;
+	inode.blocks = 0;
+	if (allocate_inode(&root_mount, &ino) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (write_inode_new(&root_mount, ino, &inode) != 0 ||
+	    insert_dirent_existing_space(&root_mount, &parent_inode, ino, name,
+					 EXT2_FT_REG_FILE) != 0) {
+		(void)free_inode(&root_mount, ino);
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -1794,6 +2179,14 @@ int main(void)
 					reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				} else {
 					reply_path_stat(&message, &reply, path);
+				}
+				break;
+			case BUNIX_VFS_CREATE_BUFFER:
+				if (read_resolved_path(&message, path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply_create(&reply, path,
+						     message.words[3] >> 32);
 				}
 				break;
 			case BUNIX_VFS_CHMOD_BUFFER:

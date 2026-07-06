@@ -560,6 +560,38 @@ static long vfs_chown_path_buffer(u64 vfs, const char *path, u64 uid, u64 gid)
 	return 0;
 }
 
+static long vfs_create_path_buffer(u64 vfs, const char *path, u64 mode)
+{
+	const char cwd[] = "/";
+	const u64 cwd_len = sizeof(cwd);
+	const u64 path_len = path != 0 ? str_len(path) + 1 : 0;
+	const long buffer = path_len != 0 ?
+			    bunix_buffer_create(cwd_len + path_len) : -1;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_CREATE_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { cwd_len, path_len, 0, mode << 32 },
+	};
+	struct bunix_msg reply;
+
+	if (vfs == 0 || path == 0 || buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, cwd, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, cwd_len, path, path_len) != 0 ||
+	    bunix_ipc_call(vfs, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
 static long vfs_stat_path(u64 vfs, const char *path, u64 *size, u64 *ino,
 			  u64 *nlink, u64 *type, u64 *mode, u64 *uid,
 			  u64 *gid)
@@ -814,6 +846,18 @@ static long ext2_readonly_selftest(u64 vfs)
 	    hello_mode != 0644 ||
 	    hello_uid != 321 ||
 	    hello_gid != 54) {
+		return -1;
+	}
+	if (vfs_create_path_buffer(vfs, "/mnt/ext2/created.txt", 0640) != 0 ||
+	    vfs_stat_path(vfs, "/mnt/ext2/created.txt", &hello_size, 0, 0,
+			  &hello_type, &hello_mode, &hello_uid,
+			  &hello_gid) != 0 ||
+	    hello_size != 0 ||
+	    hello_type != BUNIX_VFS_TYPE_REGULAR ||
+	    hello_mode != 0640 ||
+	    hello_uid != 0 ||
+	    hello_gid != 0 ||
+	    vfs_readdir_has(vfs, "/mnt/ext2", "created.txt") != 0) {
 		return -1;
 	}
 	return 0;
