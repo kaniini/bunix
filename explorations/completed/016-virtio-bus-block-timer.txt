@@ -42,8 +42,9 @@ Tasks:
       server that shares the same driver framework.
 - [x] Add QEMU run/test modes that boot with VirtIO block and deterministic
       device topology.
-- [ ] Add tests for bus enumeration, feature negotiation failures, block reads,
-      block writes, flushes, interrupt-driven completions, and clean poweroff.
+- [x] Add tests for bus enumeration, feature negotiation failures, block reads,
+      block writes, flushes, polling completions, VirtIO-backed rootfs boot,
+      and clean poweroff.
 - [x] Document the ARM porting shape for VirtIO MMIO transport and timer
       selection.
 
@@ -284,3 +285,11 @@ Progress:
   chooses a missing feature bit, requires it, and expects the bus to reject the
   negotiation.  The dedicated VirtIO block boot target now asserts
   `virtio-blk: feature fail ok` before read/write/flush coverage.
+- Test coverage now includes `test-boot-virtio` for deterministic bus
+  enumeration and feature discovery, `test-boot-virtio-blk` for feature
+  negotiation failure plus read/write/flush requests, and
+  `test-boot-virtio-blk-backend` for mounting the root filesystem through the
+  VirtIO block backend and powering off cleanly.  Interrupt-driven completions
+  are intentionally split into `025-virtio-irq-driven-completions.txt` because
+  Bunix can acknowledge the VirtIO ISR byte but does not yet route hardware IRQ
+  events to userspace drivers.
