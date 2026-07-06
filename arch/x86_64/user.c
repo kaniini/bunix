@@ -282,6 +282,8 @@ enum {
 	LINUX_RPC_EXEC_PROCESS = 1002,
 	LINUX_RPC_EXEC_PREPARE = 1005,
 	USER_PROC_SET_CMDLINE_BUFFER = 14,
+	USER_PROC_EXEC_REPLACE_TASK = 16,
+	USER_PROC_EXEC_REPLACE_BUFFER = 17,
 };
 
 static int linux_einval_int(const char *function, u64 line)
@@ -296,106 +298,12 @@ static u64 linux_einval_u64(const char *function, u64 line)
 	return (u64)-LINUX_EINVAL;
 }
 
-enum {
-	ELF_MAGIC0 = 0x7f,
-	ELF_MAGIC1 = 'E',
-	ELF_MAGIC2 = 'L',
-	ELF_MAGIC3 = 'F',
-	ELF_CLASS_64 = 2,
-	ELF_DATA_LSB = 1,
-	ELF_TYPE_EXEC = 2,
-	ELF_TYPE_DYN = 3,
-	ELF_MACHINE_X86_64 = 62,
-	ELF_PH_LOAD = 1,
-	ELF_PH_DYNAMIC = 2,
-	ELF_PH_INTERP = 3,
-	ELF_PF_X = 1,
-	ELF_PF_W = 2,
-	ELF_EHDR_SIZE = 64,
-	ELF_PHDR_SIZE = 56,
-	ELF_DT_NULL = 0,
-	ELF_DT_RELR = 0x24,
-	ELF_DT_RELRSZ = 0x23,
-	ELF_DT_RELRENT = 0x25,
-	LINUX_AT_NULL = 0,
-	LINUX_AT_PHDR = 3,
-	LINUX_AT_PHENT = 4,
-	LINUX_AT_PHNUM = 5,
-	LINUX_AT_PAGESZ = 6,
-	LINUX_AT_BASE = 7,
-	LINUX_AT_ENTRY = 9,
-	LINUX_AT_UID = 11,
-	LINUX_AT_EUID = 12,
-	LINUX_AT_GID = 13,
-	LINUX_AT_EGID = 14,
-	LINUX_AT_CLKTCK = 17,
-	LINUX_AT_SECURE = 23,
-	LINUX_AT_RANDOM = 25,
-	LINUX_AT_EXECFN = 31,
-	BUNIX_AT_STDOUT = 0x62780101,
-	BUNIX_AT_STDERR = 0x62780102,
-	BUNIX_AT_TIME = 0x62780103,
-	BUNIX_AT_PROC = 0x62780104,
-	BUNIX_AT_NAMES = 0x62780106,
-	LINUX_EXEC_HANDLE_STDOUT = 2,
-	LINUX_EXEC_HANDLE_STDERR = LINUX_EXEC_HANDLE_STDOUT,
-	LINUX_EXEC_HANDLE_TIME = 3,
-	LINUX_EXEC_HANDLE_PROC = 4,
-	LINUX_EXEC_HANDLE_NAMES = 5,
-};
-
-struct elf64_ehdr {
-	u8 ident[16];
-	u16 type;
-	u16 machine;
-	u32 version;
-	u64 entry;
-	u64 phoff;
-	u64 shoff;
-	u32 flags;
-	u16 ehsize;
-	u16 phentsize;
-	u16 phnum;
-	u16 shentsize;
-	u16 shnum;
-	u16 shstrndx;
-} __attribute__((packed));
-
-struct elf64_phdr {
-	u32 type;
-	u32 flags;
-	u64 offset;
-	u64 vaddr;
-	u64 paddr;
-	u64 filesz;
-	u64 memsz;
-	u64 align;
-} __attribute__((packed));
-
-struct elf64_dyn {
-	i64 tag;
-	u64 value;
-} __attribute__((packed));
-
-struct linux_exec_image {
-	struct elf64_ehdr ehdr;
-	struct elf64_phdr *phdrs;
-};
-
 struct linux_exec_args {
 	u64 argc;
 	u64 envc;
 	u64 bytes;
 	char **argv;
 	char **envp;
-};
-
-struct linux_exec_credentials {
-	u64 uid;
-	u64 gid;
-	u64 euid;
-	u64 egid;
-	u64 secure;
 };
 
 struct linux_vfork_wait {
@@ -551,29 +459,6 @@ static u32 linux_map_flags_to_task(u64 flags)
 static u64 min_u64(u64 left, u64 right)
 {
 	return left < right ? left : right;
-}
-
-static u64 max_u64(u64 left, u64 right)
-{
-	return left > right ? left : right;
-}
-
-static u64 read_u64_le(const u8 *data)
-{
-	u64 value = 0;
-
-	for (u64 i = 0; i < sizeof(value); i++) {
-		value |= ((u64)data[i]) << (i * 8);
-	}
-
-	return value;
-}
-
-static void write_u64_le(u8 *data, u64 value)
-{
-	for (u64 i = 0; i < sizeof(value); i++) {
-		data[i] = (u8)((value >> (i * 8)) & 0xff);
-	}
 }
 
 static void mem_copy(u8 *dst, const u8 *src, u64 len)
@@ -837,9 +722,9 @@ static int linux_vfs_status_to_errno(u64 status)
 	return status == 0 ? 0 : linux_einval_int(__func__, __LINE__);
 }
 
-static int linux_vfs_read_file(struct task *task, const char *path,
-			       u8 **image_out, u64 image_cap,
-			       u64 *image_size)
+static int linux_vfs_read_prefix(struct task *task, const char *path,
+				 u8 *prefix, u64 prefix_cap,
+				 u64 *prefix_size)
 {
 	struct ipc_port *vfs = ipc_port_find("vfs");
 	struct ipc_port *reply_port = task_reply_port(task);
@@ -847,18 +732,18 @@ static int linux_vfs_read_file(struct task *task, const char *path,
 	struct ipc_message reply;
 	u64 file;
 	u64 size;
+	u64 read_len;
 	struct shared_buffer *buffer;
 	const u64 path_len = str_len(path) + 1;
 	const char cwd[] = "/";
 	const u64 cwd_len = sizeof(cwd);
 	struct shared_buffer *path_buffer;
-	u8 *image;
 
-	if (vfs == 0 || reply_port == 0 || path == 0 || image_out == 0 ||
-	    image_size == 0) {
+	if (vfs == 0 || reply_port == 0 || path == 0 || prefix == 0 ||
+	    prefix_cap == 0 || prefix_size == 0) {
 		return -1;
 	}
-	*image_out = 0;
+	*prefix_size = 0;
 
 	path_buffer = buffer_create(cwd_len + path_len);
 	if (path_buffer == 0 ||
@@ -896,59 +781,42 @@ static int linux_vfs_read_file(struct task *task, const char *path,
 
 	file = reply.words[1];
 	size = reply.words[2];
-	if (size == 0 || (image_cap != 0 && size > image_cap)) {
+	if (size == 0) {
 		(void)linux_vfs_close(task, file);
 		return -1;
 	}
-	image = (u8 *)slab_alloc(size);
-	if (image == 0) {
-		(void)linux_vfs_close(task, file);
-		return -2;
-	}
 
-	buffer = buffer_create(LINUX_MAX_SYSCALL_BUFFER);
+	read_len = min_u64(size, prefix_cap);
+	buffer = buffer_create(read_len);
 	if (buffer == 0) {
-		slab_free(image);
 		(void)linux_vfs_close(task, file);
 		return -2;
 	}
 
-	for (u64 offset = 0; offset < size;) {
-		const u64 chunk = min_u64(size - offset,
-					  LINUX_MAX_SYSCALL_BUFFER);
-
-		request = (struct ipc_message){
-			.protocol = USER_FOURCC_VFS,
-			.type = USER_VFS_READ_FILE_BUFFER,
-			.sender = 0,
-			.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
-			.reply_port = reply_port,
-			.cap_type = IPC_CAP_BUFFER,
-			.cap_object = buffer,
-			.words = { file, offset, chunk, 0 },
-		};
-		if (ipc_send(vfs, &request) != 0 ||
-		    ipc_recv(reply_port, &reply) != 0 ||
-		    reply.words[0] != 0 ||
-		    reply.words[1] != chunk ||
-		    buffer_read(buffer, 0, image + offset, chunk) != 0) {
-			buffer_release(buffer);
-			slab_free(image);
-			(void)linux_vfs_close(task, file);
-			return -1;
-		}
-		offset += chunk;
-	}
-
-	buffer_release(buffer);
-	if (linux_vfs_close(task, file) != 0) {
-		slab_free(image);
+	request = (struct ipc_message){
+		.protocol = USER_FOURCC_VFS,
+		.type = USER_VFS_READ_FILE_BUFFER,
+		.sender = 0,
+		.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_BUFFER,
+		.cap_object = buffer,
+		.words = { file, 0, read_len, 0 },
+	};
+	if (ipc_send(vfs, &request) != 0 ||
+	    ipc_recv(reply_port, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[1] == 0 ||
+	    reply.words[1] > read_len ||
+	    buffer_read(buffer, 0, prefix, reply.words[1]) != 0) {
+		buffer_release(buffer);
+		(void)linux_vfs_close(task, file);
 		return -1;
 	}
 
-	*image_out = image;
-	*image_size = size;
-	return 0;
+	*prefix_size = reply.words[1];
+	buffer_release(buffer);
+	return linux_vfs_close(task, file);
 }
 
 static int linux_mmap_file_into_task(struct task *task, struct ipc_port *linux,
@@ -1011,249 +879,6 @@ static int linux_mmap_file_into_task(struct task *task, struct ipc_port *linux,
 	}
 
 	buffer_release(buffer);
-	return 0;
-}
-
-static void linux_exec_image_free(struct linux_exec_image *exec)
-{
-	if (exec == 0) {
-		return;
-	}
-	slab_free(exec->phdrs);
-	exec->phdrs = 0;
-	mem_zero((u8 *)&exec->ehdr, sizeof(exec->ehdr));
-}
-
-static int linux_exec_validate(const u8 *image, u64 image_size,
-			       struct linux_exec_image *exec)
-{
-	const struct elf64_ehdr *ehdr;
-	u64 phdr_bytes;
-	u64 phdr_size;
-
-	if (image == 0 || exec == 0 || image_size < ELF_EHDR_SIZE) {
-		return -1;
-	}
-	mem_zero((u8 *)exec, sizeof(*exec));
-
-	ehdr = (const struct elf64_ehdr *)image;
-	phdr_bytes = ehdr->phoff + (u64)ehdr->phnum * ehdr->phentsize;
-	if (ehdr->phoff > phdr_bytes ||
-	    ehdr->ident[0] != ELF_MAGIC0 ||
-	    ehdr->ident[1] != ELF_MAGIC1 ||
-	    ehdr->ident[2] != ELF_MAGIC2 ||
-	    ehdr->ident[3] != ELF_MAGIC3 ||
-	    ehdr->ident[4] != ELF_CLASS_64 ||
-	    ehdr->ident[5] != ELF_DATA_LSB ||
-	    (ehdr->type != ELF_TYPE_EXEC && ehdr->type != ELF_TYPE_DYN) ||
-	    ehdr->machine != ELF_MACHINE_X86_64 ||
-	    ehdr->ehsize != ELF_EHDR_SIZE ||
-	    ehdr->phentsize != ELF_PHDR_SIZE ||
-	    ehdr->phnum == 0 ||
-	    phdr_bytes > image_size) {
-		return -1;
-	}
-	phdr_size = (u64)ehdr->phnum * sizeof(exec->phdrs[0]);
-	if (ehdr->phnum != phdr_size / sizeof(exec->phdrs[0])) {
-		return -1;
-	}
-	exec->phdrs = (struct elf64_phdr *)slab_alloc(phdr_size);
-	if (exec->phdrs == 0) {
-		return -2;
-	}
-	exec->ehdr = *ehdr;
-	mem_copy((u8 *)exec->phdrs, image + ehdr->phoff, phdr_size);
-
-	for (u64 i = 0; i < exec->ehdr.phnum; i++) {
-		const struct elf64_phdr *phdr = &exec->phdrs[i];
-
-		if (phdr->type != ELF_PH_LOAD) {
-			continue;
-		}
-		if (phdr->filesz > phdr->memsz ||
-		    phdr->offset + phdr->filesz < phdr->offset ||
-		    phdr->offset + phdr->filesz > image_size ||
-		    phdr->vaddr + phdr->memsz < phdr->vaddr ||
-		    phdr->memsz == 0) {
-			linux_exec_image_free(exec);
-			return -1;
-		}
-	}
-
-	return 0;
-}
-
-static int linux_exec_vaddr_to_offset(const struct linux_exec_image *exec,
-				      u64 vaddr, u64 len, u64 *offset)
-{
-	if (exec == 0 || exec->phdrs == 0 || offset == 0 ||
-	    vaddr + len < vaddr) {
-		return -1;
-	}
-
-	for (u64 i = 0; i < exec->ehdr.phnum; i++) {
-		const struct elf64_phdr *phdr = &exec->phdrs[i];
-
-		if (phdr->type == ELF_PH_LOAD &&
-		    vaddr >= phdr->vaddr &&
-		    vaddr + len <= phdr->vaddr + phdr->filesz) {
-			*offset = phdr->offset + (vaddr - phdr->vaddr);
-			return 0;
-		}
-	}
-
-	return -1;
-}
-
-static int linux_exec_apply_relr_one(u8 *image,
-				     const struct linux_exec_image *exec,
-				     u64 load_bias, u64 reloc_vaddr)
-{
-	u64 offset = 0;
-
-	if (linux_exec_vaddr_to_offset(exec, reloc_vaddr, sizeof(u64),
-				       &offset) != 0) {
-		return -1;
-	}
-
-	write_u64_le(image + offset, read_u64_le(image + offset) + load_bias);
-	return 0;
-}
-
-static int linux_exec_apply_relative_relocations(u8 *image,
-						 const struct linux_exec_image *exec,
-						 u64 image_size, u64 load_bias)
-{
-	u64 relr = 0;
-	u64 relrsz = 0;
-	u64 relrent = 8;
-
-	if (load_bias == 0) {
-		return 0;
-	}
-
-	for (u64 i = 0; i < exec->ehdr.phnum; i++) {
-		const struct elf64_phdr *phdr = &exec->phdrs[i];
-
-		if (phdr->type != ELF_PH_DYNAMIC) {
-			continue;
-		}
-		if (phdr->filesz % sizeof(struct elf64_dyn) != 0 ||
-		    phdr->offset + phdr->filesz < phdr->offset ||
-		    phdr->offset + phdr->filesz > image_size) {
-			return -1;
-		}
-
-		const u64 entries = phdr->filesz / sizeof(struct elf64_dyn);
-		const struct elf64_dyn *dyn =
-			(const struct elf64_dyn *)(image + phdr->offset);
-
-		for (u64 entry = 0; entry < entries; entry++) {
-			if (dyn[entry].tag == ELF_DT_NULL) {
-				break;
-			}
-			if (dyn[entry].tag == ELF_DT_RELR) {
-				relr = dyn[entry].value;
-			} else if (dyn[entry].tag == ELF_DT_RELRSZ) {
-				relrsz = dyn[entry].value;
-			} else if (dyn[entry].tag == ELF_DT_RELRENT) {
-				relrent = dyn[entry].value;
-			}
-		}
-		break;
-	}
-
-	if (relr == 0 || relrsz == 0) {
-		return 0;
-	}
-	if (relrent != sizeof(u64) || relrsz % relrent != 0) {
-		return -1;
-	}
-
-	u64 relr_offset = 0;
-	if (linux_exec_vaddr_to_offset(exec, relr, relrsz, &relr_offset) != 0 ||
-	    relr_offset + relrsz < relr_offset ||
-	    relr_offset + relrsz > image_size) {
-		return -1;
-	}
-
-	u64 reloc_vaddr = 0;
-	const u64 entries = relrsz / relrent;
-
-	for (u64 i = 0; i < entries; i++) {
-		const u64 entry = read_u64_le(image + relr_offset + i * relrent);
-
-		if ((entry & 1) == 0) {
-			reloc_vaddr = entry;
-			if (linux_exec_apply_relr_one(image, exec, load_bias,
-						      reloc_vaddr) != 0) {
-				return -1;
-			}
-			reloc_vaddr += sizeof(u64);
-			continue;
-		}
-
-		for (u64 bit = 1; bit < 64; bit++) {
-			if ((entry & (1ull << bit)) != 0 &&
-			    linux_exec_apply_relr_one(image, exec, load_bias,
-						      reloc_vaddr) != 0) {
-				return -1;
-			}
-			reloc_vaddr += sizeof(u64);
-		}
-	}
-
-	return 0;
-}
-
-static int linux_exec_interp_path(const u8 *image,
-				  const struct linux_exec_image *exec,
-				  u64 image_size, char *path, u64 path_size)
-{
-	if (image == 0 || exec == 0 || exec->phdrs == 0 ||
-	    path == 0 || path_size == 0) {
-		return -1;
-	}
-	path[0] = '\0';
-	for (u64 i = 0; i < exec->ehdr.phnum; i++) {
-		const struct elf64_phdr *phdr = &exec->phdrs[i];
-
-		if (phdr->type != ELF_PH_INTERP) {
-			continue;
-		}
-		if (phdr->filesz == 0 || phdr->filesz >= path_size ||
-		    phdr->offset + phdr->filesz < phdr->offset ||
-		    phdr->offset + phdr->filesz > image_size) {
-			return -1;
-		}
-		mem_copy((u8 *)path, image + phdr->offset, phdr->filesz);
-		path[phdr->filesz] = '\0';
-		return 1;
-	}
-	return 0;
-}
-
-static int linux_exec_unmap_current(struct task *task)
-{
-	struct vm_space *space = task_vm_space(task);
-
-	while (task_vm_region_count(task) != 0) {
-		const struct task_vm_region *region =
-			task_vm_region_at(task, 0);
-		const u64 base = region->base;
-		const u64 len = region->len;
-
-		if (vm_unmap_user_range(space, base, len) != 0) {
-			return -1;
-		}
-		if (task_remove_vm_region(task, base, len) != 0) {
-			return -1;
-		}
-	}
-
-	task_clear_vm_regions(task);
-	task_set_linux_brk(task, LINUX_INITIAL_BRK);
-	task_set_linux_mmap_next(task, LINUX_MMAP_BASE);
 	return 0;
 }
 
@@ -2286,57 +1911,6 @@ static u64 linux_forward_groups_out(struct ipc_port *linux,
 	return reply.words[0];
 }
 
-static int linux_exec_map_segment(struct task *task, const u8 *image,
-				  const struct elf64_phdr *phdr,
-				  u64 load_bias)
-{
-	struct vm_space *space = task_vm_space(task);
-	const u32 writable = (phdr->flags & ELF_PF_W) != 0;
-	const u64 segment_start = phdr->vaddr + load_bias;
-	const u64 segment_end = segment_start + phdr->memsz;
-	const u64 page_start = align_down(segment_start, VM_PAGE_SIZE);
-	const u64 page_end = align_up(segment_end, VM_PAGE_SIZE);
-
-	for (u64 page = page_start; page < page_end; page += VM_PAGE_SIZE) {
-		struct vm_frame frame = vm_alloc_user_page(space, page,
-							   writable);
-		const u64 page_end_addr = page + VM_PAGE_SIZE;
-		const u64 copy_start = max_u64(page, segment_start);
-		const u64 copy_end = min_u64(page_end_addr,
-					     segment_start + phdr->filesz);
-
-		if (frame.addr == 0) {
-			(void)vm_unmap_user_range(space, page_start,
-						  page - page_start);
-			return -1;
-		}
-		mem_zero((u8 *)frame.addr, VM_PAGE_SIZE);
-		if (copy_start < copy_end) {
-			const u64 dst_offset = copy_start - page;
-			const u64 src_offset = copy_start - segment_start;
-
-			mem_copy((u8 *)(frame.addr + dst_offset),
-				 image + phdr->offset + src_offset,
-				 copy_end - copy_start);
-		}
-	}
-
-	const u32 prot = TASK_VM_PROT_READ |
-			 (writable != 0 ? TASK_VM_PROT_WRITE : 0) |
-			 ((phdr->flags & ELF_PF_X) != 0 ?
-			  TASK_VM_PROT_EXEC : 0);
-
-	if (task_add_vm_mapping(task, page_start, page_end - page_start,
-				prot, TASK_VM_MAP_PRIVATE, TASK_VM_REGION_ELF,
-				TASK_VM_OBJECT_FILE, 0, phdr->offset) != 0) {
-		(void)vm_unmap_user_range(space, page_start,
-					  page_end - page_start);
-		return -1;
-	}
-
-	return 0;
-}
-
 static char *linux_copy_cstr_dynamic(const char *src, u64 max_len, u64 *len_out,
 				     int *error)
 {
@@ -2866,27 +2440,35 @@ static int linux_exec_prepare_shebang(struct task *task, char *load_path,
 	return result;
 }
 
-static void linux_exec_credentials_load(struct task *task,
-					struct linux_exec_credentials *creds)
+static int linux_exec_replace_write_string(struct shared_buffer *buffer,
+					   u64 *offset, u64 limit,
+					   const char *text)
 {
-	struct ipc_port *linux;
-	struct ipc_port *reply_port;
+	const u64 len = str_len(text) + 1;
+
+	if (buffer == 0 || offset == 0 || text == 0 || len == 1 ||
+	    len > LINUX_EXEC_MAX_STRING ||
+	    *offset + len < *offset ||
+	    *offset + len > limit ||
+	    buffer_write(buffer, *offset, text, len) != 0) {
+		return -1;
+	}
+
+	*offset += len;
+	return 0;
+}
+
+static void linux_exec_credentials_load(struct task *task, u64 creds[5])
+{
+	struct ipc_port *linux = ipc_port_find("linux");
+	struct ipc_port *reply_port = task_reply_port(task);
 	u64 value;
 
-	if (creds == 0) {
-		return;
-	}
-	creds->uid = 0;
-	creds->gid = 0;
-	creds->euid = 0;
-	creds->egid = 0;
-	creds->secure = 0;
-	if (task == 0) {
-		return;
-	}
-
-	linux = ipc_port_find("linux");
-	reply_port = task_reply_port(task);
+	creds[0] = 0;
+	creds[1] = 0;
+	creds[2] = 0;
+	creds[3] = 0;
+	creds[4] = 0;
 	if (linux == 0 || reply_port == 0) {
 		return;
 	}
@@ -2894,186 +2476,164 @@ static void linux_exec_credentials_load(struct task *task,
 	value = linux_forward_words(linux, reply_port, LINUX_SYSCALL_GETUID,
 				    0, 0, 0);
 	if ((i64)value >= 0) {
-		creds->uid = value;
+		creds[0] = value;
 	}
 	value = linux_forward_words(linux, reply_port, LINUX_SYSCALL_GETGID,
 				    0, 0, 0);
 	if ((i64)value >= 0) {
-		creds->gid = value;
+		creds[1] = value;
 	}
 	value = linux_forward_words(linux, reply_port, LINUX_SYSCALL_GETEUID,
 				    0, 0, 0);
 	if ((i64)value >= 0) {
-		creds->euid = value;
+		creds[2] = value;
 	}
 	value = linux_forward_words(linux, reply_port, LINUX_SYSCALL_GETEGID,
 				    0, 0, 0);
 	if ((i64)value >= 0) {
-		creds->egid = value;
+		creds[3] = value;
 	}
 }
 
-static int linux_exec_build_stack(const char *path,
-				  const struct linux_exec_args *args,
-				  const struct linux_exec_image *exec,
-				  u64 load_bias, u64 program_entry,
-				  u64 interpreter_base,
-				  const struct linux_exec_credentials *creds,
-				  u8 *stack_image, u64 stack_size,
-				  u64 *new_sp)
+static int linux_exec_replace_buffer_create(const char *load_path,
+					    const char *execfn_path,
+					    const struct linux_exec_args *args,
+					    const u64 creds[5],
+					    struct shared_buffer **out,
+					    u64 *total_out)
 {
-	const u64 aux_pairs = interpreter_base == 0 ? 19 : 20;
-	const u64 stack_base = LINUX_EXEC_STACK_TOP - stack_size;
-	u64 *argv_addrs;
-	u64 *env_addrs = 0;
-	u64 sp = stack_size;
-	int result = -1;
+	u64 total;
+	u64 offset = 0;
+	struct shared_buffer *buffer;
 
-	if (path == 0 || args == 0 || exec == 0 || exec->phdrs == 0 ||
-	    creds == 0 ||
-	    stack_image == 0 || new_sp == 0 || stack_size == 0 ||
-	    args->argc == 0) {
-		return -1;
+	if (load_path == 0 || execfn_path == 0 || args == 0 || creds == 0 ||
+	    out == 0 || total_out == 0 || args->argc == 0 ||
+	    args->argc > LINUX_EXEC_MAX_POINTERS ||
+	    args->envc > LINUX_EXEC_MAX_POINTERS) {
+		return -LINUX_EINVAL;
 	}
 
-	argv_addrs = (u64 *)slab_alloc(args->argc * sizeof(u64));
-	env_addrs = args->envc == 0 ? 0 :
-		(u64 *)slab_alloc(args->envc * sizeof(u64));
-	if (argv_addrs == 0 || (args->envc != 0 && env_addrs == 0)) {
-		goto out;
-	}
-	mem_zero(stack_image, stack_size);
-
-	for (u64 i = args->argc; i > 0; i--) {
-		const u64 index = i - 1;
-		const u64 len = str_len(args->argv[index]) + 1;
-
-		if (len > LINUX_EXEC_MAX_STRING || sp < len) {
-			goto out;
-		}
-		sp -= len;
-		mem_copy(stack_image + sp, (const u8 *)args->argv[index], len);
-		argv_addrs[index] = stack_base + sp;
-	}
-	for (u64 i = args->envc; i > 0; i--) {
-		const u64 index = i - 1;
-		const u64 len = str_len(args->envp[index]) + 1;
-
-		if (len > LINUX_EXEC_MAX_STRING || sp < len) {
-			goto out;
-		}
-		sp -= len;
-		mem_copy(stack_image + sp, (const u8 *)args->envp[index], len);
-		env_addrs[index] = stack_base + sp;
-	}
-
-	const u64 path_len = str_len(path) + 1;
-	if (path_len > LINUX_EXEC_MAX_PATH || sp < path_len) {
-		goto out;
-	}
-	sp -= path_len;
-	mem_copy(stack_image + sp, (const u8 *)path, path_len);
-	const u64 execfn = stack_base + sp;
-	const u8 random_bytes[16] = {
-		0x62, 0x75, 0x6e, 0x69, 0x78, 0x2d, 0x72, 0x61,
-		0x6e, 0x64, 0x6f, 0x6d, 0x2d, 0x65, 0x78, 0x00,
-	};
-
-	sp = align_down(sp, 16);
-	if (sp < sizeof(random_bytes)) {
-		goto out;
-	}
-	sp -= sizeof(random_bytes);
-	mem_copy(stack_image + sp, random_bytes, sizeof(random_bytes));
-	const u64 random_addr = stack_base + sp;
-
-	const u64 phdr_bytes = exec->ehdr.phnum * sizeof(struct elf64_phdr);
-	if (sp < phdr_bytes) {
-		goto out;
-	}
-	sp = align_down(sp - phdr_bytes, 8);
-	for (u64 i = 0; i < exec->ehdr.phnum; i++) {
-		const struct elf64_phdr *phdr = &exec->phdrs[i];
-		struct elf64_phdr aux_phdr = *phdr;
-
-		aux_phdr.vaddr += load_bias;
-		aux_phdr.paddr += load_bias;
-		mem_copy(stack_image + sp + i * sizeof(aux_phdr),
-			 (const u8 *)&aux_phdr, sizeof(aux_phdr));
-	}
-	const u64 copied_phdr_addr = stack_base + sp;
-	const u64 phdr_addr = interpreter_base != 0 ?
-			       load_bias + exec->ehdr.phoff : copied_phdr_addr;
-
-	sp = align_down(sp, 16);
-	const u64 words = 1 + args->argc + 1 + args->envc + 1 +
-			  aux_pairs * 2;
-	if (sp < words * sizeof(u64)) {
-		goto out;
-	}
-	sp -= words * sizeof(u64);
-	u64 *stack_words = (u64 *)(stack_image + sp);
-	u64 word = 0;
-
-	stack_words[word++] = args->argc;
+	total = 5 * sizeof(u64) + str_len(load_path) + 1 +
+		str_len(execfn_path) + 1;
 	for (u64 i = 0; i < args->argc; i++) {
-		stack_words[word++] = argv_addrs[i];
+		total += str_len(args->argv[i]) + 1;
 	}
-	stack_words[word++] = 0;
 	for (u64 i = 0; i < args->envc; i++) {
-		stack_words[word++] = env_addrs[i];
+		total += str_len(args->envp[i]) + 1;
 	}
-	stack_words[word++] = 0;
-	stack_words[word++] = LINUX_AT_PAGESZ;
-	stack_words[word++] = VM_PAGE_SIZE;
-	stack_words[word++] = LINUX_AT_ENTRY;
-	stack_words[word++] = program_entry;
-	if (interpreter_base != 0) {
-		stack_words[word++] = LINUX_AT_BASE;
-		stack_words[word++] = interpreter_base;
+	if (total == 0 || total > LINUX_EXEC_MAX_STRING_BYTES ||
+	    total < str_len(load_path) + 1) {
+		return -LINUX_E2BIG;
 	}
-	stack_words[word++] = LINUX_AT_PHDR;
-	stack_words[word++] = phdr_addr;
-	stack_words[word++] = LINUX_AT_PHENT;
-	stack_words[word++] = exec->ehdr.phentsize;
-	stack_words[word++] = LINUX_AT_PHNUM;
-	stack_words[word++] = exec->ehdr.phnum;
-	stack_words[word++] = LINUX_AT_EXECFN;
-	stack_words[word++] = execfn;
-	stack_words[word++] = LINUX_AT_RANDOM;
-	stack_words[word++] = random_addr;
-	stack_words[word++] = LINUX_AT_CLKTCK;
-	stack_words[word++] = 100;
-	stack_words[word++] = LINUX_AT_UID;
-	stack_words[word++] = creds->uid;
-	stack_words[word++] = LINUX_AT_EUID;
-	stack_words[word++] = creds->euid;
-	stack_words[word++] = LINUX_AT_GID;
-	stack_words[word++] = creds->gid;
-	stack_words[word++] = LINUX_AT_EGID;
-	stack_words[word++] = creds->egid;
-	stack_words[word++] = LINUX_AT_SECURE;
-	stack_words[word++] = creds->secure;
-	stack_words[word++] = BUNIX_AT_STDOUT;
-	stack_words[word++] = LINUX_EXEC_HANDLE_STDOUT;
-	stack_words[word++] = BUNIX_AT_STDERR;
-	stack_words[word++] = LINUX_EXEC_HANDLE_STDERR;
-	stack_words[word++] = BUNIX_AT_TIME;
-	stack_words[word++] = LINUX_EXEC_HANDLE_TIME;
-	stack_words[word++] = BUNIX_AT_PROC;
-	stack_words[word++] = LINUX_EXEC_HANDLE_PROC;
-	stack_words[word++] = BUNIX_AT_NAMES;
-	stack_words[word++] = LINUX_EXEC_HANDLE_NAMES;
-	stack_words[word++] = LINUX_AT_NULL;
-	stack_words[word++] = 0;
 
-	*new_sp = stack_base + sp;
-	result = 0;
+	buffer = buffer_create(total);
+	if (buffer == 0) {
+		return -LINUX_ENOMEM;
+	}
+	if (buffer_write(buffer, 0, creds, 5 * sizeof(u64)) != 0) {
+		buffer_release(buffer);
+		return -LINUX_EFAULT;
+	}
+	offset = 5 * sizeof(u64);
+	if (linux_exec_replace_write_string(buffer, &offset, total,
+					    load_path) != 0 ||
+	    linux_exec_replace_write_string(buffer, &offset, total,
+					    execfn_path) != 0) {
+		buffer_release(buffer);
+		return -LINUX_EFAULT;
+	}
+	for (u64 i = 0; i < args->argc; i++) {
+		if (linux_exec_replace_write_string(buffer, &offset, total,
+						    args->argv[i]) != 0) {
+			buffer_release(buffer);
+			return -LINUX_EFAULT;
+		}
+	}
+	for (u64 i = 0; i < args->envc; i++) {
+		if (linux_exec_replace_write_string(buffer, &offset, total,
+						    args->envp[i]) != 0) {
+			buffer_release(buffer);
+			return -LINUX_EFAULT;
+		}
+	}
+	if (offset != total) {
+		buffer_release(buffer);
+		return -LINUX_EFAULT;
+	}
 
-out:
-	slab_free(argv_addrs);
-	slab_free(env_addrs);
-	return result;
+	*out = buffer;
+	*total_out = total;
+	return 0;
+}
+
+static int linux_proc_exec_replace(struct task *task, const char *load_path,
+				   const char *execfn_path,
+				   const struct linux_exec_args *args,
+				   u64 *entry, u64 *stack)
+{
+	struct ipc_port *proc = ipc_port_find("proc");
+	struct ipc_port *reply_port = task_reply_port(task);
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_PROC,
+		.type = USER_PROC_EXEC_REPLACE_TASK,
+		.sender = 0,
+		.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_TASK,
+		.cap_object = task,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct ipc_message reply;
+	struct shared_buffer *buffer = 0;
+	u64 creds[5];
+	u64 total = 0;
+	u64 token;
+	int result;
+
+	if (proc == 0 || reply_port == 0 || load_path == 0 ||
+	    execfn_path == 0 || args == 0 || entry == 0 || stack == 0) {
+		return -LINUX_ENOSYS;
+	}
+
+	linux_exec_credentials_load(task, creds);
+	result = linux_exec_replace_buffer_create(load_path, execfn_path,
+						  args, creds, &buffer, &total);
+	if (result != 0) {
+		return result;
+	}
+
+	if (ipc_send(proc, &request) != 0 ||
+	    ipc_recv(reply_port, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[1] == 0) {
+		buffer_release(buffer);
+		return -LINUX_ENOSYS;
+	}
+	token = reply.words[1];
+
+	request = (struct ipc_message){
+		.protocol = USER_FOURCC_PROC,
+		.type = USER_PROC_EXEC_REPLACE_BUFFER,
+		.sender = 0,
+		.cap_rights = TASK_RIGHT_RECV,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_BUFFER,
+		.cap_object = buffer,
+		.words = { token, total, args->argc, args->envc },
+	};
+	if (ipc_send(proc, &request) != 0 ||
+	    ipc_recv(reply_port, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[1] == 0 ||
+	    reply.words[2] == 0) {
+		buffer_release(buffer);
+		return -LINUX_EINVAL;
+	}
+
+	buffer_release(buffer);
+	*entry = reply.words[1];
+	*stack = reply.words[2];
+	return 0;
 }
 
 static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
@@ -3088,30 +2648,15 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	char path[LINUX_EXEC_MAX_PATH];
 	char load_path[LINUX_EXEC_MAX_PATH];
 	struct linux_exec_args args;
-	struct linux_exec_credentials creds;
-	u64 image_size = 0;
-	u64 interp_size = 0;
-	struct linux_exec_image exec;
-	struct linux_exec_image interp_exec;
-	u8 *stack_image = 0;
-	u8 *image = 0;
-	u8 *interp_image = 0;
-	char interp_path[LINUX_EXEC_MAX_PATH];
+	u8 prefix[LINUX_SHEBANG_MAX];
+	u64 prefix_size = 0;
 	u64 new_sp = 0;
-	u64 load_bias = 0;
-	u64 interp_bias = 0;
 	u64 entry = 0;
-	u64 program_entry = 0;
-	const u64 stack_base =
-		LINUX_EXEC_STACK_TOP - LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE;
 	int read_result;
 	int path_result;
 	int arg_result;
-	const u64 stack_size = LINUX_EXEC_STACK_PAGES * VM_PAGE_SIZE;
+	int replace_result;
 
-	mem_zero((u8 *)&exec, sizeof(exec));
-	mem_zero((u8 *)&interp_exec, sizeof(interp_exec));
-	mem_zero((u8 *)&creds, sizeof(creds));
 	path_result = copy_cstr_from_user_errno(path, user_path, sizeof(path));
 	if (path_result != 0) {
 		return (u64)path_result;
@@ -3127,193 +2672,44 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	}
 
 	for (u64 depth = 0; depth < LINUX_SHEBANG_MAX_DEPTH; depth++) {
-		read_result = linux_vfs_read_file(task, load_path, &image, 0,
-						  &image_size);
+		read_result = linux_vfs_read_prefix(task, load_path, prefix,
+						    sizeof(prefix),
+						    &prefix_size);
 		if (read_result != 0) {
 			linux_exec_args_free(&args);
 			return read_result == -2 ? (u64)-LINUX_ENOMEM :
 			       (read_result == -1 ? (u64)-LINUX_EIO :
 				(u64)read_result);
 		}
-		const int validate_result =
-			linux_exec_validate(image, image_size, &exec);
-		if (validate_result == 0) {
+		if (prefix_size < 2 || prefix[0] != '#' || prefix[1] != '!') {
 			break;
 		}
-		linux_exec_image_free(&exec);
-		if (validate_result == -2) {
-			slab_free(image);
-			linux_exec_args_free(&args);
-			return (u64)-LINUX_ENOMEM;
-		}
-
 		if (depth + 1 == LINUX_SHEBANG_MAX_DEPTH) {
-			slab_free(image);
-			image = 0;
-			image_size = 0;
 			linux_exec_args_free(&args);
 			return linux_einval_u64(__func__, __LINE__);
 		}
 		const int script_result =
 			linux_exec_prepare_shebang(task, load_path, &args,
-						   image, image_size);
-		slab_free(image);
-		image = 0;
-		image_size = 0;
+						   prefix, prefix_size);
 		if (script_result != 0) {
 			linux_exec_args_free(&args);
 			return (u64)script_result;
 		}
 	}
 
-	load_bias = exec.ehdr.type == ELF_TYPE_DYN ? LINUX_EXEC_DYN_LOAD_BIAS : 0;
-	program_entry = exec.ehdr.entry + load_bias;
-	entry = program_entry;
-
-	const int interp = linux_exec_interp_path(image, &exec, image_size,
-						 interp_path,
-						 sizeof(interp_path));
-	if (interp < 0) {
-		linux_exec_image_free(&exec);
-		slab_free(image);
+	replace_result = linux_proc_exec_replace(task, load_path, path, &args,
+						 &entry, &new_sp);
+	if (replace_result != 0) {
 		linux_exec_args_free(&args);
-		return linux_einval_u64(__func__, __LINE__);
-	}
-	if (interp > 0) {
-		read_result = linux_vfs_read_file(task, interp_path,
-						  &interp_image, 0,
-						  &interp_size);
-		if (read_result != 0) {
-			linux_exec_image_free(&exec);
-			slab_free(image);
-			linux_exec_args_free(&args);
-			return read_result == -2 ? (u64)-LINUX_ENOMEM :
-			       (read_result == -1 ? (u64)-LINUX_EIO :
-				(u64)read_result);
-		}
-		const int interp_validate_result =
-			linux_exec_validate(interp_image, interp_size,
-					    &interp_exec);
-		if (interp_validate_result != 0) {
-			linux_exec_image_free(&exec);
-			slab_free(interp_image);
-			slab_free(image);
-			linux_exec_args_free(&args);
-			return interp_validate_result == -2 ? (u64)-LINUX_ENOMEM :
-			       linux_einval_u64(__func__, __LINE__);
-		}
-		interp_bias = interp_exec.ehdr.type == ELF_TYPE_DYN ?
-			      LINUX_EXEC_INTERP_LOAD_BIAS : 0;
-		entry = interp_exec.ehdr.entry + interp_bias;
-	}
-	stack_image = (u8 *)slab_alloc(stack_size);
-	if (stack_image == 0) {
-		linux_exec_image_free(&interp_exec);
-		linux_exec_image_free(&exec);
-		if (interp_image != 0) {
-			slab_free(interp_image);
-		}
-		slab_free(image);
-		linux_exec_args_free(&args);
-		return (u64)-LINUX_ENOMEM;
-	}
-	linux_exec_credentials_load(task, &creds);
-	if ((interp_image == 0 &&
-	     linux_exec_apply_relative_relocations(image, &exec, image_size,
-						  load_bias) != 0) ||
-	    linux_exec_build_stack(path, &args, &exec, load_bias, program_entry,
-				   interp_bias, &creds, stack_image, stack_size,
-				   &new_sp) != 0) {
-		slab_free(stack_image);
-		linux_exec_image_free(&interp_exec);
-		linux_exec_image_free(&exec);
-		if (interp_image != 0) {
-			slab_free(interp_image);
-		}
-		slab_free(image);
-		linux_exec_args_free(&args);
-		return linux_einval_u64(__func__, __LINE__);
+		return (u64)replace_result;
 	}
 
-	if (linux_exec_unmap_current(task) != 0) {
-		slab_free(stack_image);
-		linux_exec_image_free(&interp_exec);
-		linux_exec_image_free(&exec);
-		if (interp_image != 0) {
-			slab_free(interp_image);
-		}
-		slab_free(image);
-		linux_exec_args_free(&args);
-		return linux_einval_u64(__func__, __LINE__);
-	}
-
-	for (u64 i = 0; i < exec.ehdr.phnum; i++) {
-		const struct elf64_phdr *phdr = &exec.phdrs[i];
-
-		if (phdr->type == ELF_PH_LOAD &&
-		    linux_exec_map_segment(task, image, phdr, load_bias) != 0) {
-			slab_free(stack_image);
-			linux_exec_image_free(&interp_exec);
-			linux_exec_image_free(&exec);
-			if (interp_image != 0) {
-				slab_free(interp_image);
-			}
-			slab_free(image);
-			linux_exec_args_free(&args);
-			return (u64)-LINUX_ENOMEM;
-		}
-	}
-	if (interp_image != 0) {
-		for (u64 i = 0; i < interp_exec.ehdr.phnum; i++) {
-			const struct elf64_phdr *phdr = &interp_exec.phdrs[i];
-
-			if (phdr->type == ELF_PH_LOAD &&
-			    linux_exec_map_segment(task, interp_image, phdr,
-						   interp_bias) != 0) {
-				slab_free(stack_image);
-				linux_exec_image_free(&interp_exec);
-				linux_exec_image_free(&exec);
-				slab_free(interp_image);
-				slab_free(image);
-				linux_exec_args_free(&args);
-				return (u64)-LINUX_ENOMEM;
-			}
-		}
-	}
-
-	if (vm_alloc_user_range(task_vm_space(task), stack_base,
-				stack_size, 1) != 0 ||
-	    task_add_vm_mapping(task, stack_base,
-				stack_size,
-				TASK_VM_PROT_READ | TASK_VM_PROT_WRITE,
-				TASK_VM_MAP_PRIVATE | TASK_VM_MAP_ANONYMOUS,
-				TASK_VM_REGION_STACK, TASK_VM_OBJECT_ANON,
-				0, 0) != 0 ||
-	    vm_write_user(task_vm_space(task), stack_base, stack_image,
-			  stack_size) != 0) {
-		slab_free(stack_image);
-		linux_exec_image_free(&interp_exec);
-		linux_exec_image_free(&exec);
-		if (interp_image != 0) {
-			slab_free(interp_image);
-		}
-		slab_free(image);
-		linux_exec_args_free(&args);
-		return (u64)-LINUX_ENOMEM;
-	}
-	slab_free(stack_image);
-	stack_image = 0;
-
+	task_set_linux_brk(task, LINUX_INITIAL_BRK);
+	task_set_linux_mmap_next(task, LINUX_MMAP_BASE);
 	frame->user_rip = entry;
 	frame->user_rsp = new_sp;
 	const u64 exec_result = linux_exec_process(task);
 	if ((i64)exec_result < 0) {
-		linux_exec_image_free(&interp_exec);
-		linux_exec_image_free(&exec);
-		if (interp_image != 0) {
-			slab_free(interp_image);
-		}
-		slab_free(image);
 		linux_exec_args_free(&args);
 		return exec_result;
 	}
@@ -3322,12 +2718,6 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	console_printf("linux: execve task=%u path=%s entry=%p stack=%p\n",
 		       task_id(task), path, (const void *)entry,
 		       (const void *)new_sp);
-	if (interp_image != 0) {
-		slab_free(interp_image);
-	}
-	linux_exec_image_free(&interp_exec);
-	linux_exec_image_free(&exec);
-	slab_free(image);
 	linux_exec_args_free(&args);
 	return 0;
 }

@@ -7,7 +7,7 @@ enum {
 	PROC_HANDLE_NAMES = 3,
 	PROC_HANDLE_TIME = 4,
 	PROC_SEGMENT_MAX = 4096,
-	PROC_INIT_STACK_MAX = 256 * 1024,
+	PROC_INIT_STACK_MAX = 512 * 1024,
 	PROC_SPAWN_BUFFER_MAX = 512 * 1024,
 	USER_STACK_TOP = 0x800000,
 	ELF_MAGIC = 0x464c457f,
@@ -127,6 +127,14 @@ struct exec_strings {
 	u64 envc;
 	char **argv;
 	char **envp;
+};
+
+struct exec_credentials {
+	u64 uid;
+	u64 gid;
+	u64 euid;
+	u64 egid;
+	u64 secure;
 };
 
 struct pending_exec_replace {
@@ -641,17 +649,18 @@ out:
 static int exec_strings_from_replace_buffer(const struct bunix_msg *message,
 					    char **load_path,
 					    char **execfn_path,
+					    struct exec_credentials *creds,
 					    struct exec_strings *strings)
 {
 	unsigned char *buffer;
 	u64 total;
-	u64 pos = 0;
+	u64 pos = sizeof(*creds);
 	int result = -1;
 
 	if (message == 0 || load_path == 0 || execfn_path == 0 ||
-	    strings == 0 || message->cap == 0 ||
+	    creds == 0 || strings == 0 || message->cap == 0 ||
 	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
-	    message->words[1] == 0 ||
+	    message->words[1] <= sizeof(*creds) ||
 	    message->words[1] > PROC_SPAWN_BUFFER_MAX ||
 	    message->words[2] == 0 ||
 	    message->words[2] > message->words[1] ||
@@ -666,6 +675,11 @@ static int exec_strings_from_replace_buffer(const struct bunix_msg *message,
 	if (bunix_buffer_read(message->cap, 0, buffer, total) != 0) {
 		goto out;
 	}
+	creds->uid = read_u64_le(buffer);
+	creds->gid = read_u64_le(buffer + 8);
+	creds->euid = read_u64_le(buffer + 16);
+	creds->egid = read_u64_le(buffer + 24);
+	creds->secure = read_u64_le(buffer + 32);
 	if (spawn_buffer_string(buffer, &pos, total, load_path) != 0 ||
 	    spawn_buffer_string(buffer, &pos, total, execfn_path) != 0) {
 		goto out;
@@ -1063,8 +1077,10 @@ static long build_initial_stack(u64 task, const char *path,
 				const struct exec_info *exec,
 				u64 load_bias, u64 interpreter_base,
 				const struct exec_strings *strings,
+				const struct exec_credentials *creds,
 				u64 *stack)
 {
+	const struct exec_credentials root_creds = { 0, 0, 0, 0, 0 };
 	const u64 stack_base = USER_STACK_TOP - PROC_INIT_STACK_MAX;
 	const u64 path_len = str_len(path);
 	const u64 phdr_size = exec != 0 ? exec->phnum * exec->phent : 0;
@@ -1083,6 +1099,9 @@ static long build_initial_stack(u64 task, const char *path,
 	u64 sp = PROC_INIT_STACK_MAX;
 	long result = -1;
 
+	if (creds == 0) {
+		creds = &root_creds;
+	}
 	if (exec == 0 ||
 	    exec->phdrs == 0 ||
 	    phdr_size == 0) {
@@ -1184,15 +1203,15 @@ static long build_initial_stack(u64 task, const char *path,
 	words[word++] = AT_EXECFN;
 	words[word++] = execfn;
 	words[word++] = AT_UID;
-	words[word++] = 0;
+	words[word++] = creds->uid;
 	words[word++] = AT_EUID;
-	words[word++] = 0;
+	words[word++] = creds->euid;
 	words[word++] = AT_GID;
-	words[word++] = 0;
+	words[word++] = creds->gid;
 	words[word++] = AT_EGID;
-	words[word++] = 0;
+	words[word++] = creds->egid;
 	words[word++] = AT_SECURE;
-	words[word++] = 0;
+	words[word++] = creds->secure;
 	words[word++] = AT_RANDOM;
 	words[word++] = random_addr;
 	words[word++] = AT_CLKTCK;
@@ -1295,8 +1314,9 @@ static int elf_phdr_table_size(const struct elf64_ehdr *ehdr, u64 file_size,
 static long load_task_image(u64 vfs, u64 task, int clear_existing,
 			    const char *load_path,
 			    const char *execfn_path,
-			    const struct exec_strings *strings, u64 *entry,
-			    u64 *stack)
+			    const struct exec_strings *strings,
+			    const struct exec_credentials *creds,
+			    u64 *entry, u64 *stack)
 {
 	struct elf64_ehdr ehdr;
 	struct elf64_ehdr interp_ehdr;
@@ -1429,8 +1449,14 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 		goto out;
 	}
 
+	if (clear_existing &&
+	    bunix_task_alloc(task, USER_STACK_TOP - PROC_INIT_STACK_MAX,
+			     PROC_INIT_STACK_MAX, 1) != 0) {
+		goto out;
+	}
+
 	if (build_initial_stack(task, execfn_path, &exec, load_bias,
-				interp_bias, strings, stack) != 0) {
+				interp_bias, strings, creds, stack) != 0) {
 		goto out;
 	}
 
@@ -1491,7 +1517,7 @@ static long exec_path(u64 vfs, struct process *process,
 			return -1;
 		}
 	}
-	if (load_task_image(vfs, (u64)task, 0, path, path, strings,
+	if (load_task_image(vfs, (u64)task, 0, path, path, strings, 0,
 			    &start_entry, &stack) != 0) {
 		bunix_handle_close((u64)task);
 		return -1;
@@ -1811,6 +1837,7 @@ static long exec_replace_from_message(u64 vfs, const struct bunix_msg *message,
 {
 	struct pending_exec_replace *pending;
 	struct exec_strings strings = { 0, 0, 0, 0 };
+	struct exec_credentials creds = { 0, 0, 0, 0, 0 };
 	char *load_path = 0;
 	char *execfn_path = 0;
 	long result = -1;
@@ -1826,9 +1853,11 @@ static long exec_replace_from_message(u64 vfs, const struct bunix_msg *message,
 	}
 
 	if (exec_strings_from_replace_buffer(message, &load_path, &execfn_path,
+					     &creds,
 					     &strings) == 0) {
 		result = load_task_image(vfs, pending->task_handle, 1,
 					 load_path, execfn_path, &strings,
+					 &creds,
 					 entry, stack);
 	}
 

@@ -26,10 +26,10 @@ Additional finding:
       Linux server, proc server, and VM/task primitives.
 - [x] Move shebang parsing and argv rewriting out of arch code while keeping
       Linux-compatible interpreter argument semantics.
-- [ ] Move ELF and PT_INTERP policy toward shared proc/Linux-server helpers,
+- [x] Move ELF and PT_INTERP policy toward shared proc/Linux-server helpers,
       leaving arch code responsible only for final register/stack activation
       details that are truly architecture-specific.
-- [ ] Replace full executable/interpreter image buffering with segment-oriented
+- [x] Replace full executable/interpreter image buffering with segment-oriented
       loading so later dynamic execs do not depend on large contiguous kernel
       slab allocations.
 - [ ] Preserve `AT_EXECFN`, argv, envp, auxv, credentials, process identity,
@@ -62,6 +62,13 @@ Progress:
   both the target task capability and the exec argument buffer without widening
   IPC messages.  Proc now has a shared segment-oriented `load_task_image()`
   helper used by spawn and ready for exec replacement.
+- Switched x86 Linux `execve()` to read only a shebang-sized prefix in
+  kernelspace, ask the Linux server for shebang argv rewriting, then ask proc
+  to replace the existing task using the segment-oriented ELF/PT_INTERP loader.
+  The old arch-side ELF validation, interpreter loading, relocation, segment
+  mapper, address-space clearing, and stack builder were removed.  Proc now
+  allocates a replacement stack and preserves Linux UID/GID auxv credentials
+  passed by the syscall path.
 
 Validation so far:
 
@@ -69,3 +76,14 @@ Validation so far:
 - `BUNIX_SHELL_PART=tmpfs-basic-linux-tests make test-shell-part`
 - `BUNIX_TEST_SET=openrc make test-parallel`
 - `BUNIX_SHELL_PART=smoke make test-shell-part`
+- `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part`
+- `BUNIX_SHELL_PART=tmpfs-basic-linux-tests make test-shell-part`
+- `BUNIX_SHELL_PART=smoke make test-shell-part`
+
+Known remaining failure:
+
+- `BUNIX_TEST_SET=openrc make test-parallel` now passes
+  `alpine-openrc-smoke`, but `alpine-openrc-full` stalls after the root shell
+  starts `busybox ps | busybox grep "/bin/sh"`.  Synthetic `busybox ps` and
+  pipe/grep coverage pass, so this needs targeted OpenRC/procfs/process-lifecycle
+  debugging before the exploration can be completed.
