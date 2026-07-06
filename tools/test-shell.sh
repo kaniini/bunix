@@ -24,6 +24,7 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$script_dir/shell-tests/interactive-tty.sh"
 . "$script_dir/shell-tests/root-login-union.sh"
 . "$script_dir/shell-tests/root-tmpfs-chown.sh"
+. "$script_dir/shell-tests/long-login.sh"
 BUNIX_COLLECT_FAILURES=1
 BUNIX_FAILURE_DIR=$failure_dir
 BUNIX_QEMU_LOG=$qemu_log
@@ -187,16 +188,6 @@ run_interactive_tty
 run_root_login_union
 check_root_login_union
 run_root_tmpfs_chown
-
-long_root_prompts_before=$(current_prompt_count "~ # ")
-login_user administrator_with_long_name password_longer_than_sixteen "~ # " "$long_root_prompts_before"
-
-send_script <<'EOF_LONG_LOGIN'
-busybox id
-env
-exit
-EOF_LONG_LOGIN
-wait_for_each_fixed "$log" "long login regression missing" 45 180 \
-	"uid=0(root)" "USER=administrator_with_long_name" \
-	"LOGNAME=administrator_with_long_name"
+run_long_login
+check_long_login
 echo "shell regression ok"

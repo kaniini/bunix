@@ -87,11 +87,14 @@ Plan:
      copy-up/busy-mount coverage.
    - `tools/shell-tests/root-tmpfs-chown.sh` owns root chown of the user-created
      tmpfs file, verifies the updated owner, exits root, and waits for login.
+   - `tools/shell-tests/long-login.sh` owns the long username/password root
+     login regression and environment checks.
+   - The root mount-soak behavior from the original plan is currently covered
+     by `tools/shell-tests/root-login-union.sh` through the lower/upper busy
+     umount and replacement mount denial checks.
 
    Needs:
 
-   - Extract the root-phase batches:
-     `long-login` and `root-mount-soak`.
    - Move broad marker files into shard-owned marker files as the batches are
      split.
 
