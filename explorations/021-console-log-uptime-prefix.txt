@@ -1,5 +1,10 @@
 Prefix console log messages with uptime.
 
+Priority:
+
+- Run this before the security vulnerability audit so the audit has stable,
+  timestamped boot, server, and dmesg evidence to work from.
+
 Problem:
 
 - Bunix console log messages are useful, but once many servers are active it
