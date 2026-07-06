@@ -42,7 +42,7 @@ Tasks:
 - [x] Route Linux `/dev/console`, `/dev/tty`, stdin/stdout/stderr, `poll(2)`,
       and terminal ioctls through the TTY layer rather than serial-specific
       shortcuts.
-- [ ] Add tests for boot console handoff, login/password echo behavior,
+- [x] Add tests for boot console handoff, login/password echo behavior,
       backspace, Ctrl-C, poll readiness, foreground process interruption, and
       shell logout/login respawn.
 - [x] Document how the framework will map to future ARM UART drivers without
@@ -120,10 +120,12 @@ Progress:
 
 Needs:
 
-- The full aggregate `make test-shell` still needs a harness/drain cleanup.
-  Relevant focused shards pass independently, but the aggregate can start later
-  shards while prior command output is still draining after the userspace serial
-  input path made input delivery faster.
+- Added a final drain marker wait to the rootfs/vfs/proc/dev shell shard so the
+  aggregate shell suite does not start later shards while `/dev/console` output
+  is still draining after faster userspace serial input delivery.
+- Validated the 015 TTY behavior gate with `make test-boot`,
+  `BUNIX_SHELL_PART=rootfs-vfs-proc-dev make test-shell-part`, and the aggregate
+  `make test-shell`.
 
 Portability notes:
 

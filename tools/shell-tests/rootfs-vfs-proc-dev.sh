@@ -71,6 +71,8 @@ busybox test -c /dev/console && echo DEV_CONSOLE_CHAR_OK
 busybox test -c /dev/ttyS0 && echo DEV_TTYS0_CHAR_OK
 busybox sh -c 'i=0; while [ "$i" -lt 300 ]; do printf a; i=$((i + 1)); done; echo DEV_CONSOLE_BIG_END' > /dev/console && echo DEV_CONSOLE_BIG_WRITE_OK
 EOF_ROOTFS_VFS_PROC_DEV
+	wait_for_fixed "$log" "DEV_CONSOLE_BIG_WRITE_OK" \
+		"rootfs/vfs/proc/dev commands did not drain" 160 220
 }
 
 check_rootfs_vfs_proc_dev() {
