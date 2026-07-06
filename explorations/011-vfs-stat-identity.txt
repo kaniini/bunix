@@ -6,6 +6,15 @@ constant identity for many files, which can make distinct shared objects
 look identical.  A temporary handle-derived inode is only a diagnostic
 shortcut; this exploration should replace it with real VFS identity.
 
+Related findings:
+
+- See `007-openrc-linux-compat.txt` for the OpenRC loader trace that found
+  musl opening both `/usr/lib/librc.so.1` and `/usr/lib/libeinfo.so.1` before
+  still reporting unresolved `libeinfo` symbols.
+- That trace, together with local `~/musl/ldso` source, is the motivating
+  evidence for treating `st_dev`/`st_ino` identity as a correctness blocker
+  for dynamic OpenRC userspace.
+
 - [ ] Define VFS metadata identity fields for filesystem device ID, inode ID,
       link count, block size, block count, and rdev where applicable.
 - [ ] Extend VFS stat metadata replies without reviving the old 16-byte VFS
