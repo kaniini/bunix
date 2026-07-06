@@ -200,12 +200,21 @@ Goal:
 
 Plan:
 
-10. Separate immutable build artifacts from per-VM runtime state
+10. Separate immutable build artifacts from per-VM runtime state [DONE]
    Build the kernel, modules, rootfs image, and generated GRUB configs once.
    Each VM worker should get its own runtime directory containing an ESP copy,
    serial pipe/logs, QEMU log, temporary files, and failure artifact output.
    Source/build artifacts should be read-only during VM execution; per-worker
    state must live outside shared build products.
+
+   Result:
+
+   - `tools/test-shell.sh` and `tools/test-command.sh` create unique per-run
+     runtime directories.
+   - Each QEMU run copies the built ESP into that runtime directory and boots
+     the copy, leaving shared build artifacts read-only during VM execution.
+   - Failure artifacts default to a per-run subdirectory, and bundles record the
+     runtime directory path.
 
 11. Add a parallel test runner
    Add a host-side scheduler, likely `tools/test-parallel.sh`, that consumes a

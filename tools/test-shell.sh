@@ -6,11 +6,13 @@ ovmf=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE.fd}
 esp=${ESP_DIR:-build/esp}
 timeout_cmd=${TIMEOUT:-timeout}
 qemu_timeout=${QEMU_TIMEOUT:-180s}
-tmp=${TMPDIR:-/tmp}/bunix-shell-test.$$
+run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
+tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-shell-test.$run_id}
 log=$tmp/serial.log
 qemu_log=$tmp/qemu.log
 pipe=$tmp/serial
-failure_dir=${FAILURE_DIR:-build/failures}
+runtime_esp=$tmp/esp
+failure_dir=${FAILURE_DIR:-build/failures/$run_id}
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 shell_parts=${BUNIX_SHELL_PART:-all}
 . "$script_dir/test-lib.sh"
@@ -31,8 +33,9 @@ BUNIX_COLLECT_FAILURES=1
 BUNIX_FAILURE_DIR=$failure_dir
 BUNIX_QEMU_LOG=$qemu_log
 BUNIX_TEST_HARNESS=$0
+BUNIX_TEST_RUNTIME_DIR=$tmp
 BUNIX_SHELL_PARTS=$shell_parts
-export BUNIX_COLLECT_FAILURES BUNIX_FAILURE_DIR BUNIX_QEMU_LOG BUNIX_TEST_HARNESS BUNIX_SHELL_PARTS
+export BUNIX_COLLECT_FAILURES BUNIX_FAILURE_DIR BUNIX_QEMU_LOG BUNIX_TEST_HARNESS BUNIX_TEST_RUNTIME_DIR BUNIX_SHELL_PARTS
 
 cleanup() {
 	if [ "${qemu_pid:-}" ]; then
@@ -109,13 +112,21 @@ start_qemu() {
 	mkfifo "$pipe.in" "$pipe.out"
 	trap cleanup EXIT INT TERM
 
+	if [ ! -d "$esp" ]; then
+		echo "ESP directory is not readable: $esp" >&2
+		exit 1
+	fi
+	rm -rf "$runtime_esp"
+	mkdir -p "$runtime_esp"
+	cp -R "$esp/." "$runtime_esp/"
+
 	cat "$pipe.out" > "$log" &
 	cat_pid=$!
 
 	TMPDIR=$tmp $timeout_cmd "$qemu_timeout" "$qemu" -enable-kvm -machine q35 -cpu host -m 128M \
 		-smp "${SMP:-2}" \
 		-drive if=pflash,format=raw,readonly=on,file="$ovmf" \
-		-drive format=raw,file=fat:rw:"$esp" \
+		-drive format=raw,file=fat:rw:"$runtime_esp" \
 		-serial pipe:"$pipe" -display none -no-reboot 2>"$qemu_log" &
 	qemu_pid=$!
 }

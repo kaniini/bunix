@@ -13,6 +13,7 @@ save_failure_artifacts() {
 	printf '%s\n' "$label" > "$out/reason.txt"
 	printf '%s\n' "${KERNEL_CMDLINE:-}" > "$out/kernel-cmdline.txt"
 	printf '%s\n' "${BUNIX_CMD:-${CMD:-}}" > "$out/command.txt"
+	printf '%s\n' "${BUNIX_TEST_RUNTIME_DIR:-}" > "$out/test-runtime-dir.txt"
 	printf '%s\n' "${BUNIX_SHELL_PARTS:-${BUNIX_SHELL_PART:-}}" > "$out/shell-selected-parts.txt"
 	printf '%s\n' "${BUNIX_CURRENT_SHARD:-}" > "$out/shell-current-shard.txt"
 	printf '%s\n' "${BUNIX_CURRENT_MARKER_FILE:-}" > "$out/shell-current-marker-file.txt"
