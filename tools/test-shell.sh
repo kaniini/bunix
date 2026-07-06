@@ -14,6 +14,7 @@ failure_dir=${FAILURE_DIR:-build/failures}
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 shell_parts=${BUNIX_SHELL_PART:-all}
 . "$script_dir/test-lib.sh"
+. "$script_dir/shell-tests/smoke.sh"
 . "$script_dir/shell-tests/login-smoke.sh"
 . "$script_dir/shell-tests/exec-argv-pipe.sh"
 . "$script_dir/shell-tests/rootfs-vfs-proc-dev.sh"
@@ -205,7 +206,7 @@ require_supported_parts() {
 	for part do
 		case "$part" in
 		all|vfs|procfs|devfs|tmpfs|path|statfs|large-io|mount|\
-		login-smoke|exec-argv-pipe|rootfs-vfs-proc-dev|\
+		smoke|login-smoke|exec-argv-pipe|rootfs-vfs-proc-dev|\
 		tmpfs-basic-linux-tests|path-limits-statfs|union-root-user|\
 		tmpfs-extended|large-io-mount|interactive-tty|root-login-union|\
 		root-tmpfs-chown|long-login)
@@ -266,6 +267,13 @@ exec 3>"$pipe.in"
 login_user kaniini bunix "~ $ "
 user_shell_active=1
 root_shell_active=0
+
+if part_selected smoke; then
+	begin_shard smoke
+	run_smoke
+	check_smoke
+	finish_shard smoke
+fi
 
 if part_selected login-smoke; then
 	begin_shard login-smoke

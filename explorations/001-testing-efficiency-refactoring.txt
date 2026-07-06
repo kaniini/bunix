@@ -174,9 +174,16 @@ Plan:
      the bundle alongside the existing serial/QEMU logs, Linux strace tail, and
      git commit.
 
-9. Add a fast default smoke target
+9. Add a fast default smoke target [DONE]
    Provide `make test-smoke` for the first pre-commit gate. It should run boot
    markers, login, a minimal VFS/procfs sanity pass, and `/bin/sysracetest`.
+
+   Result:
+
+   - Added a `smoke` shard that checks boot markers from the shell serial log,
+     uses the normal login flow, does minimal VFS/procfs reads, and runs
+     `/bin/sysracetest`.
+   - `make test-smoke` runs only the smoke shard.
 
 Milestone: parallelize test execution across many QEMU/KVM VMs
 

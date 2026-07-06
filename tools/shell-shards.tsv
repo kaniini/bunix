@@ -1,4 +1,5 @@
 # name	phase	smp	memory	timeout	cost	clean_boot	description
+smoke	user	2	128M	90	1	no	Fast boot-marker, login, minimal VFS/procfs, and sysrace smoke target.
 login-smoke	user	1	128M	120	1	no	Login environment, uptime/uname/id/groups, /usr/bin/env, access checks, stty, basic sleep, signal, and kill probes.
 exec-argv-pipe	user	1	128M	120	1	no	Pipes, argv/env expansion, large argv/env, and initial procfs read through the login shell.
 rootfs-vfs-proc-dev	user	1	128M	150	2	no	Rootfs stat/list/readlink, long paths, cwd/dotdot/slash resolution, procfs files, and devfs zero/urandom checks.

@@ -515,6 +515,10 @@ test-shell-part: $(EFI_BOOT_APP)
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		BUNIX_SHELL_PART="$(BUNIX_SHELL_PART)" sh tools/test-shell.sh
 
+test-smoke: $(EFI_BOOT_APP)
+	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		BUNIX_SHELL_PART=smoke sh tools/test-shell.sh
+
 test-command: $(EFI_BOOT_APP)
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		sh tools/test-command.sh
