@@ -159,26 +159,10 @@ check_login_smoke
 
 check_rootfs_vfs_proc_dev
 
-check_exact_markers_file "$log" "$script_dir/test-shell-exact-markers.txt" \
-	"shell regression missing" 75 220
-check_fixed_markers_file "$log" "$script_dir/test-shell-content-markers.txt" \
-	"shell content regression missing" 45 220
-check_fixed_markers_file "$log" "$script_dir/test-shell-provisional-markers.txt" \
-	"provisional shell marker missing" 45 220
 check_path_limits_statfs
 check_union_root_user
 check_tmpfs_extended
-wait_for_each_fixed_count "$log" 2 "append payload missing from file output" 45 220 \
-	TMP_APPEND_ONE TMP_APPEND_TWO TMP_LONG_READDIR_PAYLOAD TMP_NAME_MAX_PAYLOAD \
-	TMP_NAME255_PAYLOAD PATHMAX2_TMP_PAYLOAD UNION_ROOT_BASE_PAYLOAD \
-	UNION_ROOT_APPEND_PAYLOAD UNION_ROOT_LONG_PAYLOAD UNION_NAME_MAX_PAYLOAD
 check_large_io_mount
-wait_for_each_fixed "$log" "procfs content regression missing" 45 220 \
-	"cpu  " "/bin/sh" PROC_SHELL_PPID_OK "direct_delivered " "direct_handoff "
-wait_for_each_regex "$log" "IPC fast path counter did not increase" 45 220 \
-	"direct_delivered [1-9][0-9]*" "direct_handoff [1-9][0-9]*"
-wait_for_each_regex "$log" "IPC per-CPU counter did not increase" 45 220 \
-	"cpu[0-9][0-9]* sends [1-9][0-9]*"
 check_tmpfs_basic_linux_tests
 
 check_exec_argv_pipe

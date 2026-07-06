@@ -43,6 +43,12 @@ EOF_TMPFS_BASIC_LINUX_TESTS
 }
 
 check_tmpfs_basic_linux_tests() {
+	check_exact_markers_file "$log" "$script_dir/shell-tests/tmpfs-basic-linux-tests.exact-markers.txt" \
+		"tmpfs/basic Linux exact marker missing" 75 220
+	check_fixed_markers_file "$log" "$script_dir/shell-tests/tmpfs-basic-linux-tests.content-markers.txt" \
+		"tmpfs/basic Linux content marker missing" 45 220
+	wait_for_each_fixed_count "$log" 2 "tmpfs append payload missing from file output" 45 220 \
+		TMP_APPEND_ONE TMP_APPEND_TWO
 	wait_for_fixed "$log" "DYN_HELLO_OK" "dynamic musl hello did not complete" 45 220
 	wait_for_fixed "$log" "EXECBIG_OK" "large Linux executable did not complete" 45 220
 	wait_for_fixed "$log" "sysrace ok" "Linux syscall race stress test did not complete" 75 220

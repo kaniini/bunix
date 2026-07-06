@@ -1,0 +1,14 @@
+LINUX_BIG_WRITE_OK
+linux mmapbig ok
+MMAPBIG_OK
+linux mmaphuge ok
+linux readbig ok
+linux readlinkbig ok
+READBIG_OK
+MNT_OK
+MNT_PAYLOAD
+MNT_CAT
+MNT_LIST
+UMNT_OK
+UMNT_GONE
+UMNT_HIDE

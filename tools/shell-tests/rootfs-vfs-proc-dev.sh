@@ -53,6 +53,12 @@ EOF_ROOTFS_VFS_PROC_DEV
 }
 
 check_rootfs_vfs_proc_dev() {
+	check_exact_markers_file "$log" "$script_dir/shell-tests/rootfs-vfs-proc-dev.exact-markers.txt" \
+		"rootfs/vfs/proc/dev exact marker missing" 75 220
+	check_fixed_markers_file "$log" "$script_dir/shell-tests/rootfs-vfs-proc-dev.content-markers.txt" \
+		"rootfs/vfs/proc/dev content marker missing" 45 220
+	check_fixed_markers_file "$log" "$script_dir/shell-tests/rootfs-vfs-proc-dev.provisional-markers.txt" \
+		"rootfs/vfs/proc/dev provisional marker missing" 45 220
 	wait_for_fixed "$log" "Size: 15" "busybox stat did not report /hello.txt size" 45 120
 	require_no_fixed "$log" "can't stat '/hello.txt'" "busybox stat failed for /hello.txt" 120
 
@@ -79,4 +85,10 @@ check_rootfs_vfs_proc_dev() {
 
 	wait_for_each_fixed "$log" "devfs character-device regression missing" 45 180 \
 		DEV_NULL_CHAR_OK DEV_ZERO_CHAR_OK DEV_CONSOLE_CHAR_OK
+	wait_for_each_fixed "$log" "procfs content regression missing" 45 220 \
+		"cpu  " "/bin/sh" PROC_SHELL_PPID_OK "direct_delivered " "direct_handoff "
+	wait_for_each_regex "$log" "IPC fast path counter did not increase" 45 220 \
+		"direct_delivered [1-9][0-9]*" "direct_handoff [1-9][0-9]*"
+	wait_for_each_regex "$log" "IPC per-CPU counter did not increase" 45 220 \
+		"cpu[0-9][0-9]* sends [1-9][0-9]*"
 }

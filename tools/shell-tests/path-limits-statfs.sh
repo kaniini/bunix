@@ -28,8 +28,12 @@ EOF_PATH_LIMITS_STATFS
 }
 
 check_path_limits_statfs() {
+	check_exact_markers_file "$log" "$script_dir/shell-tests/path-limits-statfs.exact-markers.txt" \
+		"path/statfs exact marker missing" 75 220
 	wait_for_each_fixed "$log" "tmpfs path limit regression missing" 45 220 \
 		PATHMAX2_TMP_MKDIR_OK PATHMAX2_TMP_FILE_OK PATHMAX2_TMP_CHDIR_OK \
+		PATHMAX2_TMP_PAYLOAD
+	wait_for_each_fixed_count "$log" 2 "path limit payload missing from file output" 45 220 \
 		PATHMAX2_TMP_PAYLOAD
 	wait_for_fixed "$log" "linux pathmax ok" "linux pathmax regression failed" 75 220
 	wait_for_fixed "$log" "linux patherr ok" "empty Linux path errno regression failed" 45 220

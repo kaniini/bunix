@@ -36,6 +36,8 @@ EOF_UNION_ROOT
 }
 
 check_union_root_user() {
+	check_exact_markers_file "$log" "$script_dir/shell-tests/union-root-user.exact-markers.txt" \
+		"union root user exact marker missing" 75 220
 	wait_for_each_fixed "$log" "unionfs user-root regression missing" 45 220 \
 		UNION_ROOT_LOWER_OK UNION_LOWER_RENAME_CREATE_OK \
 		UNION_LOWER_RENAME_READ_OK UNION_LOWER_RENAME_OLD_GONE_OK \
@@ -47,4 +49,7 @@ check_union_root_user() {
 		UNION_ROOT_READDIR_UPPER_OK UNION_ROOT_READDIR_LOWER_OK \
 		UNION_ROOT_UNLINK_UPPER_OK UNION_ROOT_UNLINK_UPPER_GONE_OK \
 		UNION_ROOT_LOWER_STILL_OK
+	wait_for_each_fixed_count "$log" 2 "union root payload missing from file output" 45 220 \
+		UNION_ROOT_BASE_PAYLOAD UNION_ROOT_APPEND_PAYLOAD \
+		UNION_ROOT_LONG_PAYLOAD UNION_NAME_MAX_PAYLOAD
 }

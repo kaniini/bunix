@@ -22,6 +22,8 @@ EOF_MOUNT_TMPFS
 }
 
 check_large_io_mount() {
+	check_exact_markers_file "$log" "$script_dir/shell-tests/large-io-mount.exact-markers.txt" \
+		"large I/O mount exact marker missing" 75 220
 	wait_for_each_fixed "$log" "large I/O or mount regression missing" 45 220 \
 		LINUX_BIG_WRITE_OK "linux mmapbig ok" MMAPBIG_OK "linux mmaphuge ok" \
 		"linux readbig ok" "linux readlinkbig ok" READBIG_OK MNT_OK \

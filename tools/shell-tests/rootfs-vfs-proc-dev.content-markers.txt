@@ -1,5 +1,3 @@
 /bin/sh
 nodev
 Bunix virtual CPU
-TRUN
-TRUNCATE_CAT_OK

@@ -81,6 +81,10 @@ EOF_TMPFS_EXTENDED
 }
 
 check_tmpfs_extended() {
+	check_exact_markers_file "$log" "$script_dir/shell-tests/tmpfs-extended.exact-markers.txt" \
+		"tmpfs extended exact marker missing" 75 220
+	check_fixed_markers_file "$log" "$script_dir/shell-tests/tmpfs-extended.provisional-markers.txt" \
+		"tmpfs extended provisional marker missing" 45 220
 	wait_for_each_fixed "$log" "tmpfs extended regression missing" 45 220 \
 		TMP_MKDIR_OK TMP_MKDIR_STAT_OK TMP_LONG_READDIR_OK \
 		TMP_LONG_NAME_CAT_OK TMP_NAME_MAX_READDIR_OK TMP_NAME_MAX_CAT_OK \
@@ -96,4 +100,6 @@ check_tmpfs_extended() {
 		TMP_SYMLINK_READLINK_OK TMP_SYMLINK_LS_OK UNION_SYMLINK_CREATE_OK \
 		UNION_SYMLINK_READLINK_OK UNION_SYMLINK_LS_OK UNION_HARDLINK_CREATE_OK \
 		UNION_HARDLINK_SHARE_OK
+	wait_for_each_fixed_count "$log" 2 "tmpfs extended payload missing from file output" 45 220 \
+		TMP_LONG_READDIR_PAYLOAD TMP_NAME_MAX_PAYLOAD TMP_NAME255_PAYLOAD
 }

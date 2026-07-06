@@ -50,7 +50,7 @@ Plan:
    - `make list-shell-shards` prints the shard manifest for review and later
      parallel scheduling.
 
-2. Extract shell command batches into files
+2. Extract shell command batches into files [DONE]
    Move large heredoc blocks out of `tools/test-shell.sh` into
    `tools/shell-tests/*.sh` with matching marker files. The harness should run
    one or more named batches in order. Keep these batches POSIX shell and
@@ -92,11 +92,9 @@ Plan:
    - The root mount-soak behavior from the original plan is currently covered
      by `tools/shell-tests/root-login-union.sh` through the lower/upper busy
      umount and replacement mount denial checks.
-
-   Needs:
-
-   - Move broad marker files into shard-owned marker files as the batches are
-     split.
+   - The broad `tools/test-shell-*-markers.txt` files were split into
+     shard-owned marker files under `tools/shell-tests/` and removed once the
+     main harness stopped using them.
 
 3. Add `make test-shell-part`
    Support targeted shard runs:
