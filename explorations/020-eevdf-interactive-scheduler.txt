@@ -96,6 +96,19 @@ Instrumentation slice:
   - `make`
   - `BUNIX_TEST_SET=rootfs-vfs-proc-dev make test-parallel`
 
+Scheduler class metadata slice:
+
+- Bunix tasks now have explicit scheduler metadata: class, priority, and future
+  policy-right bits.  Threads inherit that metadata when they are created, but
+  all classes still use the same weight in this slice to preserve behavior.
+- The initial class set is `KERNEL`, `SERVER`, `USER`, `BATCH`, and `IDLE`.
+  Kernel scheduler threads are `KERNEL`, boot module servers are marked
+  `SERVER`, ordinary task creation defaults to `USER`, and forked Bunix tasks
+  inherit their parent's scheduler metadata.
+- Policy rights are named but not yet exposed as ambient authority.  Future
+  policy-server work can grant class, priority, or weight adjustment rights as
+  capabilities instead of letting arbitrary tasks self-promote.
+
 Tasks:
 
 - [x] Inventory the current task/thread/runqueue/preemption/SMP code and
@@ -104,7 +117,7 @@ Tasks:
       virtual deadlines, and how Bunix threads map into those entities.
 - [x] Define interactivity heuristics: wakeup bonus, sleep credit, IPC/server
       wakeups, terminal input latency, and guardrails against gaming.
-- [ ] Define scheduling classes or priorities for kernel/server/user work,
+- [x] Define scheduling classes or priorities for kernel/server/user work,
       including how capabilities or policy servers may grant scheduling rights.
 - [ ] Design SMP run queues, load tracking, migration, CPU affinity, idle CPU
       selection, and cross-CPU wakeup behavior.

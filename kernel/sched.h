@@ -13,6 +13,20 @@ enum thread_state {
 	THREAD_DEAD,
 };
 
+enum sched_class {
+	SCHED_CLASS_KERNEL = 1,
+	SCHED_CLASS_SERVER = 2,
+	SCHED_CLASS_USER = 3,
+	SCHED_CLASS_BATCH = 4,
+	SCHED_CLASS_IDLE = 5,
+};
+
+enum sched_policy_rights {
+	SCHED_POLICY_RIGHT_CLASS = 1 << 0,
+	SCHED_POLICY_RIGHT_PRIORITY = 1 << 1,
+	SCHED_POLICY_RIGHT_WEIGHT = 1 << 2,
+};
+
 struct task;
 struct thread;
 struct vm_space;
@@ -141,6 +155,9 @@ void sched_secondary_start(u32 cpu_id) __attribute__((noreturn));
 struct task *task_create(const char *name, struct vm_space *vm_space);
 struct vm_space *task_vm_space(struct task *task);
 void task_set_ipc_affinity(struct task *task, u32 cpu_id);
+void task_set_sched_policy(struct task *task, enum sched_class sched_class,
+			   u32 priority, u32 rights);
+void task_inherit_sched_policy(struct task *dst, const struct task *src);
 struct thread *thread_create(struct task *task, const char *name,
 			     thread_entry_t entry, void *arg);
 struct thread *thread_create_on_cpu(struct task *task, const char *name,

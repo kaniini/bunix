@@ -52,6 +52,9 @@ struct task {
 	u64 linux_fs_base;
 	u32 ipc_affinity_cpu;
 	u32 ipc_affinity_valid;
+	enum sched_class sched_class;
+	u32 sched_priority;
+	u32 sched_rights;
 	struct task_vm_region *vm_regions;
 	u32 vm_region_count;
 	u32 vm_region_capacity;
@@ -70,6 +73,8 @@ struct thread {
 	void *arg;
 	u32 cpu_id;
 	u32 weight;
+	enum sched_class sched_class;
+	u32 sched_priority;
 	struct thread *run_next;
 	struct thread *sleep_next;
 	struct thread *task_next;
@@ -646,6 +651,13 @@ void sched_init(void)
 	kernel_task.linux_brk = 0;
 	kernel_task.linux_mmap_next = 0;
 	kernel_task.linux_fs_base = 0;
+	kernel_task.ipc_affinity_cpu = 0;
+	kernel_task.ipc_affinity_valid = 0;
+	kernel_task.sched_class = SCHED_CLASS_KERNEL;
+	kernel_task.sched_priority = 0;
+	kernel_task.sched_rights = SCHED_POLICY_RIGHT_CLASS |
+				   SCHED_POLICY_RIGHT_PRIORITY |
+				   SCHED_POLICY_RIGHT_WEIGHT;
 	kernel_task.vm_regions = 0;
 	kernel_task.vm_region_count = 0;
 	kernel_task.vm_region_capacity = 0;
@@ -676,6 +688,8 @@ void sched_init(void)
 		cpus[i].scheduler_thread.state = THREAD_RUNNING;
 		cpus[i].scheduler_thread.cpu_id = i;
 		cpus[i].scheduler_thread.weight = SCHED_BASE_WEIGHT;
+		cpus[i].scheduler_thread.sched_class = SCHED_CLASS_KERNEL;
+		cpus[i].scheduler_thread.sched_priority = 0;
 		cpus[i].current = &cpus[i].scheduler_thread;
 		cpus[i].reap = 0;
 		cpus[i].quantum_left = SCHED_QUANTUM_TICKS;
@@ -744,6 +758,9 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	task->linux_fs_base = 0;
 	task->ipc_affinity_cpu = 0;
 	task->ipc_affinity_valid = 0;
+	task->sched_class = SCHED_CLASS_USER;
+	task->sched_priority = 0;
+	task->sched_rights = 0;
 	task->vm_regions = 0;
 	task->vm_region_count = 0;
 	task->vm_region_capacity = 0;
@@ -808,6 +825,38 @@ void task_set_ipc_affinity(struct task *task, u32 cpu_id)
 	spin_unlock_irqrestore(&task->lock, flags);
 }
 
+void task_set_sched_policy(struct task *task, enum sched_class sched_class,
+			   u32 priority, u32 rights)
+{
+	if (task == 0 ||
+	    sched_class < SCHED_CLASS_KERNEL ||
+	    sched_class > SCHED_CLASS_IDLE) {
+		return;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
+	task->sched_class = sched_class;
+	task->sched_priority = priority;
+	task->sched_rights = rights;
+	spin_unlock_irqrestore(&task->lock, flags);
+}
+
+void task_inherit_sched_policy(struct task *dst, const struct task *src)
+{
+	if (dst == 0 || src == 0) {
+		return;
+	}
+
+	const u64 src_flags = spin_lock_irqsave(&((struct task *)src)->lock);
+	const enum sched_class sched_class = src->sched_class;
+	const u32 priority = src->sched_priority;
+	const u32 rights = src->sched_rights;
+	spin_unlock_irqrestore(&((struct task *)src)->lock, src_flags);
+
+	task_set_sched_policy(dst, sched_class, priority, rights);
+}
+
 static u32 task_select_cpu(struct task *task, const char **policy)
 {
 	if (task != 0) {
@@ -862,6 +911,8 @@ static struct thread *thread_create_placed(struct task *task, const char *name,
 	thread->entry = entry;
 	thread->arg = arg;
 	thread->weight = SCHED_BASE_WEIGHT;
+	thread->sched_class = task->sched_class;
+	thread->sched_priority = task->sched_priority;
 	thread->run_next = 0;
 	thread->sleep_next = 0;
 	thread->task_next = task->threads;

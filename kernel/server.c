@@ -158,6 +158,7 @@ static u64 launch_user_image(const char *name, struct task *parent,
 	if (task == 0) {
 		return (u64)-1;
 	}
+	task_set_sched_policy(task, SCHED_CLASS_SERVER, 0, 0);
 
 	struct ipc_port *service_port = ipc_port_create(name);
 	const u64 child_self =
@@ -704,6 +705,7 @@ struct task *server_task_fork_current_stopped(
 	if (child == 0) {
 		return 0;
 	}
+	task_inherit_sched_policy(child, parent);
 	if (task_clone_handles(child, parent) != 0) {
 		(void)task_kill(child);
 		return 0;
