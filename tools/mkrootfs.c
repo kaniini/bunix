@@ -1,8 +1,11 @@
 #include <errno.h>
+#include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 enum {
 	ROOTFS_MAGIC = 0x30534652,
@@ -18,7 +21,7 @@ struct rootfs_header {
 	uint32_t entries;
 };
 
-struct rootfs_entry {
+struct rootfs_disk_entry {
 	char path[ROOTFS_MAX_PATH];
 	uint64_t offset;
 	uint64_t size;
@@ -26,6 +29,12 @@ struct rootfs_entry {
 	uint32_t gid;
 	uint32_t mode;
 	uint32_t type;
+};
+
+struct rootfs_entry {
+	struct rootfs_disk_entry disk;
+	char source[ROOTFS_MAX_PATH];
+	char inline_data[ROOTFS_MAX_PATH];
 };
 
 struct rootfs_entries {
@@ -94,7 +103,7 @@ static int path_exists(const struct rootfs_entries *entries,
 		       const char *path)
 {
 	for (size_t i = 0; i < entries->count; i++) {
-		if (strcmp(entries->items[i].path, path) == 0) {
+		if (strcmp(entries->items[i].disk.path, path) == 0) {
 			return 1;
 		}
 	}
@@ -115,11 +124,11 @@ static int add_directory(struct rootfs_entries *entries,
 		return -1;
 	}
 
-	strcpy(entry->path, path);
-	entry->uid = 0;
-	entry->gid = 0;
-	entry->mode = 0555;
-	entry->type = ROOTFS_TYPE_DIRECTORY;
+	strcpy(entry->disk.path, path);
+	entry->disk.uid = 0;
+	entry->disk.gid = 0;
+	entry->disk.mode = 0555;
+	entry->disk.type = ROOTFS_TYPE_DIRECTORY;
 	return 0;
 }
 
@@ -212,11 +221,150 @@ static int copy_file(FILE *out, const char *path)
 	return 0;
 }
 
+static int append_tree_entry(struct rootfs_entries *entries, const char *path,
+			     const char *source, const char *inline_data,
+			     const struct stat *st, uint32_t type)
+{
+	struct rootfs_entry *entry;
+
+	if (strlen(path) >= ROOTFS_MAX_PATH) {
+		fprintf(stderr, "mkrootfs: path too long: %s\n", path);
+		return -1;
+	}
+	if (add_parent_directories(entries, path) != 0) {
+		fprintf(stderr, "mkrootfs: add parents for %s\n", path);
+		return -1;
+	}
+	if (path_exists(entries, path)) {
+		if (type == ROOTFS_TYPE_DIRECTORY) {
+			for (size_t i = 0; i < entries->count; i++) {
+				if (strcmp(entries->items[i].disk.path, path) == 0) {
+					entries->items[i].disk.mode =
+						st->st_mode & 07777;
+					return 0;
+				}
+			}
+		}
+		fprintf(stderr, "mkrootfs: invalid duplicate path: %s\n", path);
+		return -1;
+	}
+
+	entry = entries_append(entries, path);
+	if (entry == NULL) {
+		return -1;
+	}
+
+	strcpy(entry->disk.path, path);
+	entry->disk.uid = 0;
+	entry->disk.gid = 0;
+	entry->disk.mode = st->st_mode & 07777;
+	entry->disk.type = type;
+	if (type == ROOTFS_TYPE_REGULAR) {
+		if ((uint64_t)st->st_size > INT64_MAX) {
+			fprintf(stderr, "mkrootfs: file too large: %s\n", source);
+			return -1;
+		}
+		entry->disk.size = (uint64_t)st->st_size;
+		strcpy(entry->source, source);
+	} else if (type == ROOTFS_TYPE_SYMLINK) {
+		entry->disk.size = strlen(inline_data);
+		strcpy(entry->inline_data, inline_data);
+	}
+	return 0;
+}
+
+static int import_tree_path(struct rootfs_entries *entries, const char *root,
+			    const char *path)
+{
+	char source[ROOTFS_MAX_PATH];
+	struct stat st;
+
+	if (strcmp(path, "/") == 0) {
+		snprintf(source, sizeof(source), "%s", root);
+	} else if (snprintf(source, sizeof(source), "%s%s", root, path) >=
+		   (int)sizeof(source)) {
+		fprintf(stderr, "mkrootfs: source path too long: %s%s\n", root,
+			path);
+		return -1;
+	}
+
+	if (lstat(source, &st) != 0) {
+		fprintf(stderr, "mkrootfs: stat %s: %s\n", source,
+			strerror(errno));
+		return -1;
+	}
+
+	if (S_ISLNK(st.st_mode)) {
+		char target[ROOTFS_MAX_PATH];
+		const ssize_t len = readlink(source, target, sizeof(target) - 1);
+
+		if (len < 0) {
+			fprintf(stderr, "mkrootfs: readlink %s: %s\n", source,
+				strerror(errno));
+			return -1;
+		}
+		target[len] = '\0';
+		return append_tree_entry(entries, path, source, target, &st,
+					 ROOTFS_TYPE_SYMLINK);
+	}
+
+	if (S_ISREG(st.st_mode)) {
+		return append_tree_entry(entries, path, source, NULL, &st,
+					 ROOTFS_TYPE_REGULAR);
+	}
+
+	if (S_ISDIR(st.st_mode)) {
+		struct dirent **names = NULL;
+		const int count = scandir(source, &names, NULL, alphasort);
+
+		if (strcmp(path, "/") != 0 &&
+		    append_tree_entry(entries, path, source, NULL, &st,
+				      ROOTFS_TYPE_DIRECTORY) != 0) {
+			return -1;
+		}
+		if (count < 0) {
+			fprintf(stderr, "mkrootfs: opendir %s: %s\n", source,
+				strerror(errno));
+			return -1;
+		}
+		for (int i = 0; i < count; i++) {
+			char child[ROOTFS_MAX_PATH];
+			int rc = 0;
+
+			if (strcmp(names[i]->d_name, ".") == 0 ||
+			    strcmp(names[i]->d_name, "..") == 0) {
+				free(names[i]);
+				continue;
+			}
+			if (strcmp(path, "/") == 0) {
+				rc = snprintf(child, sizeof(child), "/%s",
+					      names[i]->d_name);
+			} else {
+				rc = snprintf(child, sizeof(child), "%s/%s",
+					      path, names[i]->d_name);
+			}
+			free(names[i]);
+			if (rc < 0 || rc >= (int)sizeof(child) ||
+			    import_tree_path(entries, root, child) != 0) {
+				for (int j = i + 1; j < count; j++) {
+					free(names[j]);
+				}
+				free(names);
+				return -1;
+			}
+		}
+		free(names);
+		return 0;
+	}
+
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
-	if (argc < 4) {
+	if (argc < 3) {
 		fprintf(stderr,
-			"usage: mkrootfs OUT PATH FILE [--symlink PATH TARGET] [--dir PATH] ...\n");
+			"usage: mkrootfs OUT PATH FILE [--symlink PATH TARGET] [--dir PATH] [--tree DIR] ...\n");
 		return 1;
 	}
 
@@ -238,10 +386,23 @@ int main(int argc, char **argv)
 	for (int arg = 2; arg < argc;) {
 		const int is_symlink = strcmp(argv[arg], "--symlink") == 0;
 		const int is_dir = strcmp(argv[arg], "--dir") == 0;
+		const int is_tree = strcmp(argv[arg], "--tree") == 0;
 		const char *path;
 		const char *file;
 		FILE *in;
 		long size = 0;
+
+		if (is_tree) {
+			if (arg + 1 >= argc) {
+				fprintf(stderr, "mkrootfs: incomplete tree\n");
+				goto out;
+			}
+			if (import_tree_path(&entries, argv[arg + 1], "/") != 0) {
+				goto out;
+			}
+			arg += 2;
+			continue;
+		}
 
 		if (is_dir) {
 			if (arg + 1 >= argc) {
@@ -318,24 +479,30 @@ int main(int argc, char **argv)
 		if (entry == NULL) {
 			goto out;
 		}
-		strcpy(entry->path, path);
-		entry->size = (uint64_t)size;
-		entry->uid = 0;
-		entry->gid = 0;
-		entry->mode = is_dir ? 0555 :
-				  (is_symlink ? 0777 :
-				  (strncmp(path, "/bin/", 5) == 0 ?
-				   0555 : 0444));
+		strcpy(entry->disk.path, path);
+		entry->disk.size = (uint64_t)size;
+		entry->disk.uid = 0;
+		entry->disk.gid = 0;
+		entry->disk.mode = is_dir ? 0555 :
+				    (is_symlink ? 0777 :
+				    (strncmp(path, "/bin/", 5) == 0 ?
+				     0555 : 0444));
+		if (!is_dir && !is_symlink) {
+			strcpy(entry->source, file);
+		}
+		if (is_symlink) {
+			strcpy(entry->inline_data, file);
+		}
 		if (strcmp(path, "/secret.txt") == 0) {
-			entry->mode = 0400;
+			entry->disk.mode = 0400;
 		}
 		if (strcmp(path, "/etc/shadow") == 0) {
-			entry->mode = 0400;
+			entry->disk.mode = 0400;
 		}
-		entry->type = is_dir ? ROOTFS_TYPE_DIRECTORY :
-			      (is_symlink ?
-			       ROOTFS_TYPE_SYMLINK :
-			       ROOTFS_TYPE_REGULAR);
+		entry->disk.type = is_dir ? ROOTFS_TYPE_DIRECTORY :
+				   (is_symlink ?
+				    ROOTFS_TYPE_SYMLINK :
+				    ROOTFS_TYPE_REGULAR);
 	}
 
 	if (entries.count > UINT32_MAX) {
@@ -344,12 +511,12 @@ int main(int argc, char **argv)
 	}
 	header.entries = (uint32_t)entries.count;
 	uint64_t offset = sizeof(header) +
-			  entries.count * sizeof(entries.items[0]);
+			  entries.count * sizeof(entries.items[0].disk);
 	for (size_t i = 0; i < entries.count; i++) {
-		if (entries.items[i].type == ROOTFS_TYPE_REGULAR ||
-		    entries.items[i].type == ROOTFS_TYPE_SYMLINK) {
-			entries.items[i].offset = offset;
-			offset += entries.items[i].size;
+		if (entries.items[i].disk.type == ROOTFS_TYPE_REGULAR ||
+		    entries.items[i].disk.type == ROOTFS_TYPE_SYMLINK) {
+			entries.items[i].disk.offset = offset;
+			offset += entries.items[i].disk.size;
 		}
 	}
 
@@ -360,34 +527,39 @@ int main(int argc, char **argv)
 		goto out;
 	}
 
-	if (fwrite(&header, sizeof(header), 1, out) != 1 ||
-	    fwrite(entries.items, sizeof(entries.items[0]), entries.count, out) !=
-	    entries.count) {
+	if (fwrite(&header, sizeof(header), 1, out) != 1) {
 		fprintf(stderr, "mkrootfs: write header: %s\n", strerror(errno));
 		fclose(out);
 		goto out;
 	}
+	for (size_t i = 0; i < entries.count; i++) {
+		if (fwrite(&entries.items[i].disk,
+			   sizeof(entries.items[i].disk), 1, out) != 1) {
+			fprintf(stderr, "mkrootfs: write entry: %s\n",
+				strerror(errno));
+			fclose(out);
+			goto out;
+		}
+	}
 
-	for (int arg = 2; arg < argc;) {
-		if (strcmp(argv[arg], "--dir") == 0) {
-			arg += 2;
-		} else if (strcmp(argv[arg], "--symlink") == 0) {
-			const char *path = argv[arg + 1];
-			const char *target = argv[arg + 2];
+	for (size_t i = 0; i < entries.count; i++) {
+		const struct rootfs_entry *entry = &entries.items[i];
 
-			if (copy_bytes(out, path,
-				       (const unsigned char *)target,
-				       strlen(target)) != 0) {
+		if (entry->disk.type == ROOTFS_TYPE_DIRECTORY) {
+			continue;
+		}
+		if (entry->disk.type == ROOTFS_TYPE_SYMLINK) {
+			if (copy_bytes(out, entry->disk.path,
+				       (const unsigned char *)entry->inline_data,
+				       entry->disk.size) != 0) {
 				fclose(out);
 				goto out;
 			}
-			arg += 3;
-		} else {
-			if (copy_file(out, argv[arg + 1]) != 0) {
-				fclose(out);
-				goto out;
-			}
-			arg += 2;
+			continue;
+		}
+		if (copy_file(out, entry->source) != 0) {
+			fclose(out);
+			goto out;
 		}
 	}
 

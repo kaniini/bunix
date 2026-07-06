@@ -4,6 +4,7 @@ set -eu
 tool=${1:?mkrootfs tool required}
 tmp=${TMPDIR:-/tmp}/bunix-rootfs-tool-test.$$
 image=$tmp/rootfs.img
+tree_image=$tmp/tree-rootfs.img
 args=
 
 cleanup() {
@@ -34,4 +35,39 @@ if [ "$entries" -le 128 ]; then
 	exit 1
 fi
 
-echo "rootfs tool regression ok entries=$entries long_path=${#long_path}"
+mkdir -p "$tmp/tree/sbin" "$tmp/tree/etc" "$tmp/tree/lib"
+printf '#!/bin/sh\necho tree-run\n' > "$tmp/tree/sbin/runme"
+chmod 0755 "$tmp/tree/sbin/runme"
+printf 'tree-conf\n' > "$tmp/tree/etc/tree.conf"
+ln -s ../sbin/runme "$tmp/tree/lib/runme-link"
+
+"$tool" "$tree_image" --tree "$tmp/tree"
+tree_entries=$(od -An -j4 -N4 -tu4 "$tree_image" | tr -d ' ')
+if [ "$tree_entries" -lt 6 ]; then
+	echo "rootfs tree import did not add expected entries: $tree_entries" >&2
+	exit 1
+fi
+if ! grep -aF "../sbin/runme" "$tree_image" >/dev/null 2>&1; then
+	echo "rootfs tree import did not encode symlink target" >&2
+	exit 1
+fi
+
+entry_size=4128
+mode_offset=4120
+runme_mode=
+i=0
+while [ "$i" -lt "$tree_entries" ]; do
+	entry_offset=$((8 + i * entry_size))
+	path=$(dd if="$tree_image" bs=1 skip="$entry_offset" count=4096 2>/dev/null | tr -d '\000')
+	if [ "$path" = /sbin/runme ]; then
+		runme_mode=$(od -An -j$((entry_offset + mode_offset)) -N4 -tu4 "$tree_image" | tr -d ' ')
+		break
+	fi
+	i=$((i + 1))
+done
+if [ "$runme_mode" != 493 ]; then
+	echo "rootfs tree import did not preserve executable mode: $runme_mode" >&2
+	exit 1
+fi
+
+echo "rootfs tool regression ok entries=$entries tree_entries=$tree_entries long_path=${#long_path}"
