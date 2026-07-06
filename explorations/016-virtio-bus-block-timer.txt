@@ -123,3 +123,8 @@ Progress:
   records with `BUNIX_DEV_TRANSPORT_MMIO`; ARM should discover platform/MMIO
   VirtIO ranges from firmware/device-tree/ACPI and grant MMIO plus IRQ resources
   without exposing PCI assumptions to block/net/timer drivers.
+- Added transport-independent VirtIO helpers for feature negotiation, status
+  construction, queue layout sizing, descriptor initialization, avail-ring
+  submission, and used-ring indexing.  The VirtIO mechanics task remains open
+  until these helpers are wired into a discovered device and real queue
+  notification/completion path.

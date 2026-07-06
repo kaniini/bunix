@@ -78,4 +78,120 @@ struct bunix_virtio_device_info {
 	struct bunix_device_feature_set features;
 };
 
+static inline u64 bunix_virtio_align_up(u64 value, u64 alignment)
+{
+	if (alignment == 0) {
+		return value;
+	}
+	return (value + alignment - 1) & ~(alignment - 1);
+}
+
+static inline int bunix_virtio_negotiate_features(
+	u64 device_features, u64 required_features, u64 optional_features,
+	u64 *driver_features)
+{
+	if (driver_features == 0 ||
+	    (device_features & required_features) != required_features) {
+		return -1;
+	}
+
+	*driver_features = required_features | (device_features & optional_features);
+	return 0;
+}
+
+static inline u64 bunix_virtio_status_driver_start(void)
+{
+	return BUNIX_VIRTIO_STATUS_ACKNOWLEDGE | BUNIX_VIRTIO_STATUS_DRIVER;
+}
+
+static inline u64 bunix_virtio_status_features_ok(void)
+{
+	return bunix_virtio_status_driver_start() |
+	       BUNIX_VIRTIO_STATUS_FEATURES_OK;
+}
+
+static inline u64 bunix_virtio_status_driver_ok(void)
+{
+	return bunix_virtio_status_features_ok() |
+	       BUNIX_VIRTIO_STATUS_DRIVER_OK;
+}
+
+static inline u64 bunix_virtio_status_failed(u64 status)
+{
+	return status | BUNIX_VIRTIO_STATUS_FAILED;
+}
+
+static inline u64 bunix_virtio_queue_desc_bytes(u64 queue_size)
+{
+	return queue_size * sizeof(struct bunix_virtio_descriptor);
+}
+
+static inline u64 bunix_virtio_queue_avail_bytes(u64 queue_size)
+{
+	return 2 * sizeof(unsigned short) + queue_size * sizeof(unsigned short);
+}
+
+static inline u64 bunix_virtio_queue_used_bytes(u64 queue_size)
+{
+	return 2 * sizeof(unsigned short) +
+	       queue_size * sizeof(struct bunix_virtio_used_elem);
+}
+
+static inline int bunix_virtio_queue_layout_init(
+	struct bunix_virtio_queue_layout *layout, u64 queue_size, u64 alignment)
+{
+	u64 offset;
+
+	if (layout == 0 || queue_size == 0 ||
+	    (queue_size & (queue_size - 1)) != 0 ||
+	    (alignment != 0 && (alignment & (alignment - 1)) != 0)) {
+		return -1;
+	}
+	if (alignment == 0) {
+		alignment = 4096;
+	}
+
+	layout->queue_size = queue_size;
+	layout->alignment = alignment;
+	layout->desc_offset = 0;
+	layout->avail_offset = bunix_virtio_queue_desc_bytes(queue_size);
+	offset = layout->avail_offset + bunix_virtio_queue_avail_bytes(queue_size);
+	layout->used_offset = bunix_virtio_align_up(offset, alignment);
+	layout->total_len = layout->used_offset +
+			    bunix_virtio_queue_used_bytes(queue_size);
+	return 0;
+}
+
+static inline void bunix_virtio_desc_set(
+	struct bunix_virtio_descriptor *desc, u64 addr, u64 len, u64 flags,
+	u64 next)
+{
+	if (desc == 0) {
+		return;
+	}
+	desc->addr = addr;
+	desc->len = (unsigned int)len;
+	desc->flags = (unsigned short)flags;
+	desc->next = (unsigned short)next;
+}
+
+static inline void bunix_virtio_avail_put(struct bunix_virtio_avail *avail,
+					  u64 queue_size, u64 head)
+{
+	if (avail == 0 || queue_size == 0) {
+		return;
+	}
+	avail->ring[avail->idx % queue_size] = (unsigned short)head;
+	avail->idx++;
+}
+
+static inline struct bunix_virtio_used_elem *
+bunix_virtio_used_at(struct bunix_virtio_used *used, u64 queue_size, u64 index)
+{
+	if (used == 0 || queue_size == 0) {
+		return 0;
+	}
+	return &used->ring[index % queue_size];
+}
+
 #endif
