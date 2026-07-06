@@ -13,8 +13,18 @@ save_failure_artifacts() {
 	printf '%s\n' "$label" > "$out/reason.txt"
 	printf '%s\n' "${KERNEL_CMDLINE:-}" > "$out/kernel-cmdline.txt"
 	printf '%s\n' "${BUNIX_CMD:-${CMD:-}}" > "$out/command.txt"
+	printf '%s\n' "${BUNIX_SHELL_PARTS:-${BUNIX_SHELL_PART:-}}" > "$out/shell-selected-parts.txt"
+	printf '%s\n' "${BUNIX_CURRENT_SHARD:-}" > "$out/shell-current-shard.txt"
+	printf '%s\n' "${BUNIX_CURRENT_MARKER_FILE:-}" > "$out/shell-current-marker-file.txt"
+	printf '%s\n' "${BUNIX_CURRENT_SHARD_FILE:-}" > "$out/shell-current-shard-file.txt"
 	if [ -n "${BUNIX_CMD_FILE:-}" ] && [ -r "${BUNIX_CMD_FILE:-}" ]; then
 		cp "$BUNIX_CMD_FILE" "$out/input-script.sh"
+	fi
+	if [ -n "${BUNIX_CURRENT_SHARD_FILE:-}" ] && [ -r "${BUNIX_CURRENT_SHARD_FILE:-}" ]; then
+		cp "$BUNIX_CURRENT_SHARD_FILE" "$out/shell-shard.sh"
+	fi
+	if [ -n "${BUNIX_CURRENT_MARKER_FILE:-}" ] && [ -r "${BUNIX_CURRENT_MARKER_FILE:-}" ]; then
+		cp "$BUNIX_CURRENT_MARKER_FILE" "$out/shell-marker-file.txt"
 	fi
 	if [ -n "${BUNIX_TEST_HARNESS:-}" ] && [ -r "${BUNIX_TEST_HARNESS:-}" ]; then
 		cp "$BUNIX_TEST_HARNESS" "$out/test-harness.sh"

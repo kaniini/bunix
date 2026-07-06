@@ -162,9 +162,17 @@ Plan:
    - The existing failure path still prints the preserved artifact directory
      immediately.
 
-8. Add artifact metadata for shards
+8. Add artifact metadata for shards [DONE]
    Failure bundles should include the selected shard list, current shard name,
    marker file, command batch, serial/QEMU logs, strace tail, and git commit.
+
+   Result:
+
+   - `tools/test-lib.sh` writes shard metadata files into failure bundles:
+     selected parts, current shard, marker file, and shard command-batch path.
+   - When available, the active shard script and marker file are copied into
+     the bundle alongside the existing serial/QEMU logs, Linux strace tail, and
+     git commit.
 
 9. Add a fast default smoke target
    Provide `make test-smoke` for the first pre-commit gate. It should run boot

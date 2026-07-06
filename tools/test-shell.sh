@@ -30,7 +30,8 @@ BUNIX_COLLECT_FAILURES=1
 BUNIX_FAILURE_DIR=$failure_dir
 BUNIX_QEMU_LOG=$qemu_log
 BUNIX_TEST_HARNESS=$0
-export BUNIX_COLLECT_FAILURES BUNIX_FAILURE_DIR BUNIX_QEMU_LOG BUNIX_TEST_HARNESS
+BUNIX_SHELL_PARTS=$shell_parts
+export BUNIX_COLLECT_FAILURES BUNIX_FAILURE_DIR BUNIX_QEMU_LOG BUNIX_TEST_HARNESS BUNIX_SHELL_PARTS
 
 cleanup() {
 	if [ "${qemu_pid:-}" ]; then
@@ -144,7 +145,9 @@ begin_shard() {
 	name=$1
 
 	BUNIX_CURRENT_SHARD=$name
+	BUNIX_CURRENT_SHARD_FILE=$script_dir/shell-tests/$name.sh
 	export BUNIX_CURRENT_SHARD
+	export BUNIX_CURRENT_SHARD_FILE
 	mkdir -p "$tmp/shard-times"
 	date +%s > "$tmp/shard-times/$name"
 }
@@ -157,6 +160,7 @@ finish_shard() {
 
 	echo "test-shell-part name=$name status=ok seconds=$seconds"
 	unset BUNIX_CURRENT_SHARD
+	unset BUNIX_CURRENT_SHARD_FILE
 }
 
 part_selected() {
