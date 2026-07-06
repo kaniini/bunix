@@ -185,3 +185,11 @@ Progress:
   `buffer_phys` native syscall for shared-buffer handles so upcoming VirtIO
   queue setup can program descriptor/driver/device ring physical addresses from
   a capability-held queue memory buffer.
+- Added `DEV0 SETUP_QUEUE` support to `virtio-bus.server` for modern PCI
+  devices.  The bus allocates a shared-buffer queue memory object, computes the
+  descriptor/driver/device ring layout, programs queue size and physical ring
+  addresses through common config, enables the queue, and returns the queue
+  buffer capability plus layout metadata to the caller.  The server also parses
+  the notify capability multiplier and implements `DEV0 NOTIFY_QUEUE` using the
+  queue's notify offset.  A real block driver still needs to fill descriptors,
+  consume used rings, handle interrupts, and exercise this path end-to-end.

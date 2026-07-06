@@ -5,6 +5,7 @@ enum {
 	VIRTIO_BUS_HANDLE_NAMES = 3,
 	VIRTIO_BUS_HANDLE_PCI_CONFIG = 4,
 	VIRTIO_BUS_MAX_RESOURCES = 16,
+	VIRTIO_BUS_MAX_QUEUES = 8,
 	PCI_CONFIG_ADDRESS = 0,
 	PCI_CONFIG_DATA = 4,
 	PCI_VENDOR_NONE = 0xffff,
@@ -30,11 +31,25 @@ enum {
 	VIRTIO_PCI_COMMON_DRIVER_FEATURE_SELECT = 0x08,
 	VIRTIO_PCI_COMMON_DRIVER_FEATURE = 0x0c,
 	VIRTIO_PCI_COMMON_DEVICE_STATUS = 0x14,
+	VIRTIO_PCI_COMMON_QUEUE_SELECT = 0x16,
+	VIRTIO_PCI_COMMON_QUEUE_SIZE = 0x18,
+	VIRTIO_PCI_COMMON_QUEUE_ENABLE = 0x1c,
+	VIRTIO_PCI_COMMON_QUEUE_NOTIFY_OFF = 0x1e,
+	VIRTIO_PCI_COMMON_QUEUE_DESC = 0x20,
+	VIRTIO_PCI_COMMON_QUEUE_DRIVER = 0x28,
+	VIRTIO_PCI_COMMON_QUEUE_DEVICE = 0x30,
+};
+
+struct virtio_bus_queue {
+	u64 buffer_handle;
+	struct bunix_virtio_queue_layout layout;
+	u64 notify_off;
 };
 
 struct virtio_bus_device {
 	struct bunix_virtio_device_info info;
 	struct bunix_device_resource resources[VIRTIO_BUS_MAX_RESOURCES];
+	struct virtio_bus_queue queues[VIRTIO_BUS_MAX_QUEUES];
 	u64 resource_count;
 };
 
@@ -131,6 +146,28 @@ static void log_features(const struct virtio_bus_device *device, u64 index)
 	append_text(line, sizeof(line), &offset, " common=");
 	append_u64(line, sizeof(line), &offset,
 		   device->info.transport.common_cfg_resource);
+	append_char(line, sizeof(line), &offset, '\n');
+	bunix_console_log(line, offset);
+}
+
+static void log_queue_setup(u64 device_index, u64 queue_index,
+			    const struct virtio_bus_queue *queue)
+{
+	char line[128];
+	u64 offset = 0;
+
+	if (queue == 0) {
+		return;
+	}
+	line[0] = '\0';
+	append_text(line, sizeof(line), &offset, "virtio-bus: queue device=");
+	append_u64(line, sizeof(line), &offset, device_index);
+	append_text(line, sizeof(line), &offset, " index=");
+	append_u64(line, sizeof(line), &offset, queue_index);
+	append_text(line, sizeof(line), &offset, " size=");
+	append_u64(line, sizeof(line), &offset, queue->layout.queue_size);
+	append_text(line, sizeof(line), &offset, " bytes=");
+	append_u64(line, sizeof(line), &offset, queue->layout.total_len);
 	append_char(line, sizeof(line), &offset, '\n');
 	bunix_console_log(line, offset);
 }
@@ -417,6 +454,55 @@ static long virtio_common_get_status(struct virtio_bus_device *device)
 				   VIRTIO_PCI_COMMON_DEVICE_STATUS);
 }
 
+static struct bunix_device_resource *
+virtio_common_resource(struct virtio_bus_device *device)
+{
+	return resource_find_flag(device, BUNIX_DEV_RESOURCE_FLAG_VIRTIO_COMMON_CFG,
+				  0);
+}
+
+static int virtio_common_select_queue(struct bunix_device_resource *common,
+				      u64 queue_index)
+{
+	if (common == 0 || common->handle == 0 ||
+	    queue_index >= VIRTIO_BUS_MAX_QUEUES) {
+		return -1;
+	}
+	return bunix_hw_mmio_write16(common->handle,
+				     VIRTIO_PCI_COMMON_QUEUE_SELECT,
+				     queue_index) == 0 ? 0 : -1;
+}
+
+static int virtio_common_write64(struct bunix_device_resource *common,
+				 u64 offset, u64 value)
+{
+	if (common == 0 || common->handle == 0) {
+		return -1;
+	}
+	if (bunix_hw_mmio_write32(common->handle, offset,
+				  value & 0xffffffffu) != 0 ||
+	    bunix_hw_mmio_write32(common->handle, offset + 4,
+				  (value >> 32) & 0xffffffffu) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static u64 queue_size_choose(u64 max_size, u64 requested_size)
+{
+	u64 size = 1;
+	u64 limit = requested_size == 0 || requested_size > max_size ?
+		    max_size : requested_size;
+
+	if (max_size == 0) {
+		return 0;
+	}
+	while ((size << 1) != 0 && (size << 1) <= limit) {
+		size <<= 1;
+	}
+	return size;
+}
+
 static void scan_pci_bars(struct virtio_bus_device *device, u64 bus, u64 slot,
 			  u64 function)
 {
@@ -547,6 +633,8 @@ static void scan_virtio_capabilities(struct virtio_bus_device *device, u64 bus,
 							  offset + 8);
 		const long cap_len = pci_config_read32(bus, slot, function,
 						       offset + 12);
+		const long cap_extra = pci_config_read32(bus, slot, function,
+							 offset + 16);
 		u64 cfg_type;
 		u64 bar;
 		u64 flag;
@@ -558,6 +646,11 @@ static void scan_virtio_capabilities(struct virtio_bus_device *device, u64 bus,
 		    data0 >= 0 && cap_offset >= 0 && cap_len > 0) {
 			cfg_type = ((u64)header >> 24) & 0xff;
 			bar = (u64)data0 & 0xff;
+			if (cfg_type == VIRTIO_PCI_CAP_NOTIFY_CFG &&
+			    cap_extra >= 0) {
+				device->info.transport.notify_off_multiplier =
+					(u64)cap_extra & 0xffffffffu;
+			}
 			flag = virtio_cfg_flag(cfg_type);
 			if (flag != 0 && bar < 6) {
 				for (u64 i = 0; i < device->resource_count; i++) {
@@ -782,6 +875,117 @@ static void reply_negotiate_features(struct bunix_msg *reply, u64 device_index,
 	reply->words[3] = (u64)status & 0xff;
 }
 
+static void reply_setup_queue(struct bunix_msg *reply, u64 device_index,
+			      u64 queue_index, u64 requested_size)
+{
+	struct virtio_bus_device *device;
+	struct bunix_device_resource *common;
+	struct virtio_bus_queue *queue;
+	struct bunix_virtio_queue_layout layout;
+	long max_size;
+	long notify_off;
+	long buffer_handle;
+	long queue_phys;
+	u64 queue_size;
+
+	if (device_index >= device_count || queue_index >= VIRTIO_BUS_MAX_QUEUES) {
+		reply_no_device(reply);
+		return;
+	}
+	device = &devices[device_index];
+	common = virtio_common_resource(device);
+	if (virtio_common_select_queue(common, queue_index) != 0) {
+		reply_no_device(reply);
+		return;
+	}
+	max_size = bunix_hw_mmio_read16(common->handle,
+					VIRTIO_PCI_COMMON_QUEUE_SIZE);
+	notify_off = bunix_hw_mmio_read16(common->handle,
+					   VIRTIO_PCI_COMMON_QUEUE_NOTIFY_OFF);
+	if (max_size <= 0 || notify_off < 0) {
+		reply_no_device(reply);
+		return;
+	}
+	queue_size = queue_size_choose((u64)max_size, requested_size);
+	if (bunix_virtio_queue_layout_init(&layout, queue_size, 4096) != 0) {
+		reply_no_device(reply);
+		return;
+	}
+	buffer_handle = bunix_buffer_create(layout.total_len);
+	if (buffer_handle <= 0) {
+		reply_no_device(reply);
+		return;
+	}
+	queue_phys = bunix_buffer_phys((u64)buffer_handle);
+	if (queue_phys <= 0 ||
+	    bunix_hw_mmio_write16(common->handle,
+				  VIRTIO_PCI_COMMON_QUEUE_ENABLE, 0) != 0 ||
+	    bunix_hw_mmio_write16(common->handle,
+				  VIRTIO_PCI_COMMON_QUEUE_SIZE,
+				  queue_size) != 0 ||
+	    virtio_common_write64(common, VIRTIO_PCI_COMMON_QUEUE_DESC,
+				  (u64)queue_phys + layout.desc_offset) != 0 ||
+	    virtio_common_write64(common, VIRTIO_PCI_COMMON_QUEUE_DRIVER,
+				  (u64)queue_phys + layout.avail_offset) != 0 ||
+	    virtio_common_write64(common, VIRTIO_PCI_COMMON_QUEUE_DEVICE,
+				  (u64)queue_phys + layout.used_offset) != 0 ||
+	    bunix_hw_mmio_write16(common->handle,
+				  VIRTIO_PCI_COMMON_QUEUE_ENABLE, 1) != 0) {
+		bunix_handle_close((u64)buffer_handle);
+		reply_no_device(reply);
+		return;
+	}
+
+	queue = &device->queues[queue_index];
+	if (queue->buffer_handle != 0) {
+		bunix_handle_close(queue->buffer_handle);
+	}
+	queue->buffer_handle = (u64)buffer_handle;
+	queue->layout = layout;
+	queue->notify_off = (u64)notify_off;
+	log_queue_setup(device_index, queue_index, queue);
+
+	reply->words[0] = BUNIX_DEV_OK;
+	reply->words[1] = queue_size | (queue_index << 32);
+	reply->words[2] = layout.total_len;
+	reply->words[3] = (u64)notify_off;
+	reply->cap = (u64)buffer_handle;
+	reply->cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_RECV |
+			    BUNIX_RIGHT_DUP;
+}
+
+static void reply_notify_queue(struct bunix_msg *reply, u64 device_index,
+			       u64 queue_index)
+{
+	struct virtio_bus_device *device;
+	struct bunix_device_resource *notify;
+	struct virtio_bus_queue *queue;
+	u64 offset;
+
+	if (device_index >= device_count || queue_index >= VIRTIO_BUS_MAX_QUEUES) {
+		reply_no_device(reply);
+		return;
+	}
+	device = &devices[device_index];
+	notify = resource_find_flag(device,
+				    BUNIX_DEV_RESOURCE_FLAG_VIRTIO_NOTIFY_CFG,
+				    0);
+	queue = &device->queues[queue_index];
+	if (notify == 0 || notify->handle == 0 || queue->buffer_handle == 0) {
+		reply_no_device(reply);
+		return;
+	}
+	offset = queue->notify_off * device->info.transport.notify_off_multiplier;
+	if (bunix_hw_mmio_write16(notify->handle, offset, queue_index) != 0) {
+		reply_no_device(reply);
+		return;
+	}
+	reply->words[0] = BUNIX_DEV_OK;
+	reply->words[1] = queue_index;
+	reply->words[2] = offset;
+	reply->words[3] = 0;
+}
+
 static void reply_no_device(struct bunix_msg *reply)
 {
 	reply->words[0] = BUNIX_DEV_ERR_NOENT;
@@ -842,10 +1046,17 @@ int main(void)
 						 message.words[1],
 						 message.words[2]);
 			break;
+		case BUNIX_DEV_SETUP_QUEUE:
+			reply_setup_queue(&reply, message.words[0],
+					  message.words[1],
+					  message.words[2]);
+			break;
+		case BUNIX_DEV_NOTIFY_QUEUE:
+			reply_notify_queue(&reply, message.words[0],
+					   message.words[1]);
+			break;
 		case BUNIX_DEV_BIND_DRIVER:
 		case BUNIX_DEV_RESET:
-		case BUNIX_DEV_SETUP_QUEUE:
-		case BUNIX_DEV_NOTIFY_QUEUE:
 		case BUNIX_DEV_ACK_INTERRUPT:
 			reply_no_device(&reply);
 			break;
