@@ -1,0 +1,168 @@
+#!/bin/sh
+set -eu
+
+manifest=${BUNIX_SHELL_SHARDS:-tools/shell-shards.tsv}
+jobs=${BUNIX_TEST_JOBS:-2}
+test_set=${BUNIX_TEST_SET:-${BUNIX_SHELL_PART:-all}}
+run_root=${BUNIX_TEST_RUN_ROOT:-build/test-runs}
+run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
+make_cmd=${MAKE:-make}
+
+case "$jobs" in
+''|*[!0-9]*)
+	echo "BUNIX_TEST_JOBS must be a positive integer" >&2
+	exit 2
+	;;
+0)
+	echo "BUNIX_TEST_JOBS must be greater than zero" >&2
+	exit 2
+	;;
+esac
+
+if [ ! -r "$manifest" ]; then
+	echo "shell shard manifest is not readable: $manifest" >&2
+	exit 2
+fi
+
+mkdir -p "$run_root/$run_id"
+
+selected_names() {
+	awk -F '\t' -v set="$test_set" '
+	function selected(name, phase,    list, count, i, part) {
+		if (set == "" || set == "all" || set == "shell")
+			return 1
+		count = split(set, list, ",")
+		for (i = 1; i <= count; i++) {
+			part = list[i]
+			if (part == name)
+				return 1
+			if ((part == "smoke" || part == "sysrace") && name == "smoke")
+				return 1
+			if ((part == "vfs" || part == "procfs" || part == "devfs") &&
+			    name == "rootfs-vfs-proc-dev")
+				return 1
+			if (part == "tmpfs" &&
+			    (name == "tmpfs-basic-linux-tests" ||
+			     name == "tmpfs-extended" ||
+			     name == "root-tmpfs-chown"))
+				return 1
+			if ((part == "path" || part == "statfs") && name == "path-limits-statfs")
+				return 1
+			if ((part == "large-io" || part == "mount") && name == "large-io-mount")
+				return 1
+			if (part == phase)
+				return 1
+		}
+		return 0
+	}
+	/^#/ || NF == 0 { next }
+	NF < 8 {
+		printf "invalid shard row at %s:%d\n", FILENAME, FNR > "/dev/stderr"
+		exit 1
+	}
+	selected($1, $2) { print $1 "\t" $3 "\t" $4 "\t" $5 }
+	' "$manifest"
+}
+
+worker_parts() {
+	case "$1" in
+	root-tmpfs-chown)
+		echo "tmpfs-basic-linux-tests,root-tmpfs-chown"
+		;;
+	*)
+		echo "$1"
+		;;
+	esac
+}
+
+run_worker() {
+	name=$1
+	smp=$2
+	memory=$3
+	timeout_seconds=$4
+	parts=$(worker_parts "$name")
+	worker_dir=$run_root/$run_id/$name
+	start=$(date +%s)
+
+	mkdir -p "$worker_dir"
+	echo "test-parallel name=$name status=start smp=$smp memory=$memory timeout=${timeout_seconds}s artifact=$worker_dir"
+
+	if BUNIX_TEST_RUN_ID="$run_id-$name" \
+	    BUNIX_TEST_RUNTIME_DIR="$worker_dir/runtime" \
+	    FAILURE_DIR="$worker_dir/failures" \
+	    BUNIX_SHELL_PART="$parts" \
+	    SMP="$smp" \
+	    QEMU_TIMEOUT="${timeout_seconds}s" \
+	    "$make_cmd" test-shell-part >"$worker_dir/stdout.log" 2>"$worker_dir/stderr.log"; then
+		status=ok
+		rc=0
+	else
+		status=fail
+		rc=1
+	fi
+
+	now=$(date +%s)
+	seconds=$((now - start))
+	echo "$status" > "$worker_dir/status"
+	echo "$seconds" > "$worker_dir/seconds"
+	echo "test-parallel name=$name status=$status seconds=$seconds artifact=$worker_dir"
+	return "$rc"
+}
+
+wait_batch() {
+	status=0
+	for pid in "$@"; do
+		if ! wait "$pid"; then
+			status=1
+		fi
+	done
+	return "$status"
+}
+
+pids=
+count=0
+overall=0
+launched=0
+skipped=0
+
+while IFS='	' read -r name smp memory timeout_seconds; do
+	if [ -z "$name" ]; then
+		continue
+	fi
+	if [ "$name" = root-mount-soak ]; then
+		echo "test-parallel name=$name status=skip reason=unimplemented"
+		skipped=$((skipped + 1))
+		continue
+	fi
+
+	run_worker "$name" "$smp" "$memory" "$timeout_seconds" &
+	pids="$pids $!"
+	count=$((count + 1))
+	launched=$((launched + 1))
+
+	if [ "$count" -ge "$jobs" ]; then
+		# shellcheck disable=SC2086
+		if ! wait_batch $pids; then
+			overall=1
+		fi
+		pids=
+		count=0
+	fi
+done <<EOF_SHARDS
+$(selected_names)
+EOF_SHARDS
+
+if [ "$count" -gt 0 ]; then
+	# shellcheck disable=SC2086
+	if ! wait_batch $pids; then
+		overall=1
+	fi
+fi
+
+if [ "$launched" -eq 0 ]; then
+	echo "test-parallel status=fail reason=no-selected-shards set=$test_set"
+	exit 2
+fi
+
+echo "test-parallel status=done run_id=$run_id launched=$launched skipped=$skipped artifact=$run_root/$run_id"
+exit "$overall"

@@ -216,13 +216,30 @@ Plan:
    - Failure artifacts default to a per-run subdirectory, and bundles record the
      runtime directory path.
 
-11. Add a parallel test runner
+11. Add a parallel test runner [DONE]
    Add a host-side scheduler, likely `tools/test-parallel.sh`, that consumes a
    shard list and launches independent `test-shell-part` or `test-command`
    workers up to a configurable concurrency limit:
 
    BUNIX_TEST_JOBS=32 make test-parallel
    BUNIX_TEST_JOBS=16 BUNIX_TEST_SET=vfs,procfs,sysrace make test-parallel
+
+   Result:
+
+   - Added `tools/test-parallel.sh`, a POSIX shell host-side scheduler that
+     reads `tools/shell-shards.tsv`, expands common shard-set aliases, and
+     launches `make test-shell-part` workers in batches up to
+     `BUNIX_TEST_JOBS`.
+   - Each worker gets a unique `build/test-runs/<run-id>/<shard>/` output
+     directory, per-worker runtime directory, per-worker failure directory, and
+     metadata-derived `SMP`/`QEMU_TIMEOUT`.
+   - The `root-tmpfs-chown` worker runs its required tmpfs setup shard in the
+     same VM so it is independently schedulable.
+
+   Need:
+
+   - `root-mount-soak` is still listed in the manifest but not implemented by
+     `tools/test-shell.sh`; the parallel runner reports it as skipped for now.
 
 12. Add make targets for parallel gates
    Add targets with clear roles:
