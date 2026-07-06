@@ -109,6 +109,49 @@ Scheduler class metadata slice:
   policy-server work can grant class, priority, or weight adjustment rights as
   capabilities instead of letting arbitrary tasks self-promote.
 
+SMP policy design:
+
+- Keep per-CPU run queues for simple locking and good cache behavior, but make
+  policy decisions visible enough that starvation cannot hide behind a local
+  queue.  Each CPU tracks load, minimum virtual runtime, migrations, wakeups,
+  and runnable latency through `/proc/sched`.
+- New task placement remains least-loaded round-robin with explicit placement
+  and IPC-affinity overrides.  IPC affinity is a latency hint for servers: a
+  task that is created with a send capability to an affinity-bearing port can
+  start on that port's CPU so the first request/reply path is local.
+- Wakeups normally return a blocked thread to its last CPU.  This preserves
+  locality and keeps server state warm.  If that CPU was idle, a scheduler IPI
+  wakes it immediately.  Cross-CPU stealing should be added only after metrics
+  show a real imbalance because eager migration can damage interactive latency.
+- Migration is allowed when a thread is newly placed, explicitly moved by a
+  future scheduler-policy server, or selected by a future idle-balancing pass.
+  A migration must preserve the thread's virtual runtime/deadline state and
+  must be counted in scheduler stats.
+- CPU affinity should eventually be represented as a capability-scoped mask,
+  not as a Linux PID property.  Linux CPU affinity can map onto that lower
+  Bunix mask without making Linux process identity part of the scheduler core.
+- Idle balancing should prefer pulling the earliest-deadline eligible thread
+  from the busiest CPU only when the local CPU is idle and the source CPU has
+  spare runnable work.  That gives idle CPUs useful work while avoiding
+  continuous load-chasing.
+
+Policy tradeoffs:
+
+- Bunix deliberately favors interactive wakeup latency for IPC-heavy servers,
+  terminal input, and short-lived shell commands over perfect throughput
+  fairness.  The bounded wakeup credit is capped at 20 ticks and clamped to the
+  CPU's minimum virtual runtime so sleepers cannot accumulate unbounded
+  negative lag.
+- Direct IPC handoff can bypass the run queue when sender and receiver are on
+  the same CPU.  That trades strict fairness for lower RPC latency, but the
+  path is still accounted as a wakeup and switch so it remains observable.
+- Weights, classes, and priorities are present as metadata, but they do not yet
+  alter runtime share.  That keeps this exploration behaviorally conservative
+  until a capability-controlled policy surface exists.
+- Per-CPU queues are an implementation choice, not the semantic boundary of
+  fairness.  Future balancing must compare virtual runtime and runnable
+  latency across CPUs rather than relying only on queue length.
+
 Tasks:
 
 - [x] Inventory the current task/thread/runqueue/preemption/SMP code and
@@ -119,7 +162,7 @@ Tasks:
       wakeups, terminal input latency, and guardrails against gaming.
 - [x] Define scheduling classes or priorities for kernel/server/user work,
       including how capabilities or policy servers may grant scheduling rights.
-- [ ] Design SMP run queues, load tracking, migration, CPU affinity, idle CPU
+- [x] Design SMP run queues, load tracking, migration, CPU affinity, idle CPU
       selection, and cross-CPU wakeup behavior.
 - [x] Implement EEVDF-style pick-next logic with deterministic tie-breaking and
       bounded accounting cost.
@@ -132,5 +175,5 @@ Tasks:
       fork/exec/exit churn.
 - [ ] Compare behavior against the current scheduler on shell responsiveness,
       build/test runtime, watch/sleep behavior, and server throughput.
-- [ ] Document the policy tradeoffs explicitly: where Bunix chooses
+- [x] Document the policy tradeoffs explicitly: where Bunix chooses
       interactivity/latency over strict fairness, and why.
