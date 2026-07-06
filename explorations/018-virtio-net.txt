@@ -159,3 +159,11 @@ Progress:
   `virtio-net: attached iface=` logs.  Actual RX buffer replenishment, TX
   dequeue/completion, Ethernet encapsulation, route integration, and device
   reset handling remain open.
+- `virtio-net.server` now replenishes the receive virtqueue with guest-owned
+  buffers, notifies queue 0, strips the VirtIO-net header from completed
+  buffers, submits completed Ethernet frames to NET0 through
+  `BUNIX_NET_PACKET_RX_SUBMIT`, requeues consumed RX descriptors, and polls
+  completions in a bounded loop until exploration 025 supplies IRQ-driven
+  completions.  The dedicated boot test checks `virtio-net: rx ready`.  Real
+  external receive testing still needs deterministic host traffic and the
+  network stack still needs Ethernet/ARP/ND route integration.

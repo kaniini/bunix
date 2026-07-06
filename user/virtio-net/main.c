@@ -3,13 +3,20 @@
 enum {
 	VIRTIO_NET_HANDLE_NAMES = 3,
 	VIRTIO_NET_QUEUE_SIZE = 128,
+	VIRTIO_NET_RX_BUFFERS = 8,
 	VIRTIO_NET_DEFAULT_MTU = 1500,
+	VIRTIO_NET_MAX_MTU = 2048,
+	VIRTIO_NET_RX_BUFFER_SIZE = sizeof(struct bunix_virtio_net_header) +
+				    VIRTIO_NET_MAX_MTU,
+	VIRTIO_NET_RX_POLL_ROUNDS = 16,
 };
 
 struct virtio_net_queue {
 	u64 handle;
 	u64 phys;
 	u64 queue_size;
+	u64 next_avail;
+	u64 seen_used;
 	struct bunix_virtio_queue_layout layout;
 };
 
@@ -19,12 +26,15 @@ struct virtio_net_device {
 	u64 device_index;
 	u64 features;
 	u64 iface_id;
+	u64 rx_submit_buffer;
 	u64 mac_hi;
 	u64 mac_lo;
 	u64 mtu;
 	u64 link_flags;
 	struct virtio_net_queue rx;
 	struct virtio_net_queue tx;
+	u64 rx_buffer[VIRTIO_NET_RX_BUFFERS];
+	u64 rx_phys[VIRTIO_NET_RX_BUFFERS];
 };
 
 static void log_text(const char *text, u64 len)
@@ -190,13 +200,80 @@ static int queue_zero_avail(struct virtio_net_queue *queue)
 	if (queue == 0 || queue->handle == 0) {
 		return -1;
 	}
-	return bunix_buffer_write(queue->handle, queue->layout.avail_offset,
-				  &zero, sizeof(zero)) == 0 &&
-		       bunix_buffer_write(queue->handle,
-					  queue->layout.avail_offset + 2,
-					  &zero, sizeof(zero)) == 0 ?
+	if (bunix_buffer_write(queue->handle, queue->layout.avail_offset,
+			       &zero, sizeof(zero)) != 0 ||
+	    bunix_buffer_write(queue->handle, queue->layout.avail_offset + 2,
+			       &zero, sizeof(zero)) != 0) {
+		return -1;
+	}
+	queue->next_avail = 0;
+	queue->seen_used = 0;
+	return 0;
+}
+
+static int queue_write(u64 handle, u64 offset, const void *src, u64 len)
+{
+	return bunix_buffer_write(handle, offset, src, len) == 0 ? 0 : -1;
+}
+
+static int queue_read_u16(u64 handle, u64 offset, unsigned short *value)
+{
+	return bunix_buffer_read(handle, offset, value, sizeof(*value)) == 0 ? 0 :
+									-1;
+}
+
+static int queue_read_used_elem(struct virtio_net_queue *queue, u64 index,
+				struct bunix_virtio_used_elem *elem)
+{
+	u64 offset;
+
+	if (queue == 0 || elem == 0 || queue->handle == 0) {
+		return -1;
+	}
+	offset = queue->layout.used_offset + 2 * sizeof(unsigned short) +
+		 (index % queue->queue_size) * sizeof(*elem);
+	return bunix_buffer_read(queue->handle, offset, elem, sizeof(*elem)) == 0 ?
 		       0 :
 		       -1;
+}
+
+static int queue_write_desc(struct virtio_net_queue *queue, u64 index,
+			    u64 addr, u64 len, u64 flags, u64 next)
+{
+	struct bunix_virtio_descriptor desc;
+
+	if (queue == 0 || index >= queue->queue_size) {
+		return -1;
+	}
+	bunix_virtio_desc_set(&desc, addr, len, flags, next);
+	return queue_write(queue->handle,
+			   queue->layout.desc_offset +
+				   index * sizeof(desc),
+			   &desc, sizeof(desc));
+}
+
+static int queue_avail_put(struct virtio_net_queue *queue, u64 head)
+{
+	unsigned short entry;
+	unsigned short next;
+	u64 ring_offset;
+
+	if (queue == 0 || queue->handle == 0 || head >= queue->queue_size ||
+	    queue->next_avail - queue->seen_used >= queue->queue_size) {
+		return -1;
+	}
+	entry = (unsigned short)head;
+	next = (unsigned short)(queue->next_avail + 1);
+	ring_offset = queue->layout.avail_offset + 2 * sizeof(unsigned short) +
+		      (queue->next_avail % queue->queue_size) *
+			      sizeof(unsigned short);
+	if (queue_write(queue->handle, ring_offset, &entry, sizeof(entry)) != 0 ||
+	    queue_write(queue->handle, queue->layout.avail_offset + 2, &next,
+			sizeof(next)) != 0) {
+		return -1;
+	}
+	queue->next_avail++;
+	return 0;
 }
 
 static u64 mac_pack_hi(u64 raw_config)
@@ -236,6 +313,9 @@ static void config_read(struct virtio_net_device *device)
 		u64 mtu = (raw8 >> 16) & 0xffff;
 
 		if (mtu != 0) {
+			if (mtu > VIRTIO_NET_MAX_MTU) {
+				mtu = VIRTIO_NET_MAX_MTU;
+			}
 			device->mtu = mtu;
 		}
 	}
@@ -261,6 +341,134 @@ static int setup_queues(struct virtio_net_device *device)
 	    queue_from_reply(&reply, &device->tx) != 0 ||
 	    queue_zero_avail(&device->tx) != 0) {
 		return -1;
+	}
+	return 0;
+}
+
+static int notify_queue(struct virtio_net_device *device, u64 queue_index)
+{
+	struct bunix_msg reply;
+
+	return device_call(device->device_service, BUNIX_DEV_NOTIFY_QUEUE,
+			   device->device_index, queue_index, 0, &reply);
+}
+
+static int replenish_rx(struct virtio_net_device *device)
+{
+	for (u64 i = 0; i < VIRTIO_NET_RX_BUFFERS; i++) {
+		long handle = bunix_buffer_create(VIRTIO_NET_RX_BUFFER_SIZE);
+		long phys;
+
+		if (handle <= 0) {
+			return -1;
+		}
+		phys = bunix_buffer_phys((u64)handle);
+		if (phys <= 0) {
+			bunix_handle_close((u64)handle);
+			return -1;
+		}
+		device->rx_buffer[i] = (u64)handle;
+		device->rx_phys[i] = (u64)phys;
+		if (queue_write_desc(&device->rx, i, device->rx_phys[i],
+				     VIRTIO_NET_RX_BUFFER_SIZE,
+				     BUNIX_VIRTIO_DESC_F_WRITE, 0) != 0 ||
+		    queue_avail_put(&device->rx, i) != 0) {
+			return -1;
+		}
+	}
+	return notify_queue(device, 0);
+}
+
+static int submit_rx_frame(struct virtio_net_device *device, u64 buffer,
+			   u64 frame_len)
+{
+	struct bunix_net_packet_info info = {
+		.iface = device->iface_id,
+		.len = frame_len,
+		.flags = 0,
+		.reserved = 0,
+	};
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NET,
+		.type = BUNIX_NET_PACKET_RX_SUBMIT,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = device->rx_submit_buffer,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	static unsigned char frame[VIRTIO_NET_MAX_MTU];
+
+	if (frame_len == 0 || frame_len > device->mtu ||
+	    frame_len > sizeof(frame) || device->rx_submit_buffer == 0) {
+		return -1;
+	}
+	if (bunix_buffer_read(buffer, sizeof(struct bunix_virtio_net_header),
+			      frame, frame_len) != 0 ||
+	    bunix_buffer_write(device->rx_submit_buffer, 0, &info,
+			       sizeof(info)) != 0 ||
+	    bunix_buffer_write(device->rx_submit_buffer, sizeof(info), frame,
+			       frame_len) != 0 ||
+	    bunix_ipc_call(device->net_service, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static int poll_rx_once(struct virtio_net_device *device, u64 *completed)
+{
+	unsigned short used_idx;
+
+	if (queue_read_u16(device->rx.handle, device->rx.layout.used_offset + 2,
+			   &used_idx) != 0) {
+		return -1;
+	}
+	while (device->rx.seen_used != (u64)used_idx) {
+		struct bunix_virtio_used_elem elem;
+		u64 id;
+		u64 len;
+		u64 frame_len;
+
+		if (queue_read_used_elem(&device->rx, device->rx.seen_used,
+					 &elem) != 0) {
+			return -1;
+		}
+		id = elem.id;
+		len = elem.len;
+		device->rx.seen_used++;
+		if (id >= VIRTIO_NET_RX_BUFFERS || len <=
+			    sizeof(struct bunix_virtio_net_header)) {
+			continue;
+		}
+		frame_len = len - sizeof(struct bunix_virtio_net_header);
+		(void)submit_rx_frame(device, device->rx_buffer[id], frame_len);
+		if (queue_avail_put(&device->rx, id) != 0) {
+			return -1;
+		}
+		if (completed != 0) {
+			*completed += 1;
+		}
+	}
+	return 0;
+}
+
+static int poll_rx_bounded(struct virtio_net_device *device)
+{
+	u64 completed = 0;
+
+	for (u64 i = 0; i < VIRTIO_NET_RX_POLL_ROUNDS; i++) {
+		if (poll_rx_once(device, &completed) != 0) {
+			return -1;
+		}
+		if (completed != 0) {
+			if (notify_queue(device, 0) != 0) {
+				return -1;
+			}
+			return 0;
+		}
+		bunix_sleep_ns(1000000ull);
 	}
 	return 0;
 }
@@ -316,6 +524,19 @@ static int init_device(struct virtio_net_device *device)
 	if (device->device_service == 0 || device->net_service == 0) {
 		return -1;
 	}
+	{
+		long buffer =
+			bunix_buffer_create(sizeof(struct bunix_net_packet_info) +
+					    VIRTIO_NET_MAX_MTU);
+
+		if (buffer <= 0) {
+			return -1;
+		}
+		device->rx_submit_buffer = (u64)buffer;
+	}
+	if (device->rx_submit_buffer == 0) {
+		return -1;
+	}
 	index = find_net_device(device->device_service);
 	if (index < 0) {
 		return -1;
@@ -338,7 +559,12 @@ static int init_device(struct virtio_net_device *device)
 	    attach_net_interface(device) != 0) {
 		return -1;
 	}
+	if (replenish_rx(device) != 0) {
+		return -1;
+	}
 	log_iface(device->iface_id, device->mtu);
+	log_text("virtio-net: rx ready\n", text_len("virtio-net: rx ready\n"));
+	(void)poll_rx_bounded(device);
 	return 0;
 }
 
@@ -353,6 +579,7 @@ int main(void)
 		return 1;
 	}
 	for (;;) {
-		bunix_sleep_ns(1000000000ull);
+		(void)poll_rx_bounded(&device);
+		bunix_sleep_ns(100000000ull);
 	}
 }
