@@ -1,0 +1,110 @@
+Implement a basic multiserver USB stack.
+
+Problem:
+
+- Bunix needs USB support for real hardware bringup: keyboards, serial
+  adapters, storage, hubs, and board-level debug devices are common on both
+  x86_64 machines and future non-x86 targets.
+- USB is too broad to collapse into one driver without losing the microkernel
+  shape.  Host-controller policy, bus enumeration, hub management, transfer
+  scheduling, and class drivers should be separated by explicit protocols and
+  capabilities.
+- The riscv64 hardware work should not inherit x86_64-only assumptions about
+  PCI transport or QEMU-only devices.  A basic USB design before riscv64
+  bringup gives the port a clearer story for USB host controllers discovered
+  through PCIe, device tree, ACPI, or board-specific resources.
+
+Scheduling:
+
+- Run this after `029-pci-pcie-server.txt` and before
+  `031-riscv64-initial-port.txt`.
+- The first implementation may target deterministic x86_64 QEMU hardware, but
+  the protocol split must be transport-neutral enough for device-tree described
+  host controllers on riscv64 and future ARM work.
+- Keep existing boot, shell, VFS, VirtIO, and networking tests passing while
+  USB servers are introduced behind explicit boot/test flags.
+
+Design direction:
+
+- Introduce a userspace USB bus manager server, likely `usb-bus.server`, with a
+  FourCC protocol such as `USB0`.  It owns device addressing, descriptor
+  parsing, configuration selection, interface claiming, and child-device
+  namespace publication.
+- Introduce host-controller driver servers as separate providers below the bus
+  manager.  Initial candidates:
+  - `xhci.server` for modern PCI/PCIe xHCI controllers.
+  - Later `ehci.server`/`ohci.server`/`uhci.server` only if needed for target
+    hardware.
+  - Later device-tree or platform host-controller providers for riscv64/ARM.
+- Keep class drivers as separate servers above `USB0`: HID keyboard/mouse,
+  mass-storage/Bulk-Only Transport, CDC ACM serial, hub, and future network
+  classes should claim interfaces through attenuated interface capabilities.
+- Preserve OCAP boundaries: the kernel grants raw MMIO/I/O/IRQ/DMA resources to
+  the host-controller server; the host-controller grants only endpoint/transfer
+  capabilities upward; class drivers never receive broad hardware authority.
+- Model transfers as asynchronous requests with completion events, cancellation,
+  timeouts, and bounded buffers.  Avoid baking polling into the class-driver
+  contract, even if the first backend uses polling internally.
+
+Constraints:
+
+- Do not put USB enumeration or class policy in the kernel.
+- Do not let a class driver talk to arbitrary endpoints.  Interface claims
+  should produce capabilities scoped to endpoint IDs, transfer types, max packet
+  sizes, and direction.
+- Do not assume PCI is the only transport.  xHCI over PCI can be first, but
+  the bus-manager protocol must also work with host controllers discovered from
+  device tree or firmware resources.
+- Keep the first slice small enough to test.  A minimal xHCI path that
+  enumerates a QEMU USB device and logs descriptors is preferable to a broad
+  untested class stack.
+- Avoid GPL/copyleft USB stack reuse in Bunix kernel/servers.  Treat GPL
+  sources as behavioral references only unless the code stays in allowed
+  userspace tooling.
+
+Tasks:
+
+- [ ] Inventory existing hardware-resource grants, IRQ delivery plans, DMA/page
+      ownership primitives, `DEV0`/device-driver protocols, PCI server plans,
+      and QEMU USB test options.
+- [ ] Define the lower host-controller protocol between `usb-bus.server` and
+      controller servers: register controller, enumerate root ports, reset
+      port, allocate device slot/address, submit control/bulk/interrupt/isochronous
+      transfer, cancel transfer, and receive completion events.
+- [ ] Define the upper `USB0` bus protocol: list devices, read device/config/
+      interface/endpoint descriptors, claim/release interface, set
+      configuration/alternate setting, open endpoint, submit transfer, cancel
+      transfer, and wait for completions.
+- [ ] Add a buildable `usb-bus.server` skeleton that registers `USB0` and can
+      accept a synthetic controller registration without changing default boot
+      behavior.
+- [ ] Add a buildable `xhci.server` skeleton that can consume PCI/PCIe
+      resources from the future `PCI0` server, but keep it disabled until the
+      PCI server exposes the needed BAR/IRQ/DMA capabilities.
+- [ ] Design the DMA model for USB transfers: pinned pages or bounded shared
+      buffers, ownership transfer rules, bounce-buffer fallback, cache
+      coherency notes for non-x86, and IOMMU/security follow-up needs.
+- [ ] Implement minimal USB descriptor parsing in `usb-bus.server`: device,
+      configuration, interface, endpoint, string descriptor metadata, class/
+      subclass/protocol fields, and robust bounds checks.
+- [ ] Implement a synthetic USB controller test backend so descriptor parsing,
+      interface claiming, endpoint scoping, and transfer-completion plumbing can
+      be tested without real xHCI hardware.
+- [ ] Implement the first real xHCI milestone: controller reset, capability/
+      operational/runtime register mapping, command ring/event ring setup,
+      port status read, and clean shutdown under QEMU.
+- [ ] Implement xHCI device enumeration for one deterministic QEMU USB device:
+      port reset, slot enable, address device, descriptor read, configuration
+      set, and descriptor publication through `USB0`.
+- [ ] Add a USB smoke test that boots with the synthetic backend first, then a
+      QEMU xHCI backend once available, and always ends in guest poweroff.
+- [ ] Add a minimal HID keyboard class-driver exploration or sub-slice after
+      enumeration is proven, wiring key events toward the future TTY/input
+      stack without coupling HID to the console.
+- [ ] Add a minimal USB mass-storage exploration or sub-slice after bulk
+      transfers are proven, mapping USB storage into the existing block-device
+      protocol rather than inventing a separate filesystem path.
+- [ ] Document follow-up USB work: hubs, hotplug, HID reports, mass-storage
+      reset/retry, CDC ACM, USB networking, isochronous transfers, suspend/
+      resume, power management, xHCI streams, MSI/MSI-X, IOMMU, and
+      platform-host controllers for riscv64/ARM.
