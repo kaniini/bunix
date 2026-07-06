@@ -22,6 +22,13 @@ enum {
 	BUNIX_VIRTIO_DESC_F_WRITE = 2,
 	BUNIX_VIRTIO_DESC_F_INDIRECT = 4,
 
+	BUNIX_VIRTIO_BLK_T_IN = 0,
+	BUNIX_VIRTIO_BLK_T_OUT = 1,
+	BUNIX_VIRTIO_BLK_T_FLUSH = 4,
+	BUNIX_VIRTIO_BLK_S_OK = 0,
+	BUNIX_VIRTIO_BLK_S_IOERR = 1,
+	BUNIX_VIRTIO_BLK_S_UNSUPP = 2,
+
 	BUNIX_VIRTIO_TRANSPORT_PCI = BUNIX_DEV_TRANSPORT_PCI,
 	BUNIX_VIRTIO_TRANSPORT_MMIO = BUNIX_DEV_TRANSPORT_MMIO,
 };
@@ -48,6 +55,12 @@ struct bunix_virtio_used {
 	unsigned short flags;
 	unsigned short idx;
 	struct bunix_virtio_used_elem ring[];
+} __attribute__((packed));
+
+struct bunix_virtio_blk_req_header {
+	unsigned int type;
+	unsigned int reserved;
+	unsigned long sector;
 } __attribute__((packed));
 
 struct bunix_virtio_queue_layout {

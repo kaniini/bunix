@@ -201,3 +201,11 @@ Progress:
   which stalls the rest of boot.  The next block-driver slice should launch it
   once descriptor submission, used-ring polling or IRQ completion, and backend
   registration are implemented.
+- Extended the `virtio-blk.server` skeleton with a real single-request data
+  path.  The driver now builds a three-descriptor VirtIO block read chain for
+  sector 0, publishes it through the avail ring, notifies queue 0 through the
+  bus server, and polls the used-ring index with a bounded native sleep loop
+  before checking the request status byte.  This is still not yet connected to
+  the boot payload or block/VFS service: the request path is build-covered and
+  the default VirtIO boot smoke remains stable, but a dedicated driver launch
+  harness is still needed before marking block reads complete.
