@@ -1,0 +1,67 @@
+Bring up an initial riscv64 port.
+
+Problem:
+
+- Bunix is intentionally structured with architecture directories, but the
+  current build, boot, userspace ABI, syscall bridge, SMP, timers, interrupt
+  handling, and QEMU test loop are all concretely x86_64.
+- A riscv64 port will stress whether kernel/server boundaries are truly
+  architecture-neutral and will expose x86_64 assumptions in task state,
+  virtual memory, Linux compatibility, ELF loading, and device discovery.
+- The initial target should be a small, testable bringup path rather than a
+  full Linux-personality parity port on day one.
+
+Initial target:
+
+- Build a riscv64 kernel image and enough userspace server modules to boot
+  under `qemu-system-riscv64`.
+- Reach a minimal console log milestone first, then a native Bunix server
+  milestone, then a Linux-personality/userspace milestone once syscall and ELF
+  ABI work is ready.
+- Prefer virt machine conventions: SBI for early console/power/timer where
+  appropriate, device tree discovery, PLIC/CLINT or AIA-aware interrupt
+  planning, and VirtIO MMIO before PCI.
+
+Constraints:
+
+- Keep architecture-specific code under `arch/riscv64/` and avoid spreading
+  riscv64 conditionals through generic kernel/server code.
+- Do not regress x86_64.  Existing x86_64 tests remain the baseline while the
+  riscv64 target grows its own gates.
+- Keep future ARM portability in mind.  Any abstraction introduced for riscv64
+  should be useful for non-x86 ports generally, not just riscv64.
+- Preserve the microkernel shape: userspace servers stay userspace servers;
+  the port should not pull filesystem, network, or Linux policy into the
+  kernel to simplify bringup.
+
+Tasks:
+
+- [ ] Inventory all x86_64 assumptions in the build system, linker scripts,
+      boot path, arch headers, task/thread state, VM, interrupt/timer code,
+      syscall entry, Linux syscall bridge, userspace crt0, and test harness.
+- [ ] Choose the initial riscv64 boot path and machine model:
+      `qemu-system-riscv64 -machine virt`, OpenSBI/direct kernel entry, payload
+      format, memory map, and firmware expectations.
+- [ ] Add riscv64 toolchain variables, build rules, linker script, and
+      `ARCH=riscv64` targets without disrupting the x86_64 defaults.
+- [ ] Add `arch/riscv64/` skeleton headers and implementations for early
+      console, poweroff/reboot, interrupt enable/disable, timer source,
+      thread context, page-table primitives, and user entry stubs.
+- [ ] Define the riscv64 kernel virtual-memory layout, page-table flags,
+      physical memory discovery, direct map policy, and userspace address
+      limits.
+- [ ] Implement enough boot and early memory initialization to print a kernel
+      banner and power off cleanly under QEMU.
+- [ ] Bring up trap/interrupt handling and a timer tick with SBI/CLINT/PLIC
+      integration appropriate to the chosen machine model.
+- [ ] Bring up task/thread context switching for kernel threads, then native
+      Bunix userspace server execution with a riscv64 crt0.
+- [ ] Define riscv64 Bunix syscall entry for native Bunix programs, including
+      negative Bunix syscall IDs and register ABI documentation.
+- [ ] Decide the riscv64 Linux-personality ABI slice: static riscv64 musl ELF
+      loading first, then enough Linux syscalls for a `musl-hello` equivalent.
+- [ ] Add riscv64 rootfs/module packaging rules and QEMU smoke tests that end
+      in guest poweroff.
+- [ ] Add documentation for unsupported riscv64 features after initial bringup:
+      SMP, FPU/vector context, signals, dynamic linking, VirtIO MMIO devices,
+      networking, and Alpine rootfs parity.
