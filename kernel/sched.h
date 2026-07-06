@@ -18,18 +18,41 @@ struct thread;
 struct vm_space;
 struct ipc_port;
 struct shared_buffer;
+struct task_hw_resource;
 
 enum task_cap_type {
 	TASK_CAP_NONE = 0,
 	TASK_CAP_PORT,
 	TASK_CAP_BUFFER,
 	TASK_CAP_TASK,
+	TASK_CAP_HW_RESOURCE,
 };
 
 enum task_handle_rights {
 	TASK_RIGHT_SEND = 1 << 0,
 	TASK_RIGHT_RECV = 1 << 1,
 	TASK_RIGHT_DUP = 1 << 2,
+};
+
+enum task_hw_resource_type {
+	TASK_HW_RESOURCE_PORT = 1,
+	TASK_HW_RESOURCE_MMIO = 2,
+	TASK_HW_RESOURCE_IRQ = 3,
+};
+
+enum task_hw_resource_ops {
+	TASK_HW_OP_READ = 1 << 0,
+	TASK_HW_OP_WRITE = 1 << 1,
+	TASK_HW_OP_BIND_IRQ = 1 << 2,
+	TASK_HW_OP_ACK_IRQ = 1 << 3,
+	TASK_HW_OP_MASK_IRQ = 1 << 4,
+};
+
+struct task_hw_resource {
+	u32 type;
+	u32 ops;
+	u64 base;
+	u64 len;
 };
 
 enum task_vm_region_kind {
@@ -96,6 +119,9 @@ u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights);
 u64 task_grant_buffer(struct task *task, struct shared_buffer *buffer,
 		      u32 rights);
 u64 task_grant_task(struct task *owner, struct task *target, u32 rights);
+u64 task_grant_hw_resource(struct task *task,
+			   const struct task_hw_resource *resource,
+			   u32 rights);
 int task_clone_handles(struct task *dst, struct task *src);
 struct task *task_from_handle(struct task *owner, u64 handle, u32 rights);
 int task_can_inherit_handle(struct task *src, u64 handle, u32 rights);
@@ -109,6 +135,9 @@ struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
 				       u32 rights);
 struct shared_buffer *task_buffer_from_handle(struct task *task, u64 handle,
 					      u32 rights);
+const struct task_hw_resource *task_hw_resource_from_handle(struct task *task,
+							    u64 handle,
+							    u32 rights);
 int task_close_handle(struct task *task, u64 handle);
 struct ipc_port *task_reply_port(struct task *task);
 void sched_run(void);

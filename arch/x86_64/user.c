@@ -59,6 +59,8 @@ enum {
 	SYSCALL_VM_STATS = -62,
 	SYSCALL_MACHINE_POWER = -64,
 	SYSCALL_TASK_CLEAR = -66,
+	SYSCALL_HW_PORT_IN8 = -68,
+	SYSCALL_HW_PORT_OUT8 = -70,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -5047,6 +5049,51 @@ static u64 native_sys_machine_power(const struct native_syscall_args *args)
 	arch_poweroff();
 }
 
+static int hw_port_validate(u64 handle, u64 offset, u64 width, u32 op,
+			    u16 *port)
+{
+	const struct task_hw_resource *resource =
+		task_hw_resource_from_handle(task_current(), handle,
+					     TASK_RIGHT_SEND);
+
+	if (resource == 0 || port == 0 ||
+	    resource->type != TASK_HW_RESOURCE_PORT ||
+	    (resource->ops & op) == 0 ||
+	    width == 0 ||
+	    offset + width < offset ||
+	    offset + width > resource->len ||
+	    resource->base + offset < resource->base ||
+	    resource->base + offset > 0xffff) {
+		return -1;
+	}
+
+	*port = (u16)(resource->base + offset);
+	return 0;
+}
+
+static u64 native_sys_hw_port_in8(const struct native_syscall_args *args)
+{
+	u16 port;
+
+	if (hw_port_validate(args->arg0, args->arg1, 1, TASK_HW_OP_READ,
+			     &port) != 0) {
+		return (u64)-1;
+	}
+	return arch_inb(port);
+}
+
+static u64 native_sys_hw_port_out8(const struct native_syscall_args *args)
+{
+	u16 port;
+
+	if (hw_port_validate(args->arg0, args->arg1, 1, TASK_HW_OP_WRITE,
+			     &port) != 0) {
+		return (u64)-1;
+	}
+	arch_outb(port, (u8)args->arg2);
+	return 0;
+}
+
 static u64 native_sys_ipc_send(const struct native_syscall_args *args)
 {
 	struct user_ipc_message user_message;
@@ -5179,6 +5226,8 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_IPC_STATS, "ipc_stats", native_sys_ipc_stats },
 	{ SYSCALL_VM_STATS, "vm_stats", native_sys_vm_stats },
 	{ SYSCALL_MACHINE_POWER, "machine_power", native_sys_machine_power },
+	{ SYSCALL_HW_PORT_IN8, "hw_port_in8", native_sys_hw_port_in8 },
+	{ SYSCALL_HW_PORT_OUT8, "hw_port_out8", native_sys_hw_port_out8 },
 };
 
 static const struct native_syscall_entry *native_syscall_lookup(i64 number)

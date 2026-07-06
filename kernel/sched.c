@@ -25,6 +25,7 @@ enum task_handle_type {
 	TASK_HANDLE_PORT,
 	TASK_HANDLE_TASK,
 	TASK_HANDLE_BUFFER,
+	TASK_HANDLE_HW_RESOURCE,
 };
 
 struct task_handle {
@@ -806,6 +807,52 @@ u64 task_grant_task(struct task *owner, struct task *target, u32 rights)
 	return 0;
 }
 
+u64 task_grant_hw_resource(struct task *task,
+			   const struct task_hw_resource *resource,
+			   u32 rights)
+{
+	if (task == 0 || resource == 0 || rights == 0) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
+	for (u32 i = 0; i < task->handle_capacity; i++) {
+		if (task->handles[i].type == TASK_HANDLE_HW_RESOURCE &&
+		    task->handles[i].object == resource &&
+		    task->handles[i].rights == rights) {
+			spin_unlock_irqrestore(&task->lock, flags);
+			return i + 1;
+		}
+	}
+
+	for (;;) {
+		for (u32 i = 0; i < task->handle_capacity; i++) {
+			if (task->handles[i].type != TASK_HANDLE_EMPTY) {
+				continue;
+			}
+
+			task->handles[i].type = TASK_HANDLE_HW_RESOURCE;
+			task->handles[i].rights = rights;
+			task->handles[i].object = (void *)resource;
+			console_printf("sched: grant task=%u handle=%u type=hw rights=0x%x target=%u base=%p len=%u ops=0x%x\n",
+				       task->pid, i + 1, rights,
+				       resource->type, (const void *)resource->base,
+				       (u32)resource->len, resource->ops);
+			spin_unlock_irqrestore(&task->lock, flags);
+			return i + 1;
+		}
+		if (task_grow_handles_locked(task,
+					     task->handle_capacity + 1) != 0) {
+			break;
+		}
+	}
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	console_printf("sched: handle table grow failed task=%u\n", task->pid);
+	return 0;
+}
+
 int task_clone_handles(struct task *dst, struct task *src)
 {
 	if (dst == 0 || src == 0) {
@@ -914,6 +961,11 @@ u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
 		return task_grant_task(dst, (struct task *)src_handle.object,
 				       rights);
 	}
+	if (src_handle.type == TASK_HANDLE_HW_RESOURCE) {
+		return task_grant_hw_resource(
+			dst, (const struct task_hw_resource *)src_handle.object,
+			rights);
+	}
 
 	return 0;
 }
@@ -931,7 +983,8 @@ int task_export_cap(struct task *task, u64 handle, u32 rights,
 
 	if ((task_handle.type != TASK_HANDLE_PORT &&
 	     task_handle.type != TASK_HANDLE_BUFFER &&
-	     task_handle.type != TASK_HANDLE_TASK) ||
+	     task_handle.type != TASK_HANDLE_TASK &&
+	     task_handle.type != TASK_HANDLE_HW_RESOURCE) ||
 	    (task_handle.rights & rights) != rights) {
 		spin_unlock_irqrestore(&task->lock, flags);
 		console_printf("sched: cap denied task=%u handle=%u need=0x%x rights=0x%x\n",
@@ -943,7 +996,8 @@ int task_export_cap(struct task *task, u64 handle, u32 rights,
 	*object = task_handle.object;
 	*type = task_handle.type == TASK_HANDLE_PORT ? TASK_CAP_PORT :
 		(task_handle.type == TASK_HANDLE_BUFFER ? TASK_CAP_BUFFER :
-		 TASK_CAP_TASK);
+		 task_handle.type == TASK_HANDLE_TASK ? TASK_CAP_TASK :
+		 TASK_CAP_HW_RESOURCE);
 	spin_unlock_irqrestore(&task->lock, flags);
 	return 0;
 }
@@ -998,6 +1052,33 @@ struct shared_buffer *task_buffer_from_handle(struct task *task, u64 handle,
 	return buffer;
 }
 
+const struct task_hw_resource *task_hw_resource_from_handle(struct task *task,
+							    u64 handle,
+							    u32 rights)
+{
+	if (task == 0 || handle == 0 || handle > task->handle_capacity) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	const struct task_handle task_handle = task->handles[handle - 1];
+
+	if (task_handle.type != TASK_HANDLE_HW_RESOURCE ||
+	    (task_handle.rights & rights) != rights) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		console_printf("sched: hw handle denied task=%u handle=%u need=0x%x rights=0x%x\n",
+			       task->pid, (u32)handle, rights,
+			       task_handle.rights);
+		return 0;
+	}
+
+	const struct task_hw_resource *resource =
+		(const struct task_hw_resource *)task_handle.object;
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	return resource;
+}
+
 int task_close_handle(struct task *task, u64 handle)
 {
 	if (task == 0 || handle == 0 || handle > task->handle_capacity) {
@@ -1028,7 +1109,8 @@ int task_close_handle(struct task *task, u64 handle)
 		       task->pid, (u32)handle,
 		       type == TASK_HANDLE_PORT ? "port" :
 		       type == TASK_HANDLE_TASK ? "task" :
-		       type == TASK_HANDLE_BUFFER ? "buffer" : "unknown",
+		       type == TASK_HANDLE_BUFFER ? "buffer" :
+		       type == TASK_HANDLE_HW_RESOURCE ? "hw" : "unknown",
 		       rights);
 	return 0;
 }
@@ -1054,6 +1136,9 @@ static int task_handle_retain(enum task_handle_type type, void *object)
 		task->ref_count++;
 		spin_unlock_irqrestore(&task->lock, flags);
 		return 0;
+	}
+	if (type == TASK_HANDLE_HW_RESOURCE) {
+		return object != 0 ? 0 : -1;
 	}
 	return -1;
 }

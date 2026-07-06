@@ -39,6 +39,8 @@ enum {
 	BUNIX_SYSCALL_VM_STATS = -62,
 	BUNIX_SYSCALL_MACHINE_POWER = -64,
 	BUNIX_SYSCALL_TASK_CLEAR = -66,
+	BUNIX_SYSCALL_HW_PORT_IN8 = -68,
+	BUNIX_SYSCALL_HW_PORT_OUT8 = -70,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
@@ -62,6 +64,7 @@ enum {
 	BUNIX_PROTO_UTMPFS = ('U') | ('T' << 8) | ('M' << 16) | ('P' << 24),
 	BUNIX_PROTO_ROOTFS = ('R') | ('F' << 8) | ('S' << 16) | ('0' << 24),
 	BUNIX_PROTO_SYSFS = ('S') | ('Y' << 8) | ('S' << 16) | ('F' << 24),
+	BUNIX_PROTO_HW = ('H') | ('W' << 8) | ('R' << 16) | ('0' << 24),
 	BUNIX_PROCFS_MOUNT_NOTIFY = 1,
 	BUNIX_PROCFS_MOUNT_PATH = 2,
 	BUNIX_PROCFS_UNMOUNT_NOTIFY = 3,
@@ -264,6 +267,7 @@ enum {
 	BUNIX_SERVICE_UTMPFS = BUNIX_PROTO_UTMPFS,
 	BUNIX_SERVICE_ROOTFS = BUNIX_PROTO_ROOTFS,
 	BUNIX_SERVICE_SYSFS = BUNIX_PROTO_SYSFS,
+	BUNIX_SERVICE_HW = BUNIX_PROTO_HW,
 	BUNIX_UNIONFS_SET_UPPER = 1,
 	BUNIX_UNIONFS_MOUNT_PATH = 2,
 	BUNIX_UNIONFS_SET_LOWER = 3,
@@ -303,6 +307,24 @@ enum {
 	BUNIX_CONSOLE_WRITE = 1,
 	BUNIX_CONSOLE_LOG = 2,
 	BUNIX_CONSOLE_LOGS_TO_RING = 3,
+	BUNIX_HW_RESOURCE_PORT = 1,
+	BUNIX_HW_RESOURCE_MMIO = 2,
+	BUNIX_HW_RESOURCE_IRQ = 3,
+	BUNIX_HW_OP_READ = 1 << 0,
+	BUNIX_HW_OP_WRITE = 1 << 1,
+	BUNIX_HW_OP_BIND_IRQ = 1 << 2,
+	BUNIX_HW_OP_ACK_IRQ = 1 << 3,
+	BUNIX_HW_OP_MASK_IRQ = 1 << 4,
+	BUNIX_HW_PORT_IN8 = 1,
+	BUNIX_HW_PORT_OUT8 = 2,
+	BUNIX_HW_PORT_IN16 = 3,
+	BUNIX_HW_PORT_OUT16 = 4,
+	BUNIX_HW_MMIO_READ8 = 5,
+	BUNIX_HW_MMIO_WRITE8 = 6,
+	BUNIX_HW_IRQ_BIND = 7,
+	BUNIX_HW_IRQ_ACK = 8,
+	BUNIX_HW_IRQ_MASK = 9,
+	BUNIX_HW_EVENT_IRQ = 10,
 	BUNIX_ROOTFS_MOUNT_PATH = 1,
 	BUNIX_HANDLE_SELF = 1,
 	BUNIX_HANDLE_CONSOLE = 2,
@@ -773,6 +795,16 @@ static inline long bunix_vm_stats(struct bunix_vm_stats *stats)
 static inline long bunix_machine_poweroff(u64 code)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_MACHINE_POWER, code);
+}
+
+static inline long bunix_hw_port_in8(u64 handle, u64 offset)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_HW_PORT_IN8, handle, offset);
+}
+
+static inline long bunix_hw_port_out8(u64 handle, u64 offset, u64 value)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_HW_PORT_OUT8, handle, offset, value);
 }
 
 #endif

@@ -24,12 +24,12 @@ Constraints:
 
 Tasks:
 
-- [ ] Inventory current console, devfs, Linux TTY, login, interrupt, and input
+- [x] Inventory current console, devfs, Linux TTY, login, interrupt, and input
       paths and identify which pieces are early-console-only versus real TTY.
-- [ ] Define a device-driver RPC protocol for privileged hardware operations:
+- [x] Define a device-driver RPC protocol for privileged hardware operations:
       port I/O, MMIO read/write, interrupt binding, interrupt ack/mask, and
       timer-safe notification.
-- [ ] Add kernel capability objects for hardware resources with attenuation to
+- [x] Add kernel capability objects for hardware resources with attenuation to
       specific port ranges, MMIO ranges, IRQ vectors, and operation masks.
 - [ ] Create an initial userspace driver framework with driver registration,
       resource discovery, interrupt/event delivery, and lifecycle diagnostics.
@@ -47,3 +47,44 @@ Tasks:
       shell logout/login respawn.
 - [ ] Document how the framework will map to future ARM UART drivers without
       relying on x86 port I/O assumptions.
+
+Inventory:
+
+- `kernel/console.c` still owns both early diagnostics and the real serial
+  backend.  It initializes COM1 at `0x3f8`, writes bytes through direct x86
+  port I/O, polls serial input, queues pending input, provides the dmesg ring,
+  and has legacy kernel-side line input helpers.
+- `user/console/main.c` is currently a console service facade.  Other servers
+  send `CONS` RPCs to it, but it still calls early-console syscalls, so the
+  actual serial hardware remains kernel-owned.
+- `kernel/server.c` starts a `console-input` kernel thread that polls
+  `console_try_read_char()` and forwards bytes to the Linux server as
+  `BUNIX_LINUX_TTY_INPUT`.
+- `user/linux/main.c` owns the real Linux TTY behavior: canonical input,
+  echo, password echo suppression through termios, erase handling, Ctrl-C,
+  foreground process interruption, CPR response, `poll(2)` readiness, terminal
+  ioctls, and `/dev/tty`/`/dev/ttyS0`/`/dev/console` file descriptors.
+- `user/devfs/main.c`, `user/sysfs/main.c`, and `user/utmpfs/main.c` expose
+  serial-console-shaped device names and metadata, while `user/login/main.c`
+  depends on Linux termios to disable password echo.
+- Early-console-only pieces are boot diagnostics, the dmesg ring, log
+  verbosity, and fallback panic/bringup writes.  Real TTY pieces are serial
+  device output/input, line discipline, readiness notification, foreground
+  process signaling, termios state, and `/dev/console`/`/dev/tty` routing.
+
+Progress:
+
+- Added `HWR0` as the hardware-driver protocol namespace, with resource kinds
+  for port I/O, MMIO, and IRQ ranges; operation masks for read, write,
+  interrupt bind, interrupt ack, and interrupt mask; and message IDs for the
+  planned driver RPC surface.
+- Added native byte port I/O syscalls that require a hardware resource handle.
+  The x86 backend validates handle type, operation mask, range bounds, and
+  overflow before touching an I/O port.
+- Added hardware resources as task handle objects.  They can be inherited and
+  attenuated through existing handle rights, while the resource object carries
+  the hardware-specific operation mask and range.
+- Granted `consoled` a COM1-only port resource for `0x3f8..0x3ff` with read
+  and write authority.  Normal console writes now use that capability-backed
+  userspace serial path, with early-console writes kept as fallback and for the
+  dmesg ring.
