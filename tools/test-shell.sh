@@ -12,6 +12,7 @@ qemu_log=$tmp/qemu.log
 pipe=$tmp/serial
 failure_dir=${FAILURE_DIR:-build/failures}
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+shell_parts=${BUNIX_SHELL_PART:-all}
 . "$script_dir/test-lib.sh"
 . "$script_dir/shell-tests/login-smoke.sh"
 . "$script_dir/shell-tests/exec-argv-pipe.sh"
@@ -139,39 +140,197 @@ current_prompt_count() {
 	grep -F -c "$prompt" "$log" 2>/dev/null || true
 }
 
+part_selected() {
+	part=$1
+
+	case ",$shell_parts," in
+	*,all,*|*,"$part",*) return 0 ;;
+	esac
+
+	case "$part" in
+	rootfs-vfs-proc-dev)
+		case ",$shell_parts," in
+		*,vfs,*|*,procfs,*|*,devfs,*) return 0 ;;
+		esac
+		;;
+	tmpfs-basic-linux-tests|tmpfs-extended)
+		case ",$shell_parts," in
+		*,tmpfs,*) return 0 ;;
+		esac
+		;;
+	path-limits-statfs)
+		case ",$shell_parts," in
+		*,path,*|*,statfs,*) return 0 ;;
+		esac
+		;;
+	large-io-mount)
+		case ",$shell_parts," in
+		*,large-io,*|*,mount,*) return 0 ;;
+		esac
+		;;
+	esac
+
+	return 1
+}
+
+require_supported_parts() {
+	old_ifs=$IFS
+	IFS=,
+	set -- $shell_parts
+	IFS=$old_ifs
+
+	for part do
+		case "$part" in
+		all|vfs|procfs|devfs|tmpfs|path|statfs|large-io|mount|\
+		login-smoke|exec-argv-pipe|rootfs-vfs-proc-dev|\
+		tmpfs-basic-linux-tests|path-limits-statfs|union-root-user|\
+		tmpfs-extended|large-io-mount|interactive-tty|root-login-union|\
+		root-tmpfs-chown|long-login)
+			;;
+		root-mount-soak)
+			fail_with_log "shell shard is not implemented yet: $part" "$log" 80
+			;;
+		*)
+			fail_with_log "unknown shell shard: $part" "$log" 80
+			;;
+		esac
+	done
+}
+
+exit_user_shell_if_active() {
+	if [ "${user_shell_active:-0}" = 0 ]; then
+		return
+	fi
+
+	login_prompts_before_auto_exit=$(current_prompt_count "login: ")
+	send_script <<'EOF_AUTO_EXIT_USER'
+exit
+EOF_AUTO_EXIT_USER
+	wait_for_prompt_count_gt "login: " "$login_prompts_before_auto_exit" "login prompt did not return after selected user shards" 45 180
+	user_shell_active=0
+}
+
+login_root_if_needed() {
+	if [ "${root_shell_active:-0}" = 1 ]; then
+		return
+	fi
+
+	exit_user_shell_if_active
+	root_prompts_before_auto_root=$(current_prompt_count "~ # ")
+	login_user root root "~ # " "$root_prompts_before_auto_root"
+	root_shell_active=1
+}
+
+exit_root_shell_if_active() {
+	if [ "${root_shell_active:-0}" = 0 ]; then
+		return
+	fi
+
+	login_prompts_before_auto_root_exit=$(current_prompt_count "login: ")
+	send_script <<'EOF_AUTO_EXIT_ROOT'
+exit
+EOF_AUTO_EXIT_ROOT
+	wait_for_prompt_count_gt "login: " "$login_prompts_before_auto_root_exit" "login prompt did not return after selected root shards" 45 180
+	root_shell_active=0
+}
+
 start_qemu
 wait_for_qemu_fixed "login: " "login prompt did not appear" 80 80
+require_supported_parts
 
 sleep 3
 exec 3>"$pipe.in"
 login_user kaniini bunix "~ $ "
+user_shell_active=1
+root_shell_active=0
 
-run_login_smoke
-run_exec_argv_pipe
-run_rootfs_vfs_proc_dev
-run_tmpfs_basic_linux_tests
-run_path_limits_statfs
-run_union_root_user
-run_tmpfs_extended
-run_large_io_mount
+if part_selected login-smoke; then
+	run_login_smoke
+fi
 
-check_login_smoke
+if part_selected exec-argv-pipe; then
+	run_exec_argv_pipe
+fi
 
-check_rootfs_vfs_proc_dev
+if part_selected rootfs-vfs-proc-dev; then
+	run_rootfs_vfs_proc_dev
+fi
 
-check_path_limits_statfs
-check_union_root_user
-check_tmpfs_extended
-check_large_io_mount
-check_tmpfs_basic_linux_tests
+if part_selected tmpfs-basic-linux-tests; then
+	run_tmpfs_basic_linux_tests
+fi
 
-check_exec_argv_pipe
+if part_selected path-limits-statfs; then
+	run_path_limits_statfs
+fi
 
-run_interactive_tty
+if part_selected union-root-user; then
+	run_union_root_user
+fi
 
-run_root_login_union
-check_root_login_union
-run_root_tmpfs_chown
-run_long_login
-check_long_login
+if part_selected tmpfs-extended; then
+	run_tmpfs_extended
+fi
+
+if part_selected large-io-mount; then
+	run_large_io_mount
+fi
+
+if part_selected login-smoke; then
+	check_login_smoke
+fi
+
+if part_selected rootfs-vfs-proc-dev; then
+	check_rootfs_vfs_proc_dev
+fi
+
+if part_selected path-limits-statfs; then
+	check_path_limits_statfs
+fi
+
+if part_selected union-root-user; then
+	check_union_root_user
+fi
+
+if part_selected tmpfs-extended; then
+	check_tmpfs_extended
+fi
+
+if part_selected large-io-mount; then
+	check_large_io_mount
+fi
+
+if part_selected tmpfs-basic-linux-tests; then
+	check_tmpfs_basic_linux_tests
+fi
+
+if part_selected exec-argv-pipe; then
+	check_exec_argv_pipe
+fi
+
+if part_selected interactive-tty; then
+	run_interactive_tty
+	user_shell_active=0
+fi
+
+if part_selected root-login-union; then
+	exit_user_shell_if_active
+	run_root_login_union
+	check_root_login_union
+	root_shell_active=1
+fi
+
+if part_selected root-tmpfs-chown; then
+	login_root_if_needed
+	run_root_tmpfs_chown
+	root_shell_active=0
+	user_shell_active=0
+fi
+
+if part_selected long-login; then
+	exit_root_shell_if_active
+	exit_user_shell_if_active
+	run_long_login
+	check_long_login
+fi
 echo "shell regression ok"

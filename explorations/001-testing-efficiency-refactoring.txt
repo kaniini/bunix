@@ -96,7 +96,7 @@ Plan:
      shard-owned marker files under `tools/shell-tests/` and removed once the
      main harness stopped using them.
 
-3. Add `make test-shell-part`
+3. Add `make test-shell-part` [DONE]
    Support targeted shard runs:
 
    BUNIX_SHELL_PART=vfs make test-shell-part
@@ -105,14 +105,35 @@ Plan:
    This should boot once, log in, run only the requested batches, check only
    their markers, and preserve the same failure artifact bundle.
 
-4. Keep `make test-shell` as the full composed gate
+   Result:
+
+   - `make test-shell-part` runs `tools/test-shell.sh` with
+     `BUNIX_SHELL_PART`.
+   - `BUNIX_SHELL_PART` accepts comma-separated shard names plus convenience
+     aliases used in the examples, including `vfs`, `procfs`, and `tmpfs`.
+   - Targeted runs still boot once, perform needed login/logout transitions, and
+     check only selected shard markers.
+
+4. Keep `make test-shell` as the full composed gate [DONE]
    Make the existing target run every shard in canonical order, so CI/full
    validation does not lose coverage. Avoid increasing boot count for the full
    suite unless a shard explicitly needs a clean boot.
 
-5. Add root-phase shards
+   Result:
+
+   - The default `test-shell` path uses `BUNIX_SHELL_PART=all` behavior and
+     keeps the full serial composed gate in canonical shard order.
+
+5. Add root-phase shards [DONE]
    Move root-only checks, including mount/umount race soaking, into a root shard
    that logs in as root only when requested or when running the full suite.
+
+   Result:
+
+   - Root-phase behavior is split across `root-login-union`,
+     `root-tmpfs-chown`, and `long-login`.
+   - The root-only mount/umount busy-route coverage is owned by
+     `root-login-union`.
 
 6. Add shard-level timing and summaries
    Emit concise timing lines:
