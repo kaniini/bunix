@@ -42,7 +42,7 @@ Tasks:
       future interface routes.
 - [x] Add observability through procfs or Bunix-native tools for interfaces,
       sockets, TCP/UDP state, and packet counters.
-- [ ] Add tests for IPv4 localhost UDP, IPv6 localhost UDP, IPv4 localhost TCP,
+- [x] Add tests for IPv4 localhost UDP, IPv6 localhost UDP, IPv4 localhost TCP,
       IPv6 localhost TCP, poll/select readiness behavior, connection teardown,
       and permission checks.
 - [x] Document the boundary where real NIC drivers, including VirtIO-net, plug
@@ -189,6 +189,12 @@ Progress:
   keeps socket protocol behavior inside `linux.server` and NET0.  Ancillary
   control messages remain unsupported for now.  `nettest` now exercises
   scatter/gather UDP `sendmsg`/`recvmsg` and emits `nettest: udp msg ok`.
+- Expanded networking edge coverage with duplicate UDP bind rejection, refused
+  TCP connect, TCP shutdown EOF, low-port bind denial after dropping to uid
+  1000, and select readiness through a new readiness-only x86_64 Linux
+  `select`/`pselect6` bridge that delegates fd readiness to `linux.server`
+  `poll`.  `nettest` now emits `nettest: tcp select ok` and
+  `nettest: edges ok`.
 
 NIC / VirtIO-net Boundary:
 

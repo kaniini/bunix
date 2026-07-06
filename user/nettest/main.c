@@ -1,8 +1,10 @@
 #include <arpa/inet.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -98,6 +100,7 @@ static void udp_test(void)
 	int reuse = 1;
 	int server = socket(AF_INET, SOCK_DGRAM, 0);
 	int client = socket(AF_INET, SOCK_DGRAM, 0);
+	int duplicate;
 	ssize_t nread;
 
 	if (server < 0 || client < 0) {
@@ -115,6 +118,16 @@ static void udp_test(void)
 	if (bind(server, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
 		die("nettest: udp bind failed\n");
 	}
+	duplicate = socket(AF_INET, SOCK_DGRAM, 0);
+	if (duplicate < 0) {
+		die("nettest: udp duplicate socket failed\n");
+	}
+	errno = 0;
+	if (bind(duplicate, (struct sockaddr *)&addr, sizeof(addr)) == 0 ||
+	    errno != EADDRINUSE) {
+		die("nettest: udp duplicate bind failed\n");
+	}
+	close(duplicate);
 	memset(&check, 0, sizeof(check));
 	check_len = sizeof(check);
 	if (getsockname(server, (struct sockaddr *)&check, &check_len) != 0 ||
@@ -223,6 +236,8 @@ static void tcp_test(void)
 	struct sockaddr_in addr;
 	struct sockaddr_in check;
 	struct pollfd pfd;
+	fd_set readfds;
+	struct timeval timeout;
 	socklen_t check_len;
 	int reuse = 1;
 	int listener = socket(AF_INET, SOCK_STREAM, 0);
@@ -273,6 +288,15 @@ static void tcp_test(void)
 	if (poll(&pfd, 1, 0) != 1 || (pfd.revents & POLLIN) == 0) {
 		die("nettest: tcp poll failed\n");
 	}
+	FD_ZERO(&readfds);
+	FD_SET(listener, &readfds);
+	timeout.tv_sec = 0;
+	timeout.tv_usec = 0;
+	if (select(listener + 1, &readfds, 0, 0, &timeout) != 1 ||
+	    !FD_ISSET(listener, &readfds)) {
+		die("nettest: tcp select failed\n");
+	}
+	say("nettest: tcp select ok\n");
 	accepted = accept(listener, 0, 0);
 	if (accepted < 0) {
 		die("nettest: tcp accept failed\n");
@@ -300,6 +324,10 @@ static void tcp_test(void)
 	if (nread != (ssize_t)sizeof(server_payload) ||
 	    memcmp(buffer, server_payload, sizeof(server_payload)) != 0) {
 		die("nettest: tcp client read failed\n");
+	}
+	if (shutdown(accepted, SHUT_WR) != 0 || read(client, buffer,
+						    sizeof(buffer)) != 0) {
+		die("nettest: tcp shutdown eof failed\n");
 	}
 	close(accepted);
 	close(client);
@@ -407,6 +435,46 @@ static void proc_net_test(void)
 	say("nettest: proc net ok\n");
 }
 
+static void edge_test(void)
+{
+	struct sockaddr_in addr;
+	int fd;
+
+	fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (fd < 0) {
+		die("nettest: refused socket failed\n");
+	}
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(23999);
+	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	errno = 0;
+	if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 ||
+	    errno != ECONNREFUSED) {
+		die("nettest: refused connect failed\n");
+	}
+	close(fd);
+
+	if (setuid(1000) != 0) {
+		die("nettest: setuid failed\n");
+	}
+	fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (fd < 0) {
+		die("nettest: low port socket failed\n");
+	}
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(80);
+	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	errno = 0;
+	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 ||
+	    errno != EACCES) {
+		die("nettest: low port permission failed\n");
+	}
+	close(fd);
+	say("nettest: edges ok\n");
+}
+
 int main(void)
 {
 	udp_test();
@@ -414,6 +482,7 @@ int main(void)
 	tcp_test();
 	tcp6_test();
 	proc_net_test();
+	edge_test();
 	say("nettest: ok\n");
 	return 0;
 }

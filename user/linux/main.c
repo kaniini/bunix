@@ -5193,6 +5193,17 @@ static long linux_bind(struct linux_process *process, u64 fd, u64 addr_len,
 	if (addr.family != process->fds[fd].size) {
 		return -LINUX_EAFNOSUPPORT;
 	}
+	if (addr.port != 0 && addr.port < 1024) {
+		const long euid =
+			linux_user_credential(process, BUNIX_LINUX_GETEUID);
+
+		if (euid < 0) {
+			return euid;
+		}
+		if (euid != 0) {
+			return -LINUX_EACCES;
+		}
+	}
 	op = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
 	     BUNIX_NET_UDP_BIND : BUNIX_NET_TCP_BIND;
 	return linux_net_call(op, 0, 0, process->fds[fd].offset,

@@ -96,6 +96,7 @@ enum {
 	LINUX_SYSCALL_WRITEV = 20,
 	LINUX_SYSCALL_ACCESS = 21,
 	LINUX_SYSCALL_PIPE = 22,
+	LINUX_SYSCALL_SELECT = 23,
 	LINUX_SYSCALL_NANOSLEEP = 35,
 	LINUX_SYSCALL_DUP = 32,
 	LINUX_SYSCALL_DUP2 = 33,
@@ -181,6 +182,7 @@ enum {
 	LINUX_SYSCALL_FACCESSAT = 269,
 	LINUX_AT_SYMLINK_NOFOLLOW = 0x100,
 	LINUX_AT_EMPTY_PATH = 0x1000,
+	LINUX_SYSCALL_PSELECT6 = 270,
 	LINUX_SYSCALL_PPOLL = 271,
 	LINUX_SYSCALL_ACCEPT4 = 288,
 	LINUX_SYSCALL_SET_ROBUST_LIST = 273,
@@ -241,6 +243,8 @@ enum {
 	LINUX_MAX_SHARED_BUFFER = 1024 * 1024,
 	LINUX_MAX_SOCKADDR = 128,
 	LINUX_IOV_MAX = 1024,
+	LINUX_FDSET_BITS = 1024,
+	LINUX_FDSET_BYTES = LINUX_FDSET_BITS / 8,
 	LINUX_MSGHDR_SIZE = 56,
 	LINUX_MSGHDR_NAME_OFF = 0,
 	LINUX_MSGHDR_NAMELEN_OFF = 8,
@@ -1057,6 +1061,111 @@ static int linux_syscall_forwards_scalar(u64 number)
 	default:
 		return 0;
 	}
+}
+
+static int linux_fdset_get(const u8 *set, u64 fd)
+{
+	return (set[fd / 8] & (1u << (fd % 8))) != 0;
+}
+
+static void linux_fdset_set(u8 *set, u64 fd)
+{
+	set[fd / 8] |= (u8)(1u << (fd % 8));
+}
+
+static u64 linux_forward_select(struct ipc_port *linux,
+				struct ipc_port *reply_port, u64 nfds,
+				u64 readfds, u64 writefds, u64 exceptfds)
+{
+	enum {
+		LINUX_POLLIN = 0x0001,
+		LINUX_POLLOUT = 0x0004,
+		LINUX_POLLERR = 0x0008,
+	};
+	u8 in_read[LINUX_FDSET_BYTES];
+	u8 in_write[LINUX_FDSET_BYTES];
+	u8 in_except[LINUX_FDSET_BYTES];
+	u8 out_read[LINUX_FDSET_BYTES];
+	u8 out_write[LINUX_FDSET_BYTES];
+	u8 out_except[LINUX_FDSET_BYTES];
+	u64 bytes;
+	u64 ready = 0;
+
+	if (nfds > LINUX_FDSET_BITS) {
+		return linux_einval_u64(__func__, __LINE__);
+	}
+	bytes = (nfds + 7) / 8;
+	for (u64 i = 0; i < LINUX_FDSET_BYTES; i++) {
+		in_read[i] = 0;
+		in_write[i] = 0;
+		in_except[i] = 0;
+		out_read[i] = 0;
+		out_write[i] = 0;
+		out_except[i] = 0;
+	}
+	if (readfds != 0 &&
+	    read_current_user(readfds, in_read, bytes) != 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	if (writefds != 0 &&
+	    read_current_user(writefds, in_write, bytes) != 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	if (exceptfds != 0 &&
+	    read_current_user(exceptfds, in_except, bytes) != 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	for (u64 fd = 0; fd < nfds; fd++) {
+		u64 events = 0;
+		u64 revents;
+
+		if (linux_fdset_get(in_read, fd)) {
+			events |= LINUX_POLLIN;
+		}
+		if (linux_fdset_get(in_write, fd)) {
+			events |= LINUX_POLLOUT;
+		}
+		if (linux_fdset_get(in_except, fd)) {
+			events |= LINUX_POLLERR;
+		}
+		if (events == 0) {
+			continue;
+		}
+		revents = linux_forward_words(linux, reply_port,
+					      LINUX_SYSCALL_POLL, fd,
+					      events, 0);
+		if ((i64)revents < 0) {
+			return revents;
+		}
+		if (readfds != 0 && (revents & LINUX_POLLIN) != 0 &&
+		    linux_fdset_get(in_read, fd)) {
+			linux_fdset_set(out_read, fd);
+			ready++;
+		}
+		if (writefds != 0 && (revents & LINUX_POLLOUT) != 0 &&
+		    linux_fdset_get(in_write, fd)) {
+			linux_fdset_set(out_write, fd);
+			ready++;
+		}
+		if (exceptfds != 0 && (revents & LINUX_POLLERR) != 0 &&
+		    linux_fdset_get(in_except, fd)) {
+			linux_fdset_set(out_except, fd);
+			ready++;
+		}
+	}
+	if (readfds != 0 &&
+	    write_current_user(readfds, out_read, bytes) != 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	if (writefds != 0 &&
+	    write_current_user(writefds, out_write, bytes) != 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	if (exceptfds != 0 &&
+	    write_current_user(exceptfds, out_except, bytes) != 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	return ready;
 }
 
 struct linux_msghdr_copy {
@@ -3238,6 +3347,8 @@ static const char *linux_syscall_name(u64 number)
 		return "lstat";
 	case LINUX_SYSCALL_POLL:
 		return "poll";
+	case LINUX_SYSCALL_SELECT:
+		return "select";
 	case LINUX_SYSCALL_MMAP:
 		return "mmap";
 	case LINUX_SYSCALL_MPROTECT:
@@ -3418,6 +3529,8 @@ static const char *linux_syscall_name(u64 number)
 		return "faccessat2";
 	case LINUX_SYSCALL_PPOLL:
 		return "ppoll";
+	case LINUX_SYSCALL_PSELECT6:
+		return "pselect6";
 	case LINUX_SYSCALL_SET_ROBUST_LIST:
 		return "set_robust_list";
 	case LINUX_SYSCALL_DUP3:
@@ -4416,6 +4529,12 @@ poll_again:
 	case LINUX_SYSCALL_RECVMSG:
 		return linux_forward_recvmsg(linux, reply_port, &request,
 					     arg0, arg1, arg2);
+	case LINUX_SYSCALL_SELECT:
+		return linux_forward_select(linux, reply_port, arg0, arg1,
+					    arg2, arg3);
+	case LINUX_SYSCALL_PSELECT6:
+		return linux_forward_select(linux, reply_port, arg0, arg1,
+					    arg2, arg3);
 	case LINUX_SYSCALL_GETSOCKNAME:
 	case LINUX_SYSCALL_GETPEERNAME:
 		return linux_forward_socklen_output(linux, reply_port, &request,
