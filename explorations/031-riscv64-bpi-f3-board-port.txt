@@ -24,7 +24,7 @@ Reference facts:
 
 Relationship to generic riscv64 port:
 
-- This exploration depends on `029-riscv64-initial-port.txt` for the generic
+- This exploration depends on `030-riscv64-initial-port.txt` for the generic
   riscv64 architecture skeleton, trap handling, VM, native syscall ABI, and
   initial QEMU smoke path.
 - BPI-F3 support should be a board layer under the riscv64 port, not a forked

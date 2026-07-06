@@ -1,0 +1,74 @@
+Factor PCI/PCIe functionality out of VirtIO into a dedicated server.
+
+Problem:
+
+- `virtio-bus.server` currently owns both VirtIO device policy and low-level
+  x86_64 PCI/PCIe discovery/configuration details.  That was pragmatic for
+  early VirtIO bringup, but it conflates two buses and makes future transports
+  harder to reason about.
+- The upcoming riscv64 work should not inherit an x86_64 PCI-shaped VirtIO
+  stack.  RISC-V boards may use VirtIO MMIO, platform-specific PCIe host
+  controllers, firmware-described ECAM windows, or no PCIe at the first
+  milestone.
+- A dedicated PCI/PCIe server gives Bunix a clearer hardware-resource boundary:
+  PCI discovers functions and grants narrowly-scoped config/BAR/MSI resources;
+  VirtIO consumes either PCI resources or future MMIO resources through a bus
+  neutral device-facing API.
+
+Scheduling:
+
+- Run this before `030-riscv64-initial-port.txt`.
+- Keep x86_64 VirtIO block/network tests passing throughout the refactor.
+- The riscv64 port can then implement only the platform discovery/transport
+  pieces it actually needs, without untangling PCI assumptions from VirtIO.
+
+Design direction:
+
+- Introduce a userspace PCI/PCIe server, likely `pci.server`, with a FourCC
+  protocol and service name such as `PCI0`.
+- Move x86_64 PCI config-port scanning, BAR sizing, BAR capability grants,
+  command-register setup, and VirtIO PCI capability parsing out of
+  `virtio-bus.server` where they are generic PCI concerns.
+- Keep VirtIO-specific feature negotiation, virtqueue setup, notify handling,
+  and device-class binding in `virtio-bus.server`, but make the PCI transport
+  an explicit provider below it.
+- Preserve OCAP boundaries: the kernel grants raw hardware resources to the PCI
+  server; PCI grants attenuated device resources to consumers; drivers never
+  receive broad I/O or MMIO authority.
+
+Constraints:
+
+- Do not move PCI policy into the kernel.  Kernel involvement should remain
+  narrow hardware-resource validation and grant creation.
+- Do not hardcode QEMU-only topology into the new protocol.  The first backend
+  can scan bus 0 with config ports, but the interface should be able to grow
+  ECAM, PCIe root complexes, bridges, and firmware-provided windows.
+- Keep device enumeration deterministic enough for tests.
+- Preserve existing `test-boot-virtio`, `test-boot-virtio-blk`, and
+  `test-boot-virtio-net` behavior while changing ownership under the hood.
+
+Tasks:
+
+- [ ] Inventory current PCI/PCIe-specific code in `virtio-bus.server`,
+      x86_64 hardware-resource syscalls, BAR grant paths, VirtIO PCI resource
+      descriptors, and QEMU test assumptions.
+- [ ] Define the `PCI0` protocol: enumerate functions, read function identity,
+      enable bus-master/MMIO/I/O, size BARs, grant BAR subranges, expose PCI
+      capabilities, and report interrupt/MSI/MSI-X resources when available.
+- [ ] Add a buildable `pci.server` skeleton and register it in boot packaging
+      without changing default behavior.
+- [ ] Move x86_64 PCI config-port access and bus-0 scan logic from
+      `virtio-bus.server` into `pci.server`.
+- [ ] Move BAR sizing and BAR hardware-resource grant logic behind `PCI0`
+      requests, preserving narrow resource attenuation.
+- [ ] Refactor `virtio-bus.server` to discover VirtIO PCI devices through
+      `PCI0` instead of scanning PCI directly.
+- [ ] Keep VirtIO PCI capability parsing in the correct layer: generic PCI
+      capability walking in `PCI0`, VirtIO-specific interpretation in
+      `virtio-bus.server`, unless a thinner shared descriptor proves cleaner.
+- [ ] Add tests proving `pci.server` enumerates the deterministic QEMU VirtIO
+      functions and exposes expected vendor/device/class/BAR metadata.
+- [ ] Update VirtIO block and net boot tests to assert the new PCI server
+      comes online and that VirtIO still reaches the existing milestones.
+- [ ] Document follow-up PCI work: ECAM, bridges, MSI/MSI-X, interrupt
+      routing, hotplug, multifunction devices, and non-VirtIO PCI drivers.
