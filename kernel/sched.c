@@ -228,6 +228,35 @@ static struct thread *runq_pop(struct run_queue *runq)
 	return thread;
 }
 
+static int runq_remove(struct run_queue *runq, struct thread *thread)
+{
+	struct thread **link;
+
+	if (runq == 0 || thread == 0) {
+		return 0;
+	}
+	link = &runq->head;
+	while (*link != 0) {
+		if (*link == thread) {
+			*link = thread->run_next;
+			if (runq->tail == thread) {
+				runq->tail = 0;
+				for (struct thread *scan = runq->head; scan != 0;
+				     scan = scan->run_next) {
+					runq->tail = scan;
+				}
+			}
+			thread->run_next = 0;
+			if (runq->count > 0) {
+				runq->count--;
+			}
+			return 1;
+		}
+		link = &(*link)->run_next;
+	}
+	return 0;
+}
+
 static void sched_enqueue_on(struct cpu_sched *cpu, struct thread *thread)
 {
 	const u32 remote = cpu->id != sched_current_cpu_id();
@@ -1599,6 +1628,34 @@ static void sched_cancel_sleep(struct thread *thread)
 	spin_unlock_irqrestore(&sleep_lock, flags);
 }
 
+static int sched_cancel_ready_task(struct task *task)
+{
+	if (task == 0) {
+		return 0;
+	}
+	for (u32 cpu_id = 0; cpu_id < sched_cpu_count; cpu_id++) {
+		struct cpu_sched *cpu = &cpus[cpu_id];
+		struct thread *removed = 0;
+		const u64 flags = spin_lock_irqsave(&cpu->runq.lock);
+
+		for (struct thread *thread = cpu->runq.head; thread != 0;
+		     thread = thread->run_next) {
+			if (thread->task == task && thread->state == THREAD_READY) {
+				removed = thread;
+				(void)runq_remove(&cpu->runq, thread);
+				removed->state = THREAD_DEAD;
+				break;
+			}
+		}
+		spin_unlock_irqrestore(&cpu->runq.lock, flags);
+		if (removed != 0) {
+			sched_reap_thread(removed);
+			return 1;
+		}
+	}
+	return 0;
+}
+
 int task_kill(struct task *task)
 {
 	if (task == 0 || task == &kernel_task) {
@@ -1611,6 +1668,7 @@ int task_kill(struct task *task)
 		return -1;
 	}
 	task->killing = 1;
+	task->ref_count++;
 	spin_unlock_irqrestore(&task->lock, flags);
 
 	for (;;) {
@@ -1635,7 +1693,11 @@ int task_kill(struct task *task)
 		thread_unblock(blocked);
 	}
 
+	while (sched_cancel_ready_task(task) != 0) {
+	}
+
 	console_printf("sched: kill task=%u name=%s\n", task->pid, task->name);
+	task_release(task);
 	return 0;
 }
 
