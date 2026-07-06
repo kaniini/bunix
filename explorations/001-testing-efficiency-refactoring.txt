@@ -135,13 +135,18 @@ Plan:
    - The root-only mount/umount busy-route coverage is owned by
      `root-login-union`.
 
-6. Add shard-level timing and summaries
+6. Add shard-level timing and summaries [DONE]
    Emit concise timing lines:
 
    test-shell-part name=vfs status=ok seconds=12
 
    This will show where the slow path is and make regressions in test runtime
    visible.
+
+   Result:
+
+   - `tools/test-shell.sh` prints `test-shell-part name=<shard> status=ok
+     seconds=<n>` after each selected shard completes its checks.
 
 7. Add marker diagnostics per shard
    Marker failures should report the shard name, marker source file, missing

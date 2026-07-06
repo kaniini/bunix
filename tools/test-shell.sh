@@ -140,6 +140,22 @@ current_prompt_count() {
 	grep -F -c "$prompt" "$log" 2>/dev/null || true
 }
 
+begin_shard() {
+	name=$1
+
+	mkdir -p "$tmp/shard-times"
+	date +%s > "$tmp/shard-times/$name"
+}
+
+finish_shard() {
+	name=$1
+	start=$(cat "$tmp/shard-times/$name" 2>/dev/null || echo 0)
+	now=$(date +%s)
+	seconds=$((now - start))
+
+	echo "test-shell-part name=$name status=ok seconds=$seconds"
+}
+
 part_selected() {
 	part=$1
 
@@ -245,92 +261,116 @@ user_shell_active=1
 root_shell_active=0
 
 if part_selected login-smoke; then
+	begin_shard login-smoke
 	run_login_smoke
 fi
 
 if part_selected exec-argv-pipe; then
+	begin_shard exec-argv-pipe
 	run_exec_argv_pipe
 fi
 
 if part_selected rootfs-vfs-proc-dev; then
+	begin_shard rootfs-vfs-proc-dev
 	run_rootfs_vfs_proc_dev
 fi
 
 if part_selected tmpfs-basic-linux-tests; then
+	begin_shard tmpfs-basic-linux-tests
 	run_tmpfs_basic_linux_tests
 fi
 
 if part_selected path-limits-statfs; then
+	begin_shard path-limits-statfs
 	run_path_limits_statfs
 fi
 
 if part_selected union-root-user; then
+	begin_shard union-root-user
 	run_union_root_user
 fi
 
 if part_selected tmpfs-extended; then
+	begin_shard tmpfs-extended
 	run_tmpfs_extended
 fi
 
 if part_selected large-io-mount; then
+	begin_shard large-io-mount
 	run_large_io_mount
 fi
 
 if part_selected login-smoke; then
 	check_login_smoke
+	finish_shard login-smoke
 fi
 
 if part_selected rootfs-vfs-proc-dev; then
 	check_rootfs_vfs_proc_dev
+	finish_shard rootfs-vfs-proc-dev
 fi
 
 if part_selected path-limits-statfs; then
 	check_path_limits_statfs
+	finish_shard path-limits-statfs
 fi
 
 if part_selected union-root-user; then
 	check_union_root_user
+	finish_shard union-root-user
 fi
 
 if part_selected tmpfs-extended; then
 	check_tmpfs_extended
+	finish_shard tmpfs-extended
 fi
 
 if part_selected large-io-mount; then
 	check_large_io_mount
+	finish_shard large-io-mount
 fi
 
 if part_selected tmpfs-basic-linux-tests; then
 	check_tmpfs_basic_linux_tests
+	finish_shard tmpfs-basic-linux-tests
 fi
 
 if part_selected exec-argv-pipe; then
 	check_exec_argv_pipe
+	finish_shard exec-argv-pipe
 fi
 
 if part_selected interactive-tty; then
+	begin_shard interactive-tty
 	run_interactive_tty
 	user_shell_active=0
+	finish_shard interactive-tty
 fi
 
 if part_selected root-login-union; then
+	begin_shard root-login-union
 	exit_user_shell_if_active
 	run_root_login_union
 	check_root_login_union
 	root_shell_active=1
+	finish_shard root-login-union
 fi
 
 if part_selected root-tmpfs-chown; then
+	begin_shard root-tmpfs-chown
 	login_root_if_needed
 	run_root_tmpfs_chown
 	root_shell_active=0
 	user_shell_active=0
+	finish_shard root-tmpfs-chown
 fi
 
 if part_selected long-login; then
+	begin_shard long-login
 	exit_root_shell_if_active
 	exit_user_shell_if_active
 	run_long_login
 	check_long_login
+	finish_shard long-login
 fi
 echo "shell regression ok"
