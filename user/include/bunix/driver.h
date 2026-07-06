@@ -5,6 +5,8 @@
 
 enum {
 	BUNIX_DRIVER_RESOURCE_HW = 1,
+	BUNIX_DRIVER_RESOURCE_DEVICE = 2,
+	BUNIX_DRIVER_NAME_MAX = 32,
 };
 
 struct bunix_driver_resource {
@@ -14,6 +16,63 @@ struct bunix_driver_resource {
 	unsigned int ops;
 	u64 base;
 	u64 len;
+};
+
+struct bunix_device_id {
+	u64 transport;
+	u64 bus;
+	u64 slot;
+	u64 function;
+	u64 vendor;
+	u64 device;
+	u64 subsystem_vendor;
+	u64 subsystem_device;
+	u64 class_code;
+	u64 revision;
+};
+
+struct bunix_device_resource {
+	const char *name;
+	u64 type;
+	u64 ops;
+	u64 handle;
+	u64 base;
+	u64 len;
+	u64 alignment;
+	u64 index;
+	u64 flags;
+};
+
+struct bunix_device_dma_window {
+	u64 handle;
+	u64 ops;
+	u64 iova_base;
+	u64 len;
+	u64 alignment;
+};
+
+struct bunix_device_queue_memory {
+	u64 handle;
+	u64 index;
+	u64 queue_size;
+	u64 desc_offset;
+	u64 avail_offset;
+	u64 used_offset;
+	u64 len;
+};
+
+struct bunix_device_feature_set {
+	u64 device_features;
+	u64 driver_features;
+	u64 required_features;
+	u64 negotiated_features;
+};
+
+struct bunix_device {
+	const char *name;
+	struct bunix_device_id id;
+	const struct bunix_device_resource *resources;
+	u64 resource_count;
 };
 
 struct bunix_driver {

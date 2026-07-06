@@ -24,7 +24,7 @@ Tasks:
 
 - [x] Inventory current block, timer, interrupt, PCI/platform discovery, and
       hardware-access paths.
-- [ ] Define a generic device-resource model for userspace drivers: MMIO/PIO
+- [x] Define a generic device-resource model for userspace drivers: MMIO/PIO
       ranges, IRQs, DMA windows, feature bits, queue memory, and reset.
 - [ ] Implement or plan the required VirtIO transport layer, starting with PCI
       on x86_64 and leaving a clean MMIO transport path for ARM.
@@ -89,3 +89,20 @@ Inventory:
 - QEMU run and test modes use `-machine q35`, KVM, OVMF pflash, and a FAT ESP
   drive containing GRUB modules.  No `virtio-blk`, `virtio-mmio`, deterministic
   PCI topology, or device-specific test mode exists yet.
+
+Progress:
+
+- Added a shared `DEV0` protocol/service namespace for generic device-bus RPCs:
+  enumeration, device info, resource lookup, driver binding, reset, feature
+  read/negotiation, queue setup/notification, and interrupt ack.
+- Defined generic resource kinds for PIO, MMIO, IRQ, DMA windows, queue memory,
+  feature bits, and reset authority, plus transport IDs for platform, PCI, and
+  MMIO transports.
+- Added driver-side descriptors for device identity, device resources, DMA
+  windows, queue memory layout, feature sets, and whole devices.  These are
+  intentionally capability-oriented: handles carry authority, while base/len,
+  queue indices, feature masks, and alignments describe what that authority
+  permits.
+- This task defines the userspace contract only.  IRQ binding/delivery, DMA
+  allocation/validation, PCI discovery, and VirtIO queue mechanics remain open
+  implementation tasks in this exploration.
