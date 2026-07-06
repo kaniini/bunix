@@ -40,7 +40,7 @@ Tasks:
       not provide the desired timer device, decide whether the right target is
       virtio-rng/console, HPET/APIC timer abstraction, or a platform timer
       server that shares the same driver framework.
-- [ ] Add QEMU run/test modes that boot with VirtIO block and deterministic
+- [x] Add QEMU run/test modes that boot with VirtIO block and deterministic
       device topology.
 - [ ] Add tests for bus enumeration, feature negotiation failures, block reads,
       block writes, flushes, interrupt-driven completions, and clean poweroff.
@@ -143,3 +143,7 @@ Progress:
 - Fixed supplemental boot grants so bootstrap-launched module servers can still
   receive kernel-granted hardware resources.  A direct boot harness run with
   `-device virtio-blk-pci` now reports `virtio-bus: ready devices=1`.
+- Added `run-virtio` and `test-boot-virtio` Make targets.  They attach the
+  current rootfs image as a deterministic `virtio-blk-pci` device at
+  `pcie.0/addr=0x6`; `test-boot-virtio` boots to poweroff and asserts
+  `virtio-bus: ready devices=1`.
