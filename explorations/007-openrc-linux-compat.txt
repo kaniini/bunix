@@ -1,5 +1,17 @@
 Close Linux personality gaps discovered by OpenRC userspace.
 
+Findings:
+
+- Alpine reaches OpenRC startup and `/sbin/openrc` runs far enough for musl's
+  dynamic linker to search for dependencies.
+- The dynamic linker opens `/usr/lib/librc.so.1` and `/usr/lib/libeinfo.so.1`,
+  but relocation still reports missing `libeinfo` symbols.
+- Local musl `ldso` source shows loaded DSOs are de-duplicated with `fstat()`
+  `st_dev`/`st_ino`; Bunix currently reports constant Linux stat identity for
+  many files, so distinct shared objects can look identical.
+- Fixing `/sbin/openrc` dependency loading should therefore wait for
+  `011-vfs-stat-identity.txt` rather than using handle-derived inode shortcuts.
+
 - [ ] Boot the Alpine fixture far enough to collect strace-style logs from OpenRC startup.
 - [ ] Teach the Linux personality to load dynamic executable dependencies needed by OpenRC, including `/sbin/openrc` resolving `libeinfo` symbols.
 - [ ] Triage missing or incorrect syscalls by startup phase and impact.
