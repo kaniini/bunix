@@ -80,8 +80,10 @@ selected_shards() {
 		return value ~ /^[0-9]+[KMG]?$/
 	}
 	function selected(name, phase,    list, count, i, part) {
-		if (set == "" || set == "all" || set == "shell")
+		if (set == "" || set == "all")
 			return 1
+		if (set == "shell")
+			return phase != "openrc"
 		count = split(set, list, ",")
 		for (i = 1; i <= count; i++) {
 			part = list[i]
@@ -131,7 +133,13 @@ selected_shards() {
 		printf "invalid clean_boot value for shard %s: %s\n", $1, $7 > "/dev/stderr"
 		exit 1
 	}
-	selected($1, $2) { print $1 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 }
+	selected($1, $2) {
+		harness = $9 == "" ? "shell" : $9
+		rootfs = $10 == "" ? "synthetic" : $10
+		boot_phase = $11 == "" ? "full" : $11
+		marker_file = $12
+		print $1 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" harness "\t" rootfs "\t" boot_phase "\t" marker_file
+	}
 	' "$manifest"
 }
 
@@ -285,6 +293,10 @@ run_worker() {
 	timeout_seconds=$4
 	cost=$5
 	clean_boot=$6
+	harness=$7
+	rootfs=$8
+	boot_phase=$9
+	marker_file=${10:-}
 	worker_smp=${BUNIX_VM_SMP_OVERRIDE:-$smp}
 	worker_memory=${BUNIX_VM_MEMORY_OVERRIDE:-$memory}
 	worker_timeout=$(effective_timeout "$timeout_seconds")
@@ -298,14 +310,45 @@ run_worker() {
 	reason=
 
 	mkdir -p "$worker_dir"
-	echo "test-parallel name=$name status=start smp=$worker_smp memory=$worker_memory timeout=$worker_timeout cost=$cost clean_boot=$clean_boot artifact=$worker_dir"
+	echo "test-parallel name=$name status=start smp=$worker_smp memory=$worker_memory timeout=$worker_timeout cost=$cost clean_boot=$clean_boot harness=$harness rootfs=$rootfs artifact=$worker_dir"
 
 	while [ "$attempt" -le "$max_attempts" ]; do
 		attempt_dir=$worker_dir/attempt-$attempt
 		mkdir -p "$attempt_dir"
 		echo "test-parallel name=$name status=attempt attempt=$attempt max_attempts=$max_attempts artifact=$attempt_dir"
+		attempt_ok=0
 
-		if [ -n "$worker_cmd" ]; then
+		if [ "$harness" = boot ]; then
+			worker_esp=$ESP_DIR
+			case "$rootfs" in
+			alpine) worker_esp=${ALPINE_ESP_DIR:-build/esp-alpine} ;;
+			synthetic) worker_esp=${ESP_DIR:-build/esp} ;;
+			*)
+				echo "unknown rootfs flavor for shard $name: $rootfs" > "$attempt_dir/stderr.log"
+				worker_esp=
+				;;
+			esac
+			if [ -n "$worker_esp" ]; then
+				if BUNIX_TEST_RUN_ID="$run_id-$name-a$attempt" \
+				    BUNIX_TEST_RUNTIME_DIR="$attempt_dir/runtime" \
+				    FAILURE_DIR="$attempt_dir/failures" \
+				    BUNIX_ROOTFS_METADATA_DIR="${BUNIX_ROOTFS_METADATA_DIR:-build/alpine-rootfs}" \
+				    ESP_DIR="$worker_esp" \
+				    OVMF_CODE="$ovmf" \
+				    ROOTFS_FLAVOR="$rootfs" \
+				    BUNIX_BOOT_PHASE="$boot_phase" \
+				    SERIAL_LOG="$attempt_dir/serial.log" \
+				    SMP="$worker_smp" \
+				    QEMU_MEMORY="$worker_memory" \
+				    QEMU_TIMEOUT="$worker_timeout" \
+				    sh tools/test-boot.sh >"$attempt_dir/stdout.log" 2>"$attempt_dir/stderr.log" &&
+				    { [ -z "$marker_file" ] || sh tools/check-markers.sh "$attempt_dir/serial.log" "$marker_file" >>"$attempt_dir/stdout.log" 2>>"$attempt_dir/stderr.log"; }; then
+					attempt_ok=1
+				else
+					attempt_ok=0
+				fi
+			fi
+		elif [ "$harness" = shell ] && [ -n "$worker_cmd" ]; then
 			if BUNIX_TEST_RUN_ID="$run_id-$name-a$attempt" \
 			    BUNIX_TEST_RUNTIME_DIR="$attempt_dir/runtime" \
 			    FAILURE_DIR="$attempt_dir/failures" \
@@ -318,7 +361,7 @@ run_worker() {
 			else
 				attempt_ok=0
 			fi
-		else
+		elif [ "$harness" = shell ]; then
 			if BUNIX_TEST_RUN_ID="$run_id-$name-a$attempt" \
 			    BUNIX_TEST_RUNTIME_DIR="$attempt_dir/runtime" \
 			    FAILURE_DIR="$attempt_dir/failures" \
@@ -331,6 +374,9 @@ run_worker() {
 			else
 				attempt_ok=0
 			fi
+		else
+			echo "unknown harness for shard $name: $harness" > "$attempt_dir/stderr.log"
+			attempt_ok=0
 		fi
 		if [ "$attempt_ok" -eq 1 ]; then
 			status=ok
@@ -376,7 +422,7 @@ launched=0
 skipped=0
 stopped=0
 
-while IFS='	' read -r name smp memory timeout_seconds cost clean_boot; do
+while IFS='	' read -r name smp memory timeout_seconds cost clean_boot harness rootfs boot_phase marker_file; do
 	if [ -z "$name" ]; then
 		continue
 	fi
@@ -392,7 +438,7 @@ while IFS='	' read -r name smp memory timeout_seconds cost clean_boot; do
 		continue
 	fi
 	echo "$name" >> "$run_dir/shards.txt"
-	run_worker "$name" "$smp" "$memory" "$timeout_seconds" "$cost" "$clean_boot" &
+	run_worker "$name" "$smp" "$memory" "$timeout_seconds" "$cost" "$clean_boot" "$harness" "$rootfs" "$boot_phase" "$marker_file" &
 	pids="$pids $!"
 	count=$((count + 1))
 	launched=$((launched + 1))

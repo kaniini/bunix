@@ -2,6 +2,8 @@ ARCH := x86_64
 BUILD_DIR := build
 ISO_ROOT := $(BUILD_DIR)/iso
 ESP_DIR := $(BUILD_DIR)/esp
+ALPINE_ESP_DIR := $(BUILD_DIR)/esp-alpine
+ALPINE_EFI_BOOT_APP := $(ALPINE_ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 EFI_BOOT_IMG := $(BUILD_DIR)/bunixos-efi.iso
 EFI_BOOT_APP := $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 GRUB_CFG := $(BUILD_DIR)/grub.cfg
@@ -90,6 +92,8 @@ ROOTFS_FLAVOR ?= synthetic
 BLOCK_IMAGE := $(if $(filter alpine,$(ROOTFS_FLAVOR)),$(ALPINE_BLOCK_IMAGE),$(SYNTHETIC_BLOCK_IMAGE))
 TEST_BOOT_MARKERS := $(if $(filter alpine,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine.txt,tools/test-boot-markers.txt)
 ROOTFS_FLAVOR_STAMP := $(BUILD_DIR)/rootfs-flavor.stamp
+PARALLEL_TEST_SET := $(if $(BUNIX_TEST_SET),$(BUNIX_TEST_SET),all)
+PARALLEL_ALPINE_ESP := $(if $(filter all openrc,$(PARALLEL_TEST_SET)),$(ALPINE_EFI_BOOT_APP))
 ROOTFS_TOOL := $(BUILD_DIR)/tools/mkrootfs
 ROOTFS_HELLO := modules/hello.txt
 ROOTFS_SECRET := modules/secret.txt
@@ -235,6 +239,11 @@ $(BUILD_DIR)/%.S.o: %.S
 iso: $(EFI_BOOT_IMG)
 
 esp: $(EFI_BOOT_APP)
+
+ifneq ($(ESP_DIR),$(ALPINE_ESP_DIR))
+$(ALPINE_EFI_BOOT_APP): FORCE
+	$(MAKE) ROOTFS_FLAVOR=alpine ESP_DIR=$(ALPINE_ESP_DIR) esp
+endif
 
 $(BUILD_DIR)/user/%.c.o: user/%.c
 	mkdir -p $(dir $@)
@@ -527,7 +536,7 @@ run-iso: $(EFI_BOOT_IMG)
 
 test: test-parallel
 
-test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt tools/test-boot-markers-alpine.txt
+test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt tools/test-boot-markers-alpine.txt tools/test-boot-markers-alpine-smoke.txt
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
@@ -549,9 +558,9 @@ test-smoke-parallel: $(EFI_BOOT_APP)
 		BUNIX_TEST_SET=smoke BUNIX_TEST_JOBS="$(BUNIX_TEST_JOBS)" \
 		sh tools/test-parallel.sh
 
-test-shell-parallel: $(EFI_BOOT_APP)
-	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) \
-		BUNIX_TEST_SET="$(if $(BUNIX_TEST_SET),$(BUNIX_TEST_SET),all)" \
+test-shell-parallel: $(EFI_BOOT_APP) $(PARALLEL_ALPINE_ESP)
+	ESP_DIR=$(ESP_DIR) ALPINE_ESP_DIR=$(ALPINE_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) \
+		BUNIX_TEST_SET="$(PARALLEL_TEST_SET)" \
 		BUNIX_TEST_JOBS="$(BUNIX_TEST_JOBS)" \
 		sh tools/test-parallel.sh
 

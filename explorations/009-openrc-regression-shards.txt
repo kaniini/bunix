@@ -1,8 +1,0 @@
-Add sharded OpenRC regression coverage.
-
-- [ ] Split OpenRC tests into shardable phases with explicit SMP policy per shard.
-- [ ] Add failure artifact collection for Alpine/OpenRC boot logs, dmesg, strace, and rootfs metadata.
-- [ ] Add fast smoke shards for early userspace and slower shards for full OpenRC milestones.
-- [ ] Integrate the shards into `make test-parallel` without regressing ordinary BusyBox shard time.
-- [ ] Ensure every shard exits through guest poweroff instead of timeout or host cleanup.
-- [ ] Document expected runtime and shard resource profiles.

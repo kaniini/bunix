@@ -27,6 +27,14 @@ save_failure_artifacts() {
 	if [ -n "${BUNIX_CURRENT_MARKER_FILE:-}" ] && [ -r "${BUNIX_CURRENT_MARKER_FILE:-}" ]; then
 		cp "$BUNIX_CURRENT_MARKER_FILE" "$out/shell-marker-file.txt"
 	fi
+	if [ -n "${BUNIX_ROOTFS_METADATA_DIR:-}" ] && [ -d "${BUNIX_ROOTFS_METADATA_DIR:-}" ]; then
+		mkdir -p "$out/rootfs-metadata"
+		for metadata in manifest.txt apk.log apk.plain.log; do
+			if [ -r "$BUNIX_ROOTFS_METADATA_DIR/$metadata" ]; then
+				cp "$BUNIX_ROOTFS_METADATA_DIR/$metadata" "$out/rootfs-metadata/$metadata"
+			fi
+		done
+	fi
 	if [ -n "${BUNIX_TEST_HARNESS:-}" ] && [ -r "${BUNIX_TEST_HARNESS:-}" ]; then
 		cp "$BUNIX_TEST_HARNESS" "$out/test-harness.sh"
 	fi

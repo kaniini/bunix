@@ -9,6 +9,7 @@ qemu_timeout=${QEMU_TIMEOUT:-60s}
 qemu_memory=${QEMU_MEMORY:-128M}
 qemu_extra_args=${QEMU_EXTRA_ARGS:-}
 rootfs_flavor=${ROOTFS_FLAVOR:-synthetic}
+boot_phase=${BUNIX_BOOT_PHASE:-full}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-boot-test.$run_id}
 log=${SERIAL_LOG:-build/serial.log}
@@ -105,7 +106,7 @@ sleep 3
 exec 3>"$pipe.in"
 printf '%s\n%s\n' root root >&3
 wait_for_fixed_boot "~ # " "root shell prompt did not appear for boot poweroff" 60 180
-if [ "$rootfs_flavor" = alpine ]; then
+if [ "$rootfs_flavor" = alpine ] && [ "$boot_phase" = full ]; then
 	printf 'busybox id | busybox grep "uid=0(root)" >/dev/null && printf "BUNIX_ALPINE_ID_%%s\\n" OK\n' >&3
 	printf 'busybox ps | busybox grep "/bin/sh" >/dev/null && printf "BUNIX_ALPINE_PS_%%s\\n" OK\n' >&3
 	printf 'busybox dmesg | busybox grep "linux-server: close" >/dev/null && printf "BUNIX_ALPINE_DMESG_%%s\\n" OK\n' >&3

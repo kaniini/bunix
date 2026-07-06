@@ -1,0 +1,8 @@
+kernel: log level info
+linux-server: online
+bootstrap: linux init exec
+OpenRC
+Mounting /proc
+Caching service dependencies ... [ ok ]
+login:
+Requesting system poweroff

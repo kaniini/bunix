@@ -1,0 +1,32 @@
+Add sharded OpenRC regression coverage.
+
+Findings:
+
+- The parallel harness now supports per-shard harness type, rootfs flavor,
+  boot phase, and marker file.  Existing BusyBox rows default to the shell
+  harness, synthetic rootfs, and no boot marker file.
+- OpenRC coverage is split into two boot-harness shards:
+  `alpine-openrc-smoke` uses SMP=1, 128M, 120s timeout, cost=1, clean boot,
+  Alpine rootfs, and a smoke boot phase that reaches OpenRC/login and powers
+  off.
+- `alpine-openrc-full` uses SMP=2, 128M, 180s timeout, cost=3, clean boot,
+  Alpine rootfs, and the full boot phase that reaches login, runs root shell
+  `id`, `ps`, and `dmesg` probes, then powers off.
+- `make test-parallel BUNIX_TEST_SET=openrc` builds a separate
+  `build/esp-alpine` image and runs both OpenRC shards in parallel.  The
+  normal synthetic `build/esp` remains available for ordinary shell shards.
+- `BUNIX_TEST_SET=smoke make test-parallel` does not build the Alpine ESP and
+  still launches only the existing synthetic BusyBox smoke shard.
+- Failure artifacts for boot shards include serial and QEMU logs through the
+  existing harness, Linux strace lines when present, and Alpine rootfs metadata
+  from `build/alpine-rootfs/{manifest.txt,apk.log,apk.plain.log}` when
+  available.
+- Every OpenRC shard exits through `/sbin/poweroff`; success is not inferred
+  from timeout or host cleanup.
+
+- [x] Split OpenRC tests into shardable phases with explicit SMP policy per shard.
+- [x] Add failure artifact collection for Alpine/OpenRC boot logs, dmesg, strace, and rootfs metadata.
+- [x] Add fast smoke shards for early userspace and slower shards for full OpenRC milestones.
+- [x] Integrate the shards into `make test-parallel` without regressing ordinary BusyBox shard time.
+- [x] Ensure every shard exits through guest poweroff instead of timeout or host cleanup.
+- [x] Document expected runtime and shard resource profiles.
