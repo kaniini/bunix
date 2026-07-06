@@ -863,6 +863,19 @@ int main(void)
 			return 1;
 		}
 	}
+	bunix_launch_module_with_caps("sysfs", fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	{
+		u64 sysfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						      BUNIX_SERVICE_SYSFS,
+						      BUNIX_RIGHT_SEND);
+
+		if (sysfs == 0 ||
+		    send_path_command(sysfs, BUNIX_PROTO_SYSFS,
+				      BUNIX_SYSFS_MOUNT_PATH, "/sys") != 0) {
+			return 1;
+		}
+	}
 	bunix_launch_module_with_caps("utmpfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	{

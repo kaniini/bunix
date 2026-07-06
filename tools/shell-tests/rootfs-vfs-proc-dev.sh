@@ -38,6 +38,13 @@ busybox cat /proc/filesystems && echo PROC_FILESYSTEMS_OK
 busybox cat /proc/cpuinfo && echo PROC_CPUINFO_OK
 busybox cat /proc/self/cmdline && echo PROC_CMDLINE_OK
 /bin/cat /proc/self/cmdline | busybox grep -a /bin/cat && echo PROC_SELF_CMDLINE_CALLER_OK
+busybox test -d /sys && echo SYS_DIR_OK
+busybox test -d /sys/class && echo SYS_CLASS_OK
+busybox test -d /sys/class/tty && echo SYS_CLASS_TTY_OK
+busybox ls /sys/class/tty && echo SYS_CLASS_TTY_LS_OK
+busybox test -d /sys/devices/system/cpu && echo SYS_CPU_DIR_OK
+busybox cat /sys/devices/system/cpu/online && echo SYS_CPU_ONLINE_OK
+busybox cat /proc/mounts | busybox grep "sysfs /sys sysfs" && echo PROC_MOUNTS_SYSFS_OK
 busybox stat /dev/zero && echo DEV_ZERO_STAT_OK
 busybox stat /dev/urandom && echo DEV_URANDOM_STAT_OK
 busybox test -r /dev/zero && echo DEV_ZERO_ACCESS_OK
@@ -86,6 +93,10 @@ check_rootfs_vfs_proc_dev() {
 		DEV_TTYS0_CHAR_OK
 	wait_for_each_fixed "$log" "procfs content regression missing" 45 220 \
 		"cpu  " "busybox" "direct_delivered " "direct_handoff "
+	wait_for_each_fixed "$log" "sysfs regression missing" 45 220 \
+		SYS_DIR_OK SYS_CLASS_OK SYS_CLASS_TTY_OK SYS_CLASS_TTY_LS_OK \
+		SYS_CPU_DIR_OK SYS_CPU_ONLINE_OK PROC_MOUNTS_SYSFS_OK \
+		"ttyS0" "0-1"
 	wait_for_each_regex "$log" "IPC fast path counter did not increase" 45 220 \
 		"direct_delivered [1-9][0-9]*" "direct_handoff [1-9][0-9]*"
 	wait_for_each_regex "$log" "IPC per-CPU counter did not increase" 45 220 \
