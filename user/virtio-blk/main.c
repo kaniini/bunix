@@ -129,7 +129,8 @@ static int virtio_blk_queue_from_reply(struct bunix_msg *reply,
 	queue->handle = reply->cap;
 	queue->queue_size = reply->words[1] & 0xffffffffull;
 	if (bunix_virtio_queue_layout_init(&queue->layout, queue->queue_size,
-					   4096) != 0 ||
+					   BUNIX_VIRTIO_MODERN_QUEUE_ALIGNMENT) !=
+		    0 ||
 	    queue->layout.total_len != reply->words[2]) {
 		return -1;
 	}

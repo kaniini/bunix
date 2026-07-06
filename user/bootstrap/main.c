@@ -760,6 +760,7 @@ int main(void)
 	const char names_ready[] = "bootstrap: names ready\n";
 	const char fs_namespace_ready[] = "bootstrap: fs namespace\n";
 	const char fs_ready[] = "bootstrap: fs ready\n";
+	const char virtio_blk_test[] = "bootstrap: virtio-blk test\n";
 	char file[17];
 	u64 console;
 	u64 vm;
@@ -823,6 +824,13 @@ int main(void)
 	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_DEVICE,
 				      BUNIX_RIGHT_SEND) == 0) {
 		return 1;
+	}
+	if (bunix_cmdline_has("virtio-blk-test") > 0) {
+		bunix_console_log(virtio_blk_test,
+				  sizeof(virtio_blk_test) - 1);
+		bunix_launch_module_with_caps("virtio-blk", fs_caps,
+					      sizeof(fs_caps) /
+						      sizeof(fs_caps[0]));
 	}
 	bunix_launch_module_with_caps("vfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));

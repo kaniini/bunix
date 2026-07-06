@@ -4,6 +4,9 @@ ISO_ROOT := $(BUILD_DIR)/iso
 ESP_DIR := $(BUILD_DIR)/esp
 ALPINE_ESP_DIR := $(BUILD_DIR)/esp-alpine
 ALPINE_EFI_BOOT_APP := $(ALPINE_ESP_DIR)/EFI/BOOT/BOOTX64.EFI
+VIRTIO_BLK_TEST_ESP_DIR := $(BUILD_DIR)/esp-virtio-blk
+VIRTIO_BLK_TEST_EFI_BOOT_APP := $(VIRTIO_BLK_TEST_ESP_DIR)/EFI/BOOT/BOOTX64.EFI
+VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG := $(BUILD_DIR)/grub-standalone-virtio-blk.cfg
 EFI_BOOT_IMG := $(BUILD_DIR)/bunixos-efi.iso
 EFI_BOOT_APP := $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 GRUB_CFG := $(BUILD_DIR)/grub.cfg
@@ -233,7 +236,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-virtio run-kernel run-iso test test-boot test-boot-virtio test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool test-alpine-rootfs list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
+.PHONY: all clean run run-virtio run-kernel run-iso test test-boot test-boot-virtio test-boot-virtio-blk test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool test-alpine-rootfs list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -482,6 +485,13 @@ $(GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 	sed 's|@KERNEL_CMDLINE@|$(KERNEL_CMDLINE)|g' $< > $@.tmp
 	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
 
+$(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
+	mkdir -p $(BUILD_DIR)
+	sed -e 's|@KERNEL_CMDLINE@|log=info virtio-blk-test|g' \
+		-e '/virtio-bus\.server/a module2 /modules/virtio-blk.server virtio-blk' \
+		$< > $@.tmp
+	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
+
 $(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
@@ -507,6 +517,37 @@ $(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTS
 		"modules/unionfs.server=$(UNIONFS_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
+		"modules/vfs.server=$(VFS_MODULE)" \
+		"modules/ping.server=$(PING_MODULE)" \
+		"modules/disk0.img=$(BLOCK_IMAGE)" \
+		"modules/vm.server=modules/vm.server"
+
+$(VIRTIO_BLK_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(VIRTIO_BLK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
+		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
+	fi
+	mkdir -p $(VIRTIO_BLK_TEST_ESP_DIR)/EFI/BOOT $(VIRTIO_BLK_TEST_ESP_DIR)/boot
+	cp $(KERNEL) $(VIRTIO_BLK_TEST_ESP_DIR)/boot/bunixos.kernel
+	$(GRUB_MKSTANDALONE) -O x86_64-efi -o $@ \
+		"boot/grub/grub.cfg=$(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG)" \
+		"boot/bunixos.kernel=$(KERNEL)" \
+		"modules/console.server=$(CONSOLE_MODULE)" \
+		"modules/names.server=$(NAMES_MODULE)" \
+		"modules/bootstrap.server=$(BOOTSTRAP_MODULE)" \
+		"modules/time.server=$(TIME_MODULE)" \
+		"modules/user.server=$(USER_MODULE)" \
+		"modules/linux.server=$(LINUX_SERVER_MODULE)" \
+		"modules/proc.server=$(PROC_MODULE)" \
+		"modules/procfs.server=$(PROCFS_MODULE)" \
+		"modules/tmpfs.server=$(TMPFS_MODULE)" \
+		"modules/devfs.server=$(DEVFS_MODULE)" \
+		"modules/sysfs.server=$(SYSFS_MODULE)" \
+		"modules/utmpfs.server=$(UTMPFS_MODULE)" \
+		"modules/rootfs.server=$(ROOTFS_MODULE)" \
+		"modules/unionfs.server=$(UNIONFS_MODULE)" \
+		"modules/block.server=$(BLOCK_MODULE)" \
+		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
+		"modules/virtio-blk.server=$(VIRTIO_BLK_MODULE)" \
 		"modules/vfs.server=$(VFS_MODULE)" \
 		"modules/ping.server=$(PING_MODULE)" \
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
@@ -589,6 +630,14 @@ test-boot-virtio: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools
 	grep -aF "virtio-bus: features index=0" $(BUILD_DIR)/serial.log >/dev/null
 	! grep -aF "virtio-bus: features index=0 device=0 " $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-bus: ready devices=1" $(BUILD_DIR)/serial.log >/dev/null
+
+test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
+	ESP_DIR=$(VIRTIO_BLK_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log \
+		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_BLK_ARGS)" sh tools/test-boot.sh
+	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
+	grep -aF "bootstrap: virtio-blk test" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "virtio-blk: read ok" $(BUILD_DIR)/serial.log >/dev/null
 
 test-shell: $(EFI_BOOT_APP)
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

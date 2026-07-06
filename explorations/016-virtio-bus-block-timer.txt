@@ -209,3 +209,15 @@ Progress:
   the boot payload or block/VFS service: the request path is build-covered and
   the default VirtIO boot smoke remains stable, but a dedicated driver launch
   harness is still needed before marking block reads complete.
+- Added a dedicated `test-boot-virtio-blk` boot image and target.  It builds a
+  separate ESP that includes `virtio-blk.server`, adds a `virtio-blk-test`
+  kernel command-line flag, has bootstrap launch the driver only under that
+  flag, boots with the deterministic modern PCI block device, and asserts
+  `virtio-blk: read ok`.
+- Fixed two bugs exposed by the dedicated driver boot.  First, server boot
+  modules are copied into PMM-owned backing before launch so an image loaded at
+  physical `0x400000` cannot be remapped over itself while the ELF loader maps
+  a user segment at virtual `0x400000`.  Second, modern VirtIO queue layout now
+  uses a 4-byte alignment instead of a legacy 4 KiB used-ring alignment, keeping
+  the queue-0 test ring inside one shared-buffer page until a real contiguous
+  DMA allocator exists.

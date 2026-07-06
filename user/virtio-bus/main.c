@@ -907,7 +907,9 @@ static void reply_setup_queue(struct bunix_msg *reply, u64 device_index,
 		return;
 	}
 	queue_size = queue_size_choose((u64)max_size, requested_size);
-	if (bunix_virtio_queue_layout_init(&layout, queue_size, 4096) != 0) {
+	if (bunix_virtio_queue_layout_init(&layout, queue_size,
+					   BUNIX_VIRTIO_MODERN_QUEUE_ALIGNMENT) !=
+	    0) {
 		reply_no_device(reply);
 		return;
 	}

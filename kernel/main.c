@@ -1,4 +1,5 @@
 #include "buffer.h"
+#include "cmdline.h"
 #include "console.h"
 #include "ipc.h"
 #include "multiboot2.h"
@@ -14,6 +15,8 @@
 #include <arch/user.h>
 #include "../servers/vm/vm_server.h"
 
+static const char *kernel_cmdline;
+
 static int starts_with(const char *text, const char *prefix)
 {
 	while (*prefix != '\0') {
@@ -25,11 +28,58 @@ static int starts_with(const char *text, const char *prefix)
 	return 1;
 }
 
+static u64 str_len(const char *s)
+{
+	u64 len = 0;
+
+	while (s[len] != '\0') {
+		len++;
+	}
+	return len;
+}
+
+int kernel_cmdline_has(const char *token)
+{
+	const char *cmdline = kernel_cmdline;
+	const u64 token_len = token == 0 ? 0 : str_len(token);
+
+	if (cmdline == 0 || token_len == 0) {
+		return 0;
+	}
+
+	while (*cmdline != '\0') {
+		while (*cmdline == ' ') {
+			cmdline++;
+		}
+
+		u64 len = 0;
+		while (cmdline[len] != '\0' && cmdline[len] != ' ') {
+			len++;
+		}
+		if (len == token_len) {
+			u64 i;
+
+			for (i = 0; i < len; i++) {
+				if (cmdline[i] != token[i]) {
+					break;
+				}
+			}
+			if (i == len) {
+				return 1;
+			}
+		}
+		cmdline += len;
+	}
+
+	return 0;
+}
+
 static void configure_boot_options(u64 multiboot_info)
 {
 	const char *cmdline = multiboot2_cmdline(multiboot_info);
 	int have_log = 0;
 
+	kernel_cmdline = cmdline;
 	while (*cmdline != '\0') {
 		while (*cmdline == ' ') {
 			cmdline++;

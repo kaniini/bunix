@@ -54,6 +54,7 @@ enum {
 	BUNIX_SYSCALL_HW_MMIO_READ32 = -92,
 	BUNIX_SYSCALL_HW_MMIO_WRITE32 = -94,
 	BUNIX_SYSCALL_BUFFER_PHYS = -96,
+	BUNIX_SYSCALL_CMDLINE_HAS = -98,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
@@ -573,6 +574,11 @@ static inline u64 bunix_clock_monotonic_ns(void)
 static inline long bunix_sleep_ns(u64 ns)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_SLEEP_NS, ns);
+}
+
+static inline long bunix_cmdline_has(const char *token)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_CMDLINE_HAS, (u64)token);
 }
 
 static inline long bunix_port_create(const char *name)

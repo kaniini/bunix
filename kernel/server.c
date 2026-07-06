@@ -259,21 +259,22 @@ static void mem_zero(u8 *dst, u64 len)
 	}
 }
 
-static u64 copy_boot_data_module(const struct multiboot2_module *module)
+static u64 copy_boot_module(const struct multiboot2_module *module,
+			    const char *kind)
 {
 	const u64 size = module->end - module->start;
 	const u64 pages = align_up(size, PMM_PAGE_SIZE) / PMM_PAGE_SIZE;
 	const u64 copy = pmm_pages_alloc_contiguous(pages);
 
 	if (copy == 0) {
-		console_printf("kernel: failed to copy data module %s size=%u\n",
-			       module->cmdline, (u32)size);
+		console_printf("kernel: failed to copy %s module %s size=%u\n",
+			       kind, module->cmdline, (u32)size);
 		return 0;
 	}
 
 	mem_copy((u8 *)copy, (const u8 *)module->start, size);
-	console_printf("kernel: copied data module %s image=%p-%p size=%u\n",
-		       module->cmdline, (const void *)copy,
+	console_printf("kernel: copied %s module %s image=%p-%p size=%u\n",
+		       kind, module->cmdline, (const void *)copy,
 		       (const void *)(copy + size), (u32)size);
 	return copy;
 }
@@ -810,7 +811,7 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 	const struct server *server = find_boot_server(module->cmdline);
 	if (server == 0) {
 		if (str_eq(module->cmdline, "disk0")) {
-			const u64 copy = copy_boot_data_module(module);
+			const u64 copy = copy_boot_module(module, "data");
 			const u64 size = module->end - module->start;
 
 			disk0_module.name = module->cmdline;
@@ -833,6 +834,8 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 		return;
 	}
 
+	const u64 size = module->end - module->start;
+	const u64 copy = copy_boot_module(module, "server");
 	struct module_server_start *start =
 		(struct module_server_start *)slab_zalloc(sizeof(*start));
 	if (start == 0) {
@@ -840,8 +843,8 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 		return;
 	}
 	start->server = server;
-	start->image_start = module->start;
-	start->image_end = module->end;
+	start->image_start = copy != 0 ? copy : module->start;
+	start->image_end = start->image_start + size;
 	start->data_start = 0;
 	start->data_end = 0;
 	if (str_eq(server->name, "block")) {
@@ -860,8 +863,8 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 	}
 
 	console_printf("kernel: recorded module server %s image=%p-%p\n",
-		       server->name, (const void *)module->start,
-		       (const void *)module->end);
+		       server->name, (const void *)start->image_start,
+		       (const void *)start->image_end);
 }
 
 void server_start_boot_modules(u64 multiboot_info)
