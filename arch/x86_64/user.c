@@ -92,6 +92,7 @@ enum {
 	LINUX_SYSCALL_SENDTO = 44,
 	LINUX_SYSCALL_RECVFROM = 45,
 	LINUX_SYSCALL_FCNTL = 72,
+	LINUX_SYSCALL_FLOCK = 73,
 	LINUX_SYSCALL_GETCWD = 79,
 	LINUX_SYSCALL_CHDIR = 80,
 	LINUX_SYSCALL_RENAME = 82,
@@ -759,29 +760,6 @@ static int linux_poll_timeout_is_infinite(u64 number, u64 timeout)
 	return ((u32)timeout & 0x80000000u) != 0;
 }
 
-static short linux_poll_revents(int fd, short events, int suppress_pollin)
-{
-	short revents = 0;
-
-	if (fd < 0) {
-		return 0;
-	}
-	if ((events & LINUX_POLLOUT) != 0) {
-		revents |= events & LINUX_POLLOUT;
-	}
-	if ((events & LINUX_POLLIN) != 0) {
-		if (fd == 0) {
-			if (console_can_read()) {
-				revents |= events & LINUX_POLLIN;
-			}
-		} else if (!suppress_pollin) {
-			revents |= events & LINUX_POLLIN;
-		}
-	}
-
-	return revents;
-}
-
 static int console_write_user(u64 vaddr, u64 len)
 {
 	enum {
@@ -1393,6 +1371,7 @@ static int linux_syscall_forwards_scalar(u64 number)
 	case LINUX_SYSCALL_DUP2:
 	case LINUX_SYSCALL_DUP3:
 	case LINUX_SYSCALL_FCNTL:
+	case LINUX_SYSCALL_FLOCK:
 	case LINUX_SYSCALL_GETUID:
 	case LINUX_SYSCALL_GETGID:
 	case LINUX_SYSCALL_GETEUID:
@@ -4225,32 +4204,34 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		u64 timeout_ns;
 		int infinite_timeout;
 		int slept = 0;
-		int suppress_pollin = 0;
 
 		if (arg1 > 64 || (arg1 != 0 && arg0 == 0)) {
 			return linux_einval_u64(__func__, __LINE__);
 		}
+		if (linux == 0 || reply_port == 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
 		timeout_ns = linux_poll_timeout_ns(number, arg2);
 		infinite_timeout = linux_poll_timeout_is_infinite(number, arg2);
-		if (number == LINUX_SYSCALL_PPOLL) {
-			suppress_pollin = arg2 != 0 && timeout_ns != 0;
-		} else {
-			const u32 raw = (u32)arg2;
-
-			suppress_pollin = raw != 0 &&
-					   (raw & 0x80000000u) == 0;
-		}
 poll_again:
 		ready = 0;
 		for (u64 i = 0; i < arg1; i++) {
 			const u64 addr = arg0 + i * sizeof(pollfd);
-			short revents = 0;
+			u64 revents_result;
+			short revents;
 
 			if (read_current_user(addr, &pollfd, sizeof(pollfd)) != 0) {
 				return (u64)-LINUX_EFAULT;
 			}
-			revents = linux_poll_revents(pollfd.fd, pollfd.events,
-						     suppress_pollin);
+			revents_result =
+				linux_forward_words(linux, reply_port, number,
+						    (u64)(long)pollfd.fd,
+						    (u64)(unsigned short)pollfd.events,
+						    0);
+			if ((i64)revents_result < 0) {
+				return revents_result;
+			}
+			revents = (short)revents_result;
 			if (revents != 0) {
 				ready++;
 			}

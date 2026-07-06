@@ -4164,6 +4164,78 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 	return utmps_recv_response(&process->fds[fd], len, buffer);
 }
 
+static long linux_pollfd(struct linux_process *process, long fd, u64 events)
+{
+	enum {
+		LINUX_POLLIN = 0x0001,
+		LINUX_POLLOUT = 0x0004,
+		LINUX_POLLERR = 0x0008,
+		LINUX_POLLHUP = 0x0010,
+		LINUX_POLLNVAL = 0x0020,
+	};
+	struct linux_pipe *pipe;
+	u64 revents = 0;
+
+	if (fd < 0) {
+		return 0;
+	}
+	if ((u64)fd >= process->fd_capacity ||
+	    process->fds[fd].kind == 0) {
+		return LINUX_POLLNVAL;
+	}
+	switch (process->fds[fd].kind) {
+	case LINUX_FD_CONSOLE:
+		if ((events & LINUX_POLLIN) != 0 && tty_read_queue_len != 0) {
+			revents |= LINUX_POLLIN;
+		}
+		if ((events & LINUX_POLLOUT) != 0) {
+			revents |= LINUX_POLLOUT;
+		}
+		break;
+	case LINUX_FD_FILE:
+	case LINUX_FD_DIR:
+	case LINUX_FD_SOCKET:
+		if ((events & LINUX_POLLIN) != 0) {
+			revents |= LINUX_POLLIN;
+		}
+		if ((events & LINUX_POLLOUT) != 0) {
+			revents |= LINUX_POLLOUT;
+		}
+		break;
+	case LINUX_FD_PIPE_READ:
+		pipe = linux_pipe_find(process->fds[fd].handle);
+		if (pipe == 0) {
+			revents |= LINUX_POLLNVAL;
+			break;
+		}
+		if ((events & LINUX_POLLIN) != 0 &&
+		    (pipe->len != 0 || pipe->write_refs == 0)) {
+			revents |= LINUX_POLLIN;
+		}
+		if (pipe->write_refs == 0) {
+			revents |= LINUX_POLLHUP;
+		}
+		break;
+	case LINUX_FD_PIPE_WRITE:
+		pipe = linux_pipe_find(process->fds[fd].handle);
+		if (pipe == 0) {
+			revents |= LINUX_POLLNVAL;
+			break;
+		}
+		if (pipe->read_refs == 0) {
+			revents |= LINUX_POLLERR;
+		} else if ((events & LINUX_POLLOUT) != 0 &&
+			   pipe->len < LINUX_PIPE_CAPACITY) {
+			revents |= LINUX_POLLOUT;
+		}
+		break;
+	default:
+		revents |= LINUX_POLLNVAL;
+		break;
+	}
+	return (long)revents;
+}
+
 static long linux_read(struct linux_process *process, u64 fd, u64 len,
 		       u64 buffer, u64 reply_handle, int *blocked)
 {
@@ -5266,6 +5338,17 @@ int main(void)
 							  message.words[0],
 							  message.words[1],
 							  message.words[2]);
+			break;
+		case BUNIX_LINUX_FLOCK:
+			reply.words[0] = message.words[0] < process->fd_capacity &&
+						 process->fds[message.words[0]].kind != 0 ?
+					 0 : (u64)-LINUX_EBADF;
+			break;
+		case BUNIX_LINUX_POLL:
+		case BUNIX_LINUX_PPOLL:
+			reply.words[0] = (u64)linux_pollfd(process,
+							   (long)message.words[0],
+							   message.words[1]);
 			break;
 		case BUNIX_LINUX_DUP:
 			reply.words[0] = (u64)linux_dup_to(process,

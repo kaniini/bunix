@@ -1,0 +1,24 @@
+kernel: log level info
+names: init dynamic
+user: gdt/tss/syscall ready
+time: online
+user: online
+proc: online
+vfs: online
+procfs: online
+tmpfs: online
+devfs: online
+utmpfs: online
+rootfs: online
+unionfs: online
+ping: online
+linux-server: online
+bootstrap: fs namespace
+bootstrap: fs ready
+bootstrap: linux init exec
+OpenRC
+Mounting /proc
+Caching service dependencies ... [ ok ]
+login:
+login: shell exec
+Requesting system poweroff

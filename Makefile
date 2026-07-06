@@ -88,6 +88,7 @@ SYNTHETIC_BLOCK_IMAGE := $(BUILD_DIR)/modules/disk0.img
 ALPINE_BLOCK_IMAGE := $(BUILD_DIR)/modules/alpine-disk0.img
 ROOTFS_FLAVOR ?= synthetic
 BLOCK_IMAGE := $(if $(filter alpine,$(ROOTFS_FLAVOR)),$(ALPINE_BLOCK_IMAGE),$(SYNTHETIC_BLOCK_IMAGE))
+TEST_BOOT_MARKERS := $(if $(filter alpine,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine.txt,tools/test-boot-markers.txt)
 ROOTFS_FLAVOR_STAMP := $(BUILD_DIR)/rootfs-flavor.stamp
 ROOTFS_TOOL := $(BUILD_DIR)/tools/mkrootfs
 ROOTFS_HELLO := modules/hello.txt
@@ -526,10 +527,10 @@ run-iso: $(EFI_BOOT_IMG)
 
 test: test-parallel
 
-test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
+test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt tools/test-boot-markers-alpine.txt
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
-	sh tools/check-markers.sh $(BUILD_DIR)/serial.log tools/test-boot-markers.txt
+	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
 
 test-shell: $(EFI_BOOT_APP)
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

@@ -31,6 +31,16 @@ Findings:
 - Linux TTY reads must not call the blocking early console read syscall inside
   the Linux server.  A process waiting for terminal input can otherwise stop
   unrelated Linux IPC such as `wait4`, pipe wakeups, and process exits.
+- OpenRC `gendepends.sh` exposed another kernel/server split bug: kernel-side
+  `poll` treated numeric fd 0 as the console even after shell redirection
+  duped `/etc/init.d/binfmt` onto stdin.  Linux poll readiness must be resolved
+  by the Linux server against the current Linux fd table.
+- OpenRC's dependency cache path uses `flock(2)`.  Advisory locking can be a
+  compatibility no-op for now, but valid fds must return success so OpenRC does
+  not report `Function not implemented`.
+- With Linux-server poll readiness and minimal `flock(2)`, Alpine OpenRC
+  caches service dependencies, reaches Bunix login, starts a root shell, and
+  powers off through `/sbin/poweroff`.
 
 - [x] Boot the Alpine fixture far enough to collect strace-style logs from OpenRC startup.
 - [x] Identify the OpenRC dynamic-loader stat identity issue and defer the
@@ -42,8 +52,11 @@ Findings:
 - [x] Preserve Alpine system users/groups while overlaying Bunix login
       credentials into the Alpine fixture.
 - [x] Keep Linux TTY reads from blocking the whole Linux personality server.
+- [x] Move Linux `poll`/`ppoll` readiness to the Linux server so redirected fds
+      are interpreted through the Linux fd table.
+- [x] Add minimal `flock(2)` compatibility for OpenRC dependency cache locking.
 - [ ] Triage remaining missing or incorrect syscalls by startup phase and impact.
-- [ ] Debug the remaining OpenRC fork/pipe supervision stall after `/run/lock`
+- [x] Debug the remaining OpenRC fork/pipe supervision stall after `/run/lock`
       correction.
 - [ ] Implement remaining high-priority syscall fixes in narrow slices with
       reproducer tests.
