@@ -50,6 +50,7 @@ enum {
 	PROC_EXEC_PATH_MAX = 4096,
 	PROC_TASK_NAME_MAX = 32,
 	PROC_SPAWN_SET_LOGIN = 1,
+	PROC_SPAWN_LINUX = 2,
 	PROC_SPAWN_FLAGS_MASK = 0xffffffff,
 	PROC_SPAWN_SESSION_SHIFT = 32,
 };
@@ -1217,8 +1218,8 @@ static int elf_phdr_table_size(const struct elf64_ehdr *ehdr, u64 file_size,
 static long exec_path(u64 vfs, struct process *process,
 		      const char *path, const char *task_name,
 		      u64 linux_parent_pid, u64 login_uid, int set_login,
-		      u64 session_id, const struct exec_strings *strings,
-		      u64 *linux_pid)
+		      u64 session_id, int linux_personality,
+		      const struct exec_strings *strings, u64 *linux_pid)
 {
 	const struct bunix_launch_cap caps[] = {
 		{ PROC_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
@@ -1467,7 +1468,7 @@ static long exec_path(u64 vfs, struct process *process,
 	bunix_free(interp_phdrs);
 	bunix_free(phdrs);
 	bunix_free(aux_phdrs);
-	if (is_linux_path(path)) {
+	if (linux_personality) {
 		if (register_linux_process((u64)bunix_id, process->pid,
 					   linux_parent_pid, session_id,
 					   linux_pid) != 0) {
@@ -1588,8 +1589,8 @@ static struct process *process_alloc(void)
 }
 
 static long spawn_process(const char *path, u64 login_uid, int set_login,
-			  u64 session_id, const struct exec_strings *strings,
-			  u64 *pid)
+			  u64 session_id, int linux_personality,
+			  const struct exec_strings *strings, u64 *pid)
 {
 	u64 vfs;
 	u64 linux_pid = 0;
@@ -1597,6 +1598,7 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 	struct process *process;
 	struct exec_strings default_strings = { 0, 0, 0, 0 };
 	const struct exec_strings *exec_strings = strings;
+	int linux_path;
 
 	if (pid == 0) {
 		return -1;
@@ -1643,7 +1645,8 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 		return -1;
 	}
 
-	if (is_linux_path(path) && first_linux_pid != 0) {
+	linux_path = linux_personality || is_linux_path(path);
+	if (linux_path && first_linux_pid != 0) {
 		struct process *parent = process_find_linux_pid(first_linux_pid);
 
 		linux_parent_pid = first_linux_pid;
@@ -1652,7 +1655,7 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 
 	if (exec_path(vfs, process, path, task_name_for_path(path),
 		      linux_parent_pid, login_uid, set_login, session_id,
-		      exec_strings, &linux_pid) != 0) {
+		      linux_path, exec_strings, &linux_pid) != 0) {
 		process_reset(process);
 		*pid = 0;
 		exec_strings_free(&default_strings);
@@ -1772,7 +1775,9 @@ int main(void)
 							   &strings) == 0 &&
 			    spawn_process(path, 0,
 					  (flags & PROC_SPAWN_SET_LOGIN) != 0,
-					  session_id, &strings, &pid) == 0) {
+					  session_id,
+					  (flags & PROC_SPAWN_LINUX) != 0,
+					  &strings, &pid) == 0) {
 				reply.words[0] = 0;
 				reply.words[1] = pid;
 				log_exec_line(path);

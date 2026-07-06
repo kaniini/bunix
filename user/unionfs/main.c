@@ -1015,7 +1015,6 @@ static int copy_lower_to_upper(struct unionfs_open *open, u64 task)
 
 static int copy_lower_path_to_upper(const char *relative, u64 task)
 {
-	char lower[UNIONFS_MAX_PATH];
 	char upper[UNIONFS_MAX_PATH];
 	struct bunix_msg stat_reply;
 	struct bunix_msg open_reply;
@@ -1023,7 +1022,6 @@ static int copy_lower_path_to_upper(const char *relative, u64 task)
 	int result;
 
 	if (relative == 0 ||
-	    compose_lower_path(relative, lower) != 0 ||
 	    compose_upper_path(relative, upper) != 0 ||
 	    lower_path_call(BUNIX_VFS_STAT_PATH_META_BUFFER, relative, 0, 0,
 			    &stat_reply) != 0 ||
@@ -1095,11 +1093,9 @@ static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 {
 	char relative[UNIONFS_MAX_PATH];
 	char upper[UNIONFS_MAX_PATH];
-	char lower[UNIONFS_MAX_PATH];
 	int upper_ok;
 
-	if (mounted_relative_path(path, relative) != 0 ||
-	    compose_lower_path(relative, lower) != 0) {
+	if (mounted_relative_path(path, relative) != 0) {
 		bunix_console_log("unionfs: open path failed\n",
 				  sizeof("unionfs: open path failed\n") - 1);
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
@@ -1124,7 +1120,7 @@ static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 	if (nofollow && message->type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
 		word3 |= 1UL << 32;
 	}
-	if (lower_path_call(message->type, lower, word3, message, reply) != 0) {
+	if (lower_path_call(message->type, relative, word3, message, reply) != 0) {
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
 	}
 }
@@ -1134,7 +1130,6 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 {
 	char relative[UNIONFS_MAX_PATH];
 	char upper[UNIONFS_MAX_PATH];
-	char lower[UNIONFS_MAX_PATH];
 	struct bunix_msg layer_reply;
 	u64 handle;
 	u64 upper_handle = 0;
@@ -1146,8 +1141,7 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 	int upper_ok;
 	int lower_dir;
 
-	if (mounted_relative_path(path, relative) != 0 ||
-	    compose_lower_path(relative, lower) != 0) {
+	if (mounted_relative_path(path, relative) != 0) {
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
 		return;
 	}
@@ -1162,11 +1156,9 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 			reply->words[0] = BUNIX_VFS_ERR_NOENT;
 			return;
 		}
-		if (lower_path_call(BUNIX_VFS_OPEN_BUFFER, lower,
+		if (lower_path_call(BUNIX_VFS_OPEN_BUFFER, relative,
 				    message->words[3], 0, &layer_reply) != 0 ||
 		    layer_reply.words[0] != 0) {
-			bunix_console_log("unionfs: open lower missing\n",
-					  sizeof("unionfs: open lower missing\n") - 1);
 			reply->words[0] = BUNIX_VFS_ERR_NOENT;
 			return;
 		}
@@ -1206,11 +1198,11 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 	upper_handle = layer_reply.words[1];
 	upper_size = layer_reply.words[2];
 	upper_type = layer_reply.words[3];
-	lower_dir = lower_is_directory(lower) &&
+	lower_dir = lower_is_directory(relative) &&
 		    (!upper_ok || !whiteout_exists(relative));
 	if (upper_type == BUNIX_VFS_TYPE_DIRECTORY || lower_dir) {
 		if (lower_dir &&
-		    lower_path_call(BUNIX_VFS_OPEN_BUFFER, lower,
+		    lower_path_call(BUNIX_VFS_OPEN_BUFFER, relative,
 				    message->words[3], 0, &layer_reply) == 0 &&
 		    layer_reply.words[0] == 0) {
 			lower_handle = layer_reply.words[1];
@@ -1248,11 +1240,9 @@ static void reply_mutate(struct bunix_msg *message, struct bunix_msg *reply,
 {
 	char relative[UNIONFS_MAX_PATH];
 	char upper[UNIONFS_MAX_PATH];
-	char lower[UNIONFS_MAX_PATH];
 
 	if (mounted_relative_path(path, relative) != 0 ||
-	    compose_upper_path(relative, upper) != 0 ||
-	    compose_lower_path(relative, lower) != 0) {
+	    compose_upper_path(relative, upper) != 0) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -1294,7 +1284,7 @@ static void reply_mutate(struct bunix_msg *message, struct bunix_msg *reply,
 			      BUNIX_VFS_TYPE_REGULAR;
 	struct bunix_msg lower_reply;
 
-	if (lower_path_call(BUNIX_VFS_STAT_PATH_META_BUFFER, lower, 0, 0,
+	if (lower_path_call(BUNIX_VFS_STAT_PATH_META_BUFFER, relative, 0, 0,
 			    &lower_reply) == 0 &&
 	    lower_reply.words[0] == 0 &&
 	    (lower_reply.words[2] >> 32) == want_type &&

@@ -98,6 +98,7 @@ enum {
 	LINUX_STATFS_FREE_BLOCKS = 16384,
 	LINUX_INITIAL_FDS = 16,
 	LINUX_PIPE_CAPACITY = 4096,
+	LINUX_PROC_SPAWN_LINUX = 2,
 	LINUX_S_IFCHR = 0020000,
 	LINUX_S_IFBLK = 0060000,
 	LINUX_S_IFDIR = 0040000,
@@ -537,7 +538,7 @@ static long linux_proc_spawn_path(u64 proc, const char *path)
 		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
 		.reply = 0,
 		.cap = 0,
-		.words = { 0, 1, 0, 0 },
+		.words = { 0, 1, 0, LINUX_PROC_SPAWN_LINUX },
 	};
 	u64 len;
 	u64 total;
@@ -653,6 +654,7 @@ static int is_utmps_socket_path(const char *path)
 static int linux_console_path(const char *path)
 {
 	return string_equal(path, "/dev/tty") ||
+	       string_equal(path, "/dev/ttyS0") ||
 	       string_equal(path, "/dev/console");
 }
 

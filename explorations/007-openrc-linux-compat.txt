@@ -1,6 +1,7 @@
 Close Linux personality gaps discovered by OpenRC userspace.
 
 - [ ] Boot the Alpine fixture far enough to collect strace-style logs from OpenRC startup.
+- [ ] Teach the Linux personality to load dynamic executable dependencies needed by OpenRC, including `/sbin/openrc` resolving `libeinfo` symbols.
 - [ ] Triage missing or incorrect syscalls by startup phase and impact.
 - [ ] Implement high-priority syscall fixes in narrow slices with reproducer tests.
 - [ ] Ensure process/session/task identity remains consistent across Bunix tasks and Linux PIDs.

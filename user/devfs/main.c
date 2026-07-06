@@ -12,6 +12,11 @@ enum {
 	LINUX_S_IFCHR = 0020000,
 };
 
+struct devfs_entry {
+	const char *name;
+	u64 device;
+};
+
 static u64 random_state = 0x6465766673726e67ull;
 static u64 vfs_service;
 
@@ -83,6 +88,9 @@ static u64 device_for_path(const char *path)
 		return DEVFS_RANDOM;
 	}
 	if (str_eq(path, "/dev/tty")) {
+		return DEVFS_TTY;
+	}
+	if (str_eq(path, "/dev/ttyS0")) {
 		return DEVFS_TTY;
 	}
 	if (str_eq(path, "/dev/console")) {
@@ -205,13 +213,14 @@ int main(void)
 {
 	const char online[] = "devfs: online\n";
 	const char mounted[] = "devfs: mounted\n";
-	const char *entries[] = {
-		"console",
-		"null",
-		"random",
-		"tty",
-		"urandom",
-		"zero",
+	const struct devfs_entry entries[] = {
+		{ "console", DEVFS_CONSOLE },
+		{ "null", DEVFS_NULL },
+		{ "random", DEVFS_RANDOM },
+		{ "tty", DEVFS_TTY },
+		{ "ttyS0", DEVFS_TTY },
+		{ "urandom", DEVFS_RANDOM },
+		{ "zero", DEVFS_ZERO },
 	};
 	struct bunix_msg message;
 
@@ -362,16 +371,16 @@ int main(void)
 				break;
 			}
 			reply.words[0] = 0;
-			reply.words[1] = (message.words[1] + 1) |
+			reply.words[1] = entries[message.words[1]].device |
 					 ((u64)BUNIX_VFS_TYPE_CHARACTER << 32);
-			reply.words[2] = str_len(entries[message.words[1]]);
+			reply.words[2] = str_len(entries[message.words[1]].name);
 			reply.words[3] = reply.words[2];
 			if (reply.words[3] > message.words[3]) {
 				reply.words[3] = message.words[3];
 			}
 			if (reply.words[3] != 0 &&
 			    bunix_buffer_write(message.cap, message.words[2],
-					       entries[message.words[1]],
+					       entries[message.words[1]].name,
 					       reply.words[3]) != 0) {
 				reply.words[0] = (u64)-1;
 			}

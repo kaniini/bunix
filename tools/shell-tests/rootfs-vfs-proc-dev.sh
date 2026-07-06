@@ -46,6 +46,7 @@ busybox head -c 4 /dev/urandom >/dev/null && echo DEV_URANDOM_READ_OK
 busybox test -c /dev/null && echo DEV_NULL_CHAR_OK
 busybox test -c /dev/zero && echo DEV_ZERO_CHAR_OK
 busybox test -c /dev/console && echo DEV_CONSOLE_CHAR_OK
+busybox test -c /dev/ttyS0 && echo DEV_TTYS0_CHAR_OK
 busybox sh -c 'i=0; while [ "$i" -lt 300 ]; do printf a; i=$((i + 1)); done; echo DEV_CONSOLE_BIG_END' > /dev/console && echo DEV_CONSOLE_BIG_WRITE_OK
 EOF_ROOTFS_VFS_PROC_DEV
 }
@@ -81,7 +82,8 @@ check_rootfs_vfs_proc_dev() {
 	wait_for_fixed "$log" "PROC_SELF_CMDLINE_CALLER_OK" "procfs self cmdline did not resolve caller" 45 180
 
 	wait_for_each_fixed "$log" "devfs character-device regression missing" 45 180 \
-		DEV_NULL_CHAR_OK DEV_ZERO_CHAR_OK DEV_CONSOLE_CHAR_OK
+		DEV_NULL_CHAR_OK DEV_ZERO_CHAR_OK DEV_CONSOLE_CHAR_OK \
+		DEV_TTYS0_CHAR_OK
 	wait_for_each_fixed "$log" "procfs content regression missing" 45 220 \
 		"cpu  " "busybox" "direct_delivered " "direct_handoff "
 	wait_for_each_regex "$log" "IPC fast path counter did not increase" 45 220 \

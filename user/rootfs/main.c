@@ -112,6 +112,95 @@ static int set_path(char *target, const char *path)
 	return 0;
 }
 
+static int normalize_absolute_path(const char *path, char *out)
+{
+	u64 out_len = 1;
+	u64 pos = 1;
+
+	if (path == 0 || out == 0 || path[0] != '/') {
+		return -1;
+	}
+	out[0] = '/';
+	out[1] = '\0';
+	while (path[pos] != '\0') {
+		u64 start;
+		u64 len;
+
+		while (path[pos] == '/') {
+			pos++;
+		}
+		start = pos;
+		while (path[pos] != '\0' && path[pos] != '/') {
+			pos++;
+		}
+		len = pos - start;
+		if (len == 0 ||
+		    (len == 1 && path[start] == '.')) {
+			continue;
+		}
+		if (len == 2 && path[start] == '.' &&
+		    path[start + 1] == '.') {
+			if (out_len > 1) {
+				while (out_len > 1 && out[out_len - 1] != '/') {
+					out_len--;
+				}
+				out[out_len == 1 ? 1 : out_len] = '\0';
+			}
+			continue;
+		}
+		if (out_len != 1) {
+			if (out_len + 1 >= ROOTFS_MAX_PATH) {
+				return -1;
+			}
+			out[out_len++] = '/';
+		}
+		if (out_len + len >= ROOTFS_MAX_PATH) {
+			return -1;
+		}
+		for (u64 i = 0; i < len; i++) {
+			out[out_len++] = path[start + i];
+		}
+		out[out_len] = '\0';
+	}
+	return 0;
+}
+
+static int resolve_symlink_target(const char *link_path, const char *target,
+				  char *out)
+{
+	char combined[ROOTFS_MAX_PATH];
+	u64 slash = 0;
+	u64 pos = 0;
+
+	if (link_path == 0 || target == 0 || out == 0) {
+		return -1;
+	}
+	if (target[0] == '/') {
+		return normalize_absolute_path(target, out);
+	}
+	for (u64 i = 0; link_path[i] != '\0'; i++) {
+		if (link_path[i] == '/') {
+			slash = i;
+		}
+	}
+	if (slash == 0) {
+		combined[pos++] = '/';
+	} else {
+		for (u64 i = 0; i < slash && pos + 1 < ROOTFS_MAX_PATH; i++) {
+			combined[pos++] = link_path[i];
+		}
+		combined[pos++] = '/';
+	}
+	for (u64 i = 0; target[i] != '\0'; i++) {
+		if (pos + 1 >= ROOTFS_MAX_PATH) {
+			return -1;
+		}
+		combined[pos++] = target[i];
+	}
+	combined[pos] = '\0';
+	return normalize_absolute_path(combined, out);
+}
+
 static char *dup_path(const char *path)
 {
 	const u64 len = str_len(path);
@@ -401,8 +490,7 @@ static const struct rootfs_entry *rootfs_resolve(const char *path)
 			return entry;
 		}
 		if (rootfs_read_text(entry, target, sizeof(target)) != 0 ||
-		    target[0] != '/' ||
-		    set_path(current, target) != 0) {
+		    resolve_symlink_target(current, target, current) != 0) {
 			return 0;
 		}
 	}

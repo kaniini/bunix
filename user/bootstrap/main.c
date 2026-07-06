@@ -363,6 +363,7 @@ static long register_proc_execs(u64 proc, u64 vfs)
 		return -1;
 	}
 	if (vfs_read_text(vfs, "/etc/execs", text, BOOT_CONFIG_MAX) != 0) {
+		result = 0;
 		goto out;
 	}
 	while (text[pos] != '\0') {
@@ -545,6 +546,7 @@ static long run_boot_spawns(u64 proc, u64 vfs)
 		return -1;
 	}
 	if (vfs_read_text(vfs, "/etc/spawns", text, BOOT_CONFIG_MAX) != 0) {
+		final = 0;
 		goto out;
 	}
 	while (text[pos] != '\0') {
