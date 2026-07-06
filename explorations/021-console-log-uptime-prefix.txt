@@ -1,0 +1,55 @@
+Prefix console log messages with uptime.
+
+Problem:
+
+- Bunix console log messages are useful, but once many servers are active it
+  is hard to tell ordering, latency, and time gaps from text alone.
+- Linux-style log timestamps make boot, OpenRC, scheduler, IPC, server, and
+  dmesg investigations much easier without requiring full tracing.
+- The timestamping should apply to log messages, not raw interactive console
+  writes, so shell output and terminal control sequences remain unchanged.
+
+Design direction:
+
+- Add a monotonic uptime prefix to every complete console log line, similar to
+  Linux `dmesg` output.
+- Keep raw console writes used for TTY/user output unprefixed.
+- Use the kernel's monotonic time source where available, with a sensible early
+  boot behavior before the timer is fully online.
+- Make the format stable enough for tests while avoiding overfitting existing
+  marker checks to a single timestamp value.
+
+Constraints:
+
+- Do not break existing serial marker tests.  Tests that look for substrings
+  should keep working, but exact-line checks may need targeted updates.
+- Prefix only log records emitted through console log paths, including server
+  `bunix_console_log()` output and dmesg-visible kernel log records.
+- Preserve the distinction between early console, console server output, ring
+  buffer logging, and user-facing terminal writes.
+- Make the implementation SMP-safe and compatible with existing console
+  locking.
+- The timestamp source should be architecture-neutral enough to survive future
+  ARM work.
+
+Tasks:
+
+- [ ] Inventory all console write paths and classify them as log records,
+      terminal/user writes, early boot diagnostics, or raw device output.
+- [ ] Define the exact uptime prefix format, precision, early-boot fallback,
+      and whether continuation lines inherit or suppress prefixes.
+- [ ] Implement line-oriented prefixing in the kernel console log path so each
+      complete log line gets one uptime prefix in both serial output and the
+      dmesg ring.
+- [ ] Ensure `bunix_console_write()` and Linux `/dev/console`/TTY output remain
+      unprefixed.
+- [ ] Ensure `bunix_console_log()` from userspace servers is prefixed exactly
+      once, including fragmented writes and lines without a trailing newline.
+- [ ] Update marker tests and exact-line tests to tolerate uptime prefixes only
+      where they apply to logs.
+- [ ] Add focused tests proving log lines are prefixed, interactive shell
+      output is not prefixed, and BusyBox `dmesg` exposes the prefixed records.
+- [ ] Verify boot, shell, Alpine/OpenRC boot, and dmesg behavior with narrow
+      tests before running the full completion gate.
+- [ ] Document any remaining log-format limitations or future structured-log
+      work.
