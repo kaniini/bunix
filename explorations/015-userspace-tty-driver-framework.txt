@@ -33,9 +33,9 @@ Tasks:
       specific port ranges, MMIO ranges, IRQ vectors, and operation masks.
 - [x] Create an initial userspace driver framework with driver registration,
       resource discovery, interrupt/event delivery, and lifecycle diagnostics.
-- [ ] Move the serial console implementation into a userspace driver using the
+- [x] Move the serial console implementation into a userspace driver using the
       hardware RPC protocol instead of direct kernel console ownership.
-- [ ] Keep early console output available until the serial driver is online,
+- [x] Keep early console output available until the serial driver is online,
       then hand off normal console writes/input to the userspace path.
 - [ ] Refactor TTY line discipline into a clear server-side layer that can be
       shared by serial console, future virtual terminals, and PTYs.
@@ -98,6 +98,20 @@ Progress:
 - Moved Linux TTY mutable state into a `struct linux_tty` instance.  Behavior is
   unchanged, but the line discipline now has a concrete state object boundary
   for the later split into a reusable TTY server layer.
+- Added `ipc_try_recv` as a generic nonblocking IPC primitive so consoled can
+  run a driver-style event loop without blocking forever on console RPCs.
+- Moved serial input polling out of the kernel `console-input` thread and into
+  consoled.  Consoled reads COM1 through its attenuated hardware resource,
+  resolves the Linux server when available, and forwards bytes as
+  `BUNIX_LINUX_TTY_INPUT`.
+- Kept early console writes as the serialized boot-output path until
+  `BUNIX_CONSOLE_LOGS_TO_RING`; after that handoff, normal console writes can
+  use the userspace serial driver path while kernel/server logs live in dmesg.
+- Tightened login echo handling for faster userspace serial input: login now
+  disables terminal echo before accepting credentials and manually echoes the
+  username line, avoiding password typeahead leakage.
+- Fixed the shell harness to relogin before user shards if a prior selected
+  shard intentionally ended at the login prompt.
 
 Portability notes:
 

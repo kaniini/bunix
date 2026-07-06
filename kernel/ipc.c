@@ -456,6 +456,43 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 	return 0;
 }
 
+int ipc_try_recv(struct ipc_port *port, struct ipc_message *message)
+{
+	if (port == 0 || message == 0) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&ipc_lock);
+	port->affinity_cpu = sched_current_cpu_id();
+	port->affinity_valid = 1;
+	if (port->head == 0) {
+		spin_unlock_irqrestore(&ipc_lock, flags);
+		return 1;
+	}
+
+	struct ipc_message_node *node = port->head;
+	port->head = node->next;
+	if (port->head == 0) {
+		port->tail = 0;
+	}
+
+	port->queued--;
+	*message = node->message;
+	node->message.reply_port = 0;
+	node->message.cap_type = IPC_CAP_NONE;
+	node->message.cap_object = 0;
+	node->message.cap_rights = 0;
+	message_free(node);
+
+	if (ipc_should_log(port, message)) {
+		console_printf("ipc: try_recv port=%s proto=0x%x type=%u sender=%u queued=%u\n",
+			       port->name, message->protocol, message->type,
+			       message->sender, port->queued);
+	}
+	spin_unlock_irqrestore(&ipc_lock, flags);
+	return 0;
+}
+
 void ipc_cancel_thread(struct thread *thread)
 {
 	if (thread == 0) {

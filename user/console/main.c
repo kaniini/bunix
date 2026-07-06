@@ -10,12 +10,15 @@ enum {
 	COM1_LINE_CTRL = 3,
 	COM1_MODEM_CTRL = 4,
 	COM1_LINE_STATUS = 5,
+	COM1_LINE_STATUS_DATA_READY = 0x01,
 	COM1_LINE_STATUS_TX_EMPTY = 0x20,
 };
 
 static char console_buffer[CONSOLE_CHUNK];
 static u64 console_serial_handle;
+static u64 console_linux_handle;
 static int console_serial_ready;
+static int console_driver_output_enabled;
 
 static const struct bunix_driver_resource console_resources[] = {
 	{
@@ -78,6 +81,24 @@ static int serial_putc(char c)
 	return serial_out8(COM1_DATA, (u64)(unsigned char)c);
 }
 
+static int serial_try_getc(char *out)
+{
+	const long status = serial_in8(COM1_LINE_STATUS);
+	long value;
+
+	if (out == 0 || status < 0 ||
+	    (status & COM1_LINE_STATUS_DATA_READY) == 0) {
+		return 0;
+	}
+
+	value = serial_in8(COM1_DATA);
+	if (value < 0) {
+		return 0;
+	}
+	*out = (char)(unsigned char)value;
+	return 1;
+}
+
 static int serial_write(const char *text, u64 len)
 {
 	if (!console_serial_ready) {
@@ -104,11 +125,70 @@ static void console_emit(u64 buffer, u64 len, int log)
 		}
 		if (log) {
 			bunix_early_console_log(console_buffer, chunk);
-		} else if (serial_write(console_buffer, chunk) != 0) {
+		} else if (!console_driver_output_enabled ||
+			   serial_write(console_buffer, chunk) != 0) {
 			bunix_early_console_write(console_buffer, chunk);
 		}
 		offset += chunk;
 	}
+}
+
+static u64 resolve_linux(void)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_RESOLVE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { BUNIX_NAMES_ROOT, BUNIX_SERVICE_LINUX,
+			   BUNIX_RIGHT_SEND, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(CONSOLE_HANDLE_NAMES, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return 0;
+	}
+	return reply.cap;
+}
+
+static void console_forward_input(char c)
+{
+	struct bunix_msg message = {
+		.protocol = BUNIX_PROTO_LINUX,
+		.type = BUNIX_LINUX_TTY_INPUT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { (u64)(unsigned char)c, 0, 0, 0 },
+	};
+
+	if (console_linux_handle == 0) {
+		console_linux_handle = resolve_linux();
+	}
+	if (console_linux_handle != 0 &&
+	    bunix_ipc_send(console_linux_handle, &message) != 0) {
+		bunix_handle_close(console_linux_handle);
+		console_linux_handle = 0;
+	}
+}
+
+static int console_poll_input(void)
+{
+	int any = 0;
+	char c;
+
+	if (!console_serial_ready) {
+		return 0;
+	}
+	while (serial_try_getc(&c)) {
+		console_forward_input(c);
+		any = 1;
+	}
+	return any;
 }
 
 int main(void)
@@ -126,13 +206,24 @@ int main(void)
 				   console_serial_ready ? "driver online" :
 				   "driver fallback");
 	for (;;) {
-		if (bunix_ipc_recv(BUNIX_HANDLE_CONSOLE, &message) != 0 ||
-		    message.protocol != BUNIX_PROTO_CONSOLE) {
+		const long recv =
+			bunix_ipc_try_recv(BUNIX_HANDLE_CONSOLE, &message);
+		int did_work = console_poll_input();
+
+		if (recv == 1) {
+			if (!did_work) {
+				bunix_sleep_ns(1000000ull);
+			}
 			continue;
 		}
+		if (recv != 0 || message.protocol != BUNIX_PROTO_CONSOLE) {
+			continue;
+		}
+		did_work = 1;
 
 		if (message.type == BUNIX_CONSOLE_LOGS_TO_RING) {
 			bunix_early_console_logs_to_ring();
+			console_driver_output_enabled = console_serial_ready;
 		} else if (message.type == BUNIX_CONSOLE_WRITE ||
 		    message.type == BUNIX_CONSOLE_LOG) {
 			if (message.cap != 0 && message.words[0] != 0) {
@@ -155,5 +246,6 @@ int main(void)
 			bunix_ipc_send(message.reply, &reply);
 			bunix_handle_close(message.reply);
 		}
+		(void)did_work;
 	}
 }

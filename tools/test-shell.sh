@@ -252,6 +252,16 @@ EOF_AUTO_EXIT_USER
 	user_shell_active=0
 }
 
+login_user_if_needed() {
+	if [ "${user_shell_active:-0}" = 1 ]; then
+		return
+	fi
+
+	user_prompts_before=$(current_prompt_count "~ $ ")
+	login_user kaniini bunix "~ $ " "$user_prompts_before"
+	user_shell_active=1
+}
+
 login_root_if_needed() {
 	if [ "${root_shell_active:-0}" = 1 ]; then
 		return
@@ -325,41 +335,49 @@ fi
 
 if part_selected exec-argv-pipe; then
 	begin_shard exec-argv-pipe
+	login_user_if_needed
 	run_exec_argv_pipe
 fi
 
 if part_selected procfs-cmdline; then
 	begin_shard procfs-cmdline
+	login_user_if_needed
 	run_procfs_cmdline
 fi
 
 if part_selected rootfs-vfs-proc-dev; then
 	begin_shard rootfs-vfs-proc-dev
+	login_user_if_needed
 	run_rootfs_vfs_proc_dev
 fi
 
 if part_selected tmpfs-basic-linux-tests; then
 	begin_shard tmpfs-basic-linux-tests
+	login_user_if_needed
 	run_tmpfs_basic_linux_tests
 fi
 
 if part_selected path-limits-statfs; then
 	begin_shard path-limits-statfs
+	login_user_if_needed
 	run_path_limits_statfs
 fi
 
 if part_selected union-root-user; then
 	begin_shard union-root-user
+	login_user_if_needed
 	run_union_root_user
 fi
 
 if part_selected tmpfs-extended; then
 	begin_shard tmpfs-extended
+	login_user_if_needed
 	run_tmpfs_extended
 fi
 
 if part_selected large-io-mount; then
 	begin_shard large-io-mount
+	login_user_if_needed
 	run_large_io_mount
 fi
 
@@ -415,6 +433,7 @@ fi
 
 if part_selected interactive-tty; then
 	begin_shard interactive-tty
+	login_user_if_needed
 	run_interactive_tty
 	user_shell_active=0
 	finish_shard interactive-tty

@@ -136,6 +136,7 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "sched: thread tid") ||
 	    str_starts_with(fmt, "ipc: send") ||
 	    str_starts_with(fmt, "ipc: recv") ||
+	    str_starts_with(fmt, "ipc: try_recv") ||
 	    str_starts_with(fmt, "buffer: create") ||
 	    str_starts_with(fmt, "buffer: destroy") ||
 	    str_starts_with(fmt, "buffer: read") ||

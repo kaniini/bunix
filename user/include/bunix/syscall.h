@@ -41,6 +41,7 @@ enum {
 	BUNIX_SYSCALL_TASK_CLEAR = -66,
 	BUNIX_SYSCALL_HW_PORT_IN8 = -68,
 	BUNIX_SYSCALL_HW_PORT_OUT8 = -70,
+	BUNIX_SYSCALL_IPC_TRY_RECV = -72,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
@@ -509,6 +510,11 @@ static inline long bunix_ipc_send(u64 port, const struct bunix_msg *message)
 static inline long bunix_ipc_recv(u64 port, struct bunix_msg *message)
 {
 	return bunix_syscall2(BUNIX_SYSCALL_IPC_RECV, port, (u64)message);
+}
+
+static inline long bunix_ipc_try_recv(u64 port, struct bunix_msg *message)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_IPC_TRY_RECV, port, (u64)message);
 }
 
 static inline long bunix_ipc_call(u64 port, const struct bunix_msg *request,

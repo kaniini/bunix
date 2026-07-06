@@ -472,14 +472,19 @@ int main(int argc, char **argv, char **envp)
 	linux = resolve_service(aux.names_handle, BUNIX_SERVICE_LINUX,
 				BUNIX_RIGHT_SEND);
 	for (;;) {
+		restore_termios = tty_set_echo(0, saved_termios) == 0;
 		write_text("login: ");
 		nread = read_text(name, sizeof(name));
 		if (nread <= 0) {
+			if (restore_termios) {
+				tty_restore(saved_termios);
+			}
 			continue;
 		}
 		strip_line(name, (u64)nread);
+		write_text(name);
+		write_text("\n");
 		write_text("password: ");
-		restore_termios = tty_set_echo(0, saved_termios) == 0;
 		nread = read_text(password, sizeof(password));
 		if (restore_termios) {
 			tty_restore(saved_termios);
