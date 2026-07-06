@@ -388,18 +388,6 @@ while IFS='	' read -r name smp memory timeout_seconds cost clean_boot; do
 		skipped=$((skipped + 1))
 		continue
 	fi
-	if [ "$name" = root-mount-soak ]; then
-		echo "test-parallel name=$name status=skip reason=unimplemented"
-		mkdir -p "$run_dir/$name"
-		echo skip > "$run_dir/$name/status"
-		echo 0 > "$run_dir/$name/seconds"
-		echo unimplemented > "$run_dir/$name/reason"
-		echo 0 > "$run_dir/$name/attempts"
-		echo "$name" >> "$run_dir/shards.txt"
-		skipped=$((skipped + 1))
-		continue
-	fi
-
 	echo "$name" >> "$run_dir/shards.txt"
 	run_worker "$name" "$smp" "$memory" "$timeout_seconds" "$cost" "$clean_boot" &
 	pids="$pids $!"

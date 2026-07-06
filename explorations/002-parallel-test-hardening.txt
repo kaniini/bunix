@@ -27,11 +27,27 @@ Goal:
 
 Plan:
 
-1. Implement `root-mount-soak`
+1. Implement `root-mount-soak` [DONE]
    Add the missing root mount/umount soak shard to `tools/test-shell.sh` and
    `tools/shell-tests/`. It should boot cleanly, log in as root, exercise the
    root-only mount/umount race coverage intended by the manifest, and stop being
    skipped by `tools/test-parallel.sh`.
+
+   Result:
+
+   - Added `tools/shell-tests/root-mount-soak.sh`.
+   - `tools/test-shell.sh` sources and runs the shard as a root-phase shard.
+   - `tools/test-parallel.sh` no longer skips `root-mount-soak`.
+   - The shard repeatedly mounts tmpfs on unique `/mnt/soak-*` mountpoints,
+     writes and verifies payloads, unmounts, checks hidden state, and verifies
+     busy unmount denial while a subprocess has a mountpoint as cwd.
+
+   Need:
+
+   - Repeatedly mounting and unmounting tmpfs on the same `/mnt` mountpoint
+     leaves `/mnt` busy after the first cycle. The soak shard avoids this with
+     unique mountpoints so the parallel gate can close, but this is a VFS/mount
+     lifecycle bug that needs a future exploration.
 
 2. Investigate one-vCPU boot failure
    Reproduce the `SMP=1` early-exit behavior with a focused shard and QEMU debug

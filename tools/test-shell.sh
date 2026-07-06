@@ -30,6 +30,7 @@ shell_parts=${BUNIX_SHELL_PART:-all}
 . "$script_dir/shell-tests/root-login-union.sh"
 . "$script_dir/shell-tests/root-tmpfs-chown.sh"
 . "$script_dir/shell-tests/long-login.sh"
+. "$script_dir/shell-tests/root-mount-soak.sh"
 BUNIX_COLLECT_FAILURES=1
 BUNIX_FAILURE_DIR=$failure_dir
 BUNIX_QEMU_LOG=$qemu_log
@@ -221,10 +222,7 @@ require_supported_parts() {
 		smoke|login-smoke|exec-argv-pipe|rootfs-vfs-proc-dev|\
 		tmpfs-basic-linux-tests|path-limits-statfs|union-root-user|\
 		tmpfs-extended|large-io-mount|interactive-tty|root-login-union|\
-		root-tmpfs-chown|long-login)
-			;;
-		root-mount-soak)
-			fail_with_log "shell shard is not implemented yet: $part" "$log" 80
+		root-tmpfs-chown|long-login|root-mount-soak)
 			;;
 		*)
 			fail_with_log "unknown shell shard: $part" "$log" 80
@@ -390,6 +388,14 @@ if part_selected root-tmpfs-chown; then
 	root_shell_active=0
 	user_shell_active=0
 	finish_shard root-tmpfs-chown
+fi
+
+if part_selected root-mount-soak; then
+	begin_shard root-mount-soak
+	run_root_mount_soak
+	check_root_mount_soak
+	root_shell_active=1
+	finish_shard root-mount-soak
 fi
 
 if part_selected long-login; then
