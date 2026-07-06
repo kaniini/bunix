@@ -29,7 +29,7 @@ Tasks:
       address configuration, and interrupt behavior.
 - [x] Define the packet-device protocol between NIC drivers and the network
       interface manager.
-- [ ] Implement VirtIO-net feature negotiation, RX/TX virtqueues, buffer
+- [x] Implement VirtIO-net feature negotiation, RX/TX virtqueues, buffer
       replenishment, transmit completion, receive delivery, and device reset.
 - [x] Add support for MAC address discovery/configuration and basic link state.
 - [ ] Integrate the driver with the network stack interface registry and route
