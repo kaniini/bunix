@@ -71,12 +71,14 @@ Plan:
      proc tools, mount listing, basic mkdir checks, and large exec coverage.
    - `tools/shell-tests/path-limits-statfs.sh` owns deep tmpfs path coverage,
      Linux path limit/errno tests, and the `df`/statfs smoke check.
+   - `tools/shell-tests/union-root-user.sh` owns user-session unionfs lower
+     rename, lower hardlink copy-up, root upper writes, long names, readdir, and
+     unlink behavior.
 
    Needs:
 
    - Extract the remaining user-phase batches:
-     `union-root-user`, `tmpfs-extended`, `large-io-mount`, and
-     `interactive-tty`.
+     `tmpfs-extended`, `large-io-mount`, and `interactive-tty`.
    - Extract the root-phase batches:
      `root-login-union`, `root-tmpfs-chown`, `long-login`, and
      `root-mount-soak`.
