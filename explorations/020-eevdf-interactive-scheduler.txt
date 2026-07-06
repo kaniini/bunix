@@ -1,0 +1,59 @@
+Extend the scheduler into a high-quality EEVDF-inspired interactive scheduler.
+
+Problem:
+
+- Bunix has enough task/thread/preemption machinery to run real userspace, but
+  the scheduler still needs a more deliberate policy for latency, fairness,
+  SMP placement, and interactive behavior.
+- The target is an EEVDF-style scheduler that favors interactivity and low
+  latency over strict throughput fairness where those goals conflict.
+
+Design direction:
+
+- Use EEVDF concepts for virtual deadlines, eligible time, lag accounting, and
+  proportional fairness.
+- Use Con Kolivas' scheduler work, including BFS and MuQSS, as inspiration for
+  simple global reasoning, strong desktop/interactivity latency, bounded
+  wakeup behavior, and avoiding excessive scheduler complexity.
+- Keep the scheduler portable and SMP-aware.  Per-CPU run queues may exist for
+  scalability, but the policy should have a clear global fairness/latency
+  model and avoid hiding starvation behind per-CPU artifacts.
+
+Constraints:
+
+- Preserve Bunix task/thread semantics: tasks are low-level objects, not Linux
+  processes.
+- Linux process/LWP behavior should map onto Bunix scheduling primitives
+  without making Linux PID identity the scheduler's primary model.
+- Interactive wakeups, IPC wakeups, console input, and server responsiveness
+  should get good latency under load.
+- Server threads and user processes should have tunable weights/classes without
+  creating ambient privilege or ad hoc hardcoded special cases.
+- The design must handle SMP placement, migration, idle balancing, affinity,
+  preemption, timer ticks, and future real-time-ish classes cleanly.
+
+Tasks:
+
+- [ ] Inventory the current task/thread/runqueue/preemption/SMP code and
+      document existing invariants.
+- [ ] Define scheduler entities, weights, virtual runtime/lag, eligible time,
+      virtual deadlines, and how Bunix threads map into those entities.
+- [ ] Define interactivity heuristics: wakeup bonus, sleep credit, IPC/server
+      wakeups, terminal input latency, and guardrails against gaming.
+- [ ] Define scheduling classes or priorities for kernel/server/user work,
+      including how capabilities or policy servers may grant scheduling rights.
+- [ ] Design SMP run queues, load tracking, migration, CPU affinity, idle CPU
+      selection, and cross-CPU wakeup behavior.
+- [ ] Implement EEVDF-style pick-next logic with deterministic tie-breaking and
+      bounded accounting cost.
+- [ ] Integrate preemption decisions for wakeups, timer ticks, IPC fast paths,
+      blocking, yield, and task exit.
+- [ ] Add instrumentation for runnable latency, wakeup-to-run time, runtime
+      share, migrations, preemptions, and per-CPU load.
+- [ ] Add stress tests for CPU-bound fairness, interactive shell latency under
+      CPU load, server RPC latency, SMP balancing, affinity, starvation, and
+      fork/exec/exit churn.
+- [ ] Compare behavior against the current scheduler on shell responsiveness,
+      build/test runtime, watch/sleep behavior, and server throughput.
+- [ ] Document the policy tradeoffs explicitly: where Bunix chooses
+      interactivity/latency over strict fairness, and why.
