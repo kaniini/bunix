@@ -986,6 +986,39 @@ static void reply_notify_queue(struct bunix_msg *reply, u64 device_index,
 	reply->words[3] = 0;
 }
 
+static void reply_read_config64(struct bunix_msg *reply, u64 device_index,
+				u64 offset)
+{
+	struct virtio_bus_device *device;
+	struct bunix_device_resource *config;
+	long low;
+	long high;
+
+	if (device_index >= device_count) {
+		reply_no_device(reply);
+		return;
+	}
+	device = &devices[device_index];
+	config = resource_find_flag(device,
+				    BUNIX_DEV_RESOURCE_FLAG_VIRTIO_DEVICE_CFG,
+				    0);
+	if (config == 0 || config->handle == 0 || offset + 8 > config->len) {
+		reply_no_device(reply);
+		return;
+	}
+	low = bunix_hw_mmio_read32(config->handle, offset);
+	high = bunix_hw_mmio_read32(config->handle, offset + 4);
+	if (low < 0 || high < 0) {
+		reply_no_device(reply);
+		return;
+	}
+	reply->words[0] = BUNIX_DEV_OK;
+	reply->words[1] = (u64)(unsigned int)low |
+			  ((u64)(unsigned int)high << 32);
+	reply->words[2] = offset;
+	reply->words[3] = 8;
+}
+
 static void reply_bind_driver(struct bunix_msg *reply, u64 device_index)
 {
 	struct virtio_bus_device *device;
@@ -1078,6 +1111,10 @@ int main(void)
 		case BUNIX_DEV_NOTIFY_QUEUE:
 			reply_notify_queue(&reply, message.words[0],
 					   message.words[1]);
+			break;
+		case BUNIX_DEV_READ_CONFIG64:
+			reply_read_config64(&reply, message.words[0],
+					    message.words[1]);
 			break;
 		case BUNIX_DEV_BIND_DRIVER:
 			reply_bind_driver(&reply, message.words[0]);

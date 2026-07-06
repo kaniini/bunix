@@ -4,13 +4,18 @@ enum {
 	VIRTIO_BLK_HANDLE_NAMES = 3,
 	VIRTIO_BLK_QUEUE_SIZE = 128,
 	VIRTIO_BLK_SECTOR_SIZE = 512,
+	VIRTIO_BLK_BUFFER_MAX = 128 * 1024,
 	VIRTIO_BLK_REQ_HEADER_SIZE = 16,
 	VIRTIO_BLK_REQ_DATA_OFFSET = VIRTIO_BLK_REQ_HEADER_SIZE,
 	VIRTIO_BLK_REQ_STATUS_OFFSET = VIRTIO_BLK_REQ_DATA_OFFSET +
-				       VIRTIO_BLK_SECTOR_SIZE,
+				       VIRTIO_BLK_BUFFER_MAX,
 	VIRTIO_BLK_REQ_SIZE = VIRTIO_BLK_REQ_STATUS_OFFSET + 1,
 	VIRTIO_BLK_COMPLETION_POLLS = 1000,
 };
+
+static unsigned char block_buffer[VIRTIO_BLK_BUFFER_MAX];
+static unsigned char cache_buffer[VIRTIO_BLK_BUFFER_MAX];
+static unsigned char sector_buffer[VIRTIO_BLK_SECTOR_SIZE];
 
 struct virtio_blk_queue {
 	u64 handle;
@@ -20,6 +25,36 @@ struct virtio_blk_queue {
 	u64 seen_used;
 	struct bunix_virtio_queue_layout layout;
 };
+
+struct virtio_blk_device {
+	u64 device_service;
+	u64 device_index;
+	u64 capacity_bytes;
+	u64 req_buffer;
+	u64 req_phys;
+	u64 cache_start;
+	u64 cache_len;
+	struct virtio_blk_queue queue;
+};
+
+static long register_service(u64 service, u64 handle)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_REGISTER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = handle,
+		.words = { BUNIX_NAMES_ROOT, service, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(VIRTIO_BLK_HANDLE_NAMES, &request, &reply) != 0) {
+		return -1;
+	}
+	return reply.words[0] == 0 ? 0 : -1;
+}
 
 static u64 device_service_wait(void)
 {
@@ -87,6 +122,19 @@ static long find_block_device(u64 device_service)
 		}
 	}
 	return -1;
+}
+
+static u64 virtio_blk_capacity_bytes(u64 device_service, u64 device_index)
+{
+	struct bunix_msg reply;
+	u64 sectors;
+
+	if (device_call(device_service, BUNIX_DEV_READ_CONFIG64, device_index,
+			0, 0, &reply) != 0) {
+		return 0;
+	}
+	sectors = reply.words[1];
+	return sectors * VIRTIO_BLK_SECTOR_SIZE;
 }
 
 static int queue_write(u64 handle, u64 offset, const void *src, u64 len)
@@ -166,9 +214,12 @@ static int virtio_blk_queue_init(struct virtio_blk_queue *queue)
 static int virtio_blk_submit(u64 device_service, u64 device_index,
 			     struct virtio_blk_queue *queue, u64 req_buffer,
 			     u64 req_phys, u64 type, u64 sector, int has_data,
-			     int device_writes_data)
+			     u64 data_len, int device_writes_data)
 {
 	const unsigned char pending = 0xff;
+	const u64 status_offset = has_data ?
+					  VIRTIO_BLK_REQ_DATA_OFFSET + data_len :
+					  VIRTIO_BLK_REQ_DATA_OFFSET;
 	struct bunix_virtio_blk_req_header header = {
 		.type = (unsigned int)type,
 		.reserved = 0,
@@ -188,6 +239,7 @@ static int virtio_blk_submit(u64 device_service, u64 device_index,
 
 	if (queue == 0 || queue->handle == 0 || queue->phys == 0 ||
 	    req_buffer == 0 || req_phys == 0 ||
+	    data_len > VIRTIO_BLK_BUFFER_MAX ||
 	    queue->next_avail - queue->seen_used >= queue->queue_size) {
 		return -1;
 	}
@@ -196,7 +248,7 @@ static int virtio_blk_submit(u64 device_service, u64 device_index,
 		      (queue->next_avail % queue->queue_size) *
 			      sizeof(unsigned short);
 	if (bunix_buffer_write(req_buffer, 0, &header, sizeof(header)) != 0 ||
-	    bunix_buffer_write(req_buffer, VIRTIO_BLK_REQ_STATUS_OFFSET,
+	    bunix_buffer_write(req_buffer, status_offset,
 			       &pending, sizeof(pending)) != 0 ||
 	    queue_write_desc(queue, 0, req_phys, sizeof(header),
 			     BUNIX_VIRTIO_DESC_F_NEXT, 1) != 0) {
@@ -206,13 +258,12 @@ static int virtio_blk_submit(u64 device_service, u64 device_index,
 		status_desc = 2;
 		if (queue_write_desc(queue, 1,
 				     req_phys + VIRTIO_BLK_REQ_DATA_OFFSET,
-				     VIRTIO_BLK_SECTOR_SIZE, data_flags,
-				     2) != 0) {
+				     data_len, data_flags, 2) != 0) {
 			return -1;
 		}
 	}
 	if (queue_write_desc(queue, status_desc,
-			     req_phys + VIRTIO_BLK_REQ_STATUS_OFFSET, 1,
+			     req_phys + status_offset, 1,
 			     BUNIX_VIRTIO_DESC_F_WRITE, 0) != 0 ||
 	    queue_write_u16(queue->handle, ring_offset, head) != 0 ||
 	    queue_write_u16(queue->handle, queue->layout.avail_offset + 2,
@@ -236,7 +287,7 @@ static int virtio_blk_submit(u64 device_service, u64 device_index,
 		if (used_idx != (unsigned short)queue->seen_used) {
 			queue->seen_used = used_idx;
 			if (bunix_buffer_read(req_buffer,
-					      VIRTIO_BLK_REQ_STATUS_OFFSET,
+					      status_offset,
 					      &status, sizeof(status)) != 0) {
 				return -1;
 			}
@@ -267,22 +318,265 @@ static int virtio_blk_selftest(u64 device_service, u64 device_index,
 	}
 	if (virtio_blk_submit(device_service, device_index, queue,
 			      (u64)req_buffer, (u64)req_phys,
-			      BUNIX_VIRTIO_BLK_T_IN, 0, 1, 1) != 0 ||
+			      BUNIX_VIRTIO_BLK_T_IN, 0, 1,
+			      VIRTIO_BLK_SECTOR_SIZE, 1) != 0 ||
 	    virtio_blk_submit(device_service, device_index, queue,
 			      (u64)req_buffer, (u64)req_phys,
-			      BUNIX_VIRTIO_BLK_T_OUT, 0, 1, 0) != 0) {
+			      BUNIX_VIRTIO_BLK_T_OUT, 0, 1,
+			      VIRTIO_BLK_SECTOR_SIZE, 0) != 0) {
 		bunix_handle_close((u64)req_buffer);
 		return -1;
 	}
 	if (do_flush &&
 	    virtio_blk_submit(device_service, device_index, queue,
 			      (u64)req_buffer, (u64)req_phys,
-			      BUNIX_VIRTIO_BLK_T_FLUSH, 0, 0, 0) != 0) {
+			      BUNIX_VIRTIO_BLK_T_FLUSH, 0, 0, 0, 0) != 0) {
 		bunix_handle_close((u64)req_buffer);
 		return -1;
 	}
 	bunix_handle_close((u64)req_buffer);
 	return 0;
+}
+
+static int virtio_blk_read_sector(struct virtio_blk_device *device, u64 sector,
+				  unsigned char *out)
+{
+	if (device == 0 || out == 0 ||
+	    virtio_blk_submit(device->device_service, device->device_index,
+			      &device->queue, device->req_buffer,
+			      device->req_phys, BUNIX_VIRTIO_BLK_T_IN,
+			      sector, 1, VIRTIO_BLK_SECTOR_SIZE, 1) != 0 ||
+	    bunix_buffer_read(device->req_buffer, VIRTIO_BLK_REQ_DATA_OFFSET,
+			      out, VIRTIO_BLK_SECTOR_SIZE) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static int virtio_blk_read_aligned(struct virtio_blk_device *device, u64 sector,
+				   unsigned char *out, u64 len)
+{
+	if (len == 0) {
+		return 0;
+	}
+	if ((len % VIRTIO_BLK_SECTOR_SIZE) != 0 ||
+	    len > VIRTIO_BLK_BUFFER_MAX ||
+	    virtio_blk_submit(device->device_service, device->device_index,
+			      &device->queue, device->req_buffer,
+			      device->req_phys, BUNIX_VIRTIO_BLK_T_IN,
+			      sector, 1, len, 1) != 0 ||
+	    bunix_buffer_read(device->req_buffer, VIRTIO_BLK_REQ_DATA_OFFSET,
+			      out, len) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static int virtio_blk_read_bytes(struct virtio_blk_device *device, u64 offset,
+				 unsigned char *out, u64 len)
+{
+	u64 done = 0;
+
+	if ((offset % VIRTIO_BLK_SECTOR_SIZE) != 0) {
+		const u64 sector = offset / VIRTIO_BLK_SECTOR_SIZE;
+		const u64 sector_offset = offset % VIRTIO_BLK_SECTOR_SIZE;
+		u64 chunk = VIRTIO_BLK_SECTOR_SIZE - sector_offset;
+
+		if (chunk > len) {
+			chunk = len;
+		}
+		if (virtio_blk_read_sector(device, sector, sector_buffer) != 0) {
+			return -1;
+		}
+		for (u64 i = 0; i < chunk; i++) {
+			out[i] = sector_buffer[sector_offset + i];
+		}
+		done += chunk;
+	}
+
+	while (len - done >= VIRTIO_BLK_SECTOR_SIZE) {
+		const u64 absolute = offset + done;
+		u64 chunk = len - done;
+
+		if (chunk > VIRTIO_BLK_BUFFER_MAX) {
+			chunk = VIRTIO_BLK_BUFFER_MAX;
+		}
+		chunk -= chunk % VIRTIO_BLK_SECTOR_SIZE;
+		if (virtio_blk_read_aligned(device,
+					    absolute / VIRTIO_BLK_SECTOR_SIZE,
+					    out + done, chunk) != 0) {
+			return -1;
+		}
+		done += chunk;
+	}
+
+	if (done < len) {
+		const u64 absolute = offset + done;
+		const u64 sector = absolute / VIRTIO_BLK_SECTOR_SIZE;
+		const u64 chunk = len - done;
+
+		if (virtio_blk_read_sector(device, sector, sector_buffer) != 0) {
+			return -1;
+		}
+		for (u64 i = 0; i < chunk; i++) {
+			out[done + i] = sector_buffer[i];
+		}
+	}
+	return 0;
+}
+
+static int virtio_blk_read_cached(struct virtio_blk_device *device, u64 offset,
+				  unsigned char *out, u64 len)
+{
+	u64 load_start;
+	u64 load_len;
+
+	if (len > VIRTIO_BLK_BUFFER_MAX) {
+		return virtio_blk_read_bytes(device, offset, out, len);
+	}
+	if (device->cache_len != 0 &&
+	    offset >= device->cache_start &&
+	    len <= device->cache_len - (offset - device->cache_start)) {
+		const u64 cache_offset = offset - device->cache_start;
+
+		for (u64 i = 0; i < len; i++) {
+			out[i] = cache_buffer[cache_offset + i];
+		}
+		return 0;
+	}
+
+	load_start = offset - (offset % VIRTIO_BLK_SECTOR_SIZE);
+	load_len = VIRTIO_BLK_BUFFER_MAX;
+	if (load_start >= device->capacity_bytes) {
+		return -1;
+	}
+	if (load_len > device->capacity_bytes - load_start) {
+		load_len = device->capacity_bytes - load_start;
+	}
+	load_len -= load_len % VIRTIO_BLK_SECTOR_SIZE;
+	if (load_len == 0 ||
+	    virtio_blk_read_aligned(device, load_start / VIRTIO_BLK_SECTOR_SIZE,
+				    cache_buffer, load_len) != 0) {
+		device->cache_len = 0;
+		return -1;
+	}
+	device->cache_start = load_start;
+	device->cache_len = load_len;
+	return virtio_blk_read_cached(device, offset, out, len);
+}
+
+static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
+{
+	words[0] = 0;
+	words[1] = 0;
+
+	for (u64 i = 0; i < len && i < BUNIX_IPC_DATA_BYTES; i++) {
+		const u64 slot = i / 8;
+		const u64 shift = (i % 8) * 8;
+
+		words[slot] |= ((u64)data[i]) << shift;
+	}
+}
+
+static void serve_block_protocol(struct virtio_blk_device *device)
+{
+	const char online[] = "virtio-blk: block online\n";
+	struct bunix_msg message;
+
+	if (register_service(BUNIX_SERVICE_BLOCK, BUNIX_HANDLE_SELF) != 0) {
+		return;
+	}
+	bunix_console_log(online, sizeof(online) - 1);
+
+	for (;;) {
+		struct bunix_msg reply = {
+			.protocol = BUNIX_PROTO_BLOCK,
+			.type = 0,
+			.sender = 0,
+			.cap_rights = 0,
+			.reply = 0,
+			.cap = 0,
+			.words = { 0, 0, 0, 0 },
+		};
+
+		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
+		    message.protocol != BUNIX_PROTO_BLOCK) {
+			continue;
+		}
+
+		reply.type = message.type;
+		switch (message.type) {
+		case BUNIX_BLOCK_GET_INFO:
+			reply.words[0] = 0;
+			reply.words[1] = device->capacity_bytes;
+			reply.words[2] = VIRTIO_BLK_SECTOR_SIZE;
+			break;
+		case BUNIX_BLOCK_READ: {
+			const u64 offset = message.words[0];
+			u64 len = message.words[1];
+
+			if (offset >= device->capacity_bytes) {
+				len = 0;
+			} else if (len > device->capacity_bytes - offset) {
+				len = device->capacity_bytes - offset;
+			}
+			if (len > BUNIX_IPC_DATA_BYTES) {
+				len = BUNIX_IPC_DATA_BYTES;
+			}
+			reply.words[0] = 0;
+			reply.words[1] = len;
+			if (len != 0 &&
+			    virtio_blk_read_cached(device, offset, block_buffer,
+						   len) != 0) {
+				reply.words[0] = (u64)-1;
+				reply.words[1] = 0;
+			} else {
+				pack_bytes(&reply.words[2], block_buffer, len);
+			}
+			break;
+		}
+		case BUNIX_BLOCK_READ_BUFFER: {
+			const u64 offset = message.words[0];
+			const u64 buffer_offset = message.words[2];
+			u64 len = message.words[1];
+
+			if (message.cap == 0 ||
+			    (message.cap_rights & BUNIX_RIGHT_SEND) == 0) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
+			if (offset >= device->capacity_bytes) {
+				len = 0;
+			} else if (len > device->capacity_bytes - offset) {
+				len = device->capacity_bytes - offset;
+			}
+			if (len > sizeof(block_buffer)) {
+				len = sizeof(block_buffer);
+			}
+			reply.words[0] = 0;
+			reply.words[1] = len;
+			if (len != 0 &&
+			    (virtio_blk_read_bytes(device, offset, block_buffer,
+						   len) != 0 ||
+			     bunix_buffer_write(message.cap, buffer_offset,
+						block_buffer, len) != 0)) {
+				reply.words[0] = (u64)-1;
+				reply.words[1] = 0;
+			}
+			break;
+		}
+		default:
+			reply.words[0] = (u64)-1;
+			break;
+		}
+
+		if (message.cap != 0) {
+			bunix_handle_close(message.cap);
+		}
+		if (message.reply != 0) {
+			bunix_ipc_send(message.reply, &reply);
+		}
+	}
 }
 
 int main(void)
@@ -297,8 +591,10 @@ int main(void)
 	const char ready[] = "virtio-blk: ready\n";
 	u64 device_service;
 	long device_index;
+	long req_buffer;
+	long req_phys;
 	struct bunix_msg reply;
-	struct virtio_blk_queue queue;
+	struct virtio_blk_device device;
 	u64 features = 1ull << BUNIX_VIRTIO_F_VERSION_1;
 	const u64 optional_features = 1ull << BUNIX_VIRTIO_BLK_F_FLUSH;
 
@@ -324,7 +620,7 @@ int main(void)
 	if (device_call(device_service, BUNIX_DEV_SETUP_QUEUE,
 			(u64)device_index, 0, VIRTIO_BLK_QUEUE_SIZE,
 			&reply) != 0 ||
-	    virtio_blk_queue_from_reply(&reply, &queue) != 0) {
+	    virtio_blk_queue_from_reply(&reply, &device.queue) != 0) {
 		bunix_console_log(no_device, sizeof(no_device) - 1);
 		return 1;
 	}
@@ -335,7 +631,7 @@ int main(void)
 		return 1;
 	}
 	bunix_console_log(ready, sizeof(ready) - 1);
-	if (virtio_blk_selftest(device_service, (u64)device_index, &queue,
+	if (virtio_blk_selftest(device_service, (u64)device_index, &device.queue,
 				(features &
 				 (1ull << BUNIX_VIRTIO_BLK_F_FLUSH)) != 0) != 0) {
 		bunix_console_log(no_device, sizeof(no_device) - 1);
@@ -345,6 +641,37 @@ int main(void)
 	bunix_console_log(write_ok, sizeof(write_ok) - 1);
 	if ((features & (1ull << BUNIX_VIRTIO_BLK_F_FLUSH)) != 0) {
 		bunix_console_log(flush_ok, sizeof(flush_ok) - 1);
+	}
+	device.device_service = device_service;
+	device.device_index = (u64)device_index;
+	device.capacity_bytes = virtio_blk_capacity_bytes(device_service,
+							  (u64)device_index);
+	req_buffer = bunix_buffer_create(VIRTIO_BLK_REQ_SIZE);
+	req_phys = req_buffer > 0 ? bunix_buffer_phys((u64)req_buffer) : -1;
+	device.req_buffer = req_buffer > 0 ? (u64)req_buffer : 0;
+	device.req_phys = req_phys > 0 ? (u64)req_phys : 0;
+	device.cache_start = 0;
+	device.cache_len = 0;
+	if (device.capacity_bytes == 0) {
+		const char capacity_fail[] = "virtio-blk: capacity unavailable\n";
+
+		bunix_console_log(capacity_fail, sizeof(capacity_fail) - 1);
+	}
+	if (device.req_buffer == 0 || device.req_phys == 0) {
+		const char buffer_fail[] = "virtio-blk: block buffer unavailable\n";
+
+		bunix_console_log(buffer_fail, sizeof(buffer_fail) - 1);
+	}
+	if (device.queue.next_avail != device.queue.seen_used) {
+		const char queue_busy[] = "virtio-blk: queue busy\n";
+
+		bunix_console_log(queue_busy, sizeof(queue_busy) - 1);
+	}
+	if (device.capacity_bytes != 0 && device.req_buffer != 0 &&
+	    device.req_phys != 0 &&
+	    bunix_cmdline_has("virtio-blk-block-test") > 0 &&
+	    device.queue.next_avail == device.queue.seen_used) {
+		serve_block_protocol(&device);
 	}
 	return 0;
 }

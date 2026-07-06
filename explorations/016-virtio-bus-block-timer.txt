@@ -229,3 +229,13 @@ Progress:
   root block image to a writable scratch image before booting QEMU, so the
   normal VirtIO boot target remains read-only while the driver test can write
   sector 0 back and flush it.
+- Added a first VFS-facing block adapter path inside `virtio-blk.server`, gated
+  behind a separate `virtio-blk-block-test` command-line flag.  The driver can
+  read capacity through a bus-mediated `DEV0 READ_CONFIG64` RPC, register as
+  `BLK0`, answer `GET_INFO`, `READ`, and `READ_BUFFER`, batch aligned
+  multi-sector reads, and cache a 128 KiB window for rootfs metadata's small
+  inline reads.  This is intentionally not enabled by the normal
+  `test-boot-virtio-blk` target yet: forcing `BLK0` takeover gets rootfs
+  mounted through VirtIO but currently breaks the Linux init exec path, so the
+  next backend-integration slice needs to debug that before replacing the boot
+  module block service by default.
