@@ -77,6 +77,21 @@ int main(void)
 		}
 		return 1;
 	}
+	(void)unlink("/tmp/patherr-loop-a");
+	(void)unlink("/tmp/patherr-loop-b");
+	if (symlink("patherr-loop-b", "/tmp/patherr-loop-a") != 0 ||
+	    symlink("patherr-loop-a", "/tmp/patherr-loop-b") != 0) {
+		perror("linux patherr loop symlink");
+		return 1;
+	}
+	errno = 0;
+	fd = open("/tmp/patherr-loop-a", O_RDONLY);
+	if (expect_errno("open-symlink-loop", fd, ELOOP) != 0) {
+		if (fd >= 0) {
+			close(fd);
+		}
+		return 1;
+	}
 
 	fd = open("/hello.txt", O_RDONLY);
 	if (fd < 0) {

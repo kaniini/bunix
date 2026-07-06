@@ -1,0 +1,26 @@
+Move symlink resolution policy into VFS.
+
+Today some filesystem translators resolve symlink targets internally.  That is
+the wrong long-term layering: VFS has the namespace context, mount routing, and
+cross-translator visibility needed to resolve symlink chains consistently.
+
+- [x] Inventory every translator and Linux syscall path that currently depends on server-local symlink resolution.
+- [x] Teach VFS path walking to resolve symlink chains using `readlink` metadata from translators.
+- [x] Support relative symlink targets relative to the containing directory of the link.
+- [x] Support absolute symlink targets from the VFS namespace root, including targets crossing mount boundaries.
+- [x] Preserve `O_NOFOLLOW`, `AT_SYMLINK_NOFOLLOW`, and `readlink` behavior so callers can observe links without following them.
+- [x] Add a symlink loop limit and return Linux-compatible `ELOOP` through the Linux server.
+- [x] Refactor rootfs, tmpfs, unionfs, procfs, devfs, and future sysfs to expose links as metadata instead of resolving namespace policy internally.
+- [x] Add focused tests for absolute links, relative links, `..` components, mount-crossing links, nofollow stat, readlink, and loop detection.
+
+Notes:
+
+- VFS now owns component-wise symlink following for open/stat/access/readlink
+  path walks, using nofollow metadata and `readlink` replies from mounted
+  translators.
+- Rootfs no longer follows symlinks internally when serving mounted rootfs
+  requests.  Tmpfs, procfs, devfs, and sysfs already expose metadata directly;
+  unionfs continues to layer upper/lower metadata while VFS owns namespace
+  follow decisions above it.
+- Focused coverage lives in `tmpfs-extended`, `path-limits-statfs`,
+  `rootfs-vfs-proc-dev`, and `union-root-user`.

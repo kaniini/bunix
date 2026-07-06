@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 010-vfs-symlink-resolution.txt
+The current exploration is: 011-vfs-stat-identity.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.

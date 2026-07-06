@@ -2329,6 +2329,9 @@ static long linux_vfs_error(u64 status)
 	if (status == BUNIX_VFS_ERR_BUSY) {
 		return -LINUX_EBUSY;
 	}
+	if (status == BUNIX_VFS_ERR_LOOP) {
+		return -LINUX_ELOOP;
+	}
 	return -LINUX_ENOENT;
 }
 

@@ -6,7 +6,6 @@ enum {
 	ROOTFS_HANDLE_NAMES = 3,
 	ROOTFS_MAGIC = 0x30534652,
 	ROOTFS_MAX_PATH = 4096,
-	ROOTFS_MAX_SYMLINKS = 8,
 	ROOTFS_OPEN_ROOT = 1,
 	ROOTFS_OPEN_ENTRY = 2,
 };
@@ -110,95 +109,6 @@ static int set_path(char *target, const char *path)
 	}
 	target[i] = '\0';
 	return 0;
-}
-
-static int normalize_absolute_path(const char *path, char *out)
-{
-	u64 out_len = 1;
-	u64 pos = 1;
-
-	if (path == 0 || out == 0 || path[0] != '/') {
-		return -1;
-	}
-	out[0] = '/';
-	out[1] = '\0';
-	while (path[pos] != '\0') {
-		u64 start;
-		u64 len;
-
-		while (path[pos] == '/') {
-			pos++;
-		}
-		start = pos;
-		while (path[pos] != '\0' && path[pos] != '/') {
-			pos++;
-		}
-		len = pos - start;
-		if (len == 0 ||
-		    (len == 1 && path[start] == '.')) {
-			continue;
-		}
-		if (len == 2 && path[start] == '.' &&
-		    path[start + 1] == '.') {
-			if (out_len > 1) {
-				while (out_len > 1 && out[out_len - 1] != '/') {
-					out_len--;
-				}
-				out[out_len == 1 ? 1 : out_len] = '\0';
-			}
-			continue;
-		}
-		if (out_len != 1) {
-			if (out_len + 1 >= ROOTFS_MAX_PATH) {
-				return -1;
-			}
-			out[out_len++] = '/';
-		}
-		if (out_len + len >= ROOTFS_MAX_PATH) {
-			return -1;
-		}
-		for (u64 i = 0; i < len; i++) {
-			out[out_len++] = path[start + i];
-		}
-		out[out_len] = '\0';
-	}
-	return 0;
-}
-
-static int resolve_symlink_target(const char *link_path, const char *target,
-				  char *out)
-{
-	char combined[ROOTFS_MAX_PATH];
-	u64 slash = 0;
-	u64 pos = 0;
-
-	if (link_path == 0 || target == 0 || out == 0) {
-		return -1;
-	}
-	if (target[0] == '/') {
-		return normalize_absolute_path(target, out);
-	}
-	for (u64 i = 0; link_path[i] != '\0'; i++) {
-		if (link_path[i] == '/') {
-			slash = i;
-		}
-	}
-	if (slash == 0) {
-		combined[pos++] = '/';
-	} else {
-		for (u64 i = 0; i < slash && pos + 1 < ROOTFS_MAX_PATH; i++) {
-			combined[pos++] = link_path[i];
-		}
-		combined[pos++] = '/';
-	}
-	for (u64 i = 0; target[i] != '\0'; i++) {
-		if (pos + 1 >= ROOTFS_MAX_PATH) {
-			return -1;
-		}
-		combined[pos++] = target[i];
-	}
-	combined[pos] = '\0';
-	return normalize_absolute_path(combined, out);
 }
 
 static char *dup_path(const char *path)
@@ -475,28 +385,6 @@ static int rootfs_read_text(const struct rootfs_entry *entry, char *out, u64 max
 	return 0;
 }
 
-static const struct rootfs_entry *rootfs_resolve(const char *path)
-{
-	char current[ROOTFS_MAX_PATH];
-
-	if (path == 0 || path[0] != '/' || set_path(current, path) != 0) {
-		return 0;
-	}
-	for (u64 depth = 0; depth < ROOTFS_MAX_SYMLINKS; depth++) {
-		const struct rootfs_entry *entry = rootfs_find(current);
-		char target[ROOTFS_MAX_PATH];
-
-		if (entry == 0 || entry->type != BUNIX_VFS_TYPE_SYMLINK) {
-			return entry;
-		}
-		if (rootfs_read_text(entry, target, sizeof(target)) != 0 ||
-		    resolve_symlink_target(current, target, current) != 0) {
-			return 0;
-		}
-	}
-	return 0;
-}
-
 static int path_is_child_of(const char *path, const char *directory)
 {
 	const u64 dir_len = str_len(directory);
@@ -629,11 +517,7 @@ static int reply_readlink_target(const struct bunix_msg *message,
 static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 			    const char *path)
 {
-	const int nofollow = message->type == BUNIX_VFS_READLINK_BUFFER ||
-			     (((message->words[3] >> 32) & 1) != 0 &&
-			      message->type == BUNIX_VFS_STAT_PATH_META_BUFFER);
-	const struct rootfs_entry *entry = nofollow ? rootfs_find(path) :
-					   rootfs_resolve(path);
+	const struct rootfs_entry *entry = rootfs_find(path);
 
 	if (entry == 0) {
 		if (str_eq(path, "/")) {
@@ -663,7 +547,7 @@ static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 		       const char *path)
 {
-	const struct rootfs_entry *entry = rootfs_resolve(path);
+	const struct rootfs_entry *entry = rootfs_find(path);
 	u64 handle;
 
 	if (entry == 0 && !str_eq(path, "/")) {

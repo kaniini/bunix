@@ -70,9 +70,19 @@ echo TMP_SYMLINK_PAYLOAD > /tmp/bunix-symlink-target.txt
 busybox ln -s bunix-symlink-target.txt /tmp/bunix-symlink.txt && echo TMP_SYMLINK_CREATE_OK
 busybox readlink /tmp/bunix-symlink.txt | busybox grep bunix-symlink-target.txt && echo TMP_SYMLINK_READLINK_OK
 busybox ls -l /tmp/bunix-symlink.txt | busybox grep bunix-symlink-target.txt && echo TMP_SYMLINK_LS_OK
+busybox cat /tmp/bunix-symlink.txt | busybox grep TMP_SYMLINK_PAYLOAD && echo TMP_SYMLINK_FOLLOW_OK
+busybox ln -s /hello.txt /tmp/bunix-abs-symlink.txt && busybox cat /tmp/bunix-abs-symlink.txt | busybox grep "rootfs: module" && echo TMP_SYMLINK_ABS_FOLLOW_OK
+busybox mkdir -p /tmp/bunix-symlink-dir/sub
+echo TMP_SYMLINK_DOTDOT_PAYLOAD > /tmp/bunix-symlink-dir/target.txt
+busybox ln -s ../target.txt /tmp/bunix-symlink-dir/sub/up.txt && busybox cat /tmp/bunix-symlink-dir/sub/up.txt | busybox grep TMP_SYMLINK_DOTDOT_PAYLOAD && echo TMP_SYMLINK_DOTDOT_FOLLOW_OK
+busybox ln -s /proc/cmdline /tmp/bunix-proc-symlink.txt && busybox cat /tmp/bunix-proc-symlink.txt | busybox grep "init=/sbin/init" && echo TMP_SYMLINK_CROSS_MOUNT_OK
+busybox ln -s bunix-loop-b.txt /tmp/bunix-loop-a.txt
+busybox ln -s bunix-loop-a.txt /tmp/bunix-loop-b.txt
+/bin/patherrtest && echo TMP_SYMLINK_LOOP_OK
 busybox ln -s hello.txt /union-symlink.txt && echo UNION_SYMLINK_CREATE_OK
 busybox readlink /union-symlink.txt | busybox grep hello.txt && echo UNION_SYMLINK_READLINK_OK
 busybox ls -l /union-symlink.txt | busybox grep hello.txt && echo UNION_SYMLINK_LS_OK
+busybox cat /union-symlink.txt | busybox grep "rootfs: module" && echo UNION_SYMLINK_FOLLOW_OK
 echo UNION_HARDLINK_ONE > /union-hard-src.txt
 busybox ln /union-hard-src.txt /union-hard-dst.txt && echo UNION_HARDLINK_CREATE_OK
 echo UNION_HARDLINK_TWO >> /union-hard-dst.txt
@@ -98,8 +108,11 @@ check_tmpfs_extended() {
 		TMP_DIR_RENAME_DESCENDANT_DENY_OK TMP_DIR_RENAME_DESCENDANT_PRESERVE_OK \
 		TMP_CHMOD_OK TMP_CHOWN_DENY_OK TMP_NAME255_CREATE_OK \
 		TMP_NAME255_CAT_OK TMP_NAME256_DENY_OK TMP_SYMLINK_CREATE_OK \
-		TMP_SYMLINK_READLINK_OK TMP_SYMLINK_LS_OK UNION_SYMLINK_CREATE_OK \
-		UNION_SYMLINK_READLINK_OK UNION_SYMLINK_LS_OK UNION_HARDLINK_CREATE_OK \
+		TMP_SYMLINK_READLINK_OK TMP_SYMLINK_LS_OK TMP_SYMLINK_FOLLOW_OK \
+		TMP_SYMLINK_ABS_FOLLOW_OK TMP_SYMLINK_DOTDOT_FOLLOW_OK \
+		TMP_SYMLINK_CROSS_MOUNT_OK TMP_SYMLINK_LOOP_OK \
+		UNION_SYMLINK_CREATE_OK UNION_SYMLINK_READLINK_OK \
+		UNION_SYMLINK_LS_OK UNION_SYMLINK_FOLLOW_OK UNION_HARDLINK_CREATE_OK \
 		UNION_HARDLINK_SHARE_OK
 	wait_for_each_fixed_count "$log" 2 "tmpfs extended payload missing from file output" 45 220 \
 		TMP_LONG_READDIR_PAYLOAD TMP_NAME_MAX_PAYLOAD TMP_NAME255_PAYLOAD
