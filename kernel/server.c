@@ -31,6 +31,7 @@ static const struct server boot_servers[] = {
 	{ "block", 0 },
 	{ "virtio-bus", 0 },
 	{ "virtio-blk", 0 },
+	{ "virtio-net", 0 },
 	{ "net", 0 },
 	{ "vfs", 0 },
 	{ "ping", 0 },

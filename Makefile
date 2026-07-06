@@ -8,6 +8,10 @@ VIRTIO_BLK_TEST_ESP_DIR := $(BUILD_DIR)/esp-virtio-blk
 VIRTIO_BLK_TEST_EFI_BOOT_APP := $(VIRTIO_BLK_TEST_ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG := $(BUILD_DIR)/grub-standalone-virtio-blk.cfg
 VIRTIO_BLK_TEST_CMDLINE ?= log=info virtio-blk-test
+VIRTIO_NET_TEST_ESP_DIR := $(BUILD_DIR)/esp-virtio-net
+VIRTIO_NET_TEST_EFI_BOOT_APP := $(VIRTIO_NET_TEST_ESP_DIR)/EFI/BOOT/BOOTX64.EFI
+VIRTIO_NET_TEST_GRUB_STANDALONE_CFG := $(BUILD_DIR)/grub-standalone-virtio-net.cfg
+VIRTIO_NET_TEST_CMDLINE ?= log=info virtio-net-test
 EFI_BOOT_IMG := $(BUILD_DIR)/bunixos-efi.iso
 EFI_BOOT_APP := $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 GRUB_CFG := $(BUILD_DIR)/grub.cfg
@@ -50,6 +54,8 @@ NET_MODULE := $(BUILD_DIR)/modules/net.server
 NET_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/net/main.c.o
 VIRTIO_BLK_MODULE := $(BUILD_DIR)/modules/virtio-blk.server
 VIRTIO_BLK_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/virtio-blk/main.c.o
+VIRTIO_NET_MODULE := $(BUILD_DIR)/modules/virtio-net.server
+VIRTIO_NET_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/virtio-net/main.c.o
 VFS_MODULE := $(BUILD_DIR)/modules/vfs.server
 VFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/vfs/main.c.o
 FIRST_MODULE := $(BUILD_DIR)/modules/first.user
@@ -229,6 +235,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/virtio-bus/main.c.o \
 	$(BUILD_DIR)/user/net/main.c.o \
 	$(BUILD_DIR)/user/virtio-blk/main.c.o \
+	$(BUILD_DIR)/user/virtio-net/main.c.o \
 	$(BUILD_DIR)/user/vfs/main.c.o \
 	$(BUILD_DIR)/user/first/main.c.o \
 	$(BUILD_DIR)/user/alloctest/main.c.o \
@@ -348,6 +355,10 @@ $(NET_MODULE): $(NET_MODULE_OBJS) user/user.ld Makefile
 $(VIRTIO_BLK_MODULE): $(VIRTIO_BLK_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(VIRTIO_BLK_MODULE_OBJS)
+
+$(VIRTIO_NET_MODULE): $(VIRTIO_NET_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(VIRTIO_NET_MODULE_OBJS)
 
 $(VFS_MODULE): $(VFS_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
@@ -513,6 +524,13 @@ $(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 		$< > $@.tmp
 	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
 
+$(VIRTIO_NET_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
+	mkdir -p $(BUILD_DIR)
+	sed -e 's|@KERNEL_CMDLINE@|$(VIRTIO_NET_TEST_CMDLINE)|g' \
+		-e '/virtio-bus\.server/a module2 /modules/virtio-net.server virtio-net' \
+		$< > $@.tmp
+	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
+
 $(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
@@ -571,6 +589,38 @@ $(VIRTIO_BLK_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG
 		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
 		"modules/net.server=$(NET_MODULE)" \
 		"modules/virtio-blk.server=$(VIRTIO_BLK_MODULE)" \
+		"modules/vfs.server=$(VFS_MODULE)" \
+		"modules/ping.server=$(PING_MODULE)" \
+		"modules/disk0.img=$(BLOCK_IMAGE)" \
+		"modules/vm.server=modules/vm.server"
+
+$(VIRTIO_NET_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_NET_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VIRTIO_NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
+		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
+	fi
+	mkdir -p $(VIRTIO_NET_TEST_ESP_DIR)/EFI/BOOT $(VIRTIO_NET_TEST_ESP_DIR)/boot
+	cp $(KERNEL) $(VIRTIO_NET_TEST_ESP_DIR)/boot/bunixos.kernel
+	$(GRUB_MKSTANDALONE) -O x86_64-efi -o $@ \
+		"boot/grub/grub.cfg=$(VIRTIO_NET_TEST_GRUB_STANDALONE_CFG)" \
+		"boot/bunixos.kernel=$(KERNEL)" \
+		"modules/console.server=$(CONSOLE_MODULE)" \
+		"modules/names.server=$(NAMES_MODULE)" \
+		"modules/bootstrap.server=$(BOOTSTRAP_MODULE)" \
+		"modules/time.server=$(TIME_MODULE)" \
+		"modules/user.server=$(USER_MODULE)" \
+		"modules/linux.server=$(LINUX_SERVER_MODULE)" \
+		"modules/proc.server=$(PROC_MODULE)" \
+		"modules/procfs.server=$(PROCFS_MODULE)" \
+		"modules/tmpfs.server=$(TMPFS_MODULE)" \
+		"modules/devfs.server=$(DEVFS_MODULE)" \
+		"modules/sysfs.server=$(SYSFS_MODULE)" \
+		"modules/utmpfs.server=$(UTMPFS_MODULE)" \
+		"modules/rootfs.server=$(ROOTFS_MODULE)" \
+		"modules/unionfs.server=$(UNIONFS_MODULE)" \
+		"modules/block.server=$(BLOCK_MODULE)" \
+		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
+		"modules/net.server=$(NET_MODULE)" \
+		"modules/virtio-net.server=$(VIRTIO_NET_MODULE)" \
 		"modules/vfs.server=$(VFS_MODULE)" \
 		"modules/ping.server=$(PING_MODULE)" \
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
@@ -663,8 +713,8 @@ test-boot-virtio: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools
 	! grep -aF "virtio-bus: features index=0 device=0 " $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-bus: ready devices=1" $(BUILD_DIR)/serial.log >/dev/null
 
-test-boot-virtio-net: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
-	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+test-boot-virtio-net: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
+	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_ARGS)" sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
@@ -672,6 +722,9 @@ test-boot-virtio-net: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh t
 	grep -aF "virtio-bus: features index=0" $(BUILD_DIR)/serial.log >/dev/null
 	! grep -aF "virtio-bus: features index=0 device=0 " $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-bus: ready devices=1" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "virtio-net: negotiated" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "virtio-net: queues ready" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "virtio-net: attached iface=" $(BUILD_DIR)/serial.log >/dev/null
 
 test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) $(VIRTIO_BLK_TEST_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
 	ESP_DIR=$(VIRTIO_BLK_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

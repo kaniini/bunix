@@ -31,7 +31,7 @@ Tasks:
       interface manager.
 - [ ] Implement VirtIO-net feature negotiation, RX/TX virtqueues, buffer
       replenishment, transmit completion, receive delivery, and device reset.
-- [ ] Add support for MAC address discovery/configuration and basic link state.
+- [x] Add support for MAC address discovery/configuration and basic link state.
 - [ ] Integrate the driver with the network stack interface registry and route
       management.
 - [x] Add QEMU run/test modes with a deterministic VirtIO-net topology.
@@ -147,3 +147,15 @@ Progress:
   with MAC `52:54:00:18:00:01`, boots the normal server set, and verifies that
   `virtio-bus.server` enumerates one device with modern VirtIO-net PCI device
   ID `0x1041`.
+- Added the first userspace `virtio-net.server` slice.  It resolves `DEV0` and
+  `NET0`, finds VirtIO device type 1, negotiates `VERSION_1` with optional
+  `MAC`/`STATUS`/`MTU`, sets up RX queue 0 and TX queue 1, binds the device to
+  `DRIVER_OK`, reads MAC/MTU/link state from device config where available,
+  and attaches a packet interface to NET0.  It is launched only by the
+  dedicated `virtio-net-test` boot image for now.
+- `test-boot-virtio-net` now includes `virtio-net.server` in a dedicated ESP,
+  boots with a fixed VirtIO-net PCI topology, verifies device enumeration, and
+  checks for `virtio-net: negotiated`, `virtio-net: queues ready`, and
+  `virtio-net: attached iface=` logs.  Actual RX buffer replenishment, TX
+  dequeue/completion, Ethernet encapsulation, route integration, and device
+  reset handling remain open.

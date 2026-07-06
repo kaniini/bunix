@@ -1370,6 +1370,11 @@ int main(void)
 					      sizeof(fs_caps) /
 						      sizeof(fs_caps[0]));
 	}
+	if (bunix_cmdline_has("virtio-net-test") > 0) {
+		bunix_launch_module_with_caps("virtio-net", fs_caps,
+					      sizeof(fs_caps) /
+						      sizeof(fs_caps[0]));
+	}
 	bunix_launch_module_with_caps("vfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	vfs = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS,
