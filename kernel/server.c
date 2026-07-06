@@ -30,6 +30,7 @@ static const struct server boot_servers[] = {
 	{ "unionfs", 0 },
 	{ "block", 0 },
 	{ "virtio-bus", 0 },
+	{ "virtio-blk", 0 },
 	{ "vfs", 0 },
 	{ "ping", 0 },
 	{ "vm", vm_server_start },

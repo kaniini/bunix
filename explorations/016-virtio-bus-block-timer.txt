@@ -193,3 +193,11 @@ Progress:
   the notify capability multiplier and implements `DEV0 NOTIFY_QUEUE` using the
   queue's notify offset.  A real block driver still needs to fill descriptors,
   consume used rings, handle interrupts, and exercise this path end-to-end.
+- Added a buildable `virtio-blk.server` skeleton.  It resolves `DEV0`, locates
+  a VirtIO block device, negotiates `VERSION_1`, sets up queue 0, and can move
+  the device to `DRIVER_OK` through `DEV0 BIND_DRIVER`.  The module is
+  intentionally not part of the default boot payload yet: probing it during
+  bootstrap mutates the device before there is a real request/completion loop,
+  which stalls the rest of boot.  The next block-driver slice should launch it
+  once descriptor submission, used-ring polling or IRQ completion, and backend
+  registration are implemented.

@@ -42,6 +42,8 @@ BLOCK_MODULE := $(BUILD_DIR)/modules/block.server
 BLOCK_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/block/main.c.o
 VIRTIO_BUS_MODULE := $(BUILD_DIR)/modules/virtio-bus.server
 VIRTIO_BUS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/virtio-bus/main.c.o
+VIRTIO_BLK_MODULE := $(BUILD_DIR)/modules/virtio-blk.server
+VIRTIO_BLK_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/virtio-blk/main.c.o
 VFS_MODULE := $(BUILD_DIR)/modules/vfs.server
 VFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/vfs/main.c.o
 FIRST_MODULE := $(BUILD_DIR)/modules/first.user
@@ -215,6 +217,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/unionfs/main.c.o \
 	$(BUILD_DIR)/user/block/main.c.o \
 	$(BUILD_DIR)/user/virtio-bus/main.c.o \
+	$(BUILD_DIR)/user/virtio-blk/main.c.o \
 	$(BUILD_DIR)/user/vfs/main.c.o \
 	$(BUILD_DIR)/user/first/main.c.o \
 	$(BUILD_DIR)/user/alloctest/main.c.o \
@@ -326,6 +329,10 @@ $(BLOCK_MODULE): $(BLOCK_MODULE_OBJS) user/user.ld Makefile
 $(VIRTIO_BUS_MODULE): $(VIRTIO_BUS_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(VIRTIO_BUS_MODULE_OBJS)
+
+$(VIRTIO_BLK_MODULE): $(VIRTIO_BLK_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(VIRTIO_BLK_MODULE_OBJS)
 
 $(VFS_MODULE): $(VFS_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)

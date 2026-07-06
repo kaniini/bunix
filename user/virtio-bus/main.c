@@ -919,8 +919,6 @@ static void reply_setup_queue(struct bunix_msg *reply, u64 device_index,
 	queue_phys = bunix_buffer_phys((u64)buffer_handle);
 	if (queue_phys <= 0 ||
 	    bunix_hw_mmio_write16(common->handle,
-				  VIRTIO_PCI_COMMON_QUEUE_ENABLE, 0) != 0 ||
-	    bunix_hw_mmio_write16(common->handle,
 				  VIRTIO_PCI_COMMON_QUEUE_SIZE,
 				  queue_size) != 0 ||
 	    virtio_common_write64(common, VIRTIO_PCI_COMMON_QUEUE_DESC,
@@ -983,6 +981,30 @@ static void reply_notify_queue(struct bunix_msg *reply, u64 device_index,
 	reply->words[0] = BUNIX_DEV_OK;
 	reply->words[1] = queue_index;
 	reply->words[2] = offset;
+	reply->words[3] = 0;
+}
+
+static void reply_bind_driver(struct bunix_msg *reply, u64 device_index)
+{
+	struct virtio_bus_device *device;
+	long status;
+
+	if (device_index >= device_count) {
+		reply_no_device(reply);
+		return;
+	}
+	device = &devices[device_index];
+	status = virtio_common_get_status(device);
+	if (status < 0 ||
+	    (((u64)status & BUNIX_VIRTIO_STATUS_FEATURES_OK) == 0) ||
+	    virtio_common_set_status(device,
+				     bunix_virtio_status_driver_ok()) != 0) {
+		reply_no_device(reply);
+		return;
+	}
+	reply->words[0] = BUNIX_DEV_OK;
+	reply->words[1] = bunix_virtio_status_driver_ok();
+	reply->words[2] = 0;
 	reply->words[3] = 0;
 }
 
@@ -1056,6 +1078,8 @@ int main(void)
 					   message.words[1]);
 			break;
 		case BUNIX_DEV_BIND_DRIVER:
+			reply_bind_driver(&reply, message.words[0]);
+			break;
 		case BUNIX_DEV_RESET:
 		case BUNIX_DEV_ACK_INTERRUPT:
 			reply_no_device(&reply);
