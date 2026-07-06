@@ -147,6 +147,11 @@ Implementation notes:
   updates inode size metadata and is covered through the same hardlink-visible
   ext2 boot selftest, but it intentionally does not allocate blocks for growth
   or free blocks on shrink yet.
+- Open-handle `CHMOD` and `CHOWN` now update ext2 inode metadata in place:
+  permission bits are changed while preserving the file type, and the low
+  16-bit uid/gid fields are updated.  The ext2 boot selftest verifies the
+  changed mode and owner through the hardlink path so the check proves inode
+  metadata mutation rather than path-local state.
 
 Tasks:
 

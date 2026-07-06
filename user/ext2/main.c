@@ -226,6 +226,12 @@ static u64 load_le32(const unsigned char *buffer, u64 offset)
 	       ((u64)buffer[offset + 3] << 24);
 }
 
+static void store_le16(unsigned char *buffer, u64 offset, u64 value)
+{
+	buffer[offset] = (unsigned char)(value & 0xff);
+	buffer[offset + 1] = (unsigned char)((value >> 8) & 0xff);
+}
+
 static void store_le32(unsigned char *buffer, u64 offset, u64 value)
 {
 	buffer[offset] = (unsigned char)(value & 0xff);
@@ -750,6 +756,50 @@ static long write_inode_size(struct ext2_mount *mount, u64 ino,
 		}
 	}
 	inode->size = size;
+	return 0;
+}
+
+static long write_inode_mode(struct ext2_mount *mount, u64 ino,
+			     struct ext2_inode *inode, u64 mode)
+{
+	unsigned char raw[2];
+	u64 offset;
+
+	if (mount == 0 || inode == 0 ||
+	    inode_disk_offset(mount, ino, &offset) != 0) {
+		return -1;
+	}
+	inode->mode = (inode->mode & EXT2_S_IFMT) | (mode & 07777);
+	store_le16(raw, 0, inode->mode);
+	return mount_write_bytes(mount, offset, raw, sizeof(raw));
+}
+
+static long write_inode_owner(struct ext2_mount *mount, u64 ino,
+			      struct ext2_inode *inode, u64 uid, u64 gid)
+{
+	unsigned char raw[2];
+	u64 offset;
+
+	if (mount == 0 || inode == 0 ||
+	    inode_disk_offset(mount, ino, &offset) != 0) {
+		return -1;
+	}
+	if (uid != (u64)-1) {
+		inode->uid = uid & 0xffff;
+		store_le16(raw, 0, inode->uid);
+		if (mount_write_bytes(mount, offset + 2, raw,
+				      sizeof(raw)) != 0) {
+			return -1;
+		}
+	}
+	if (gid != (u64)-1) {
+		inode->gid = gid & 0xffff;
+		store_le16(raw, 0, inode->gid);
+		if (mount_write_bytes(mount, offset + 24, raw,
+				      sizeof(raw)) != 0) {
+			return -1;
+		}
+	}
 	return 0;
 }
 
@@ -1585,6 +1635,36 @@ static void reply_truncate(struct ext2_open *open,
 	reply->words[1] = size;
 }
 
+static void reply_chmod(struct ext2_open *open, const struct bunix_msg *message,
+			struct bunix_msg *reply)
+{
+	if (open == 0 || ext2_inode_vfs_type(&open->inode) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (write_inode_mode(&root_mount, open->ino, &open->inode,
+			     message->words[1]) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+}
+
+static void reply_chown(struct ext2_open *open, const struct bunix_msg *message,
+			struct bunix_msg *reply)
+{
+	if (open == 0 || ext2_inode_vfs_type(&open->inode) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (write_inode_owner(&root_mount, open->ino, &open->inode,
+			      message->words[1], message->words[2]) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+}
+
 static long load_initial_mount(struct ext2_mount *mount)
 {
 	unsigned char raw[EXT2_SUPER_SIZE];
@@ -1713,6 +1793,14 @@ int main(void)
 			case BUNIX_VFS_TRUNCATE:
 				reply_truncate(open_from_handle(message.words[0]),
 					       &message, &reply);
+				break;
+			case BUNIX_VFS_CHMOD:
+				reply_chmod(open_from_handle(message.words[0]),
+					    &message, &reply);
+				break;
+			case BUNIX_VFS_CHOWN:
+				reply_chown(open_from_handle(message.words[0]),
+					    &message, &reply);
 				break;
 			case BUNIX_VFS_CLOSE:
 				if (open_from_handle(message.words[0]) == 0) {
