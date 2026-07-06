@@ -1,7 +1,7 @@
 #!/bin/sh
 
 run_tmpfs_basic_linux_tests() {
-	send_script <<'EOF_TMPFS_BASIC_LINUX_TESTS'
+	send_script_sync <<'EOF_TMPFS_BASIC_LINUX_TESTS'
 echo TMP_WRITE_OK > /tmp/bunix-write.txt
 busybox sh -c "set -C; echo TMP_EXCL_BAD > /tmp/bunix-write.txt" || echo TMP_EXCL_DENY_OK
 busybox cat /tmp/bunix-write.txt | busybox grep TMP_WRITE_OK && echo TMP_EXCL_PRESERVE_OK

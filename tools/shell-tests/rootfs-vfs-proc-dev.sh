@@ -1,7 +1,7 @@
 #!/bin/sh
 
 run_rootfs_vfs_proc_dev() {
-	send_script <<'EOF_ROOTFS_VFS_PROC_DEV'
+	send_script_sync <<'EOF_ROOTFS_VFS_PROC_DEV'
 busybox cat /usr/share/bunix/nested/hello.txt && echo NESTED_CAT_OK
 busybox cat /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/rootfs-entry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/hello.txt && echo LONG_ROOTFS_PATH_OK
 /usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/linux-execve-path-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components/dyn-hello && echo LONG_EXEC_PATH_OK
@@ -36,25 +36,25 @@ busybox cat /proc/stat && echo PROC_STAT_OK
 busybox cat /proc/ipc && echo PROC_IPC_OK
 busybox cat /proc/filesystems && echo PROC_FILESYSTEMS_OK
 busybox cat /proc/cpuinfo && echo PROC_CPUINFO_OK
-busybox cat /proc/cmdline | busybox grep "init=/sbin/init" && echo PROC_CMDLINE_GLOBAL_OK
-busybox cat /proc/devices | busybox grep "Character devices:" && echo PROC_DEVICES_OK
+busybox cat /proc/cmdline > /tmp/proc-cmdline && busybox grep "init=/sbin/init" /tmp/proc-cmdline && echo PROC_CMDLINE_GLOBAL_OK
+busybox cat /proc/devices > /tmp/proc-devices && busybox grep "Character devices:" /tmp/proc-devices && echo PROC_DEVICES_OK
 busybox cat /proc/modules >/dev/null && echo PROC_MODULES_OK
 busybox cat /proc/self/cmdline && echo PROC_CMDLINE_OK
-/bin/cat /proc/self/cmdline | busybox grep -a /bin/cat && echo PROC_SELF_CMDLINE_CALLER_OK
-busybox cat /proc/self/mounts | busybox grep "sysfs /sys sysfs" && echo PROC_SELF_MOUNTS_OK
-busybox cat /proc/self/mountinfo | busybox grep " - sysfs sysfs " && echo PROC_PID_MOUNTINFO_OK
-busybox cat /proc/self/cgroup | busybox grep "0::/" && echo PROC_PID_CGROUP_OK
+/bin/cat /proc/self/cmdline > /tmp/proc-self-cmdline && busybox grep -a /bin/cat /tmp/proc-self-cmdline && echo PROC_SELF_CMDLINE_CALLER_OK
+busybox cat /proc/self/mounts > /tmp/proc-self-mounts && busybox grep "sysfs /sys sysfs" /tmp/proc-self-mounts && echo PROC_SELF_MOUNTS_OK
+busybox cat /proc/self/mountinfo > /tmp/proc-self-mountinfo && busybox grep " - sysfs sysfs " /tmp/proc-self-mountinfo && echo PROC_PID_MOUNTINFO_OK
+busybox cat /proc/self/cgroup > /tmp/proc-self-cgroup && busybox grep "0::/" /tmp/proc-self-cgroup && echo PROC_PID_CGROUP_OK
 busybox test -d /sys && echo SYS_DIR_OK
 busybox test -d /sys/class && echo SYS_CLASS_OK
 busybox test -d /sys/class/tty && echo SYS_CLASS_TTY_OK
 busybox ls /sys/class/tty && echo SYS_CLASS_TTY_LS_OK
 busybox test -d /sys/devices/system/cpu && echo SYS_CPU_DIR_OK
 busybox cat /sys/devices/system/cpu/online && echo SYS_CPU_ONLINE_OK
-busybox cat /proc/mounts | busybox grep "sysfs /sys sysfs" && echo PROC_MOUNTS_SYSFS_OK
-busybox cat /proc/mounts | busybox grep "tmpfs /run tmpfs" && echo PROC_MOUNTS_RUN_OK
-busybox cat /proc/mounts | busybox grep "tmpfs /tmp tmpfs" && echo PROC_MOUNTS_TMP_OK
-busybox cat /proc/filesystems | busybox grep -q cgroup || echo PROC_NO_CGROUP_OK
-busybox cat /proc/filesystems | busybox grep -q binfmt_misc || echo PROC_NO_BINFMT_OK
+busybox cat /proc/mounts > /tmp/proc-mounts && busybox grep "sysfs /sys sysfs" /tmp/proc-mounts && echo PROC_MOUNTS_SYSFS_OK
+busybox grep "tmpfs /run tmpfs" /tmp/proc-mounts && echo PROC_MOUNTS_RUN_OK
+busybox grep "tmpfs /tmp tmpfs" /tmp/proc-mounts && echo PROC_MOUNTS_TMP_OK
+busybox cat /proc/filesystems > /tmp/proc-filesystems && { busybox grep -q cgroup /tmp/proc-filesystems || echo PROC_NO_CGROUP_OK; }
+busybox test -s /tmp/proc-filesystems && { busybox grep -q binfmt_misc /tmp/proc-filesystems || echo PROC_NO_BINFMT_OK; }
 busybox test -r /proc/mounts && busybox test -x /proc && echo PROC_PERMS_OK
 busybox test -r /sys/devices/system/cpu/online && busybox test -x /sys && echo SYS_PERMS_OK
 busybox test -w /run && busybox sh -c 'echo run-ok > /run/openrc-check && cat /run/openrc-check' && echo RUN_TMPFS_WRITE_OK

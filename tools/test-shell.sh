@@ -77,6 +77,18 @@ send_script() {
 	done
 }
 
+send_script_sync() {
+	prompt_probe=$(printf '\033[6n')
+
+	while IFS= read -r line || [ -n "$line" ]; do
+		before=$(grep -aF -c "$prompt_probe" "$log" 2>/dev/null || true)
+		printf '%s\n' "$line" >&3
+		wait_for_prompt_count_gt "$prompt_probe" "$before" \
+			"shell prompt did not return after: $line" 90 220
+		sleep "$send_line_delay"
+	done
+}
+
 send_bytes() {
 	printf '%b' "$1" >&3
 }
