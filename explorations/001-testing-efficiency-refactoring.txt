@@ -241,7 +241,7 @@ Plan:
    - `root-mount-soak` is still listed in the manifest but not implemented by
      `tools/test-shell.sh`; the parallel runner reports it as skipped for now.
 
-12. Add make targets for parallel gates
+12. Add make targets for parallel gates [DONE]
    Add targets with clear roles:
 
    - `make test-smoke-parallel` for boot/login/sysrace/basic VFS checks.
@@ -249,6 +249,17 @@ Plan:
    - `make test-parallel` as the normal composed parallel gate.
    - Keep `make test` and `make test-shell` available as serial reference
      gates.
+
+   Result:
+
+   - Added `test-smoke-parallel`, `test-shell-parallel`, and `test-parallel`
+     Makefile targets.
+   - `test-smoke-parallel` runs only the smoke shard through
+     `tools/test-parallel.sh`.
+   - `test-shell-parallel` runs all implemented shell shards by default and
+     still accepts `BUNIX_TEST_SET=...` overrides.
+   - `test-parallel` currently aliases the composed shell parallel gate while
+     serial `test`, `test-shell`, and `test-smoke` remain available.
 
 13. Pick conservative parallel defaults
    Choose defaults that are useful on a Threadripper-class machine but safe on
