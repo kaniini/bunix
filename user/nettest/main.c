@@ -4,6 +4,7 @@
 #include <poll.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 static void say(const char *text)
@@ -84,9 +85,15 @@ static void expect_file_contains(const char *path, const char *needle,
 static void udp_test(void)
 {
 	const char payload[] = "udp-sendto";
+	const char msg_a[] = "udp-msg";
+	const char msg_b[] = "!";
 	char buffer[32];
+	char msg_buffer_a[8];
+	char msg_buffer_b[8];
 	struct sockaddr_in addr;
 	struct sockaddr_in check;
+	struct msghdr msg;
+	struct iovec iov[2];
 	socklen_t check_len;
 	int reuse = 1;
 	int server = socket(AF_INET, SOCK_DGRAM, 0);
@@ -127,6 +134,35 @@ static void udp_test(void)
 	    memcmp(buffer, payload, sizeof(payload)) != 0) {
 		die("nettest: udp recv failed\n");
 	}
+	memset(&msg, 0, sizeof(msg));
+	iov[0].iov_base = (void *)msg_a;
+	iov[0].iov_len = sizeof(msg_a) - 1;
+	iov[1].iov_base = (void *)msg_b;
+	iov[1].iov_len = sizeof(msg_b);
+	msg.msg_name = &addr;
+	msg.msg_namelen = sizeof(addr);
+	msg.msg_iov = iov;
+	msg.msg_iovlen = 2;
+	if (sendmsg(client, &msg, 0) !=
+	    (ssize_t)(sizeof(msg_a) - 1 + sizeof(msg_b))) {
+		die("nettest: udp sendmsg failed\n");
+	}
+	memset(msg_buffer_a, 0, sizeof(msg_buffer_a));
+	memset(msg_buffer_b, 0, sizeof(msg_buffer_b));
+	memset(&msg, 0, sizeof(msg));
+	iov[0].iov_base = msg_buffer_a;
+	iov[0].iov_len = sizeof(msg_a) - 1;
+	iov[1].iov_base = msg_buffer_b;
+	iov[1].iov_len = sizeof(msg_b);
+	msg.msg_iov = iov;
+	msg.msg_iovlen = 2;
+	if (recvmsg(server, &msg, 0) !=
+	    (ssize_t)(sizeof(msg_a) - 1 + sizeof(msg_b)) ||
+	    memcmp(msg_buffer_a, msg_a, sizeof(msg_a) - 1) != 0 ||
+	    memcmp(msg_buffer_b, msg_b, sizeof(msg_b)) != 0) {
+		die("nettest: udp recvmsg failed\n");
+	}
+	say("nettest: udp msg ok\n");
 	close(client);
 	close(server);
 	say("nettest: udp ok\n");

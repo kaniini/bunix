@@ -36,7 +36,7 @@ Tasks:
       wildcard addresses, ephemeral ports, checksums, and poll readiness.
 - [x] Implement enough TCP for localhost streams: listen, accept, connect,
       read/write, close, half-close, reset/error behavior, and backlog limits.
-- [ ] Add Linux syscall compatibility for the socket operations needed by
+- [x] Add Linux syscall compatibility for the socket operations needed by
       BusyBox, musl, OpenRC tools, and simple client/server test programs.
 - [x] Implement address and route tables for `127.0.0.0/8`, `::1/128`, and
       future interface routes.
@@ -182,6 +182,13 @@ Progress:
   state through a shared `bunix_net_socket_info` observation record.  `nettest`
   now verifies the procfs networking subtree during `make test-boot` and emits
   `nettest: proc net ok`.
+- Completed the first Linux socket compatibility surface by adding
+  `sendmsg(2)` and `recvmsg(2)` handling in the x86_64 Linux syscall bridge.
+  The bridge flattens msghdr/iovec payloads into the existing generic
+  `sendto`/`recvfrom` RPCs, supports optional destination names for UDP, and
+  keeps socket protocol behavior inside `linux.server` and NET0.  Ancillary
+  control messages remain unsupported for now.  `nettest` now exercises
+  scatter/gather UDP `sendmsg`/`recvmsg` and emits `nettest: udp msg ok`.
 
 NIC / VirtIO-net Boundary:
 

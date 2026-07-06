@@ -110,6 +110,8 @@ enum {
 	LINUX_SYSCALL_ACCEPT = 43,
 	LINUX_SYSCALL_SENDTO = 44,
 	LINUX_SYSCALL_RECVFROM = 45,
+	LINUX_SYSCALL_SENDMSG = 46,
+	LINUX_SYSCALL_RECVMSG = 47,
 	LINUX_SYSCALL_SHUTDOWN = 48,
 	LINUX_SYSCALL_BIND = 49,
 	LINUX_SYSCALL_LISTEN = 50,
@@ -239,6 +241,14 @@ enum {
 	LINUX_MAX_SHARED_BUFFER = 1024 * 1024,
 	LINUX_MAX_SOCKADDR = 128,
 	LINUX_IOV_MAX = 1024,
+	LINUX_MSGHDR_SIZE = 56,
+	LINUX_MSGHDR_NAME_OFF = 0,
+	LINUX_MSGHDR_NAMELEN_OFF = 8,
+	LINUX_MSGHDR_IOV_OFF = 16,
+	LINUX_MSGHDR_IOVLEN_OFF = 24,
+	LINUX_MSGHDR_CONTROL_OFF = 32,
+	LINUX_MSGHDR_CONTROLLEN_OFF = 40,
+	LINUX_MSGHDR_FLAGS_OFF = 48,
 	LINUX_EXEC_MAX_PATH = 4096,
 	LINUX_EXEC_MAX_STRING = 128 * 1024,
 	LINUX_EXEC_MAX_STRING_BYTES = 384 * 1024,
@@ -1047,6 +1057,235 @@ static int linux_syscall_forwards_scalar(u64 number)
 	default:
 		return 0;
 	}
+}
+
+struct linux_msghdr_copy {
+	u64 name;
+	u64 namelen;
+	u64 iov;
+	u64 iovlen;
+	u64 control;
+	u64 controllen;
+	u64 flags;
+};
+
+static int linux_read_msghdr(u64 user_msghdr, struct linux_msghdr_copy *out)
+{
+	u32 namelen;
+	u32 flags;
+
+	if (user_msghdr == 0 || out == 0) {
+		return -LINUX_EFAULT;
+	}
+	if (read_current_user(user_msghdr + LINUX_MSGHDR_NAME_OFF,
+			      &out->name, sizeof(out->name)) != 0 ||
+	    read_current_user(user_msghdr + LINUX_MSGHDR_NAMELEN_OFF,
+			      &namelen, sizeof(namelen)) != 0 ||
+	    read_current_user(user_msghdr + LINUX_MSGHDR_IOV_OFF,
+			      &out->iov, sizeof(out->iov)) != 0 ||
+	    read_current_user(user_msghdr + LINUX_MSGHDR_IOVLEN_OFF,
+			      &out->iovlen, sizeof(out->iovlen)) != 0 ||
+	    read_current_user(user_msghdr + LINUX_MSGHDR_CONTROL_OFF,
+			      &out->control, sizeof(out->control)) != 0 ||
+	    read_current_user(user_msghdr + LINUX_MSGHDR_CONTROLLEN_OFF,
+			      &out->controllen, sizeof(out->controllen)) != 0 ||
+	    read_current_user(user_msghdr + LINUX_MSGHDR_FLAGS_OFF,
+			      &flags, sizeof(flags)) != 0) {
+		return -LINUX_EFAULT;
+	}
+	out->namelen = namelen;
+	out->flags = flags;
+	if (out->iovlen > LINUX_IOV_MAX ||
+	    out->namelen > LINUX_MAX_SOCKADDR ||
+	    out->controllen != 0) {
+		return -LINUX_EINVAL;
+	}
+	if (out->iovlen != 0 && out->iov == 0) {
+		return -LINUX_EFAULT;
+	}
+	if (out->namelen != 0 && out->name == 0) {
+		return -LINUX_EFAULT;
+	}
+	return 0;
+}
+
+static u64 linux_forward_sendmsg(struct ipc_port *linux,
+				 struct ipc_port *reply_port,
+				 struct ipc_message *request, u64 fd,
+				 u64 user_msghdr, u64 flags)
+{
+	struct linux_msghdr_copy msg;
+	struct {
+		u64 base;
+		u64 len;
+	} iov;
+	struct shared_buffer *buffer;
+	struct ipc_message reply;
+	u64 total = 0;
+	u64 payload_offset;
+	u64 written = 0;
+	u64 irq_flags;
+	int rc;
+
+	rc = linux_read_msghdr(user_msghdr, &msg);
+	if (rc != 0) {
+		return (u64)rc;
+	}
+	for (u64 i = 0; i < msg.iovlen; i++) {
+		if (read_current_user(msg.iov + i * sizeof(iov), &iov,
+				      sizeof(iov)) != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		if (iov.base == 0 && iov.len != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		if (iov.len > LINUX_MAX_SYSCALL_BUFFER - total) {
+			return linux_einval_u64(__func__, __LINE__);
+		}
+		total += iov.len;
+	}
+	payload_offset = msg.namelen;
+	buffer = buffer_create(payload_offset + (total == 0 ? 1 : total));
+	if (buffer == 0) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	irq_flags = spin_lock_irqsave(&syscall_copy_lock);
+	if (msg.namelen != 0 &&
+	    (read_current_user(msg.name, syscall_copy_buffer,
+			       msg.namelen) != 0 ||
+	     buffer_write(buffer, 0, syscall_copy_buffer,
+			  msg.namelen) != 0)) {
+		spin_unlock_irqrestore(&syscall_copy_lock, irq_flags);
+		buffer_release(buffer);
+		return (u64)-LINUX_EFAULT;
+	}
+	for (u64 i = 0; i < msg.iovlen; i++) {
+		if (read_current_user(msg.iov + i * sizeof(iov), &iov,
+				      sizeof(iov)) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, irq_flags);
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
+		for (u64 done = 0; done < iov.len;) {
+			const u64 chunk = min_u64(iov.len - done,
+						  LINUX_MAX_SYSCALL_BUFFER);
+
+			if (read_current_user(iov.base + done,
+					      syscall_copy_buffer, chunk) != 0 ||
+			    buffer_write(buffer, payload_offset + written,
+					 syscall_copy_buffer, chunk) != 0) {
+				spin_unlock_irqrestore(&syscall_copy_lock,
+						       irq_flags);
+				buffer_release(buffer);
+				return (u64)-LINUX_EFAULT;
+			}
+			done += chunk;
+			written += chunk;
+		}
+	}
+	spin_unlock_irqrestore(&syscall_copy_lock, irq_flags);
+
+	request->type = LINUX_SYSCALL_SENDTO;
+	request->words[0] = fd;
+	request->words[1] = total;
+	request->words[2] = flags;
+	request->words[3] = msg.namelen;
+	request->cap_type = IPC_CAP_BUFFER;
+	request->cap_rights = TASK_RIGHT_RECV | TASK_RIGHT_DUP;
+	request->cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	buffer_release(buffer);
+	return reply.words[0];
+}
+
+static u64 linux_forward_recvmsg(struct ipc_port *linux,
+				 struct ipc_port *reply_port,
+				 struct ipc_message *request, u64 fd,
+				 u64 user_msghdr, u64 flags)
+{
+	struct linux_msghdr_copy msg;
+	struct {
+		u64 base;
+		u64 len;
+	} iov;
+	struct shared_buffer *buffer;
+	struct ipc_message reply;
+	u64 total = 0;
+	u64 copied = 0;
+	u64 irq_flags;
+	int rc;
+
+	rc = linux_read_msghdr(user_msghdr, &msg);
+	if (rc != 0) {
+		return (u64)rc;
+	}
+	for (u64 i = 0; i < msg.iovlen; i++) {
+		if (read_current_user(msg.iov + i * sizeof(iov), &iov,
+				      sizeof(iov)) != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		if (iov.base == 0 && iov.len != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		if (iov.len > LINUX_MAX_SYSCALL_BUFFER - total) {
+			return linux_einval_u64(__func__, __LINE__);
+		}
+		total += iov.len;
+	}
+	buffer = buffer_create(total == 0 ? 1 : total);
+	if (buffer == 0) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	request->type = LINUX_SYSCALL_RECVFROM;
+	request->words[0] = fd;
+	request->words[1] = total;
+	request->words[2] = flags;
+	request->words[3] = 0;
+	request->cap_type = IPC_CAP_BUFFER;
+	request->cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP;
+	request->cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	if ((i64)reply.words[0] <= 0) {
+		buffer_release(buffer);
+		return reply.words[0];
+	}
+	irq_flags = spin_lock_irqsave(&syscall_copy_lock);
+	for (u64 i = 0; i < msg.iovlen && copied < reply.words[0]; i++) {
+		u64 todo;
+
+		if (read_current_user(msg.iov + i * sizeof(iov), &iov,
+				      sizeof(iov)) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, irq_flags);
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
+		todo = min_u64(iov.len, reply.words[0] - copied);
+		for (u64 done = 0; done < todo;) {
+			const u64 chunk = min_u64(todo - done,
+						  LINUX_MAX_SYSCALL_BUFFER);
+
+			if (buffer_read(buffer, copied, syscall_copy_buffer,
+					chunk) != 0 ||
+			    write_current_user(iov.base + done,
+					       syscall_copy_buffer, chunk) != 0) {
+				spin_unlock_irqrestore(&syscall_copy_lock,
+						       irq_flags);
+				buffer_release(buffer);
+				return (u64)-LINUX_EFAULT;
+			}
+			done += chunk;
+			copied += chunk;
+		}
+	}
+	spin_unlock_irqrestore(&syscall_copy_lock, irq_flags);
+	buffer_release(buffer);
+	return reply.words[0];
 }
 
 static struct linux_vfork_wait *linux_vfork_begin(u32 child_task)
@@ -3065,6 +3304,10 @@ static const char *linux_syscall_name(u64 number)
 		return "sendto";
 	case LINUX_SYSCALL_RECVFROM:
 		return "recvfrom";
+	case LINUX_SYSCALL_SENDMSG:
+		return "sendmsg";
+	case LINUX_SYSCALL_RECVMSG:
+		return "recvmsg";
 	case LINUX_SYSCALL_GETCWD:
 		return "getcwd";
 	case LINUX_SYSCALL_CHDIR:
@@ -4167,6 +4410,12 @@ poll_again:
 						  TASK_RIGHT_DUP,
 						  arg0, arg3, 0);
 	}
+	case LINUX_SYSCALL_SENDMSG:
+		return linux_forward_sendmsg(linux, reply_port, &request,
+					     arg0, arg1, arg2);
+	case LINUX_SYSCALL_RECVMSG:
+		return linux_forward_recvmsg(linux, reply_port, &request,
+					     arg0, arg1, arg2);
 	case LINUX_SYSCALL_GETSOCKNAME:
 	case LINUX_SYSCALL_GETPEERNAME:
 		return linux_forward_socklen_output(linux, reply_port, &request,

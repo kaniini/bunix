@@ -67,6 +67,7 @@ first: aux proc=4
 first: large buffer ok
 alloctest: ok
 phdrstress: ok
+nettest: udp msg ok
 nettest: udp ok
 nettest: udp6 ok
 nettest: tcp ok
