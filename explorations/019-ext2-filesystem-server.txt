@@ -159,6 +159,12 @@ Implementation notes:
   and superblock, writes a zero-length regular inode, inserts the directory
   entry, and rolls back the inode allocation if insertion fails.  File data
   block allocation and directory growth are still follow-up write slices.
+- Regular-file writes can now grow files through direct blocks.  The server
+  allocates blocks from the block bitmap, updates superblock/group free-block
+  counts, zeros new blocks, attaches direct block pointers to the inode,
+  updates `i_blocks`, writes data, and then updates inode size.  Sparse writes,
+  indirect block allocation, block freeing on truncate, and directory growth
+  remain follow-up slices.
 
 Tasks:
 

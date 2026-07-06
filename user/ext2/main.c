@@ -769,6 +769,45 @@ static long write_inode_size(struct ext2_mount *mount, u64 ino,
 	return 0;
 }
 
+static long write_inode_blocks(struct ext2_mount *mount, u64 ino,
+			       struct ext2_inode *inode, u64 blocks)
+{
+	unsigned char raw[4];
+	u64 offset;
+
+	if (mount == 0 || inode == 0 ||
+	    inode_disk_offset(mount, ino, &offset) != 0) {
+		return -1;
+	}
+	store_le32(raw, 0, blocks);
+	if (mount_write_bytes(mount, offset + 28, raw, sizeof(raw)) != 0) {
+		return -1;
+	}
+	inode->blocks = blocks;
+	return 0;
+}
+
+static long write_inode_direct_block(struct ext2_mount *mount, u64 ino,
+				     struct ext2_inode *inode, u64 logical,
+				     u64 physical)
+{
+	unsigned char raw[4];
+	u64 offset;
+
+	if (mount == 0 || inode == 0 || logical >= EXT2_NDIR_BLOCKS ||
+	    physical > 0xffffffff ||
+	    inode_disk_offset(mount, ino, &offset) != 0) {
+		return -1;
+	}
+	store_le32(raw, 0, physical);
+	if (mount_write_bytes(mount, offset + 40 + logical * 4, raw,
+			      sizeof(raw)) != 0) {
+		return -1;
+	}
+	inode->block[logical] = physical;
+	return 0;
+}
+
 static long write_inode_mode(struct ext2_mount *mount, u64 ino,
 			     struct ext2_inode *inode, u64 mode)
 {
@@ -1034,6 +1073,140 @@ static long free_inode(struct ext2_mount *mount, u64 ino)
 	return 0;
 }
 
+static u64 group_first_block(const struct ext2_mount *mount, u64 group_index)
+{
+	if (mount == 0 ||
+	    group_index > ((u64)-1) / mount->super.blocks_per_group) {
+		return (u64)-1;
+	}
+	return mount->super.first_data_block +
+	       group_index * mount->super.blocks_per_group;
+}
+
+static u64 group_block_count(const struct ext2_mount *mount, u64 group_index)
+{
+	u64 first;
+
+	if (mount == 0 || group_index >= mount->super.groups_count) {
+		return 0;
+	}
+	first = group_first_block(mount, group_index);
+	if (first == (u64)-1 || first >= mount->super.blocks_count) {
+		return 0;
+	}
+	if (mount->super.blocks_count - first < mount->super.blocks_per_group) {
+		return mount->super.blocks_count - first;
+	}
+	return mount->super.blocks_per_group;
+}
+
+static long zero_block(struct ext2_mount *mount, u64 block)
+{
+	unsigned char *zero;
+	long result;
+
+	if (mount == 0 || !block_range_valid(mount, block, 1)) {
+		return -1;
+	}
+	zero = (unsigned char *)bunix_calloc(1, mount->super.block_size);
+	if (zero == 0) {
+		return -1;
+	}
+	result = mount_write_bytes(mount, block_to_offset(mount, block), zero,
+				   mount->super.block_size);
+	bunix_free(zero);
+	return result;
+}
+
+static long allocate_block(struct ext2_mount *mount, u64 *block_out)
+{
+	if (mount == 0 || block_out == 0 ||
+	    mount->super.free_blocks_count == 0) {
+		return -1;
+	}
+	for (u64 group_index = 0; group_index < mount->super.groups_count;
+	     group_index++) {
+		struct ext2_group *group = &mount->groups[group_index];
+		const u64 first = group_first_block(mount, group_index);
+		const u64 count = group_block_count(mount, group_index);
+
+		if (first == (u64)-1 || count == 0 ||
+		    group->free_blocks_count == 0) {
+			continue;
+		}
+		for (u64 bit = 0; bit < count; bit++) {
+			const u64 block = first + bit;
+			u64 allocated = 0;
+
+			if (bitmap_bit_is_set(mount, group->block_bitmap, bit,
+					      &allocated) != 0) {
+				return -1;
+			}
+			if (allocated != 0) {
+				continue;
+			}
+			if (bitmap_set_bit(mount, group->block_bitmap, bit,
+					   1) != 0 ||
+			    group->free_blocks_count == 0 ||
+			    mount->super.free_blocks_count == 0) {
+				return -1;
+			}
+			group->free_blocks_count--;
+			mount->super.free_blocks_count--;
+			if (write_group_count16(mount, group_index, 12,
+						group->free_blocks_count) != 0 ||
+			    write_super_count32(mount, 12,
+						mount->super.free_blocks_count) != 0 ||
+			    zero_block(mount, block) != 0) {
+				return -1;
+			}
+			*block_out = block;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+static long free_block(struct ext2_mount *mount, u64 block)
+{
+	u64 group_index;
+	u64 first;
+	u64 bit;
+	u64 allocated = 0;
+	struct ext2_group *group;
+
+	if (mount == 0 ||
+	    block < mount->super.first_data_block ||
+	    block >= mount->super.blocks_count) {
+		return -1;
+	}
+	group_index = (block - mount->super.first_data_block) /
+		      mount->super.blocks_per_group;
+	if (group_index >= mount->super.groups_count) {
+		return -1;
+	}
+	first = group_first_block(mount, group_index);
+	if (first == (u64)-1 || block < first) {
+		return -1;
+	}
+	bit = block - first;
+	group = &mount->groups[group_index];
+	if (bitmap_bit_is_set(mount, group->block_bitmap, bit, &allocated) != 0 ||
+	    allocated == 0 ||
+	    bitmap_set_bit(mount, group->block_bitmap, bit, 0) != 0) {
+		return -1;
+	}
+	group->free_blocks_count++;
+	mount->super.free_blocks_count++;
+	if (write_group_count16(mount, group_index, 12,
+				group->free_blocks_count) != 0 ||
+	    write_super_count32(mount, 12,
+				mount->super.free_blocks_count) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
 static u64 ext2_inode_vfs_type(const struct ext2_inode *inode)
 {
 	if (inode == 0) {
@@ -1222,6 +1395,58 @@ static long write_mapped_block(struct ext2_mount *mount,
 	if (mount == 0 || inode == 0 || data == 0 ||
 	    map_logical_block(mount, inode, logical, &physical) != 0 ||
 	    physical == 0 ||
+	    !block_range_valid(mount, physical, 1)) {
+		return -1;
+	}
+	offset = block_to_offset(mount, physical);
+	if (offset == (u64)-1 ||
+	    offset > mount->image_size ||
+	    mount->super.block_size > mount->image_size - offset) {
+		return -1;
+	}
+	return mount_write_bytes(mount, offset, data, mount->super.block_size);
+}
+
+static long ensure_direct_block(struct ext2_mount *mount, u64 ino,
+				struct ext2_inode *inode, u64 logical,
+				u64 *physical)
+{
+	u64 block;
+	u64 sectors;
+
+	if (mount == 0 || inode == 0 || physical == 0 ||
+	    logical >= EXT2_NDIR_BLOCKS) {
+		return -1;
+	}
+	if (inode->block[logical] != 0) {
+		*physical = inode->block[logical];
+		return block_range_valid(mount, *physical, 1) ? 0 : -1;
+	}
+	if (allocate_block(mount, &block) != 0) {
+		return -1;
+	}
+	sectors = mount->super.block_size / 512;
+	if (sectors == 0 ||
+	    write_inode_direct_block(mount, ino, inode, logical, block) != 0 ||
+	    write_inode_blocks(mount, ino, inode,
+			       inode->blocks + sectors) != 0) {
+		(void)write_inode_direct_block(mount, ino, inode, logical, 0);
+		(void)free_block(mount, block);
+		return -1;
+	}
+	*physical = block;
+	return 0;
+}
+
+static long write_direct_file_block(struct ext2_mount *mount, u64 ino,
+				    struct ext2_inode *inode, u64 logical,
+				    const unsigned char *data)
+{
+	u64 physical;
+	u64 offset;
+
+	if (mount == 0 || inode == 0 || data == 0 ||
+	    ensure_direct_block(mount, ino, inode, logical, &physical) != 0 ||
 	    !block_range_valid(mount, physical, 1)) {
 		return -1;
 	}
@@ -1986,6 +2211,7 @@ static void reply_write_file(struct ext2_open *open,
 	unsigned char *block;
 	u64 offset;
 	u64 len;
+	u64 new_size;
 	u64 done = 0;
 
 	if (open == 0 ||
@@ -1998,7 +2224,13 @@ static void reply_write_file(struct ext2_open *open,
 	offset = message->words[1];
 	len = message->words[2];
 	if (offset > open->inode.size ||
-	    len > open->inode.size - offset) {
+	    len > (u64)-1 - offset) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		reply->words[1] = 0;
+		return;
+	}
+	new_size = offset + len;
+	if (new_size > EXT2_NDIR_BLOCKS * root_mount.super.block_size) {
 		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 		reply->words[1] = 0;
 		return;
@@ -2012,17 +2244,22 @@ static void reply_write_file(struct ext2_open *open,
 		const u64 file_offset = offset + done;
 		const u64 logical = file_offset / root_mount.super.block_size;
 		const u64 block_offset = file_offset % root_mount.super.block_size;
+		u64 physical;
 		u64 chunk = root_mount.super.block_size - block_offset;
 
 		if (chunk > len - done) {
 			chunk = len - done;
 		}
-		if (read_mapped_block(&root_mount, &open->inode,
+		if (logical >= EXT2_NDIR_BLOCKS ||
+		    ensure_direct_block(&root_mount, open->ino, &open->inode,
+					logical, &physical) != 0 ||
+		    !block_range_valid(&root_mount, physical, 1) ||
+		    read_mapped_block(&root_mount, &open->inode,
 				      logical, block) != 0 ||
 		    bunix_buffer_read(message->cap, done,
 				      block + block_offset, chunk) != 0 ||
-		    write_mapped_block(&root_mount, &open->inode,
-				       logical, block) != 0) {
+		    write_direct_file_block(&root_mount, open->ino,
+					    &open->inode, logical, block) != 0) {
 			bunix_free(block);
 			reply->words[0] = (u64)-1;
 			reply->words[1] = done;
@@ -2031,6 +2268,13 @@ static void reply_write_file(struct ext2_open *open,
 		done += chunk;
 	}
 	bunix_free(block);
+	if (new_size > open->inode.size &&
+	    write_inode_size(&root_mount, open->ino, &open->inode,
+			     new_size) != 0) {
+		reply->words[0] = (u64)-1;
+		reply->words[1] = done;
+		return;
+	}
 	reply->words[0] = 0;
 	reply->words[1] = done;
 }

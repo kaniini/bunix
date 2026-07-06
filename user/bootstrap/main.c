@@ -860,6 +860,17 @@ static long ext2_readonly_selftest(u64 vfs)
 	    vfs_readdir_has(vfs, "/mnt/ext2", "created.txt") != 0) {
 		return -1;
 	}
+	if (vfs_write_text(vfs, "/mnt/ext2/created.txt", 0, "created ok\n",
+			   11) != 0 ||
+	    vfs_read_text(vfs, "/mnt/ext2/created.txt", text,
+			  sizeof(text)) != 0 ||
+	    !str_eq(text, "created ok\n") ||
+	    vfs_stat_path(vfs, "/mnt/ext2/created.txt", &hello_size, 0, 0,
+			  &hello_type, 0, 0, 0) != 0 ||
+	    hello_size != 11 ||
+	    hello_type != BUNIX_VFS_TYPE_REGULAR) {
+		return -1;
+	}
 	return 0;
 }
 
