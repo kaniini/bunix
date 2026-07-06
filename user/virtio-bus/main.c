@@ -207,8 +207,18 @@ static int pci_is_virtio(u64 vendor, u64 device)
 	       (device >= 0x1040 && device <= 0x107f);
 }
 
+static u64 pci_bar_grant(u64 bus, u64 slot, u64 function, u64 bar, u64 offset,
+			 u64 len, u64 ops)
+{
+	const u64 packed = (bus & 0xff) | ((slot & 0x1f) << 8) |
+			   ((function & 0x7) << 16) | ((bar & 0x7) << 24);
+	const long handle = bunix_hw_pci_bar_grant(packed, offset, len, ops);
+
+	return handle > 0 ? (u64)handle : 0;
+}
+
 static void resource_add(struct virtio_bus_device *device, u64 type, u64 ops,
-			 u64 base, u64 len, u64 index, u64 flags)
+			 u64 handle, u64 base, u64 len, u64 index, u64 flags)
 {
 	struct bunix_device_resource *resource;
 
@@ -220,7 +230,7 @@ static void resource_add(struct virtio_bus_device *device, u64 type, u64 ops,
 	resource->name = 0;
 	resource->type = type;
 	resource->ops = ops;
-	resource->handle = 0;
+	resource->handle = handle;
 	resource->base = base;
 	resource->len = len;
 	resource->alignment = 0;
@@ -260,14 +270,17 @@ static void scan_pci_bars(struct virtio_bus_device *device, u64 bus, u64 slot,
 			base = raw & ~0x3ull;
 			size = (~(mask & ~0x3ull) + 1) & 0xffffffffu;
 			flags |= BUNIX_DEV_RESOURCE_FLAG_PCI_IO;
-			resource_add(device, BUNIX_DEV_RESOURCE_PIO,
-				     BUNIX_DEV_OP_READ | BUNIX_DEV_OP_WRITE,
-				     base, size, bar, flags);
+			const u64 ops = BUNIX_DEV_OP_READ | BUNIX_DEV_OP_WRITE;
+			const u64 handle = pci_bar_grant(bus, slot, function,
+							 bar, 0, size, ops);
+			resource_add(device, BUNIX_DEV_RESOURCE_PIO, ops,
+				     handle, base, size, bar, flags);
 			continue;
 		}
 
 		base = raw & ~0xfull;
 		size = (~(mask & ~0xfull) + 1) & 0xffffffffu;
+		const u64 original_bar = bar;
 		if ((raw & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
 			flags |= BUNIX_DEV_RESOURCE_FLAG_PCI_MEM64;
 			bar++;
@@ -275,9 +288,11 @@ static void scan_pci_bars(struct virtio_bus_device *device, u64 bus, u64 slot,
 		if ((raw & PCI_BAR_MEM_PREFETCH) != 0) {
 			flags |= BUNIX_DEV_RESOURCE_FLAG_PCI_PREFETCH;
 		}
-		resource_add(device, BUNIX_DEV_RESOURCE_MMIO,
-			     BUNIX_DEV_OP_READ | BUNIX_DEV_OP_WRITE,
-			     base, size, bar, flags);
+		const u64 ops = BUNIX_DEV_OP_READ | BUNIX_DEV_OP_WRITE;
+		const u64 handle = pci_bar_grant(bus, slot, function,
+						 original_bar, 0, size, ops);
+		resource_add(device, BUNIX_DEV_RESOURCE_MMIO, ops, handle,
+			     base, size, original_bar, flags);
 	}
 }
 
@@ -335,14 +350,24 @@ static void scan_virtio_capabilities(struct virtio_bus_device *device, u64 bus,
 					struct bunix_device_resource *resource =
 						&device->resources[i];
 					if (resource->index == bar) {
+						const u64 sub_offset =
+							(u64)cap_offset &
+							0xffffffffu;
+						const u64 sub_len =
+							(u64)cap_len &
+							0xffffffffu;
+						const u64 handle =
+							pci_bar_grant(
+								bus, slot,
+								function, bar,
+								sub_offset,
+								sub_len,
+								resource->ops);
 						resource_add(
 							device, resource->type,
-							resource->ops,
+							resource->ops, handle,
 							resource->base +
-							((u64)cap_offset &
-							 0xffffffffu),
-							(u64)cap_len &
-							0xffffffffu,
+							sub_offset, sub_len,
 							bar, resource->flags |
 							flag);
 						break;

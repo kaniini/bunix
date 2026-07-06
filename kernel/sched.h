@@ -48,9 +48,15 @@ enum task_hw_resource_ops {
 	TASK_HW_OP_MASK_IRQ = 1 << 4,
 };
 
+enum task_hw_resource_flags {
+	TASK_HW_RESOURCE_OWNED = 1 << 0,
+};
+
 struct task_hw_resource {
 	u32 type;
 	u32 ops;
+	u32 flags;
+	u32 ref_count;
 	u64 base;
 	u64 len;
 };

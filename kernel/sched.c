@@ -832,6 +832,11 @@ u64 task_grant_hw_resource(struct task *task,
 				continue;
 			}
 
+			if (task_handle_retain(TASK_HANDLE_HW_RESOURCE,
+					       (void *)resource) != 0) {
+				spin_unlock_irqrestore(&task->lock, flags);
+				return 0;
+			}
 			task->handles[i].type = TASK_HANDLE_HW_RESOURCE;
 			task->handles[i].rights = rights;
 			task->handles[i].object = (void *)resource;
@@ -1138,7 +1143,15 @@ static int task_handle_retain(enum task_handle_type type, void *object)
 		return 0;
 	}
 	if (type == TASK_HANDLE_HW_RESOURCE) {
-		return object != 0 ? 0 : -1;
+		struct task_hw_resource *resource =
+			(struct task_hw_resource *)object;
+		if (resource == 0) {
+			return -1;
+		}
+		if ((resource->flags & TASK_HW_RESOURCE_OWNED) != 0) {
+			__sync_fetch_and_add(&resource->ref_count, 1);
+		}
+		return 0;
 	}
 	return -1;
 }
@@ -1151,6 +1164,14 @@ static void task_handle_release(enum task_handle_type type, void *object)
 		buffer_release((struct shared_buffer *)object);
 	} else if (type == TASK_HANDLE_TASK) {
 		task_release((struct task *)object);
+	} else if (type == TASK_HANDLE_HW_RESOURCE) {
+		struct task_hw_resource *resource =
+			(struct task_hw_resource *)object;
+		if (resource != 0 &&
+		    (resource->flags & TASK_HW_RESOURCE_OWNED) != 0 &&
+		    __sync_sub_and_fetch(&resource->ref_count, 1) == 0) {
+			slab_free(resource);
+		}
 	}
 }
 

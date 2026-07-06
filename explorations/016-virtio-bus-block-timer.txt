@@ -151,3 +151,10 @@ Progress:
   vendor capabilities, store resource descriptors, and expose those descriptors
   through `DEV0 GET_RESOURCE`.  The deterministic VirtIO boot target now also
   asserts a discovered device log line with resource metadata.
+- Added a kernel-mediated `hw_pci_bar_grant` native syscall for VirtIO PCI
+  BAR subranges.  `virtio-bus.server` now attaches hardware-resource handles to
+  whole BAR descriptors and attenuated VirtIO common/notify/ISR/device config
+  subresources, while the scheduler tracks heap-backed hardware resources with
+  owned refcounts so inherited or closed handles do not leak.  This is still
+  only the bus resource handoff foundation; driver binding, IRQ resources, DMA
+  windows, and queue ownership remain open.

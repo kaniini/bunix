@@ -46,6 +46,7 @@ enum {
 	BUNIX_SYSCALL_HW_PORT_OUT16 = -76,
 	BUNIX_SYSCALL_HW_PORT_IN32 = -78,
 	BUNIX_SYSCALL_HW_PORT_OUT32 = -80,
+	BUNIX_SYSCALL_HW_PCI_BAR_GRANT = -82,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
@@ -518,6 +519,23 @@ static inline long bunix_syscall3(long number, u64 arg0, u64 arg1, u64 arg2)
 	return rax;
 }
 
+static inline long bunix_syscall4(long number, u64 arg0, u64 arg1, u64 arg2,
+				  u64 arg3)
+{
+	long rax = number;
+	register u64 rdi __asm__("rdi") = arg0;
+	register u64 rsi __asm__("rsi") = arg1;
+	register u64 rdx __asm__("rdx") = arg2;
+	register u64 r10 __asm__("r10") = arg3;
+
+	__asm__ volatile ("syscall"
+			  : "+a"(rax), "+D"(rdi), "+S"(rsi), "+d"(rdx),
+			    "+r"(r10)
+			  :
+			  : "rcx", "r8", "r9", "r11", "memory");
+	return rax;
+}
+
 static inline long bunix_launch_module(const char *name)
 {
 	return bunix_syscall3(BUNIX_SYSCALL_LAUNCH_MODULE, (u64)name, 0, 0);
@@ -880,6 +898,13 @@ static inline long bunix_hw_port_in32(u64 handle, u64 offset)
 static inline long bunix_hw_port_out32(u64 handle, u64 offset, u64 value)
 {
 	return bunix_syscall3(BUNIX_SYSCALL_HW_PORT_OUT32, handle, offset, value);
+}
+
+static inline long bunix_hw_pci_bar_grant(u64 device, u64 offset, u64 len,
+					  u64 ops)
+{
+	return bunix_syscall4(BUNIX_SYSCALL_HW_PCI_BAR_GRANT, device, offset,
+			      len, ops);
 }
 
 #endif

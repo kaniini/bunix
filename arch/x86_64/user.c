@@ -66,6 +66,7 @@ enum {
 	SYSCALL_HW_PORT_OUT16 = -76,
 	SYSCALL_HW_PORT_IN32 = -78,
 	SYSCALL_HW_PORT_OUT32 = -80,
+	SYSCALL_HW_PCI_BAR_GRANT = -82,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -5054,6 +5055,124 @@ static u64 native_sys_machine_power(const struct native_syscall_args *args)
 	arch_poweroff();
 }
 
+enum {
+	PCI_VENDOR_VIRTIO = 0x1af4,
+	PCI_VENDOR_NONE = 0xffff,
+	PCI_BAR0 = 0x10,
+	PCI_BAR_IO = 1,
+	PCI_BAR_MEM_TYPE_MASK = 0x6,
+	PCI_BAR_MEM_TYPE_64 = 0x4,
+};
+
+static u32 pci_config_address(u64 bus, u64 slot, u64 function, u64 offset)
+{
+	return 0x80000000u |
+	       ((u32)(bus & 0xff) << 16) |
+	       ((u32)(slot & 0x1f) << 11) |
+	       ((u32)(function & 0x7) << 8) |
+	       (u32)(offset & 0xfc);
+}
+
+static u32 pci_config_read32(u64 bus, u64 slot, u64 function, u64 offset)
+{
+	arch_outl(0xcf8, pci_config_address(bus, slot, function, offset));
+	return arch_inl(0xcfc);
+}
+
+static void pci_config_write32(u64 bus, u64 slot, u64 function, u64 offset,
+			       u32 value)
+{
+	arch_outl(0xcf8, pci_config_address(bus, slot, function, offset));
+	arch_outl(0xcfc, value);
+}
+
+static int pci_device_is_virtio(u64 bus, u64 slot, u64 function)
+{
+	const u32 id = pci_config_read32(bus, slot, function, 0);
+	const u32 vendor = id & 0xffff;
+	const u32 device = id >> 16;
+
+	if (vendor == PCI_VENDOR_NONE || vendor != PCI_VENDOR_VIRTIO) {
+		return 0;
+	}
+	return (device >= 0x1000 && device <= 0x107f) ||
+	       (device >= 0x1040 && device <= 0x107f);
+}
+
+static int pci_bar_info(u64 bus, u64 slot, u64 function, u64 bar,
+			u32 *type, u64 *base, u64 *size)
+{
+	const u64 offset = PCI_BAR0 + bar * 4;
+	const u32 original = pci_config_read32(bus, slot, function, offset);
+	u32 mask;
+
+	if (bar >= 6 || original == 0 || type == 0 || base == 0 || size == 0) {
+		return -1;
+	}
+
+	pci_config_write32(bus, slot, function, offset, 0xffffffffu);
+	mask = pci_config_read32(bus, slot, function, offset);
+	pci_config_write32(bus, slot, function, offset, original);
+	if (mask == 0 || mask == 0xffffffffu) {
+		return -1;
+	}
+
+	if ((original & PCI_BAR_IO) != 0) {
+		*type = TASK_HW_RESOURCE_PORT;
+		*base = original & ~0x3ull;
+		*size = (~(mask & ~0x3u) + 1u) & 0xffffffffu;
+		return *size != 0 ? 0 : -1;
+	}
+
+	*type = TASK_HW_RESOURCE_MMIO;
+	*base = original & ~0xfull;
+	*size = (~(mask & ~0xfu) + 1u) & 0xffffffffu;
+	if ((original & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
+		/* 64-bit BAR high halves are not consumed until MMIO users exist. */
+	}
+	return *size != 0 ? 0 : -1;
+}
+
+static u64 native_sys_hw_pci_bar_grant(const struct native_syscall_args *args)
+{
+	const u64 packed = args->arg0;
+	const u64 bus = packed & 0xff;
+	const u64 slot = (packed >> 8) & 0x1f;
+	const u64 function = (packed >> 16) & 0x7;
+	const u64 bar = (packed >> 24) & 0x7;
+	const u64 offset = args->arg1;
+	const u64 len = args->arg2;
+	const u32 ops = (u32)args->arg3;
+	u32 type;
+	u64 base;
+	u64 size;
+
+	if (len == 0 || (ops & ~(TASK_HW_OP_READ | TASK_HW_OP_WRITE)) != 0 ||
+	    !pci_device_is_virtio(bus, slot, function) ||
+	    pci_bar_info(bus, slot, function, bar, &type, &base, &size) != 0 ||
+	    offset > size || len > size - offset) {
+		return (u64)-1;
+	}
+
+	struct task_hw_resource *resource =
+		(struct task_hw_resource *)slab_alloc(sizeof(*resource));
+	if (resource == 0) {
+		return (u64)-1;
+	}
+	resource->type = type;
+	resource->ops = ops;
+	resource->flags = TASK_HW_RESOURCE_OWNED;
+	resource->ref_count = 0;
+	resource->base = base + offset;
+	resource->len = len;
+	const u64 handle =
+		task_grant_hw_resource(task_current(), resource, TASK_RIGHT_SEND);
+	if (handle == 0) {
+		slab_free(resource);
+	}
+	return handle;
+}
+
 static int hw_port_validate(u64 handle, u64 offset, u64 width, u32 op,
 			    u16 *port)
 {
@@ -5310,6 +5429,8 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_HW_PORT_OUT16, "hw_port_out16", native_sys_hw_port_out16 },
 	{ SYSCALL_HW_PORT_IN32, "hw_port_in32", native_sys_hw_port_in32 },
 	{ SYSCALL_HW_PORT_OUT32, "hw_port_out32", native_sys_hw_port_out32 },
+	{ SYSCALL_HW_PCI_BAR_GRANT, "hw_pci_bar_grant",
+	  native_sys_hw_pci_bar_grant },
 };
 
 static const struct native_syscall_entry *native_syscall_lookup(i64 number)
