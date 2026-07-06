@@ -114,6 +114,11 @@ Implementation notes:
   returns one non-dot entry per cookie, and `CLOSE` releases open handles.
   This currently uses direct directory blocks; indirect directory block support
   will come with the general file/data-block mapping task.
+- File data reads now use a shared ext2 logical-block mapper that supports
+  direct, singly indirect, doubly indirect, and triply indirect blocks with
+  sparse block handling.  `READ_FILE_BUFFER` streams regular-file contents into
+  the caller buffer and directory iteration uses the same mapper, so large
+  directories can traverse indirect blocks too.
 
 Tasks:
 
@@ -126,7 +131,7 @@ Tasks:
 - [x] Implement block group descriptor loading, inode table access, block
       bitmap/inode bitmap helpers, and safe bounds checks.
 - [x] Implement directory lookup and readdir for ext2 directory entries.
-- [ ] Implement file read for direct, singly indirect, doubly indirect, and
+- [x] Implement file read for direct, singly indirect, doubly indirect, and
       triply indirect blocks as needed by realistic images.
 - [ ] Implement metadata mapping into Linux stat/statx fields: inode number,
       mode, uid/gid, size, link count, timestamps, blocks, and device identity.

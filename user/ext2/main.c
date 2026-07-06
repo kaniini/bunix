@@ -13,6 +13,9 @@ enum {
 	EXT2_NAME_MAX = 255,
 	EXT2_MAX_PATH = 4096,
 	EXT2_NDIR_BLOCKS = 12,
+	EXT2_IND_BLOCK = 12,
+	EXT2_DIND_BLOCK = 13,
+	EXT2_TIND_BLOCK = 14,
 	EXT2_S_IFMT = 0170000,
 	EXT2_S_IFIFO = 0010000,
 	EXT2_S_IFCHR = 0020000,
@@ -659,28 +662,135 @@ static u64 ext2_dirent_vfs_type(u64 file_type)
 	}
 }
 
-static long read_direct_block(const struct ext2_mount *mount,
+static long read_block_u32(const struct ext2_mount *mount, u64 block,
+			   u64 index, u64 *value)
+{
+	unsigned char raw[4];
+	u64 offset;
+	u64 entry_offset;
+
+	if (mount == 0 || value == 0 ||
+	    index >= mount->super.block_size / 4 ||
+	    index > ((u64)-1) / 4 ||
+	    !block_range_valid(mount, block, 1)) {
+		return -1;
+	}
+	entry_offset = index * 4;
+	offset = block_to_offset(mount, block);
+	if (offset == (u64)-1 ||
+	    offset > mount->image_size ||
+	    entry_offset > mount->image_size - offset ||
+	    sizeof(raw) > mount->image_size - offset - entry_offset ||
+	    block_read_bytes(mount->block, offset + entry_offset,
+			     raw, sizeof(raw)) != 0) {
+		return -1;
+	}
+	*value = load_le32(raw, 0);
+	return 0;
+}
+
+static long map_logical_block(const struct ext2_mount *mount,
+			      const struct ext2_inode *inode, u64 logical,
+			      u64 *physical)
+{
+	u64 per_block;
+	u64 index;
+	u64 first;
+	u64 second;
+
+	if (mount == 0 || inode == 0 || physical == 0) {
+		return -1;
+	}
+	per_block = mount->super.block_size / 4;
+	if (per_block == 0) {
+		return -1;
+	}
+	if (logical < EXT2_NDIR_BLOCKS) {
+		*physical = inode->block[logical];
+		return 0;
+	}
+	logical -= EXT2_NDIR_BLOCKS;
+	if (logical < per_block) {
+		if (inode->block[EXT2_IND_BLOCK] == 0) {
+			*physical = 0;
+			return 0;
+		}
+		return read_block_u32(mount, inode->block[EXT2_IND_BLOCK],
+				      logical, physical);
+	}
+	logical -= per_block;
+	if (per_block != 0 &&
+	    logical / per_block < per_block) {
+		if (inode->block[EXT2_DIND_BLOCK] == 0) {
+			*physical = 0;
+			return 0;
+		}
+		index = logical / per_block;
+		if (read_block_u32(mount, inode->block[EXT2_DIND_BLOCK],
+				   index, &first) != 0) {
+			return -1;
+		}
+		if (first == 0) {
+			*physical = 0;
+			return 0;
+		}
+		return read_block_u32(mount, first, logical % per_block,
+				      physical);
+	}
+	if (per_block > ((u64)-1) / per_block) {
+		return -1;
+	}
+	logical -= per_block * per_block;
+	if (per_block != 0 && logical / per_block / per_block < per_block) {
+		if (inode->block[EXT2_TIND_BLOCK] == 0) {
+			*physical = 0;
+			return 0;
+		}
+		index = logical / (per_block * per_block);
+		if (read_block_u32(mount, inode->block[EXT2_TIND_BLOCK],
+				   index, &first) != 0) {
+			return -1;
+		}
+		if (first == 0) {
+			*physical = 0;
+			return 0;
+		}
+		logical %= per_block * per_block;
+		if (read_block_u32(mount, first, logical / per_block,
+				   &second) != 0) {
+			return -1;
+		}
+		if (second == 0) {
+			*physical = 0;
+			return 0;
+		}
+		return read_block_u32(mount, second, logical % per_block,
+				      physical);
+	}
+	return -1;
+}
+
+static long read_mapped_block(const struct ext2_mount *mount,
 			      const struct ext2_inode *inode, u64 logical,
 			      unsigned char *out)
 {
+	u64 physical;
 	u64 offset;
-	u64 block;
 
 	if (mount == 0 || inode == 0 || out == 0 ||
-	    logical >= EXT2_NDIR_BLOCKS) {
+	    map_logical_block(mount, inode, logical, &physical) != 0) {
 		return -1;
 	}
-	block = inode->block[logical];
-	if (block == 0) {
+	if (physical == 0) {
 		for (u64 i = 0; i < mount->super.block_size; i++) {
 			out[i] = 0;
 		}
 		return 0;
 	}
-	if (!block_range_valid(mount, block, 1)) {
+	if (!block_range_valid(mount, physical, 1)) {
 		return -1;
 	}
-	offset = block_to_offset(mount, block);
+	offset = block_to_offset(mount, physical);
 	if (offset == (u64)-1 ||
 	    offset > mount->image_size ||
 	    mount->super.block_size > mount->image_size - offset ||
@@ -712,7 +822,7 @@ static long read_dirent_at(const struct ext2_mount *mount,
 	}
 	block = (unsigned char *)bunix_calloc(1, mount->super.block_size);
 	if (block == 0 ||
-	    read_direct_block(mount, directory, block_index, block) != 0) {
+	    read_mapped_block(mount, directory, block_index, block) != 0) {
 		bunix_free(block);
 		return -1;
 	}
@@ -984,6 +1094,62 @@ static void reply_readdir(struct ext2_open *open,
 	reply->words[3] = written;
 }
 
+static void reply_read_file(struct ext2_open *open,
+			    const struct bunix_msg *message,
+			    struct bunix_msg *reply)
+{
+	unsigned char *block;
+	u64 offset;
+	u64 len;
+	u64 done = 0;
+
+	if (open == 0 ||
+	    ext2_inode_vfs_type(&open->inode) != BUNIX_VFS_TYPE_REGULAR ||
+	    message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	offset = message->words[1];
+	len = message->words[2];
+	if (offset >= open->inode.size) {
+		reply->words[0] = 0;
+		reply->words[1] = 0;
+		return;
+	}
+	if (len > open->inode.size - offset) {
+		len = open->inode.size - offset;
+	}
+	block = (unsigned char *)bunix_calloc(1, root_mount.super.block_size);
+	if (block == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	while (done < len) {
+		const u64 file_offset = offset + done;
+		const u64 logical = file_offset / root_mount.super.block_size;
+		const u64 block_offset = file_offset % root_mount.super.block_size;
+		u64 chunk = root_mount.super.block_size - block_offset;
+
+		if (chunk > len - done) {
+			chunk = len - done;
+		}
+		if (read_mapped_block(&root_mount, &open->inode,
+				      logical, block) != 0 ||
+		    bunix_buffer_write(message->cap, done,
+				       block + block_offset, chunk) != 0) {
+			bunix_free(block);
+			reply->words[0] = (u64)-1;
+			reply->words[1] = done;
+			return;
+		}
+		done += chunk;
+	}
+	bunix_free(block);
+	reply->words[0] = 0;
+	reply->words[1] = done;
+}
+
 static long load_initial_mount(u64 block, struct ext2_mount *mount)
 {
 	unsigned char raw[EXT2_SUPER_SIZE];
@@ -1058,6 +1224,10 @@ int main(void)
 			case BUNIX_VFS_READDIR_BUFFER:
 				reply_readdir(open_from_handle(message.words[0]),
 					      &message, &reply);
+				break;
+			case BUNIX_VFS_READ_FILE_BUFFER:
+				reply_read_file(open_from_handle(message.words[0]),
+						&message, &reply);
 				break;
 			case BUNIX_VFS_CLOSE:
 				if (open_from_handle(message.words[0]) == 0) {
