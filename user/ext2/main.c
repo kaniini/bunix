@@ -1927,11 +1927,34 @@ static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
 	return text_len(path) < EXT2_MAX_PATH ? 0 : -1;
 }
 
+static void strip_mount_prefix(char *path)
+{
+	const char mount_prefix[] = "/mnt/ext2";
+	const u64 mount_prefix_len = sizeof(mount_prefix) - 1;
+
+	if (path == 0) {
+		return;
+	}
+	if (text_starts_with(path, mount_prefix) &&
+	    (path[mount_prefix_len] == '\0' ||
+	     path[mount_prefix_len] == '/')) {
+		if (path[mount_prefix_len] == '\0') {
+			path[0] = '/';
+			path[1] = '\0';
+			return;
+		}
+		for (u64 i = 0; i < EXT2_MAX_PATH; i++) {
+			path[i] = path[mount_prefix_len + i];
+			if (path[i] == '\0') {
+				break;
+			}
+		}
+	}
+}
+
 static int read_resolved_path(const struct bunix_msg *message, char *path)
 {
 	char cwd[EXT2_MAX_PATH];
-	const char mount_prefix[] = "/mnt/ext2";
-	const u64 mount_prefix_len = sizeof(mount_prefix) - 1;
 
 	if (message == 0 ||
 	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
@@ -1942,21 +1965,48 @@ static int read_resolved_path(const struct bunix_msg *message, char *path)
 	    path[0] != '/') {
 		return -1;
 	}
-	if (text_starts_with(path, mount_prefix) &&
-	    (path[mount_prefix_len] == '\0' ||
-	     path[mount_prefix_len] == '/')) {
-		if (path[mount_prefix_len] == '\0') {
-			path[0] = '/';
-			path[1] = '\0';
-			return 0;
-		}
-		for (u64 i = 0; i < EXT2_MAX_PATH; i++) {
-			path[i] = path[mount_prefix_len + i];
-			if (path[i] == '\0') {
-				break;
-			}
-		}
+	strip_mount_prefix(path);
+	return 0;
+}
+
+static int read_two_path_buffer(const struct bunix_msg *message,
+				char *old_path, char *new_path)
+{
+	char old_cwd[EXT2_MAX_PATH];
+	char new_cwd[EXT2_MAX_PATH];
+	const u64 old_cwd_len = message->words[1] & 0xffffffff;
+	const u64 old_path_len = message->words[1] >> 32;
+	const u64 new_cwd_len = message->words[2] & 0xffffffff;
+	const u64 new_path_len = message->words[2] >> 32;
+	u64 offset = 0;
+
+	if (message == 0 || old_path == 0 || new_path == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    read_path_buffer_at(message->cap, offset, old_cwd_len,
+				old_cwd) != 0) {
+		return -1;
 	}
+	offset += old_cwd_len;
+	if (read_path_buffer_at(message->cap, offset, old_path_len,
+				old_path) != 0) {
+		return -1;
+	}
+	offset += old_path_len;
+	if (read_path_buffer_at(message->cap, offset, new_cwd_len,
+				new_cwd) != 0) {
+		return -1;
+	}
+	offset += new_cwd_len;
+	if (read_path_buffer_at(message->cap, offset, new_path_len,
+				new_path) != 0 ||
+	    !text_eq(old_cwd, "/") ||
+	    !text_eq(new_cwd, "/") ||
+	    old_path[0] != '/' ||
+	    new_path[0] != '/') {
+		return -1;
+	}
+	strip_mount_prefix(old_path);
+	strip_mount_prefix(new_path);
 	return 0;
 }
 
@@ -2168,6 +2218,66 @@ static void reply_unlink(struct bunix_msg *reply, const char *path)
 	if (free_direct_blocks_from(&root_mount, ino, &inode, 0) != 0 ||
 	    clear_inode(&root_mount, ino) != 0 ||
 	    free_inode(&root_mount, ino) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+}
+
+static void reply_link(struct bunix_msg *reply, const char *old_path,
+		       const char *new_path)
+{
+	char parent_path[EXT2_MAX_PATH];
+	char name[EXT2_NAME_MAX + 1];
+	struct ext2_inode parent_inode;
+	struct ext2_inode old_inode;
+	struct ext2_inode existing;
+	u64 parent_ino;
+	u64 old_ino;
+	u64 existing_ino;
+	u64 file_type;
+
+	if (!root_mount_ready) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	if (lookup_path(&root_mount, old_path, &old_ino, &old_inode) != 0 ||
+	    split_parent_name(new_path, parent_path, name) != 0 ||
+	    lookup_path(&root_mount, parent_path, &parent_ino,
+			&parent_inode) != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	if (lookup_path(&root_mount, new_path, &existing_ino, &existing) == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_EXIST;
+		return;
+	}
+	file_type = ext2_inode_vfs_type(&old_inode);
+	if (file_type == BUNIX_VFS_TYPE_DIRECTORY || file_type == 0 ||
+	    old_inode.links_count >= 0xffff) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	if (file_type == BUNIX_VFS_TYPE_REGULAR) {
+		file_type = EXT2_FT_REG_FILE;
+	} else if (file_type == BUNIX_VFS_TYPE_SYMLINK) {
+		file_type = EXT2_FT_SYMLINK;
+	} else if (file_type == BUNIX_VFS_TYPE_FIFO) {
+		file_type = EXT2_FT_FIFO;
+	} else if (file_type == BUNIX_VFS_TYPE_CHARACTER) {
+		file_type = EXT2_FT_CHRDEV;
+	} else {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	if (insert_dirent_existing_space(&root_mount, &parent_inode, old_ino,
+					 name, file_type) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (write_inode_links(&root_mount, old_ino, &old_inode,
+			      old_inode.links_count + 1) != 0) {
+		(void)remove_dirent(&root_mount, &parent_inode, old_ino, name);
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -2646,6 +2756,17 @@ int main(void)
 					reply_unlink(&reply, path);
 				}
 				break;
+			case BUNIX_VFS_LINK_BUFFER: {
+				char new_path[EXT2_MAX_PATH];
+
+				if (read_two_path_buffer(&message, path,
+							 new_path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply_link(&reply, path, new_path);
+				}
+				break;
+			}
 			case BUNIX_VFS_CHMOD_BUFFER:
 				if (read_resolved_path(&message, path) != 0) {
 					reply.words[0] = BUNIX_VFS_ERR_NOENT;

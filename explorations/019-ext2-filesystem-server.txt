@@ -174,6 +174,10 @@ Implementation notes:
   frees direct data blocks plus the inode when the removed name was the final
   link.  Symlink, directory, and indirect-block unlink handling remain
   follow-up slices.
+- `LINK_BUFFER` now supports hardlinks for non-directory inode types that ext2
+  already maps into VFS metadata.  It inserts a new directory entry, increments
+  the source inode link count, and rolls back the directory entry if the link
+  count update fails.  Directory hardlinks remain rejected.
 
 Tasks:
 

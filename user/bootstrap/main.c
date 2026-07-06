@@ -624,6 +624,50 @@ static long vfs_unlink_path_buffer(u64 vfs, const char *path)
 	return 0;
 }
 
+static long vfs_link_path_buffer(u64 vfs, const char *old_path,
+				 const char *new_path)
+{
+	const char cwd[] = "/";
+	const u64 cwd_len = sizeof(cwd);
+	const u64 old_len = old_path != 0 ? str_len(old_path) + 1 : 0;
+	const u64 new_len = new_path != 0 ? str_len(new_path) + 1 : 0;
+	const u64 old_off = cwd_len;
+	const u64 new_cwd_off = old_off + old_len;
+	const u64 new_off = new_cwd_off + cwd_len;
+	const long buffer = old_len != 0 && new_len != 0 ?
+			    bunix_buffer_create(new_off + new_len) : -1;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_LINK_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = {
+			0,
+			cwd_len | (old_len << 32),
+			cwd_len | (new_len << 32),
+			0,
+		},
+	};
+	struct bunix_msg reply;
+
+	if (vfs == 0 || old_path == 0 || new_path == 0 || buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, cwd, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, old_off, old_path, old_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, new_cwd_off, cwd, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, new_off, new_path, new_len) != 0 ||
+	    bunix_ipc_call(vfs, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
 static long vfs_stat_path(u64 vfs, const char *path, u64 *size, u64 *ino,
 			  u64 *nlink, u64 *type, u64 *mode, u64 *uid,
 			  u64 *gid, u64 *blocks)
@@ -816,6 +860,8 @@ static long ext2_readonly_selftest(u64 vfs)
 	u64 hello_uid = 0;
 	u64 hello_gid = 0;
 	u64 hello_blocks = 0;
+	u64 created_ino = 0;
+	u64 linked_ino = 0;
 
 	if (vfs_read_text(vfs, "/mnt/ext2/hello.txt", text,
 			  sizeof(text)) != 0 ||
@@ -916,10 +962,33 @@ static long ext2_readonly_selftest(u64 vfs)
 	    hello_blocks != 0) {
 		return -1;
 	}
+	if (vfs_link_path_buffer(vfs, "/mnt/ext2/created.txt",
+				 "/mnt/ext2/created-hard.txt") != 0 ||
+	    vfs_stat_path(vfs, "/mnt/ext2/created.txt", 0, &created_ino,
+			  &hello_nlink, 0, 0, 0, 0, 0) != 0 ||
+	    vfs_stat_path(vfs, "/mnt/ext2/created-hard.txt", 0, &linked_ino,
+			  &hard_nlink, 0, 0, 0, 0, 0) != 0 ||
+	    created_ino == 0 ||
+	    created_ino != linked_ino ||
+	    hello_nlink != 2 ||
+	    hard_nlink != 2 ||
+	    vfs_readdir_has(vfs, "/mnt/ext2", "created-hard.txt") != 0) {
+		return -1;
+	}
 	if (vfs_unlink_path_buffer(vfs, "/mnt/ext2/created.txt") != 0 ||
 	    vfs_stat_path(vfs, "/mnt/ext2/created.txt", 0, 0, 0, 0,
 			  0, 0, 0, 0) == 0 ||
-	    vfs_readdir_has(vfs, "/mnt/ext2", "created.txt") == 0) {
+	    vfs_readdir_has(vfs, "/mnt/ext2", "created.txt") == 0 ||
+	    vfs_stat_path(vfs, "/mnt/ext2/created-hard.txt", 0, &linked_ino,
+			  &hard_nlink, 0, 0, 0, 0, 0) != 0 ||
+	    linked_ino != created_ino ||
+	    hard_nlink != 1) {
+		return -1;
+	}
+	if (vfs_unlink_path_buffer(vfs, "/mnt/ext2/created-hard.txt") != 0 ||
+	    vfs_stat_path(vfs, "/mnt/ext2/created-hard.txt", 0, 0, 0, 0,
+			  0, 0, 0, 0) == 0 ||
+	    vfs_readdir_has(vfs, "/mnt/ext2", "created-hard.txt") == 0) {
 		return -1;
 	}
 	return 0;
