@@ -7,6 +7,8 @@ Commit each exploration as tasks are completed.
 
 An exploration is considered complete when all tasks are completed, and it
 passes full tests.  Prefer narrow testing strategies for individual tasks.
+Provide justification in responses when running expensive tests like
+'make test' or unbounded 'make test-shell'.
 
 When an exploration is considered complete:
  - Move the exploration from ./explorations/ to ./explorations/completed/.
