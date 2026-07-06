@@ -115,6 +115,23 @@ enum {
 	BUNIX_VFS_ERR_INVAL = 8,
 	BUNIX_VFS_ERR_BUSY = 9,
 	BUNIX_VFS_ERR_LOOP = 10,
+	BUNIX_VFS_STAT_SIZE = 0,
+	BUNIX_VFS_STAT_MODE_TYPE = 8,
+	BUNIX_VFS_STAT_OWNER = 16,
+	BUNIX_VFS_STAT_DEV = 24,
+	BUNIX_VFS_STAT_INO = 32,
+	BUNIX_VFS_STAT_NLINK = 40,
+	BUNIX_VFS_STAT_RDEV = 48,
+	BUNIX_VFS_STAT_BLKSIZE = 56,
+	BUNIX_VFS_STAT_BLOCKS = 64,
+	BUNIX_VFS_STAT_BYTES = 72,
+	BUNIX_VFS_DEV_ROOTFS = 1,
+	BUNIX_VFS_DEV_TMPFS = 2,
+	BUNIX_VFS_DEV_PROCFS = 3,
+	BUNIX_VFS_DEV_DEVFS = 4,
+	BUNIX_VFS_DEV_SYSFS = 5,
+	BUNIX_VFS_DEV_UTMPFS = 6,
+	BUNIX_VFS_DEV_UNIONFS = 7,
 	BUNIX_LINUX_READ = 0,
 	BUNIX_LINUX_WRITE = 1,
 	BUNIX_LINUX_OPEN = 2,
@@ -332,6 +349,45 @@ struct bunix_vm_stats {
 	u64 free_frames;
 };
 
+static inline void bunix_store_u64_le(unsigned char *buffer, u64 offset,
+				      u64 value)
+{
+	for (u64 i = 0; i < 8; i++) {
+		buffer[offset + i] = (unsigned char)((value >> (i * 8)) & 0xff);
+	}
+}
+
+static inline u64 bunix_load_u64_le(const unsigned char *buffer, u64 offset)
+{
+	u64 value = 0;
+
+	for (u64 i = 0; i < 8; i++) {
+		value |= ((u64)buffer[offset + i]) << (i * 8);
+	}
+	return value;
+}
+
+static inline void bunix_vfs_stat_pack(unsigned char *buffer, u64 size,
+				       u64 mode_type, u64 owner, u64 dev,
+				       u64 ino, u64 nlink, u64 rdev,
+				       u64 blksize, u64 blocks)
+{
+	for (u64 i = 0; i < BUNIX_VFS_STAT_BYTES; i++) {
+		buffer[i] = 0;
+	}
+	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_SIZE, size);
+	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_MODE_TYPE, mode_type);
+	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_OWNER, owner);
+	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_DEV, dev);
+	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_INO, ino);
+	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_NLINK,
+			   nlink == 0 ? 1 : nlink);
+	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_RDEV, rdev);
+	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_BLKSIZE,
+			   blksize == 0 ? 4096 : blksize);
+	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_BLOCKS, blocks);
+}
+
 static inline long bunix_syscall0(long number)
 {
 	long rax = number;
@@ -526,6 +582,21 @@ static inline long bunix_buffer_write(u64 handle, u64 offset, const void *src,
 	const u64 args[] = { handle, offset, (u64)src, len };
 
 	return bunix_syscall3(BUNIX_SYSCALL_BUFFER_WRITE, (u64)args, 0, 0);
+}
+
+static inline long bunix_vfs_stat_write(u64 buffer, u64 offset, u64 size,
+					u64 mode_type, u64 owner, u64 dev,
+					u64 ino, u64 nlink, u64 rdev,
+					u64 blksize, u64 blocks)
+{
+	unsigned char stat[BUNIX_VFS_STAT_BYTES];
+
+	if (buffer == 0) {
+		return -1;
+	}
+	bunix_vfs_stat_pack(stat, size, mode_type, owner, dev, ino, nlink,
+			    rdev, blksize, blocks);
+	return bunix_buffer_write(buffer, offset, stat, sizeof(stat));
 }
 
 static inline u64 bunix_cstring_len(const char *text)

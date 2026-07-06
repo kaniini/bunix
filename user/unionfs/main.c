@@ -372,12 +372,27 @@ static long register_service(u64 service, u64 handle)
 	return reply.words[0] == 0 ? 0 : -1;
 }
 
-static void stat_root_dir(struct bunix_msg *reply)
+static u64 stat_buffer_offset(const struct bunix_msg *message)
+{
+	if (message->type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
+		return message->words[0] + message->words[1];
+	}
+	return message->words[1];
+}
+
+static void stat_root_dir(struct bunix_msg *message, struct bunix_msg *reply)
 {
 	reply->words[0] = 0;
 	reply->words[1] = 0;
 	reply->words[2] = 0555 | ((u64)BUNIX_VFS_TYPE_DIRECTORY << 32);
 	reply->words[3] = 0;
+	if (message->cap != 0 &&
+	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0) {
+		(void)bunix_vfs_stat_write(
+			message->cap, stat_buffer_offset(message), 0,
+			reply->words[2], 0, BUNIX_VFS_DEV_UNIONFS, 1, 1,
+			0, 4096, 0);
+	}
 }
 
 static int service_path_call(u64 service, u64 type, const char *path, u64 word3,
@@ -387,8 +402,12 @@ static int service_path_call(u64 service, u64 type, const char *path, u64 word3,
 	const char root[] = "/";
 	const u64 cwd_len = 2;
 	const u64 path_len = str_len(path) + 1;
+	const u64 stat_out = type == BUNIX_VFS_STAT_PATH_META_BUFFER &&
+			     source != 0 &&
+			     (source->cap_rights & BUNIX_RIGHT_SEND) != 0 ?
+			     BUNIX_VFS_STAT_BYTES : 0;
 	const u64 out_cap = type == BUNIX_VFS_READLINK_BUFFER && source != 0 ?
-			    source->words[3] >> 32 : 0;
+			    source->words[3] >> 32 : stat_out;
 	const long buffer = bunix_buffer_create(cwd_len + path_len + out_cap);
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
@@ -429,6 +448,22 @@ static int service_path_call(u64 service, u64 type, const char *path, u64 word3,
 					written) != 0 ||
 		      bunix_buffer_write(source->cap, source_offset, target,
 					 written) != 0))) {
+			reply->words[0] = (u64)-1;
+			result = -1;
+		}
+	}
+	if (result == 0 && type == BUNIX_VFS_STAT_PATH_META_BUFFER &&
+	    stat_out != 0 && reply->words[0] == 0) {
+		unsigned char stat[BUNIX_VFS_STAT_BYTES];
+		const u64 source_offset = source->words[0] + source->words[1];
+		const u64 temp_offset = cwd_len + path_len;
+
+		if (source->cap == 0 ||
+		    (source->cap_rights & BUNIX_RIGHT_SEND) == 0 ||
+		    bunix_buffer_read((u64)buffer, temp_offset, stat,
+				      sizeof(stat)) != 0 ||
+		    bunix_buffer_write(source->cap, source_offset, stat,
+				       sizeof(stat)) != 0) {
 			reply->words[0] = (u64)-1;
 			result = -1;
 		}
@@ -1605,7 +1640,7 @@ static void forward_open_handle(struct bunix_msg *message,
 			forget_open(open);
 			reply->words[0] = 0;
 		} else if (message->type == BUNIX_VFS_STAT_META) {
-			stat_root_dir(reply);
+			stat_root_dir(message, reply);
 		} else if (message->type == BUNIX_VFS_READDIR_BUFFER) {
 			readdir_merged(open, message, reply);
 		} else if ((message->type == BUNIX_VFS_CHMOD ||

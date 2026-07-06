@@ -3,4 +3,5 @@ PATHMAX2_TMP_FILE_OK
 PATHMAX2_TMP_CHDIR_OK
 linux pathmax ok
 linux patherr ok
+linux statid ok
 STATFS_DF_OK

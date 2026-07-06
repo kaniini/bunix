@@ -1336,19 +1336,37 @@ static int file_is_dir(u64 file)
 	       kind == PROCFS_KIND_PID_FD;
 }
 
-static void stat_reply(struct bunix_msg *reply, u64 file)
+static u64 stat_buffer_offset(const struct bunix_msg *message)
+{
+	if (message->type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
+		return message->words[0] + message->words[1];
+	}
+	return message->words[1];
+}
+
+static void stat_reply(const struct bunix_msg *message, struct bunix_msg *reply,
+		       u64 file)
 {
 	const int is_dir = file_is_dir(file);
 	const int is_symlink = file_kind(file) == PROCFS_KIND_PID_EXE;
+	const u64 size = file_size(file);
 
 	reply->words[0] = 0;
-	reply->words[1] = file_size(file);
+	reply->words[1] = size;
 	reply->words[2] = is_dir ?
 			  (0555 | ((u64)BUNIX_VFS_TYPE_DIRECTORY << 32)) :
 			  (is_symlink ?
 			   (0777 | ((u64)BUNIX_VFS_TYPE_SYMLINK << 32)) :
 			   (0444 | ((u64)BUNIX_VFS_TYPE_REGULAR << 32)));
 	reply->words[3] = 0;
+	if (message->cap != 0 &&
+	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0) {
+		(void)bunix_vfs_stat_write(
+			message->cap, stat_buffer_offset(message), size,
+			reply->words[2], 0, BUNIX_VFS_DEV_PROCFS,
+			file == 0 ? 1 : file, 1, 0, 4096,
+			(size + 511) / 512);
+	}
 }
 
 static const char *proc_dir_entry(u64 index, u64 *type)
@@ -1527,7 +1545,7 @@ int main(void)
 				break;
 			}
 			if (message.type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
-				stat_reply(&reply, file);
+				stat_reply(&message, &reply, file);
 			} else {
 				const u64 handle = open_file(file);
 
@@ -1567,7 +1585,7 @@ int main(void)
 			if (file == 0) {
 				reply.words[0] = (u64)-1;
 			} else {
-				stat_reply(&reply, file);
+				stat_reply(&message, &reply, file);
 			}
 			break;
 		}

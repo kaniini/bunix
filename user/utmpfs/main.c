@@ -309,12 +309,30 @@ static long getent_utmp(u64 user, u64 index, u64 buffer)
 				  sizeof(record)) == 0 ? 0 : -1;
 }
 
-static void stat_utmp(struct bunix_msg *reply, u64 user)
+static u64 stat_buffer_offset(const struct bunix_msg *message)
 {
+	if (message->type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
+		return message->words[0] + message->words[1];
+	}
+	return message->words[1];
+}
+
+static void stat_utmp(const struct bunix_msg *message, struct bunix_msg *reply,
+		      u64 user)
+{
+	const u64 size = utmp_size(user);
+
 	reply->words[0] = 0;
-	reply->words[1] = utmp_size(user);
+	reply->words[1] = size;
 	reply->words[2] = 0444 | ((u64)BUNIX_VFS_TYPE_REGULAR << 32);
 	reply->words[3] = 0;
+	if (message->cap != 0 &&
+	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0) {
+		(void)bunix_vfs_stat_write(
+			message->cap, stat_buffer_offset(message), size,
+			reply->words[2], 0, BUNIX_VFS_DEV_UTMPFS, 1, 1,
+			0, 4096, (size + 511) / 512);
+	}
 }
 
 int main(void)
@@ -402,13 +420,13 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
-			stat_utmp(&reply, user);
+			stat_utmp(&message, &reply, user);
 			break;
 		case BUNIX_VFS_STAT_META:
 			if (message.words[0] != 1) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 			} else {
-				stat_utmp(&reply, user);
+				stat_utmp(&message, &reply, user);
 			}
 			break;
 		case BUNIX_VFS_READ_FILE_BUFFER: {

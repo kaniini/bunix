@@ -28,6 +28,7 @@ struct rootfs_disk_entry {
 struct rootfs_entry {
 	struct bunix_tree_node node;
 	char *path;
+	u64 ino;
 	u64 offset;
 	u64 size;
 	unsigned int uid;
@@ -347,6 +348,7 @@ static int rootfs_mount(void)
 			return -1;
 		}
 		root_entries[i].path = dup_path(disk_entry.path);
+		root_entries[i].ino = i + 2;
 		root_entries[i].offset = disk_entry.offset;
 		root_entries[i].size = disk_entry.size;
 		root_entries[i].uid = disk_entry.uid;
@@ -425,20 +427,43 @@ static const char *path_name_in_dir(const char *path, const char *directory)
 	return str_eq(directory, "/") ? path + 1 : path + dir_len + 1;
 }
 
-static void stat_entry(struct bunix_msg *reply, const struct rootfs_entry *entry)
+static u64 stat_buffer_offset(const struct bunix_msg *message)
+{
+	if (message->type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
+		return message->words[0] + message->words[1];
+	}
+	return message->words[1];
+}
+
+static void stat_entry(struct bunix_msg *message, struct bunix_msg *reply,
+		       const struct rootfs_entry *entry)
 {
 	reply->words[0] = 0;
 	reply->words[1] = entry->size;
 	reply->words[2] = entry->mode | ((u64)entry->type << 32);
 	reply->words[3] = ((u64)entry->uid) | ((u64)entry->gid << 32);
+	if (message->cap != 0 &&
+	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0) {
+		(void)bunix_vfs_stat_write(
+			message->cap, stat_buffer_offset(message), entry->size,
+			reply->words[2], reply->words[3], BUNIX_VFS_DEV_ROOTFS,
+			entry->ino, 1, 0, 4096, (entry->size + 511) / 512);
+	}
 }
 
-static void stat_root_dir(struct bunix_msg *reply)
+static void stat_root_dir(struct bunix_msg *message, struct bunix_msg *reply)
 {
 	reply->words[0] = 0;
 	reply->words[1] = 0;
 	reply->words[2] = 0555 | ((u64)BUNIX_VFS_TYPE_DIRECTORY << 32);
 	reply->words[3] = 0;
+	if (message->cap != 0 &&
+	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0) {
+		(void)bunix_vfs_stat_write(
+			message->cap, stat_buffer_offset(message), 0,
+			reply->words[2], 0, BUNIX_VFS_DEV_ROOTFS, 1, 1, 0,
+			4096, 0);
+	}
 }
 
 static u64 remember_open(u64 kind, const struct rootfs_entry *entry)
@@ -521,7 +546,7 @@ static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 
 	if (entry == 0) {
 		if (str_eq(path, "/")) {
-			stat_root_dir(reply);
+			stat_root_dir(message, reply);
 		} else {
 			reply->words[0] = BUNIX_VFS_ERR_NOENT;
 		}
@@ -540,7 +565,7 @@ static void reply_path_meta(struct bunix_msg *message, struct bunix_msg *reply,
 						  message->words[3] >> 32) ?
 				  0 : BUNIX_VFS_ERR_ACCESS;
 	} else {
-		stat_entry(reply, entry);
+		stat_entry(message, reply, entry);
 	}
 }
 
@@ -644,9 +669,9 @@ static void forward_open_handle(struct bunix_msg *message,
 		reply->words[0] = 0;
 	} else if (message->type == BUNIX_VFS_STAT_META) {
 		if (open->kind == ROOTFS_OPEN_ROOT) {
-			stat_root_dir(reply);
+			stat_root_dir(message, reply);
 		} else {
-			stat_entry(reply, entry);
+			stat_entry(message, reply, entry);
 		}
 	} else if (message->type == BUNIX_VFS_READ_FILE_BUFFER &&
 		   open->kind == ROOTFS_OPEN_ENTRY &&

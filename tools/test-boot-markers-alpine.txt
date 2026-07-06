@@ -24,5 +24,9 @@ login: shell exec
 BUNIX_ALPINE_ID_OK
 BUNIX_ALPINE_PS_OK
 BUNIX_ALPINE_DMESG_OK
+linux statid dso ok
+linux statid ok
+BUNIX_ALPINE_STATID_OK
+BUNIX_ALPINE_OPENRC_HELP_OK
 BUNIX_ALPINE_BOOT_COMMANDS_OK
 Requesting system poweroff

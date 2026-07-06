@@ -9,11 +9,12 @@ root=$stage/root
 manifest=$artifact_dir/manifest.txt
 apk_log=$artifact_dir/apk.log
 apk_plain_log=$artifact_dir/apk.plain.log
-apk_cache=${APK_CACHE_DIR:-/etc/apk/cache}
+apk_cache=${APK_CACHE_DIR:-$artifact_dir/apk-cache}
 repositories=${APK_REPOSITORIES_FILE:-/etc/apk/repositories}
 apk_packages=${ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc}
 rootfs_tool=${ROOTFS_TOOL:-build/tools/mkrootfs}
 login=${LOGIN_MODULE:-build/modules/login.user}
+statidtest=${STATIDTEST_MODULE:-build/modules/statidtest.user}
 
 merge_account_file() {
 	base=$1
@@ -39,7 +40,8 @@ merge_account_file() {
 }
 
 rm -rf "$stage"
-mkdir -p "$root" "$(dirname "$out")" "$artifact_dir"
+mkdir -p "$root" "$(dirname "$out")" "$artifact_dir" "$apk_cache"
+apk_cache=$(CDPATH= cd "$apk_cache" && pwd)
 
 # shellcheck disable=SC2086
 if ! apk --root "$root" --initdb --allow-untrusted \
@@ -67,6 +69,8 @@ mkdir -p "$root/bin" "$root/etc" "$root/etc/init.d" "$root/etc/runlevels/default
 rm -f "$root/bin/login"
 cp "$login" "$root/bin/login"
 chmod 0555 "$root/bin/login"
+cp "$statidtest" "$root/bin/statidtest"
+chmod 0555 "$root/bin/statidtest"
 
 merge_account_file "$root/etc/passwd" modules/passwd
 merge_account_file "$root/etc/shadow" modules/shadow

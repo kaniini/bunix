@@ -15,27 +15,33 @@ Related findings:
   evidence for treating `st_dev`/`st_ino` identity as a correctness blocker
   for dynamic OpenRC userspace.
 
-- [ ] Define VFS metadata identity fields for filesystem device ID, inode ID,
+- [x] Define VFS metadata identity fields for filesystem device ID, inode ID,
       link count, block size, block count, and rdev where applicable.
-- [ ] Extend VFS stat metadata replies without reviving the old 16-byte VFS
+- [x] Extend VFS stat metadata replies without reviving the old 16-byte VFS
       protocol or breaking existing translators.
-- [ ] Assign stable per-filesystem device IDs to rootfs, tmpfs, procfs, devfs,
+- [x] Assign stable per-filesystem device IDs to rootfs, tmpfs, procfs, devfs,
       sysfs, utmpfs, unionfs, and mounted translator views.
-- [ ] Give each filesystem stable inode IDs with correct hard-link behavior:
+- [x] Give each filesystem stable inode IDs with correct hard-link behavior:
       same inode for hard links, distinct inode for distinct files, and stable
       identity across open/stat/fstat for the same object.
-- [ ] Make unionfs preserve lower-layer identity for lower files, upper-layer
+- [x] Make unionfs preserve lower-layer identity for lower files, upper-layer
       identity for materialized files, and coherent identity after copy-up,
       rename, whiteout, and hard-link operations.
-- [ ] Update Linux `stat`, `fstat`, `newfstatat`, and `statx` to populate
+- [x] Update Linux `stat`, `fstat`, `newfstatat`, and `statx` to populate
       `st_dev`, `st_ino`, `st_nlink`, `st_rdev`, `st_blksize`, and block
       counts from VFS metadata.
-- [ ] Add focused tests that compare `stat()` and `fstat()` identity for
+- [x] Add focused tests that compare `stat()` and `fstat()` identity for
       `/usr/lib/librc.so.1`, `/usr/lib/libeinfo.so.1`, hard links, symlinks,
       tmpfs files, and unionfs lower/upper files.
-- [ ] Add a regression test proving musl does not collapse distinct OpenRC
+- [x] Add a regression test proving musl does not collapse distinct OpenRC
       DSOs by inode identity and `/sbin/openrc --help` resolves `libeinfo`
       symbols.
-- [ ] Remove any handle-derived inode shortcuts and temporary loader-path
+- [x] Remove any handle-derived inode shortcuts and temporary loader-path
       diagnostics once real identity is in place.
-- [ ] Run focused stat/loader tests, then the OpenRC Linux compatibility shard.
+- [x] Run focused stat/loader tests, then the OpenRC Linux compatibility shard.
+
+Validation:
+
+- `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part`
+- `BUNIX_SHELL_PART=rootfs-vfs-proc-dev,tmpfs-extended,union-root-user make test-shell-part`
+- `BUNIX_TEST_SET=openrc make test-parallel`

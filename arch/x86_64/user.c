@@ -559,13 +559,6 @@ static void write_u64_le(u8 *data, u64 value)
 	}
 }
 
-static void write_u32_le(u8 *data, u32 value)
-{
-	for (u64 i = 0; i < sizeof(value); i++) {
-		data[i] = (u8)((value >> (i * 8)) & 0xff);
-	}
-}
-
 static void mem_copy(u8 *dst, const u8 *src, u64 len)
 {
 	for (u64 i = 0; i < len; i++) {
@@ -625,34 +618,6 @@ static int read_current_user(u64 vaddr, void *dst, u64 len)
 static int write_current_user(u64 vaddr, const void *src, u64 len)
 {
 	return vm_write_user(task_vm_space(task_current()), vaddr, src, len);
-}
-
-static int linux_write_stat_user(u64 addr, u64 size, u64 type_mode,
-				 u64 owner)
-{
-	u8 stat[LINUX_STAT_SIZE];
-	const u64 mode = type_mode & 0xffffffff;
-	const u64 type = type_mode >> 32;
-	const u64 linux_type = type == USER_VFS_TYPE_DIRECTORY ?
-			       LINUX_S_IFDIR :
-			       (type == USER_VFS_TYPE_SYMLINK ?
-				LINUX_S_IFLNK :
-				(type == USER_VFS_TYPE_FIFO ?
-				 LINUX_S_IFIFO :
-				 (type == USER_VFS_TYPE_CHARACTER ?
-				  LINUX_S_IFCHR : LINUX_S_IFREG)));
-
-	mem_zero(stat, sizeof(stat));
-	write_u64_le(stat + 0, 1);
-	write_u64_le(stat + 8, 1);
-	write_u64_le(stat + 16, 1);
-	write_u32_le(stat + 24, (u32)(linux_type | mode));
-	write_u32_le(stat + 28, (u32)(owner & 0xffffffff));
-	write_u32_le(stat + 32, (u32)(owner >> 32));
-	write_u64_le(stat + 48, size);
-	write_u64_le(stat + 56, 4096);
-	write_u64_le(stat + 64, (size + 511) / 512);
-	return write_current_user(addr, stat, sizeof(stat));
 }
 
 static int linux_timespec_to_ns(u64 vaddr, u64 *ns)
@@ -4849,6 +4814,7 @@ poll_again:
 	case LINUX_SYSCALL_STAT:
 	case LINUX_SYSCALL_LSTAT:
 	case LINUX_SYSCALL_NEWFSTATAT: {
+		struct shared_buffer *buffer;
 		const char *path = number == LINUX_SYSCALL_NEWFSTATAT ?
 				    (const char *)arg1 : (const char *)arg0;
 		const u64 dirfd = number == LINUX_SYSCALL_NEWFSTATAT ?
@@ -4869,14 +4835,22 @@ poll_again:
 		request.words[1] = 0;
 		request.words[2] = flags;
 		request.words[3] = 0;
-		result = linux_forward_path(linux, reply_port, &request, &reply,
-					    path, 0, 1, TASK_RIGHT_RECV);
+		buffer = linux_forward_path_buffer(linux, reply_port, &request,
+						   &reply, path,
+						   LINUX_STAT_SIZE, 1,
+						   TASK_RIGHT_RECV |
+						   TASK_RIGHT_SEND,
+						   &result);
+		if (buffer == 0) {
+			return result;
+		}
 		if (result == 0 &&
-		    linux_write_stat_user(stat_addr, reply.words[1],
-					  reply.words[2],
-					  reply.words[3]) != 0) {
+		    linux_copy_buffer_to_user(buffer, 0, stat_addr,
+					      LINUX_STAT_SIZE) != 0) {
+			buffer_release(buffer);
 			return (u64)-LINUX_EFAULT;
 		}
+		buffer_release(buffer);
 		return result;
 	}
 	case LINUX_SYSCALL_STATFS: {

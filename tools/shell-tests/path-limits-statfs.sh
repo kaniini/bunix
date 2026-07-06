@@ -23,6 +23,7 @@ pwd
 cd /
 /bin/pathmaxtest
 /bin/patherrtest
+/bin/statidtest
 busybox df / /tmp /proc >/dev/null && echo STATFS_DF_OK
 EOF_PATH_LIMITS_STATFS
 }
@@ -37,5 +38,6 @@ check_path_limits_statfs() {
 		PATHMAX2_TMP_PAYLOAD
 	wait_for_fixed "$log" "linux pathmax ok" "linux pathmax regression failed" 75 220
 	wait_for_fixed "$log" "linux patherr ok" "empty Linux path errno regression failed" 45 220
+	wait_for_fixed "$log" "linux statid ok" "Linux stat identity regression failed" 45 220
 	wait_for_fixed "$log" "STATFS_DF_OK" "busybox df did not complete through statfs/fstatfs" 45 220
 }

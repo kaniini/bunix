@@ -99,7 +99,16 @@ static u64 device_for_path(const char *path)
 	return 0;
 }
 
-static void stat_device(struct bunix_msg *reply, u64 device)
+static u64 stat_buffer_offset(const struct bunix_msg *message)
+{
+	if (message->type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
+		return message->words[0] + message->words[1];
+	}
+	return message->words[1];
+}
+
+static void stat_device(const struct bunix_msg *message, struct bunix_msg *reply,
+			u64 device)
 {
 	reply->words[0] = 0;
 	reply->words[1] = 0;
@@ -108,6 +117,13 @@ static void stat_device(struct bunix_msg *reply, u64 device)
 			  (((u64)BUNIX_VFS_TYPE_CHARACTER << 32) |
 			   (device == DEVFS_CONSOLE ? 0600 : 0666));
 	reply->words[3] = 0;
+	if (message->cap != 0 &&
+	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0) {
+		(void)bunix_vfs_stat_write(
+			message->cap, stat_buffer_offset(message), 0,
+			reply->words[2], 0, BUNIX_VFS_DEV_DEVFS, device,
+			1, device == DEVFS_DIR ? 0 : device, 4096, 0);
+	}
 }
 
 static long read_generated_device(u64 device, u64 buffer, u64 len)
@@ -301,14 +317,14 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
-			stat_device(&reply, device);
+			stat_device(&message, &reply, device);
 			break;
 		case BUNIX_VFS_STAT_META:
 			device = message.words[0];
 			if (device < DEVFS_DIR || device > DEVFS_CONSOLE) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 			} else {
-				stat_device(&reply, device);
+				stat_device(&message, &reply, device);
 			}
 			break;
 		case BUNIX_VFS_READ_FILE_BUFFER:

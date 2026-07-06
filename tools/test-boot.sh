@@ -110,6 +110,8 @@ if [ "$rootfs_flavor" = alpine ] && [ "$boot_phase" = full ]; then
 	printf 'busybox id | busybox grep "uid=0(root)" >/dev/null && printf "BUNIX_ALPINE_ID_%%s\\n" OK\n' >&3
 	printf 'busybox ps | busybox grep "/bin/sh" >/dev/null && printf "BUNIX_ALPINE_PS_%%s\\n" OK\n' >&3
 	printf 'busybox dmesg | busybox grep "linux-server: close" >/dev/null && printf "BUNIX_ALPINE_DMESG_%%s\\n" OK\n' >&3
+	printf '/bin/statidtest && printf "BUNIX_ALPINE_STATID_%%s\\n" OK\n' >&3
+	printf '/sbin/openrc --help >/dev/null && printf "BUNIX_ALPINE_OPENRC_HELP_%%s\\n" OK\n' >&3
 	printf 'printf "BUNIX_ALPINE_BOOT_COMMANDS_%%s\\n" OK\n' >&3
 	wait_for_fixed_boot "BUNIX_ALPINE_BOOT_COMMANDS_OK" "alpine boot smoke commands did not finish" 60 220
 fi

@@ -150,13 +150,32 @@ static u64 node_size(const struct sysfs_node *node)
 	return str_len(node->content);
 }
 
-static void stat_node(struct bunix_msg *reply, const struct sysfs_node *node)
+static u64 stat_buffer_offset(const struct bunix_msg *message)
 {
+	if (message->type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
+		return message->words[0] + message->words[1];
+	}
+	return message->words[1];
+}
+
+static void stat_node(const struct bunix_msg *message, struct bunix_msg *reply,
+		      const struct sysfs_node *node)
+{
+	const u64 size = node_size(node);
+
 	reply->words[0] = 0;
-	reply->words[1] = 0;
+	reply->words[1] = size;
 	reply->words[2] = ((u64)node->type << 32) |
 			  (node->type == BUNIX_VFS_TYPE_DIRECTORY ? 0555 : 0444);
-	reply->words[3] = node_size(node);
+	reply->words[3] = 0;
+	if (message->cap != 0 &&
+	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0) {
+		(void)bunix_vfs_stat_write(
+			message->cap, stat_buffer_offset(message), size,
+			reply->words[2], 0, BUNIX_VFS_DEV_SYSFS,
+			handle_for_node(node), 1, 0, 4096,
+			(size + 511) / 512);
+	}
 }
 
 static long mount_sysfs(u64 vfs, const char *path)
@@ -286,14 +305,14 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
-			stat_node(&reply, node);
+			stat_node(&message, &reply, node);
 			break;
 		case BUNIX_VFS_STAT_META:
 			node = node_from_handle(message.words[0]);
 			if (node == 0) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 			} else {
-				stat_node(&reply, node);
+				stat_node(&message, &reply, node);
 			}
 			break;
 		case BUNIX_VFS_READ_FILE_BUFFER:

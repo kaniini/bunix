@@ -19,6 +19,7 @@ struct tmpfs_inode {
 	u64 size;
 	u64 capacity;
 	u64 refs;
+	u64 ino;
 	unsigned int type;
 	unsigned int mode;
 	unsigned int uid;
@@ -45,6 +46,7 @@ static struct bunix_tree roots;
 static struct bunix_tree files;
 static struct bunix_u64_tree open_files;
 static u64 next_open_id = 1;
+static u64 next_inode_id = 2;
 static u64 user_service;
 static u64 vfs_service;
 
@@ -366,6 +368,7 @@ static struct tmpfs_inode root_inode = {
 	.size = 0,
 	.capacity = 0,
 	.refs = 1,
+	.ino = 1,
 	.type = BUNIX_VFS_TYPE_DIRECTORY,
 	.mode = 0777,
 	.uid = 0,
@@ -592,6 +595,10 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 		return 0;
 	}
 	file->inode->refs = 1;
+	file->inode->ino = next_inode_id++;
+	while (file->inode->ino == 0) {
+		file->inode->ino = next_inode_id++;
+	}
 	if (task != 0) {
 		if (user_credential(task, BUNIX_USER_GETEUID, &uid) != 0 ||
 		    user_credential(task, BUNIX_USER_GETEGID, &gid) != 0) {
@@ -936,20 +943,45 @@ static int file_link_to_path(struct tmpfs_file *file, const char *new_path)
 	return 0;
 }
 
-static void stat_file(struct bunix_msg *reply, const struct tmpfs_file *file)
+static u64 stat_buffer_offset(const struct bunix_msg *message)
+{
+	if (message->type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
+		return message->words[0] + message->words[1];
+	}
+	return message->words[1];
+}
+
+static void stat_file(const struct bunix_msg *message, struct bunix_msg *reply,
+		      const struct tmpfs_file *file)
 {
 	reply->words[0] = 0;
 	reply->words[1] = file->inode->size;
 	reply->words[2] = file->inode->mode | ((u64)file->inode->type << 32);
 	reply->words[3] = file->inode->uid | ((u64)file->inode->gid << 32);
+	if (message->cap != 0 &&
+	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0) {
+		(void)bunix_vfs_stat_write(
+			message->cap, stat_buffer_offset(message),
+			file->inode->size, reply->words[2], reply->words[3],
+			BUNIX_VFS_DEV_TMPFS, file->inode->ino,
+			file->inode->refs, 0, 4096,
+			(file->inode->size + 511) / 512);
+	}
 }
 
-static void stat_dir(struct bunix_msg *reply)
+static void stat_dir(const struct bunix_msg *message, struct bunix_msg *reply)
 {
 	reply->words[0] = 0;
 	reply->words[1] = 0;
 	reply->words[2] = 0777 | ((u64)BUNIX_VFS_TYPE_DIRECTORY << 32);
 	reply->words[3] = 0;
+	if (message->cap != 0 &&
+	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0) {
+		(void)bunix_vfs_stat_write(
+			message->cap, stat_buffer_offset(message), 0,
+			reply->words[2], 0, BUNIX_VFS_DEV_TMPFS,
+			root_inode.ino, root_inode.refs, 0, 4096, 0);
+	}
 }
 
 static void reply_readlink(const struct bunix_msg *message,
@@ -1260,7 +1292,7 @@ int main(void)
 				break;
 			}
 			if (path_is_root(path)) {
-				stat_dir(&reply);
+				stat_dir(&message, &reply);
 				break;
 			}
 			file = file_find(path);
@@ -1276,7 +1308,7 @@ int main(void)
 							message.words[3] >> 32) ?
 					0 : BUNIX_VFS_ERR_ACCESS;
 			} else {
-				stat_file(&reply, file);
+				stat_file(&message, &reply, file);
 			}
 			break;
 		case BUNIX_VFS_STAT_META:
@@ -1284,9 +1316,9 @@ int main(void)
 			if (open == 0) {
 				reply.words[0] = (u64)-1;
 			} else if (open->kind == TMPFS_OPEN_DIR) {
-				stat_dir(&reply);
+				stat_dir(&message, &reply);
 			} else {
-				stat_file(&reply, open->file);
+				stat_file(&message, &reply, open->file);
 			}
 			break;
 		case BUNIX_VFS_READ_FILE_BUFFER:
