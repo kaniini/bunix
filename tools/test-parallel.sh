@@ -2,11 +2,28 @@
 set -eu
 
 manifest=${BUNIX_SHELL_SHARDS:-tools/shell-shards.tsv}
-jobs=${BUNIX_TEST_JOBS:-2}
 test_set=${BUNIX_TEST_SET:-${BUNIX_SHELL_PART:-all}}
 run_root=${BUNIX_TEST_RUN_ROOT:-build/test-runs}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 make_cmd=${MAKE:-make}
+
+default_jobs() {
+	cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+	case "$cpus" in
+	''|*[!0-9]*) cpus=1 ;;
+	esac
+
+	jobs=$((cpus / 2))
+	if [ "$jobs" -lt 1 ]; then
+		jobs=1
+	fi
+	if [ "$jobs" -gt 8 ]; then
+		jobs=8
+	fi
+	echo "$jobs"
+}
+
+jobs=${BUNIX_TEST_JOBS:-$(default_jobs)}
 
 case "$jobs" in
 ''|*[!0-9]*)
@@ -25,6 +42,7 @@ if [ ! -r "$manifest" ]; then
 fi
 
 mkdir -p "$run_root/$run_id"
+echo "test-parallel status=plan run_id=$run_id jobs=$jobs set=$test_set artifact=$run_root/$run_id"
 
 selected_names() {
 	awk -F '\t' -v set="$test_set" '

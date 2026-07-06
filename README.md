@@ -34,6 +34,9 @@ Useful test targets:
 - `make test` boots to the normal marker set and checks early/server startup.
 - `make test-shell` runs the full scripted BusyBox login and filesystem smoke
   test.
+- `make test-smoke-parallel` runs the fast smoke shard through the parallel
+  harness; `make test-shell-parallel` runs all implemented shell shards in
+  parallel. Set `BUNIX_TEST_JOBS=N` to override the conservative worker count.
 - `BUNIX_CMD='/bin/pathmaxtest' make test-command` boots, logs in, runs one
   command, and preserves serial/QEMU/strace artifacts under `build/failures/`
   if the command fails.
@@ -413,6 +416,20 @@ checks pipes and file reads, verifies login/session-visible `uptime`, checks
 permission denial for `/secret.txt`, and confirms that exiting the shell returns
 to the login prompt. It also checks writable-root unionfs behavior and live
 `/proc/mounts` output.
+
+For sharded QEMU/KVM runs:
+
+```sh
+make test-smoke-parallel
+make test-shell-parallel
+BUNIX_TEST_JOBS=16 BUNIX_TEST_SET=vfs,procfs,sysrace make test-parallel
+```
+
+The parallel runner defaults to half the online CPU count capped at eight
+workers until QEMU memory pressure is better characterized. Each worker gets a
+separate runtime ESP copy and writes logs under `build/test-runs/<run-id>/`.
+Shard SMP policy comes from `tools/shell-shards.tsv`; use `BUNIX_TEST_JOBS` to
+raise or lower host concurrency.
 
 `make test-rootfs-tool` is a host-side regression for the rootfs image builder;
 it creates more than 128 entries to verify the builder's dynamic entry table.

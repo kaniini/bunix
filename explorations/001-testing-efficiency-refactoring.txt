@@ -261,10 +261,19 @@ Plan:
    - `test-parallel` currently aliases the composed shell parallel gate while
      serial `test`, `test-shell`, and `test-smoke` remain available.
 
-13. Pick conservative parallel defaults
+13. Pick conservative parallel defaults [DONE]
    Choose defaults that are useful on a Threadripper-class machine but safe on
    smaller hosts. Base `BUNIX_TEST_JOBS` on host CPU count, cap it until QEMU
    memory pressure is measured, and document how to override it.
+
+   Result:
+
+   - `tools/test-parallel.sh` defaults `BUNIX_TEST_JOBS` to half the online
+     CPU count, floored at one worker and capped at eight workers.
+   - The runner prints the selected job count in its initial plan line.
+   - `README.md` documents `make test-smoke-parallel`,
+     `make test-shell-parallel`, `make test-parallel`,
+     `BUNIX_TEST_SET=...`, and `BUNIX_TEST_JOBS=...`.
 
 14. Add shard resource metadata
    Each shard should declare its own VM resources: vCPU count, memory, timeout,
