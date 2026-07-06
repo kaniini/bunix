@@ -21,6 +21,7 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$script_dir/shell-tests/union-root-user.sh"
 . "$script_dir/shell-tests/tmpfs-extended.sh"
 . "$script_dir/shell-tests/large-io-mount.sh"
+. "$script_dir/shell-tests/interactive-tty.sh"
 BUNIX_COLLECT_FAILURES=1
 BUNIX_FAILURE_DIR=$failure_dir
 BUNIX_QEMU_LOG=$qemu_log
@@ -179,54 +180,7 @@ check_tmpfs_basic_linux_tests
 
 check_exec_argv_pipe
 
-send_script <<'EOF_SECRET_DENIED'
-busybox cat /secret.txt
-echo POSTCAT
-EOF_SECRET_DENIED
-
-wait_for_fixed "$log" "cat: can't open '/secret.txt'" "busybox cat did not report denied /secret.txt access" 45 160
-require_no_fixed "$log" "root secret" "busybox cat leaked /secret.txt to login user" 160
-wait_for_fixed "$log" "POSTCAT" "shell did not continue after denied cat" 45 160
-
-send_bytes 'ecxx\177\177ho BACKSPACE_OK\n'
-
-wait_for_fixed "$log" "BACKSPACE_OK" "busybox backspace-edited command did not complete" 45 160
-
-send_script <<'EOF_CAT_INTERRUPT'
-cat
-EOF_CAT_INTERRUPT
-sleep 1
-send_bytes '\003'
-sleep 1
-send_script <<'EOF_CAT_INTERRUPT_DONE'
-echo CTRL_C_OK
-EOF_CAT_INTERRUPT_DONE
-
-wait_for_fixed "$log" "CTRL_C_OK" "foreground Ctrl-C did not return to shell" 45 180
-
-send_script <<'EOF_WATCH'
-busybox watch -n 1 busybox echo WATCH_OK & watch_pid=$!
-EOF_WATCH
-
-wait_for_awk "$log" '{ sub(/\r$/, "") } /^WATCH_OK$/ { count++ } END { exit count >= 2 ? 0 : 1 }' "busybox watch did not repeatedly run child command" 45 220
-
-send_script <<'EOF_WATCH_DONE'
-busybox kill $watch_pid
-echo WATCH_DONE
-EOF_WATCH_DONE
-
-wait_for_fixed "$log" "WATCH_DONE" "busybox watch was not killed after repeated child runs" 45 220
-
-login_prompts_before_exit=$(current_prompt_count "login: ")
-send_script <<'EOF_EXIT_USER'
-cd /bin
-pwd
-exit
-EOF_EXIT_USER
-
-wait_for_awk "$log" '{ sub(/\r$/, "") } /\/bin \$ pwd/ { prompt = NR } /^\/bin$/ && prompt { found = 1 } END { exit found ? 0 : 1 }' "busybox chdir/pwd regression failed" 45 160
-
-wait_for_prompt_count_gt "login: " "$login_prompts_before_exit" "login prompt did not return after shell exit" 45 180
+run_interactive_tty
 
 root_prompts_before_root=$(current_prompt_count "~ # ")
 login_user root root "~ # " "$root_prompts_before_root"

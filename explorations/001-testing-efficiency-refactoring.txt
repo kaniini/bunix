@@ -79,11 +79,12 @@ Plan:
      chmod/chown denial, symlink, and union user link checks.
    - `tools/shell-tests/large-io-mount.sh` owns large `/dev/zero` writes,
      mmap/read stress helpers, and user-session tmpfs mount/umount coverage.
+   - `tools/shell-tests/interactive-tty.sh` owns denied secret reads,
+     backspace editing, foreground Ctrl-C, BusyBox watch, user shell cwd/pwd,
+     and return-to-login behavior.
 
    Needs:
 
-   - Extract the remaining user-phase batches:
-     `interactive-tty`.
    - Extract the root-phase batches:
      `root-login-union`, `root-tmpfs-chown`, `long-login`, and
      `root-mount-soak`.
