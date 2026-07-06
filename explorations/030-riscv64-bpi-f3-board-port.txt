@@ -1,0 +1,80 @@
+Target the riscv64 port to boot on Banana Pi BPI-F3 hardware.
+
+Problem:
+
+- The generic riscv64 port can start on QEMU `virt`, but real hardware will
+  surface board-specific boot, firmware, device-tree, timer, interrupt,
+  console, storage, and reset behavior.
+- Banana Pi BPI-F3 is a useful first real riscv64 board target because it is a
+  SpacemiT K1-based development board with real SMP, onboard storage, serial
+  console, Ethernet, PCIe, USB, and published vendor firmware/BSP sources.
+- A board plan needs to be explicit about what is proved on physical hardware
+  versus what remains QEMU-only.
+
+Reference facts:
+
+- Banana Pi documents BPI-F3 as an industrial RISC-V development board using
+  the SpacemiT K1 8-core RISC-V SoC.
+- The documented CPU is SpacemiT K1 X60 `RV64GCVB`, RVA22, with RVV 1.0.
+- Board resources include 2/4/8/16 GB LPDDR4, 8/16/32/128 GB eMMC options,
+  microSD, dual GbE, USB 3.0 host ports, USB-C OTG, PCIe/M.2, HDMI, GPIO, and
+  multiple UARTs.
+- The vendor publishes Bianbu OpenSBI, U-Boot, and Linux 6.1 BSP source links,
+  plus a BPI-F3 schematic and K1 documentation references.
+
+Relationship to generic riscv64 port:
+
+- This exploration depends on `029-riscv64-initial-port.txt` for the generic
+  riscv64 architecture skeleton, trap handling, VM, native syscall ABI, and
+  initial QEMU smoke path.
+- BPI-F3 support should be a board layer under the riscv64 port, not a forked
+  architecture path.
+- QEMU tests remain the fast development gate; BPI-F3 hardware tests become
+  the proof that the riscv64 port is not merely `virt`-machine-specific.
+
+Constraints:
+
+- Keep GPL/vendor BSP code out of Bunix unless it remains userspace or tooling
+  where the project explicitly allows it.  Use permissively licensed reference
+  material directly only when license-compatible; otherwise treat BSPs as
+  documentation for register layout, boot flow, and device-tree behavior.
+- Prefer consuming firmware-provided device tree data over hardcoded board
+  constants wherever possible.
+- Do not require replacing board firmware for the first milestone.  Booting
+  through vendor OpenSBI/U-Boot is acceptable while Bunix learns the platform.
+- Physical-board tests must have clear operator steps and expected serial
+  output because they cannot run inside normal CI.
+
+Tasks:
+
+- [ ] Capture the BPI-F3 boot chain: ROM, storage source selection, OpenSBI,
+      U-Boot/UEFI capabilities, kernel payload formats, device tree handoff,
+      and serial console defaults.
+- [ ] Archive exact reference versions used for bringup: vendor OpenSBI,
+      U-Boot, Linux device tree, schematic, and SpacemiT K1 documentation.
+- [ ] Define the Bunix BPI-F3 boot artifact: raw Image, FIT image, EFI payload,
+      or U-Boot-loaded ELF, with command-line and module-payload strategy.
+- [ ] Add a BPI-F3 board profile under the riscv64 build/test configuration
+      without changing the generic QEMU `virt` profile.
+- [ ] Implement firmware device-tree parsing sufficient to discover memory,
+      CPU harts, UART, interrupt controller, timer source, chosen stdout path,
+      and initrd/module locations.
+- [ ] Bring up early serial console on the BPI-F3 using firmware-provided
+      stdout first, then a native UART driver once the DT binding is confirmed.
+- [ ] Bring up SBI poweroff/reboot and timer behavior on real hardware, with
+      logs proving clean guest shutdown.
+- [ ] Bring up interrupt-controller routing for the K1/BPI-F3 path and
+      document whether the first milestone uses polling, PLIC, AIA, or another
+      vendor-specific controller path.
+- [ ] Bring up SMP hart discovery and park/release policy for the 8-core K1,
+      initially allowing `SMP=1` hardware boot if secondary harts need a later
+      slice.
+- [ ] Define a physical-board smoke-test script: prepare boot media, connect
+      serial, capture logs, boot Bunix, wait for milestone markers, and power
+      off.
+- [ ] Prove the first hardware milestone: kernel banner, memory map, timer
+      tick, serial log, and clean poweroff on BPI-F3.
+- [ ] Prove the second hardware milestone: native Bunix servers start and a
+      minimal userspace server logs successfully.
+- [ ] Plan follow-up hardware device explorations for eMMC/microSD, USB, dual
+      GbE, PCIe/M.2, display, WiFi/Bluetooth, and hardware watchdog support.
