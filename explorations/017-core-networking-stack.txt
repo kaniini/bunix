@@ -21,13 +21,13 @@ Constraints:
 
 Tasks:
 
-- [ ] Inventory current Linux socket syscall handling and all ENOSYS/EINVAL
+- [x] Inventory current Linux socket syscall handling and all ENOSYS/EINVAL
       paths for `socket`, `bind`, `connect`, `listen`, `accept`, `send*`,
       `recv*`, `getsockname`, `getpeername`, `setsockopt`, and `poll`.
-- [ ] Define the networking server split: socket API/personality adapter,
+- [x] Define the networking server split: socket API/personality adapter,
       protocol stack, routing/interface manager, loopback device, and future
       NIC driver boundary.
-- [ ] Define capability objects for sockets, interfaces, routes, packet queues,
+- [x] Define capability objects for sockets, interfaces, routes, packet queues,
       and privileged operations such as binding low ports or configuring
       addresses.
 - [ ] Implement loopback interface lifecycle and packet delivery independent of
@@ -47,3 +47,76 @@ Tasks:
       and permission checks.
 - [ ] Document the boundary where real NIC drivers, including VirtIO-net, plug
       into the stack.
+
+Inventory:
+
+- Linux socket compatibility is currently a narrow AF_UNIX stream shim in
+  `user/linux/main.c`.  `linux_socket()` only accepts `AF_UNIX`,
+  `SOCK_STREAM`, and protocol 0, then creates `LINUX_FD_SOCKET` entries whose
+  handle is either `LINUX_SOCKET_UNIX_STREAM` or the special
+  `LINUX_SOCKET_UTMPD` endpoint.
+- `linux_connect()` only understands sockaddr_un and accepts the hard-coded
+  `/run/utmps/.utmpd-socket` path.  Any non-AF_UNIX family returns
+  `EAFNOSUPPORT`; any other AF_UNIX path returns `ENOENT`.
+- `linux_sendto()` and `linux_recvfrom()` are utmps-specific.  `sendto()` only
+  accepts one-byte utmps rewind/getent commands on a connected utmps socket,
+  and `recvfrom()` delegates directly to the utmpfs response helper.
+- `poll`/`ppoll` are forwarded to the Linux server one fd at a time by
+  `arch/x86_64/user.c`, and the Linux server marks every `LINUX_FD_SOCKET` as
+  immediately readable and writable.  There is no socket wait queue, readiness
+  edge, timeout integration, or per-socket blocking state yet.
+- The syscall bridge names and forwards only `socket`, `connect`, `sendto`,
+  and `recvfrom` for socket operations.  The Bunix Linux RPC enum does not yet
+  contain `bind`, `listen`, `accept`, `accept4`, `sendmsg`, `recvmsg`,
+  `getsockname`, `getpeername`, `setsockopt`, `getsockopt`, or `shutdown`, so
+  those currently fall through the generic unknown-syscall path in the arch
+  Linux syscall layer.
+- There are no `AF_INET`, `AF_INET6`, `SOCK_DGRAM`, `SOCK_NONBLOCK` readiness
+  semantics beyond fd creation flags, address structures, route/interface
+  records, port allocation state, packet buffers, or TCP/UDP protocol objects.
+
+Server split:
+
+- Keep the Linux personality as the socket ABI adapter.  It should translate
+  Linux syscall arguments, fd flags, sockaddr layouts, credentials, and
+  wait-status behavior, then hold a capability to a native socket object rather
+  than implementing protocol mechanics inline.
+- Add a native `net.server` that owns protocol state for loopback IPv4/IPv6,
+  UDP endpoints, TCP control blocks, listen queues, route lookup, interface
+  registration, packet counters, and socket readiness notifications.  The
+  server should expose a Bunix protocol such as `NET0` rather than Linux
+  syscall numbers.
+- Keep loopback as the first built-in interface inside `net.server`: bring up
+  `lo` with `127.0.0.1/8` and `::1/128`, route those prefixes locally, and
+  deliver packets through in-memory queues without requiring a packet driver.
+- Future NIC drivers, including VirtIO-net, should register packet interfaces
+  with `net.server` through a separate driver-facing protocol.  Drivers should
+  exchange packet buffers and link-state events, not Linux sockets or process
+  IDs.
+- Privileged network configuration belongs behind explicit capabilities issued
+  by bootstrap or a future network-management server.  Ordinary Linux
+  processes should receive only socket capabilities mediated by the Linux
+  server and their process credentials.
+
+Capability model:
+
+- Socket capability: authority to operate one endpoint.  It carries domain,
+  type, protocol, nonblocking/close-on-exec state, owner credentials, local and
+  peer addresses, readiness state, receive/send queues, and shutdown state.
+- Listener capability: authority to accept queued TCP streams for one bound
+  local address/port.  It should be derived from a socket capability by
+  `listen` and should not grant route or interface configuration authority.
+- Interface capability: authority for one network interface such as `lo` or a
+  future VirtIO-net device.  Driver-facing interface caps allow RX/TX packet
+  queue attachment and link-state updates; management caps allow address and
+  MTU changes.
+- Route capability: authority to install, replace, or remove routes for a
+  constrained address family/prefix/table.  The initial route caps should cover
+  only the loopback prefixes and should be held by `net.server` during bringup.
+- Packet-queue capability: authority for a driver or loopback path to submit
+  and receive packet buffers on one interface.  Packet queues should be bounded
+  and observable, with drop counters rather than unbounded allocation.
+- Privileged port/config capability: authority to bind restricted ports or
+  configure addresses/routes.  This keeps Linux uid checks as policy in the
+  Linux/user servers while `net.server` enforces that the caller actually holds
+  the needed authority.
