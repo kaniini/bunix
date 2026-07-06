@@ -25,9 +25,9 @@ Constraints:
 
 Tasks:
 
-- [ ] Inventory QEMU VirtIO-net device modes, feature bits, queue layout, MAC
+- [x] Inventory QEMU VirtIO-net device modes, feature bits, queue layout, MAC
       address configuration, and interrupt behavior.
-- [ ] Define the packet-device protocol between NIC drivers and the network
+- [x] Define the packet-device protocol between NIC drivers and the network
       interface manager.
 - [ ] Implement VirtIO-net feature negotiation, RX/TX virtqueues, buffer
       replenishment, transmit completion, receive delivery, and device reset.
@@ -41,3 +41,85 @@ Tasks:
       networking setup exists.
 - [ ] Document future work for checksum offload, segmentation offload,
       multiqueue, promiscuous mode, and packet filtering.
+
+Inventory:
+
+- The existing VirtIO foundation from exploration 016 already provides a
+  userspace `virtio-bus.server` registered as `DEV0`.  It scans bus 0 PCI
+  config space through a narrowly granted `0xcf8/0xcfc` PIO capability, matches
+  modern VirtIO PCI functions, sizes BARs, parses common/notify/ISR/device
+  config capabilities, grants attenuated BAR subresources, reads feature banks,
+  negotiates driver features, allocates split-queue memory, programs queue
+  physical addresses, notifies queues, acknowledges ISR status, and moves a
+  device to `DRIVER_OK`.
+- `virtio-blk.server` is the class-driver template to follow.  It resolves the
+  `DEV0` service, locates a device by `BUNIX_VIRTIO_DEVICE_BLOCK`, negotiates
+  `VERSION_1`, sets up queue 0, builds descriptor chains in a shared queue
+  buffer, notifies the queue, polls used-ring completion, and optionally
+  registers behind the existing block protocol.
+- The current NET0 server owns loopback, route lookup, UDP/TCP socket state,
+  packet counters, and `/proc/net` observability.  It does not yet have a
+  driver-facing packet-interface registry, TX packet queue, RX Ethernet frame
+  ingress path, MAC identity, non-loopback interface IDs, or route-management
+  updates for external interfaces.
+- Installed QEMU exposes `virtio-net-pci`, `virtio-net-pci-non-transitional`,
+  and `virtio-net-pci-transitional`.  The deterministic Bunix target should
+  follow the block target and use modern-only PCI with `disable-legacy=on`, a
+  fixed PCI slot, and a fixed MAC address.  Useful QEMU properties for the
+  first slice are `netdev=`, `mac=`, `disable-legacy=on`, `rx_queue_size=`,
+  `tx_queue_size=`, `status=on`, `mrg_rxbuf=off`, `csum=off`, `gso=off`,
+  `guest_csum=off`, `guest_tso4=off`, `guest_tso6=off`, `guest_ufo=off`,
+  `host_tso4=off`, `host_tso6=off`, and `ctrl_vq=off`.
+- Installed QEMU netdev backends include `user`, `passt`, `tap`, `socket`,
+  `stream`, `dgram`, `bridge`, `hubport`, `vhost-user`, and `vhost-vdpa`.
+  The first deterministic attach test should use `-netdev user,id=bunix-net0`
+  or an isolated socket backend, then defer external-network smoke tests until
+  the harness owns a stable host-side topology.
+- VirtIO-net is device type 1.  The minimum modern split-queue model uses queue
+  0 for receive and queue 1 for transmit.  Queue 2 is the control virtqueue
+  only if `CTRL_VQ` is negotiated, and multiqueue adds queue pairs only if
+  `MQ` is negotiated.  The first driver should require only `VERSION_1`, avoid
+  offload features, and treat packet buffers as complete Ethernet frames
+  preceded by `struct bunix_virtio_net_header`.
+- MAC address discovery comes from device config when `MAC` is available or a
+  deterministic locally administered fallback when it is not.  Link state comes
+  from the device config `status` field when `STATUS` is negotiated; otherwise
+  the driver should report link-up once queues are initialized.  Interrupts can
+  initially follow the block driver's bounded used-ring polling path until
+  exploration 025 provides generic IRQ-driven completions.
+
+Packet-Device Protocol:
+
+- `virtio-net.server` is a userspace NIC class driver.  It talks to `DEV0` for
+  hardware resources and queue operations, and to `NET0` only through a
+  packet-interface protocol.  It must not expose Linux socket operations, Linux
+  PIDs, or protocol-stack internals.
+- NET0 remains the network interface manager and protocol owner.  It assigns
+  interface IDs, stores MAC/MTU/link state, owns route entries, accepts inbound
+  Ethernet frames from drivers, queues outbound Ethernet frames for drivers,
+  and accounts RX/TX/drop counters for `/proc/net/dev` and future Bunix-native
+  tools.
+- The shared NET0 driver ABI now reserves:
+  `BUNIX_NET_PACKET_INTERFACE_ATTACH`,
+  `BUNIX_NET_PACKET_INTERFACE_LINK`,
+  `BUNIX_NET_PACKET_RX_SUBMIT`,
+  `BUNIX_NET_PACKET_TX_DEQUEUE`, and
+  `BUNIX_NET_PACKET_TX_COMPLETE`.
+- A NIC driver attaches by sending `struct bunix_net_packet_interface_info`
+  containing requested flags, MTU, and MAC address.  NET0 replies with the
+  assigned interface ID and current counters.  `LINK` updates
+  `UP/RUNNING/BROADCAST` state without granting route-management authority.
+- RX uses `RX_SUBMIT` with a buffer containing
+  `struct bunix_net_packet_info` followed by one Ethernet frame.  NET0 validates
+  the interface ID, MTU, link state, and buffer length before passing the frame
+  into ARP/IPv4/IPv6 handling once those paths exist.
+- TX uses pull-based driver dequeue: the driver calls `TX_DEQUEUE` with an
+  output buffer and NET0 either copies one queued Ethernet frame into it or
+  returns an empty/not-ready status.  The driver calls `TX_COMPLETE` after the
+  VirtIO transmit descriptor reaches the used ring so NET0 can update counters
+  and release queued packet state.  This preserves OCAP shape because NET0 never
+  calls directly into an arbitrary driver port.
+- The first VirtIO-net implementation can prove attach/link and loopback
+  non-regression before external packet routing exists.  Actual external
+  IPv4/IPv6 traffic requires later ARP/ND, Ethernet encapsulation, route
+  installation, and deterministic host networking tests.

@@ -324,8 +324,15 @@ enum {
 	BUNIX_NET_TCP_PEER = 27,
 	BUNIX_NET_OBSERVE_SOCKET_COUNT = 28,
 	BUNIX_NET_OBSERVE_SOCKET_AT = 29,
+	BUNIX_NET_PACKET_INTERFACE_ATTACH = 30,
+	BUNIX_NET_PACKET_INTERFACE_LINK = 31,
+	BUNIX_NET_PACKET_RX_SUBMIT = 32,
+	BUNIX_NET_PACKET_TX_DEQUEUE = 33,
+	BUNIX_NET_PACKET_TX_COMPLETE = 34,
 	BUNIX_NET_IFACE_FLAG_UP = 1 << 0,
 	BUNIX_NET_IFACE_FLAG_LOOPBACK = 1 << 1,
+	BUNIX_NET_IFACE_FLAG_BROADCAST = 1 << 2,
+	BUNIX_NET_IFACE_FLAG_RUNNING = 1 << 3,
 	BUNIX_NET_ADDR_FAMILY_IPV4 = 4,
 	BUNIX_NET_ADDR_FAMILY_IPV6 = 6,
 	BUNIX_UNIONFS_SET_UPPER = 1,
@@ -498,6 +505,25 @@ struct bunix_net_socket_info {
 	u64 peer_port;
 	u64 rx_len;
 	u64 tx_len;
+};
+
+struct bunix_net_packet_interface_info {
+	u64 id;
+	u64 flags;
+	u64 mtu;
+	u64 mac_hi;
+	u64 mac_lo;
+	u64 rx_packets;
+	u64 tx_packets;
+	u64 rx_drops;
+	u64 tx_drops;
+};
+
+struct bunix_net_packet_info {
+	u64 iface;
+	u64 len;
+	u64 flags;
+	u64 reserved;
 };
 
 static inline void bunix_store_u64_le(unsigned char *buffer, u64 offset,

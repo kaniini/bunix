@@ -5,6 +5,7 @@
 
 enum {
 	BUNIX_VIRTIO_PCI_VENDOR_ID = 0x1af4,
+	BUNIX_VIRTIO_DEVICE_NET = 1,
 	BUNIX_VIRTIO_DEVICE_BLOCK = 2,
 
 	BUNIX_VIRTIO_STATUS_ACKNOWLEDGE = 1,
@@ -19,6 +20,36 @@ enum {
 	BUNIX_VIRTIO_F_VERSION_1 = 32,
 
 	BUNIX_VIRTIO_BLK_F_FLUSH = 9,
+
+	BUNIX_VIRTIO_NET_F_CSUM = 0,
+	BUNIX_VIRTIO_NET_F_GUEST_CSUM = 1,
+	BUNIX_VIRTIO_NET_F_CTRL_GUEST_OFFLOADS = 2,
+	BUNIX_VIRTIO_NET_F_MTU = 3,
+	BUNIX_VIRTIO_NET_F_MAC = 5,
+	BUNIX_VIRTIO_NET_F_GUEST_TSO4 = 7,
+	BUNIX_VIRTIO_NET_F_GUEST_TSO6 = 8,
+	BUNIX_VIRTIO_NET_F_GUEST_ECN = 9,
+	BUNIX_VIRTIO_NET_F_GUEST_UFO = 10,
+	BUNIX_VIRTIO_NET_F_HOST_TSO4 = 11,
+	BUNIX_VIRTIO_NET_F_HOST_TSO6 = 12,
+	BUNIX_VIRTIO_NET_F_HOST_ECN = 13,
+	BUNIX_VIRTIO_NET_F_HOST_UFO = 14,
+	BUNIX_VIRTIO_NET_F_MRG_RXBUF = 15,
+	BUNIX_VIRTIO_NET_F_STATUS = 16,
+	BUNIX_VIRTIO_NET_F_CTRL_VQ = 17,
+	BUNIX_VIRTIO_NET_F_CTRL_RX = 18,
+	BUNIX_VIRTIO_NET_F_CTRL_VLAN = 19,
+	BUNIX_VIRTIO_NET_F_GUEST_ANNOUNCE = 21,
+	BUNIX_VIRTIO_NET_F_MQ = 22,
+	BUNIX_VIRTIO_NET_F_CTRL_MAC_ADDR = 23,
+	BUNIX_VIRTIO_NET_F_HASH_REPORT = 57,
+	BUNIX_VIRTIO_NET_F_RSS = 60,
+	BUNIX_VIRTIO_NET_F_RSC_EXT = 61,
+	BUNIX_VIRTIO_NET_F_STANDBY = 62,
+	BUNIX_VIRTIO_NET_F_SPEED_DUPLEX = 63,
+
+	BUNIX_VIRTIO_NET_S_LINK_UP = 1,
+	BUNIX_VIRTIO_NET_S_ANNOUNCE = 2,
 
 	BUNIX_VIRTIO_DESC_F_NEXT = 1,
 	BUNIX_VIRTIO_DESC_F_WRITE = 2,
@@ -64,6 +95,28 @@ struct bunix_virtio_blk_req_header {
 	unsigned int type;
 	unsigned int reserved;
 	unsigned long sector;
+} __attribute__((packed));
+
+struct bunix_virtio_net_config {
+	unsigned char mac[6];
+	unsigned short status;
+	unsigned short max_virtqueue_pairs;
+	unsigned short mtu;
+	unsigned int speed;
+	unsigned char duplex;
+	unsigned char rss_max_key_size;
+	unsigned short rss_max_indirection_table_length;
+	unsigned int supported_hash_types;
+} __attribute__((packed));
+
+struct bunix_virtio_net_header {
+	unsigned char flags;
+	unsigned char gso_type;
+	unsigned short hdr_len;
+	unsigned short gso_size;
+	unsigned short csum_start;
+	unsigned short csum_offset;
+	unsigned short num_buffers;
 } __attribute__((packed));
 
 struct bunix_virtio_queue_layout {
