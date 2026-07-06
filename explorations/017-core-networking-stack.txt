@@ -168,3 +168,6 @@ Progress:
   `linux.server` formats AF_INET/AF_INET6 sockaddrs and keeps socket option
   policy in the Linux ABI adapter.  `nettest` now verifies SO_TYPE,
   SO_REUSEADDR, UDP getsockname, TCP getsockname, and TCP peer-name reporting.
+- Extended Linux-personality socket boot coverage to AF_INET6.  `nettest` now
+  verifies IPv4 and IPv6 localhost UDP plus IPv4 and IPv6 localhost TCP through
+  the Linux syscall bridge, with boot markers for each protocol-family pair.
