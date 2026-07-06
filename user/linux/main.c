@@ -23,8 +23,9 @@ enum {
 	LINUX_ESPIPE = 29,
 	LINUX_EPIPE = 32,
 	LINUX_EADDRINUSE = 98,
-	LINUX_ECONNREFUSED = 111,
+	LINUX_EISCONN = 106,
 	LINUX_ENOTCONN = 107,
+	LINUX_ECONNREFUSED = 111,
 	LINUX_ERANGE = 34,
 	LINUX_ENAMETOOLONG = 36,
 	LINUX_ENOSYS = 38,
@@ -4872,6 +4873,98 @@ static long linux_parse_sockaddr(u64 buffer, u64 len,
 	return -LINUX_EAFNOSUPPORT;
 }
 
+static long linux_parse_sockaddr_at(u64 buffer, u64 offset, u64 len,
+				    struct linux_sockaddr *out)
+{
+	unsigned char raw[28];
+	u64 family;
+
+	if (buffer == 0 || out == 0) {
+		return -LINUX_EFAULT;
+	}
+	if (len > sizeof(raw)) {
+		len = sizeof(raw);
+	}
+	if (len < 2 || bunix_buffer_read(buffer, offset, raw, len) != 0) {
+		return -LINUX_EFAULT;
+	}
+	family = (u64)raw[0] | ((u64)raw[1] << 8);
+	out->family = family;
+	out->hi = 0;
+	out->lo = 0;
+	out->port = 0;
+	if (family == LINUX_AF_INET) {
+		if (len < 8) {
+			return -LINUX_EINVAL;
+		}
+		out->port = ((u64)raw[2] << 8) | raw[3];
+		out->lo = ((u64)raw[4] << 24) | ((u64)raw[5] << 16) |
+			  ((u64)raw[6] << 8) | raw[7];
+		return 0;
+	}
+	if (family == LINUX_AF_INET6) {
+		if (len < 28) {
+			return -LINUX_EINVAL;
+		}
+		out->port = ((u64)raw[2] << 8) | raw[3];
+		for (u64 i = 8; i < 16; i++) {
+			out->hi = (out->hi << 8) | raw[i];
+		}
+		for (u64 i = 16; i < 24; i++) {
+			out->lo = (out->lo << 8) | raw[i];
+		}
+		return 0;
+	}
+	return -LINUX_EAFNOSUPPORT;
+}
+
+static long linux_net_udp_sendto(u64 socket, u64 payload_buffer,
+				 u64 payload_offset, u64 payload_len,
+				 const struct linux_sockaddr *dest)
+{
+	const u64 header_len = 4 * sizeof(u64);
+	const long net_buffer = bunix_buffer_create(header_len + payload_len);
+	struct bunix_msg reply;
+	u64 header[4];
+
+	if (net_buffer < 0) {
+		return -LINUX_ENOMEM;
+	}
+	header[0] = dest->family == LINUX_AF_INET ?
+		    BUNIX_NET_ADDR_FAMILY_IPV4 : BUNIX_NET_ADDR_FAMILY_IPV6;
+	header[1] = dest->hi;
+	header[2] = dest->lo;
+	header[3] = dest->port;
+	if (bunix_buffer_write(net_buffer, 0, header, sizeof(header)) != 0) {
+		bunix_handle_close((u64)net_buffer);
+		return -LINUX_EFAULT;
+	}
+	for (u64 done = 0; done < payload_len;) {
+		unsigned char chunk[256];
+		u64 copy = payload_len - done;
+
+		if (copy > sizeof(chunk)) {
+			copy = sizeof(chunk);
+		}
+		if (bunix_buffer_read(payload_buffer, payload_offset + done,
+				      chunk, copy) != 0 ||
+		    bunix_buffer_write(net_buffer, header_len + done,
+				       chunk, copy) != 0) {
+			bunix_handle_close((u64)net_buffer);
+			return -LINUX_EFAULT;
+		}
+		done += copy;
+	}
+	if (linux_net_call(BUNIX_NET_UDP_SENDTO, (u64)net_buffer,
+			   BUNIX_RIGHT_RECV, socket, payload_len, 0, 0,
+			   &reply) != 0) {
+		bunix_handle_close((u64)net_buffer);
+		return -LINUX_EPIPE;
+	}
+	bunix_handle_close((u64)net_buffer);
+	return (long)reply.words[1];
+}
+
 static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 			 u64 protocol)
 {
@@ -5093,7 +5186,7 @@ static long linux_connect(struct linux_process *process, u64 fd, u64 addr_len,
 }
 
 static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
-			 u64 buffer)
+			 u64 flags, u64 addr_len, u64 buffer)
 {
 	char command;
 	struct bunix_msg reply;
@@ -5105,6 +5198,26 @@ static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
 	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
+		if (addr_len != 0) {
+			struct linux_sockaddr dest;
+			long parsed;
+
+			if (process->fds[fd].handle != LINUX_SOCKET_NET_UDP) {
+				return -LINUX_EISCONN;
+			}
+			parsed = linux_parse_sockaddr_at(buffer, 0, addr_len,
+							 &dest);
+			if (parsed != 0) {
+				return parsed;
+			}
+			if (dest.family != process->fds[fd].size) {
+				return -LINUX_EAFNOSUPPORT;
+			}
+			return linux_net_udp_sendto(process->fds[fd].offset,
+						    buffer, addr_len, len,
+						    &dest);
+		}
+		(void)flags;
 		op = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
 		     BUNIX_NET_UDP_SEND : BUNIX_NET_TCP_WRITE;
 		if (linux_net_call(op, buffer, BUNIX_RIGHT_RECV,
@@ -5418,7 +5531,7 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 	}
 	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
 	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
-		return linux_sendto(process, fd, len, buffer);
+		return linux_sendto(process, fd, len, 0, 0, buffer);
 	}
 	if (process->fds[fd].kind == LINUX_FD_FILE) {
 		u64 done = 0;
@@ -6531,6 +6644,8 @@ int main(void)
 			reply.words[0] = (u64)linux_sendto(process,
 							   message.words[0],
 							   message.words[1],
+							   message.words[2],
+							   message.words[3],
 							   message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);

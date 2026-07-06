@@ -491,6 +491,32 @@ static int udp_deliver(struct udp_socket *source, const unsigned char *data,
 	return 0;
 }
 
+static int udp_deliver_to(struct udp_socket *source, const struct net_addr *dest_addr,
+			  const unsigned char *data, u64 len)
+{
+	struct net_addr old_peer;
+	u64 old_connected;
+	int result;
+
+	if (source == 0 || dest_addr == 0 ||
+	    source->family != dest_addr->family ||
+	    !net_addr_is_loopback(source->family, dest_addr->hi, dest_addr->lo) ||
+	    dest_addr->port == 0 || dest_addr->port > 65535) {
+		return -1;
+	}
+	if (!source->bound && udp_bind_socket(source, 0, 0, 0) != 0) {
+		return -1;
+	}
+	old_peer = source->peer;
+	old_connected = source->connected;
+	source->peer = *dest_addr;
+	source->connected = 1;
+	result = udp_deliver(source, data, len);
+	source->peer = old_peer;
+	source->connected = old_connected;
+	return result;
+}
+
 static void reply_udp_send(struct bunix_msg *reply,
 			   const struct bunix_msg *message)
 {
@@ -515,6 +541,42 @@ static void reply_udp_send(struct bunix_msg *reply,
 		return;
 	}
 	delivered = udp_deliver(socket, data, len);
+	bunix_free(data);
+	if (delivered != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = len;
+}
+
+static void reply_udp_sendto(struct bunix_msg *reply,
+			     const struct bunix_msg *message)
+{
+	struct udp_socket *socket = udp_find(message->words[0]);
+	const u64 len = message->words[1];
+	struct net_addr dest;
+	unsigned char *data;
+	long delivered;
+
+	if (socket == 0 || len > NET_PACKET_MAX || message->cap == 0 ||
+	    bunix_buffer_read(message->cap, 0, &dest, sizeof(dest)) != 0 ||
+	    dest.family != socket->family) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	data = (unsigned char *)bunix_alloc(len == 0 ? 1 : len);
+	if (data == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (len != 0 &&
+	    bunix_buffer_read(message->cap, sizeof(dest), data, len) != 0) {
+		bunix_free(data);
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	delivered = udp_deliver_to(socket, &dest, data, len);
 	bunix_free(data);
 	if (delivered != 0) {
 		reply->words[0] = (u64)-1;
@@ -1108,6 +1170,9 @@ int main(void)
 			break;
 		case BUNIX_NET_UDP_SEND:
 			reply_udp_send(&reply, &message);
+			break;
+		case BUNIX_NET_UDP_SENDTO:
+			reply_udp_sendto(&reply, &message);
 			break;
 		case BUNIX_NET_UDP_RECV:
 			reply_udp_recv(&reply, &message);

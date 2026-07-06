@@ -1171,7 +1171,8 @@ static u64 linux_write_one(struct ipc_port *linux, struct ipc_port *reply_port,
 		return linux_einval_u64(__func__, __LINE__);
 	}
 	return linux_forward_input_buffer(linux, reply_port, &request,
-					  user_buffer, len, TASK_RIGHT_RECV);
+					  user_buffer, len,
+					  TASK_RIGHT_RECV | TASK_RIGHT_DUP);
 }
 
 static u64 linux_write_chunked(struct ipc_port *linux,
@@ -3957,9 +3958,65 @@ poll_again:
 	case LINUX_SYSCALL_SENDTO: {
 		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
 				LINUX_MAX_SYSCALL_BUFFER : arg2;
+		const u64 dest_addr = frame->r8;
+		const u64 addr_len = frame->r9 > LINUX_MAX_SOCKADDR ?
+				     LINUX_MAX_SOCKADDR : frame->r9;
 
 		if (arg1 == 0 && len != 0) {
 			return (u64)-LINUX_EFAULT;
+		}
+		if (dest_addr != 0 && addr_len != 0) {
+			struct shared_buffer *buffer;
+			struct ipc_message reply;
+			u64 flags;
+
+			buffer = buffer_create(addr_len + (len == 0 ? 1 : len));
+			if (buffer == 0) {
+				return (u64)-LINUX_ENOMEM;
+			}
+			flags = spin_lock_irqsave(&syscall_copy_lock);
+			if (read_current_user(dest_addr, syscall_copy_buffer,
+					      addr_len) != 0 ||
+			    buffer_write(buffer, 0, syscall_copy_buffer,
+					 addr_len) != 0) {
+				spin_unlock_irqrestore(&syscall_copy_lock,
+						       flags);
+				buffer_release(buffer);
+				return (u64)-LINUX_EFAULT;
+			}
+			for (u64 done = 0; done < len;) {
+				const u64 chunk = min_u64(len - done,
+							  LINUX_MAX_SYSCALL_BUFFER);
+
+				if (read_current_user(arg1 + done,
+						      syscall_copy_buffer,
+						      chunk) != 0 ||
+				    buffer_write(buffer, addr_len + done,
+						 syscall_copy_buffer,
+						 chunk) != 0) {
+					spin_unlock_irqrestore(&syscall_copy_lock,
+							       flags);
+					buffer_release(buffer);
+					return (u64)-LINUX_EFAULT;
+				}
+				done += chunk;
+			}
+			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			request.type = LINUX_SYSCALL_SENDTO;
+			request.words[0] = arg0;
+			request.words[1] = len;
+			request.words[2] = arg3;
+			request.words[3] = addr_len;
+			request.cap_type = IPC_CAP_BUFFER;
+			request.cap_rights = TASK_RIGHT_RECV | TASK_RIGHT_DUP;
+			request.cap_object = buffer;
+			if (linux_forward_message(linux, reply_port, &request,
+						  &reply) != 0) {
+				buffer_release(buffer);
+				return (u64)-LINUX_ENOSYS;
+			}
+			buffer_release(buffer);
+			return reply.words[0];
 		}
 		request.type = LINUX_SYSCALL_SENDTO;
 		request.words[0] = arg0;
@@ -3967,7 +4024,9 @@ poll_again:
 		request.words[2] = arg3;
 		request.words[3] = 0;
 		return linux_forward_input_buffer(linux, reply_port, &request,
-						  arg1, len, TASK_RIGHT_RECV);
+						  arg1, len,
+						  TASK_RIGHT_RECV |
+						  TASK_RIGHT_DUP);
 	}
 	case LINUX_SYSCALL_RECVFROM: {
 		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
@@ -3980,7 +4039,8 @@ poll_again:
 		return linux_forward_output_words(linux, reply_port, &request,
 						  LINUX_SYSCALL_RECVFROM,
 						  (void *)arg1, len,
-						  TASK_RIGHT_SEND,
+						  TASK_RIGHT_SEND |
+						  TASK_RIGHT_DUP,
 						  arg0, arg3, 0);
 	}
 	case LINUX_SYSCALL_GETRANDOM: {

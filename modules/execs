@@ -11,3 +11,4 @@
 /bin/login login 1
 /sbin/init busybox 1
 /bin/ipcstress ipcstress 0
+/bin/nettest nettest 1

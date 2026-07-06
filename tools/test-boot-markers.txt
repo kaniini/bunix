@@ -67,6 +67,9 @@ first: aux proc=4
 first: large buffer ok
 alloctest: ok
 phdrstress: ok
+nettest: udp ok
+nettest: tcp ok
+nettest: ok
 linux-server: online
 linux-server: registered
 linux-server: openat
