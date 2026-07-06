@@ -158,3 +158,9 @@ Progress:
   owned refcounts so inherited or closed handles do not leak.  This is still
   only the bus resource handoff foundation; driver binding, IRQ resources, DMA
   windows, and queue ownership remain open.
+- Added capability-checked native MMIO read/write syscalls for 8/16/32-bit
+  accesses.  The kernel validates MMIO resource type, range, and operation bits,
+  maps touched pages into kernel space on demand, and keeps userspace drivers on
+  handles rather than raw I/O privilege.  This unblocks VirtIO common config,
+  notify, ISR, and device config access once drivers begin consuming `DEV0`
+  resources.

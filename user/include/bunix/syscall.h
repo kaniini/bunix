@@ -47,6 +47,12 @@ enum {
 	BUNIX_SYSCALL_HW_PORT_IN32 = -78,
 	BUNIX_SYSCALL_HW_PORT_OUT32 = -80,
 	BUNIX_SYSCALL_HW_PCI_BAR_GRANT = -82,
+	BUNIX_SYSCALL_HW_MMIO_READ8 = -84,
+	BUNIX_SYSCALL_HW_MMIO_WRITE8 = -86,
+	BUNIX_SYSCALL_HW_MMIO_READ16 = -88,
+	BUNIX_SYSCALL_HW_MMIO_WRITE16 = -90,
+	BUNIX_SYSCALL_HW_MMIO_READ32 = -92,
+	BUNIX_SYSCALL_HW_MMIO_WRITE32 = -94,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
@@ -329,10 +335,14 @@ enum {
 	BUNIX_HW_PORT_OUT16 = 4,
 	BUNIX_HW_MMIO_READ8 = 5,
 	BUNIX_HW_MMIO_WRITE8 = 6,
-	BUNIX_HW_IRQ_BIND = 7,
-	BUNIX_HW_IRQ_ACK = 8,
-	BUNIX_HW_IRQ_MASK = 9,
-	BUNIX_HW_EVENT_IRQ = 10,
+	BUNIX_HW_MMIO_READ16 = 7,
+	BUNIX_HW_MMIO_WRITE16 = 8,
+	BUNIX_HW_MMIO_READ32 = 9,
+	BUNIX_HW_MMIO_WRITE32 = 10,
+	BUNIX_HW_IRQ_BIND = 11,
+	BUNIX_HW_IRQ_ACK = 12,
+	BUNIX_HW_IRQ_MASK = 13,
+	BUNIX_HW_EVENT_IRQ = 14,
 	BUNIX_DEV_ENUMERATE = 1,
 	BUNIX_DEV_GET_INFO = 2,
 	BUNIX_DEV_GET_RESOURCE = 3,
@@ -905,6 +915,39 @@ static inline long bunix_hw_pci_bar_grant(u64 device, u64 offset, u64 len,
 {
 	return bunix_syscall4(BUNIX_SYSCALL_HW_PCI_BAR_GRANT, device, offset,
 			      len, ops);
+}
+
+static inline long bunix_hw_mmio_read8(u64 handle, u64 offset)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_HW_MMIO_READ8, handle, offset);
+}
+
+static inline long bunix_hw_mmio_write8(u64 handle, u64 offset, u64 value)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_HW_MMIO_WRITE8, handle, offset,
+			      value);
+}
+
+static inline long bunix_hw_mmio_read16(u64 handle, u64 offset)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_HW_MMIO_READ16, handle, offset);
+}
+
+static inline long bunix_hw_mmio_write16(u64 handle, u64 offset, u64 value)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_HW_MMIO_WRITE16, handle, offset,
+			      value);
+}
+
+static inline long bunix_hw_mmio_read32(u64 handle, u64 offset)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_HW_MMIO_READ32, handle, offset);
+}
+
+static inline long bunix_hw_mmio_write32(u64 handle, u64 offset, u64 value)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_HW_MMIO_WRITE32, handle, offset,
+			      value);
 }
 
 #endif

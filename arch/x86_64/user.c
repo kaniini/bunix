@@ -67,6 +67,12 @@ enum {
 	SYSCALL_HW_PORT_IN32 = -78,
 	SYSCALL_HW_PORT_OUT32 = -80,
 	SYSCALL_HW_PCI_BAR_GRANT = -82,
+	SYSCALL_HW_MMIO_READ8 = -84,
+	SYSCALL_HW_MMIO_WRITE8 = -86,
+	SYSCALL_HW_MMIO_READ16 = -88,
+	SYSCALL_HW_MMIO_WRITE16 = -90,
+	SYSCALL_HW_MMIO_READ32 = -92,
+	SYSCALL_HW_MMIO_WRITE32 = -94,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -5264,6 +5270,107 @@ static u64 native_sys_hw_port_out32(const struct native_syscall_args *args)
 	return 0;
 }
 
+static int hw_mmio_validate(u64 handle, u64 offset, u64 width, u32 op,
+			    volatile void **addr)
+{
+	const struct task_hw_resource *resource =
+		task_hw_resource_from_handle(task_current(), handle,
+					     TASK_RIGHT_SEND);
+
+	if (resource == 0 || addr == 0 ||
+	    resource->type != TASK_HW_RESOURCE_MMIO ||
+	    (resource->ops & op) == 0 ||
+	    width == 0 ||
+	    offset + width < offset ||
+	    offset + width > resource->len ||
+	    resource->base + offset < resource->base) {
+		return -1;
+	}
+
+	const u64 phys = resource->base + offset;
+	const u64 first_page = align_down(phys, VM_PAGE_SIZE);
+	const u64 last_page = align_down(phys + width - 1, VM_PAGE_SIZE);
+
+	for (u64 page = first_page; page <= last_page; page += VM_PAGE_SIZE) {
+		if (vm_map_kernel_page(page, page,
+				       op == TASK_HW_OP_WRITE ? 1 : 0) != 0) {
+			return -1;
+		}
+	}
+
+	*addr = (volatile void *)phys;
+	return 0;
+}
+
+static u64 native_sys_hw_mmio_read8(const struct native_syscall_args *args)
+{
+	volatile void *addr;
+
+	if (hw_mmio_validate(args->arg0, args->arg1, 1, TASK_HW_OP_READ,
+			     &addr) != 0) {
+		return (u64)-1;
+	}
+	return *(volatile const u8 *)addr;
+}
+
+static u64 native_sys_hw_mmio_write8(const struct native_syscall_args *args)
+{
+	volatile void *addr;
+
+	if (hw_mmio_validate(args->arg0, args->arg1, 1, TASK_HW_OP_WRITE,
+			     &addr) != 0) {
+		return (u64)-1;
+	}
+	*(volatile u8 *)addr = (u8)args->arg2;
+	return 0;
+}
+
+static u64 native_sys_hw_mmio_read16(const struct native_syscall_args *args)
+{
+	volatile void *addr;
+
+	if (hw_mmio_validate(args->arg0, args->arg1, 2, TASK_HW_OP_READ,
+			     &addr) != 0) {
+		return (u64)-1;
+	}
+	return *(volatile const u16 *)addr;
+}
+
+static u64 native_sys_hw_mmio_write16(const struct native_syscall_args *args)
+{
+	volatile void *addr;
+
+	if (hw_mmio_validate(args->arg0, args->arg1, 2, TASK_HW_OP_WRITE,
+			     &addr) != 0) {
+		return (u64)-1;
+	}
+	*(volatile u16 *)addr = (u16)args->arg2;
+	return 0;
+}
+
+static u64 native_sys_hw_mmio_read32(const struct native_syscall_args *args)
+{
+	volatile void *addr;
+
+	if (hw_mmio_validate(args->arg0, args->arg1, 4, TASK_HW_OP_READ,
+			     &addr) != 0) {
+		return (u64)-1;
+	}
+	return *(volatile const u32 *)addr;
+}
+
+static u64 native_sys_hw_mmio_write32(const struct native_syscall_args *args)
+{
+	volatile void *addr;
+
+	if (hw_mmio_validate(args->arg0, args->arg1, 4, TASK_HW_OP_WRITE,
+			     &addr) != 0) {
+		return (u64)-1;
+	}
+	*(volatile u32 *)addr = (u32)args->arg2;
+	return 0;
+}
+
 static u64 native_sys_ipc_send(const struct native_syscall_args *args)
 {
 	struct user_ipc_message user_message;
@@ -5431,6 +5538,14 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_HW_PORT_OUT32, "hw_port_out32", native_sys_hw_port_out32 },
 	{ SYSCALL_HW_PCI_BAR_GRANT, "hw_pci_bar_grant",
 	  native_sys_hw_pci_bar_grant },
+	{ SYSCALL_HW_MMIO_READ8, "hw_mmio_read8", native_sys_hw_mmio_read8 },
+	{ SYSCALL_HW_MMIO_WRITE8, "hw_mmio_write8", native_sys_hw_mmio_write8 },
+	{ SYSCALL_HW_MMIO_READ16, "hw_mmio_read16", native_sys_hw_mmio_read16 },
+	{ SYSCALL_HW_MMIO_WRITE16, "hw_mmio_write16",
+	  native_sys_hw_mmio_write16 },
+	{ SYSCALL_HW_MMIO_READ32, "hw_mmio_read32", native_sys_hw_mmio_read32 },
+	{ SYSCALL_HW_MMIO_WRITE32, "hw_mmio_write32",
+	  native_sys_hw_mmio_write32 },
 };
 
 static const struct native_syscall_entry *native_syscall_lookup(i64 number)
