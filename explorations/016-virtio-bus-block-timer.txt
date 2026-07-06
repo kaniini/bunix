@@ -147,3 +147,7 @@ Progress:
   current rootfs image as a deterministic `virtio-blk-pci` device at
   `pcie.0/addr=0x6`; `test-boot-virtio` boots to poweroff and asserts
   `virtio-bus: ready devices=1`.
+- Extended `virtio-bus.server` discovery to size PCI BARs, parse modern VirtIO
+  vendor capabilities, store resource descriptors, and expose those descriptors
+  through `DEV0 GET_RESOURCE`.  The deterministic VirtIO boot target now also
+  asserts a discovered device log line with resource metadata.

@@ -578,6 +578,7 @@ test-boot-virtio: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_BLK_ARGS)" sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
+	grep -aF "virtio-bus: device index=0" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-bus: ready devices=1" $(BUILD_DIR)/serial.log >/dev/null
 
 test-shell: $(EFI_BOOT_APP)
