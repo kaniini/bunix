@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 015-userspace-tty-driver-framework.txt
+The current exploration is: 016-virtio-bus-block-timer.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.
