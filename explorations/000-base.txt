@@ -14,7 +14,7 @@ When an exploration is considered complete:
    move to the next unfinished exploration and update this file.
 
 If an exploration is considered complete, but has follow-up items or
-unfulfilled needs, plan a new exploration and move to it.
+unfulfilled needs, plan a new exploration.
 
 The goal is considered achieved when no further explorations are available.
 
