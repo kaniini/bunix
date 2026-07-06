@@ -51,6 +51,15 @@ busybox ls /sys/class/tty && echo SYS_CLASS_TTY_LS_OK
 busybox test -d /sys/devices/system/cpu && echo SYS_CPU_DIR_OK
 busybox cat /sys/devices/system/cpu/online && echo SYS_CPU_ONLINE_OK
 busybox cat /proc/mounts | busybox grep "sysfs /sys sysfs" && echo PROC_MOUNTS_SYSFS_OK
+busybox cat /proc/mounts | busybox grep "tmpfs /run tmpfs" && echo PROC_MOUNTS_RUN_OK
+busybox cat /proc/mounts | busybox grep "tmpfs /tmp tmpfs" && echo PROC_MOUNTS_TMP_OK
+busybox cat /proc/filesystems | busybox grep -q cgroup || echo PROC_NO_CGROUP_OK
+busybox cat /proc/filesystems | busybox grep -q binfmt_misc || echo PROC_NO_BINFMT_OK
+busybox test -r /proc/mounts && busybox test -x /proc && echo PROC_PERMS_OK
+busybox test -r /sys/devices/system/cpu/online && busybox test -x /sys && echo SYS_PERMS_OK
+busybox test -w /run && busybox sh -c 'echo run-ok > /run/openrc-check && cat /run/openrc-check' && echo RUN_TMPFS_WRITE_OK
+busybox test -w /tmp && busybox sh -c 'echo tmp-ok > /tmp/openrc-check && cat /tmp/openrc-check' && echo TMP_TMPFS_WRITE_OK
+busybox test -w /var/tmp && busybox sh -c 'echo vartmp-ok > /var/tmp/openrc-check && cat /var/tmp/openrc-check' && echo VARTMP_TMPFS_WRITE_OK
 busybox stat /dev/zero && echo DEV_ZERO_STAT_OK
 busybox stat /dev/urandom && echo DEV_URANDOM_STAT_OK
 busybox test -r /dev/zero && echo DEV_ZERO_ACCESS_OK
@@ -106,6 +115,11 @@ check_rootfs_vfs_proc_dev() {
 		SYS_DIR_OK SYS_CLASS_OK SYS_CLASS_TTY_OK SYS_CLASS_TTY_LS_OK \
 		SYS_CPU_DIR_OK SYS_CPU_ONLINE_OK PROC_MOUNTS_SYSFS_OK \
 		"ttyS0" "0-1"
+	wait_for_each_fixed "$log" "openrc mount/permission surface missing" 45 220 \
+		PROC_MOUNTS_RUN_OK PROC_MOUNTS_TMP_OK PROC_NO_CGROUP_OK \
+		PROC_NO_BINFMT_OK PROC_PERMS_OK SYS_PERMS_OK \
+		RUN_TMPFS_WRITE_OK TMP_TMPFS_WRITE_OK VARTMP_TMPFS_WRITE_OK \
+		run-ok tmp-ok vartmp-ok
 	wait_for_each_regex "$log" "IPC fast path counter did not increase" 45 220 \
 		"direct_delivered [1-9][0-9]*" "direct_handoff [1-9][0-9]*"
 	wait_for_each_regex "$log" "IPC per-CPU counter did not increase" 45 220 \
