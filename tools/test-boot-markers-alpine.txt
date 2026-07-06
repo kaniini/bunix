@@ -6,6 +6,7 @@ time: online
 user: online
 proc: online
 vfs: online
+virtio-bus: ready devices=0
 procfs: online
 tmpfs: online
 devfs: online

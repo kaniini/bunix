@@ -818,6 +818,12 @@ int main(void)
 
 	bunix_launch_module_with_caps("block", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	bunix_launch_module_with_caps("virtio-bus", fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_DEVICE,
+				      BUNIX_RIGHT_SEND) == 0) {
+		return 1;
+	}
 	bunix_launch_module_with_caps("vfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	vfs = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS,

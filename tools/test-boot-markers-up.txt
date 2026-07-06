@@ -65,6 +65,7 @@ linux-server: online
 linux-server: registered
 linux-server: openat
 block: online
+virtio-bus: ready devices=0
 rootfs: online
 vfs: online
 procfs: online

@@ -40,6 +40,8 @@ UNIONFS_MODULE := $(BUILD_DIR)/modules/unionfs.server
 UNIONFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/unionfs/main.c.o
 BLOCK_MODULE := $(BUILD_DIR)/modules/block.server
 BLOCK_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/block/main.c.o
+VIRTIO_BUS_MODULE := $(BUILD_DIR)/modules/virtio-bus.server
+VIRTIO_BUS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/virtio-bus/main.c.o
 VFS_MODULE := $(BUILD_DIR)/modules/vfs.server
 VFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/vfs/main.c.o
 FIRST_MODULE := $(BUILD_DIR)/modules/first.user
@@ -210,6 +212,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/utmpfs/main.c.o \
 	$(BUILD_DIR)/user/unionfs/main.c.o \
 	$(BUILD_DIR)/user/block/main.c.o \
+	$(BUILD_DIR)/user/virtio-bus/main.c.o \
 	$(BUILD_DIR)/user/vfs/main.c.o \
 	$(BUILD_DIR)/user/first/main.c.o \
 	$(BUILD_DIR)/user/alloctest/main.c.o \
@@ -317,6 +320,10 @@ $(UNIONFS_MODULE): $(UNIONFS_MODULE_OBJS) user/user.ld Makefile
 $(BLOCK_MODULE): $(BLOCK_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(BLOCK_MODULE_OBJS)
+
+$(VIRTIO_BUS_MODULE): $(VIRTIO_BUS_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(VIRTIO_BUS_MODULE_OBJS)
 
 $(VFS_MODULE): $(VFS_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
@@ -466,7 +473,7 @@ $(GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 	sed 's|@KERNEL_CMDLINE@|$(KERNEL_CMDLINE)|g' $< > $@.tmp
 	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
 
-$(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -490,12 +497,13 @@ $(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTS
 		"modules/rootfs.server=$(ROOTFS_MODULE)" \
 		"modules/unionfs.server=$(UNIONFS_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
+		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
 		"modules/vfs.server=$(VFS_MODULE)" \
 		"modules/ping.server=$(PING_MODULE)" \
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -521,6 +529,7 @@ $(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE
 	cp $(ROOTFS_MODULE) $(ISO_ROOT)/modules/rootfs.server
 	cp $(UNIONFS_MODULE) $(ISO_ROOT)/modules/unionfs.server
 	cp $(BLOCK_MODULE) $(ISO_ROOT)/modules/block.server
+	cp $(VIRTIO_BUS_MODULE) $(ISO_ROOT)/modules/virtio-bus.server
 	cp $(VFS_MODULE) $(ISO_ROOT)/modules/vfs.server
 	cp $(PING_MODULE) $(ISO_ROOT)/modules/ping.server
 	cp $(BLOCK_IMAGE) $(ISO_ROOT)/modules/disk0.img

@@ -128,3 +128,7 @@ Progress:
   submission, and used-ring indexing.  The VirtIO mechanics task remains open
   until these helpers are wired into a discovered device and real queue
   notification/completion path.
+- Added an initial userspace `virtio-bus.server` skeleton registered as the
+  `DEV0` service.  It boots as a normal server, reports an empty enumeration,
+  and returns `NOENT` for device-specific requests until PCI/MMIO discovery is
+  implemented.  Boot marker coverage now asserts `virtio-bus: ready devices=0`.
