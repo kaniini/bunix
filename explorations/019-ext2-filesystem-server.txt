@@ -108,6 +108,12 @@ Implementation notes:
   lookup validation.  The remaining directory task work is wiring those helpers
   into persistent mount state and the VFS `OPEN_BUFFER`/`READDIR_BUFFER`
   translator operations.
+- Directory lookup and readdir are wired into the VFS translator surface for
+  the initial readonly ext2 mount state: path lookup walks directory entries
+  from inode 2, `OPEN_BUFFER` returns server-local handles, `READDIR_BUFFER`
+  returns one non-dot entry per cookie, and `CLOSE` releases open handles.
+  This currently uses direct directory blocks; indirect directory block support
+  will come with the general file/data-block mapping task.
 
 Tasks:
 
@@ -119,7 +125,7 @@ Tasks:
       incompat/ro-compat feature diagnostics.
 - [x] Implement block group descriptor loading, inode table access, block
       bitmap/inode bitmap helpers, and safe bounds checks.
-- [ ] Implement directory lookup and readdir for ext2 directory entries.
+- [x] Implement directory lookup and readdir for ext2 directory entries.
 - [ ] Implement file read for direct, singly indirect, doubly indirect, and
       triply indirect blocks as needed by realistic images.
 - [ ] Implement metadata mapping into Linux stat/statx fields: inode number,

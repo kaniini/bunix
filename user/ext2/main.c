@@ -1,5 +1,6 @@
 #include <bunix/alloc.h>
 #include <bunix/libbunix.h>
+#include <bunix/tree.h>
 
 enum {
 	EXT2_HANDLE_NAMES = 3,
@@ -10,6 +11,7 @@ enum {
 	EXT2_ROOT_INO = 2,
 	EXT2_BLOCK_READ_MAX = 128 * 1024,
 	EXT2_NAME_MAX = 255,
+	EXT2_MAX_PATH = 4096,
 	EXT2_NDIR_BLOCKS = 12,
 	EXT2_S_IFMT = 0170000,
 	EXT2_S_IFIFO = 0010000,
@@ -90,6 +92,18 @@ struct ext2_mount {
 	struct ext2_super super;
 	struct ext2_group *groups;
 };
+
+struct ext2_open {
+	struct bunix_u64_tree_node node;
+	u64 handle;
+	u64 ino;
+	struct ext2_inode inode;
+};
+
+static struct ext2_mount root_mount;
+static int root_mount_ready;
+static struct bunix_u64_tree open_files;
+static u64 next_open_handle = 1;
 
 static u64 text_len(const char *text)
 {
@@ -215,6 +229,19 @@ static int text_eq_len(const char *text, const char *name, u64 name_len)
 		}
 	}
 	return text[i] == 0;
+}
+
+static int text_eq(const char *left, const char *right)
+{
+	u64 i = 0;
+
+	while (left != 0 && right != 0 && left[i] != 0 && right[i] != 0) {
+		if (left[i] != right[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return left != 0 && right != 0 && left[i] == right[i];
 }
 
 static u64 div_round_up(u64 value, u64 divisor)
@@ -751,33 +778,238 @@ static long lookup_dirent(const struct ext2_mount *mount,
 	return BUNIX_VFS_ERR_NOENT;
 }
 
-static long load_initial_mount(u64 block)
+static long lookup_path(const struct ext2_mount *mount, const char *path,
+			u64 *ino, struct ext2_inode *inode)
+{
+	struct ext2_inode current;
+	u64 current_ino = EXT2_ROOT_INO;
+	u64 pos = 1;
+
+	if (mount == 0 || path == 0 || path[0] != '/' ||
+	    ino == 0 || inode == 0 ||
+	    read_inode(mount, EXT2_ROOT_INO, &current) != 0) {
+		return BUNIX_VFS_ERR_NOENT;
+	}
+	if (path[1] == 0) {
+		*ino = current_ino;
+		*inode = current;
+		return 0;
+	}
+	while (path[pos] != 0) {
+		struct ext2_dirent entry;
+		char name[EXT2_NAME_MAX + 1];
+		u64 name_len = 0;
+
+		while (path[pos] == '/') {
+			pos++;
+		}
+		if (path[pos] == 0) {
+			break;
+		}
+		while (path[pos + name_len] != 0 &&
+		       path[pos + name_len] != '/') {
+			if (name_len >= EXT2_NAME_MAX) {
+				return BUNIX_VFS_ERR_NOENT;
+			}
+			name[name_len] = path[pos + name_len];
+			name_len++;
+		}
+		name[name_len] = 0;
+		if (ext2_inode_vfs_type(&current) != BUNIX_VFS_TYPE_DIRECTORY ||
+		    lookup_dirent(mount, &current, name, &entry) != 0 ||
+		    read_inode(mount, entry.ino, &current) != 0) {
+			return BUNIX_VFS_ERR_NOENT;
+		}
+		current_ino = entry.ino;
+		pos += name_len;
+	}
+	*ino = current_ino;
+	*inode = current;
+	return 0;
+}
+
+static u64 remember_open(u64 ino, const struct ext2_inode *inode)
+{
+	struct ext2_open *open;
+	u64 handle;
+
+	open = (struct ext2_open *)bunix_calloc(1, sizeof(*open));
+	if (open == 0 || inode == 0) {
+		bunix_free(open);
+		return 0;
+	}
+	handle = next_open_handle++;
+	while (handle == 0 || bunix_u64_tree_get(&open_files, handle) != 0) {
+		handle = next_open_handle++;
+	}
+	open->handle = handle;
+	open->ino = ino;
+	open->inode = *inode;
+	if (bunix_u64_tree_insert_node(&open_files, &open->node, handle,
+				       (u64)open) != 0) {
+		bunix_free(open);
+		return 0;
+	}
+	return handle;
+}
+
+static struct ext2_open *open_from_handle(u64 handle)
+{
+	return (struct ext2_open *)bunix_u64_tree_get(&open_files, handle);
+}
+
+static void forget_open(u64 handle)
+{
+	struct ext2_open *open = open_from_handle(handle);
+
+	if (open == 0) {
+		return;
+	}
+	bunix_u64_tree_remove_node(&open_files, &open->node);
+	bunix_free(open);
+}
+
+static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
+{
+	if (buffer == 0 || path == 0 || len == 0 || len > EXT2_MAX_PATH) {
+		return -1;
+	}
+	for (u64 i = 0; i < EXT2_MAX_PATH; i++) {
+		path[i] = 0;
+	}
+	if (bunix_buffer_read(buffer, offset, path, len) != 0 ||
+	    path[len - 1] != 0) {
+		return -1;
+	}
+	return text_len(path) < EXT2_MAX_PATH ? 0 : -1;
+}
+
+static int read_resolved_path(const struct bunix_msg *message, char *path)
+{
+	char cwd[EXT2_MAX_PATH];
+
+	if (message == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    read_path_buffer_at(message->cap, 0, message->words[0], cwd) != 0 ||
+	    read_path_buffer_at(message->cap, message->words[0],
+				message->words[1], path) != 0 ||
+	    !text_eq(cwd, "/") ||
+	    path[0] != '/') {
+		return -1;
+	}
+	return 0;
+}
+
+static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
+		       const char *path)
+{
+	struct ext2_inode inode;
+	u64 ino;
+	u64 handle;
+	u64 type;
+
+	if (!root_mount_ready ||
+	    lookup_path(&root_mount, path, &ino, &inode) != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	type = ext2_inode_vfs_type(&inode);
+	if (type == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	handle = remember_open(ino, &inode);
+	if (handle == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = handle;
+	reply->words[2] = inode.size;
+	reply->words[3] = type;
+	(void)message;
+}
+
+static void reply_readdir(struct ext2_open *open,
+			  const struct bunix_msg *message,
+			  struct bunix_msg *reply)
+{
+	struct ext2_dirent entry;
+	u64 cookie;
+	u64 type;
+	u64 written;
+
+	if (open == 0 ||
+	    ext2_inode_vfs_type(&open->inode) != BUNIX_VFS_TYPE_DIRECTORY) {
+		reply->words[0] = BUNIX_VFS_ERR_NOTDIR;
+		return;
+	}
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	cookie = message->words[1];
+	if (next_dirent(&root_mount, &open->inode, &cookie, &entry, 1) != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	type = ext2_dirent_vfs_type(entry.file_type);
+	if (type == 0) {
+		struct ext2_inode inode;
+
+		if (read_inode(&root_mount, entry.ino, &inode) != 0) {
+			reply->words[0] = (u64)-1;
+			return;
+		}
+		type = ext2_inode_vfs_type(&inode);
+	}
+	if (type == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	written = entry.name_len;
+	if (written > message->words[3]) {
+		written = message->words[3];
+	}
+	if (written != 0 &&
+	    bunix_buffer_write(message->cap, message->words[2],
+			       entry.name, written) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = cookie | (type << 32);
+	reply->words[2] = entry.name_len;
+	reply->words[3] = written;
+}
+
+static long load_initial_mount(u64 block, struct ext2_mount *mount)
 {
 	unsigned char raw[EXT2_SUPER_SIZE];
-	struct ext2_mount mount;
 	struct ext2_inode root_inode;
 	struct ext2_dirent self;
 	u64 root_allocated = 0;
 
-	mount.block = block;
-	mount.image_size = 0;
-	mount.groups = 0;
-	if (block_get_size(block, &mount.image_size) != 0 ||
+	mount->block = block;
+	mount->image_size = 0;
+	mount->groups = 0;
+	if (block_get_size(block, &mount->image_size) != 0 ||
 	    block_read_bytes(block, EXT2_SUPER_OFFSET, raw, sizeof(raw)) != 0 ||
-	    parse_super(raw, mount.image_size, &mount.super) != 0 ||
-	    load_group_descriptors(&mount) != 0 ||
-	    inode_is_allocated(&mount, EXT2_ROOT_INO, &root_allocated) != 0 ||
-	    read_inode(&mount, EXT2_ROOT_INO, &root_inode) != 0 ||
+	    parse_super(raw, mount->image_size, &mount->super) != 0 ||
+	    load_group_descriptors(mount) != 0 ||
+	    inode_is_allocated(mount, EXT2_ROOT_INO, &root_allocated) != 0 ||
+	    read_inode(mount, EXT2_ROOT_INO, &root_inode) != 0 ||
 	    root_allocated == 0 ||
 	    ext2_inode_vfs_type(&root_inode) != BUNIX_VFS_TYPE_DIRECTORY ||
-	    lookup_dirent(&mount, &root_inode, ".", &self) != 0 ||
+	    lookup_dirent(mount, &root_inode, ".", &self) != 0 ||
 	    self.ino != EXT2_ROOT_INO ||
 	    ext2_dirent_vfs_type(self.file_type) != BUNIX_VFS_TYPE_DIRECTORY) {
-		bunix_free(mount.groups);
+		bunix_free(mount->groups);
+		mount->groups = 0;
 		return -1;
 	}
-	log_super(&mount.super);
-	bunix_free(mount.groups);
+	log_super(&mount->super);
 	return 0;
 }
 
@@ -788,18 +1020,19 @@ int main(void)
 	u64 block;
 
 	bunix_console_log(online, sizeof(online) - 1);
+	bunix_u64_tree_init(&open_files);
 	block = resolve_service(BUNIX_SERVICE_BLOCK, BUNIX_RIGHT_SEND);
 	if (block == 0) {
 		log_text("ext2: block service unavailable\n");
-	} else {
-		(void)load_initial_mount(block);
+	} else if (load_initial_mount(block, &root_mount) == 0) {
+		root_mount_ready = 1;
 	}
 	if (register_service(BUNIX_SERVICE_EXT2, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
 	}
 	for (;;) {
 		struct bunix_msg reply = {
-			.protocol = BUNIX_PROTO_EXT2,
+			.protocol = BUNIX_PROTO_VFS,
 			.type = 0,
 			.sender = 0,
 			.cap_rights = 0,
@@ -807,13 +1040,46 @@ int main(void)
 			.cap = 0,
 			.words = { 0, 0, 0, 0 },
 		};
+		char path[EXT2_MAX_PATH];
 
-		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
-		    message.protocol != BUNIX_PROTO_EXT2) {
+		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0) {
 			continue;
 		}
 		reply.type = message.type;
-		reply.words[0] = (u64)-1;
+		if (message.protocol == BUNIX_PROTO_VFS) {
+			switch (message.type) {
+			case BUNIX_VFS_OPEN_BUFFER:
+				if (read_resolved_path(&message, path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply_open(&message, &reply, path);
+				}
+				break;
+			case BUNIX_VFS_READDIR_BUFFER:
+				reply_readdir(open_from_handle(message.words[0]),
+					      &message, &reply);
+				break;
+			case BUNIX_VFS_CLOSE:
+				if (open_from_handle(message.words[0]) == 0) {
+					reply.words[0] = (u64)-1;
+				} else {
+					forget_open(message.words[0]);
+					reply.words[0] = 0;
+				}
+				break;
+			default:
+				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
+				break;
+			}
+		} else if (message.protocol == BUNIX_PROTO_EXT2) {
+			reply.protocol = BUNIX_PROTO_EXT2;
+			reply.words[0] = (u64)-1;
+		} else {
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			continue;
+		}
 		if (message.cap != 0) {
 			bunix_handle_close(message.cap);
 		}
