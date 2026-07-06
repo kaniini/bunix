@@ -44,8 +44,14 @@ fi
 mkdir -p "$run_root/$run_id"
 echo "test-parallel status=plan run_id=$run_id jobs=$jobs set=$test_set artifact=$run_root/$run_id"
 
-selected_names() {
+selected_shards() {
 	awk -F '\t' -v set="$test_set" '
+	function valid_uint(value) {
+		return value ~ /^[0-9]+$/
+	}
+	function valid_memory(value) {
+		return value ~ /^[0-9]+[KMG]?$/
+	}
 	function selected(name, phase,    list, count, i, part) {
 		if (set == "" || set == "all" || set == "shell")
 			return 1
@@ -78,7 +84,27 @@ selected_names() {
 		printf "invalid shard row at %s:%d\n", FILENAME, FNR > "/dev/stderr"
 		exit 1
 	}
-	selected($1, $2) { print $1 "\t" $3 "\t" $4 "\t" $5 }
+	!valid_uint($3) {
+		printf "invalid smp value for shard %s: %s\n", $1, $3 > "/dev/stderr"
+		exit 1
+	}
+	!valid_memory($4) {
+		printf "invalid memory value for shard %s: %s\n", $1, $4 > "/dev/stderr"
+		exit 1
+	}
+	!valid_uint($5) {
+		printf "invalid timeout value for shard %s: %s\n", $1, $5 > "/dev/stderr"
+		exit 1
+	}
+	!valid_uint($6) {
+		printf "invalid cost value for shard %s: %s\n", $1, $6 > "/dev/stderr"
+		exit 1
+	}
+	$7 != "yes" && $7 != "no" {
+		printf "invalid clean_boot value for shard %s: %s\n", $1, $7 > "/dev/stderr"
+		exit 1
+	}
+	selected($1, $2) { print $1 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 }
 	' "$manifest"
 }
 
@@ -98,12 +124,14 @@ run_worker() {
 	smp=$2
 	memory=$3
 	timeout_seconds=$4
+	cost=$5
+	clean_boot=$6
 	parts=$(worker_parts "$name")
 	worker_dir=$run_root/$run_id/$name
 	start=$(date +%s)
 
 	mkdir -p "$worker_dir"
-	echo "test-parallel name=$name status=start smp=$smp memory=$memory timeout=${timeout_seconds}s artifact=$worker_dir"
+	echo "test-parallel name=$name status=start smp=$smp memory=$memory timeout=${timeout_seconds}s cost=$cost clean_boot=$clean_boot artifact=$worker_dir"
 
 	if BUNIX_TEST_RUN_ID="$run_id-$name" \
 	    BUNIX_TEST_RUNTIME_DIR="$worker_dir/runtime" \
@@ -143,7 +171,7 @@ overall=0
 launched=0
 skipped=0
 
-while IFS='	' read -r name smp memory timeout_seconds; do
+while IFS='	' read -r name smp memory timeout_seconds cost clean_boot; do
 	if [ -z "$name" ]; then
 		continue
 	fi
@@ -153,7 +181,7 @@ while IFS='	' read -r name smp memory timeout_seconds; do
 		continue
 	fi
 
-	run_worker "$name" "$smp" "$memory" "$timeout_seconds" &
+	run_worker "$name" "$smp" "$memory" "$timeout_seconds" "$cost" "$clean_boot" &
 	pids="$pids $!"
 	count=$((count + 1))
 	launched=$((launched + 1))
@@ -167,7 +195,7 @@ while IFS='	' read -r name smp memory timeout_seconds; do
 		count=0
 	fi
 done <<EOF_SHARDS
-$(selected_names)
+$(selected_shards)
 EOF_SHARDS
 
 if [ "$count" -gt 0 ]; then

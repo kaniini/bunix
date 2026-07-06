@@ -275,11 +275,20 @@ Plan:
      `make test-shell-parallel`, `make test-parallel`,
      `BUNIX_TEST_SET=...`, and `BUNIX_TEST_JOBS=...`.
 
-14. Add shard resource metadata
+14. Add shard resource metadata [DONE]
    Each shard should declare its own VM resources: vCPU count, memory, timeout,
    expected cost, and whether it requires a clean boot. SMP-sensitive shards such
    as scheduler, IPC, and `sysrace` can request `SMP=2` or higher, while simple
    filesystem shards can request `SMP=1` for throughput.
+
+   Result:
+
+   - `tools/shell-shards.tsv` declares per-shard SMP, memory, timeout, cost,
+     and clean-boot metadata.
+   - `tools/test-parallel.sh` validates those fields before scheduling selected
+     shards.
+   - Worker start lines include the resource metadata used for scheduling, so
+     SMP policy is visible per shard.
 
 15. Make QEMU worker resources configurable
    Support runner-level knobs:
