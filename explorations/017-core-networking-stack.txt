@@ -146,3 +146,11 @@ Progress:
   cleanup, and refused-connect reset/error behavior.  Bootstrap now self-tests
   IPv4 and IPv6 TCP streams in both directions and boot markers assert
   `bootstrap: net tcp ok`.
+- Started Linux socket compatibility over `NET0`: the x86_64 Linux syscall
+  bridge now forwards `bind`, `listen`, `accept`, `accept4`, and `shutdown` in
+  addition to the previous socket/connect/send/recv path, and `linux.server`
+  can create AF_INET/AF_INET6 TCP and UDP sockets backed by native NET0 socket
+  IDs.  TCP sockets now participate in Linux `read`, `write`, `poll`, and
+  `close`; UDP supports bind/connect/send/recv/close.  Remaining Linux socket
+  work includes sockaddr return paths, `sendto` with an explicit destination,
+  `getsockname`, `getpeername`, socket options, and dedicated userland tests.

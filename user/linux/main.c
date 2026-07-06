@@ -22,6 +22,9 @@ enum {
 	LINUX_EMFILE = 24,
 	LINUX_ESPIPE = 29,
 	LINUX_EPIPE = 32,
+	LINUX_EADDRINUSE = 98,
+	LINUX_ECONNREFUSED = 111,
+	LINUX_ENOTCONN = 107,
 	LINUX_ERANGE = 34,
 	LINUX_ENAMETOOLONG = 36,
 	LINUX_ENOSYS = 38,
@@ -141,11 +144,18 @@ enum {
 	LINUX_SEEK_CUR = 1,
 	LINUX_SEEK_END = 2,
 	LINUX_AF_UNIX = 1,
+	LINUX_AF_INET = 2,
+	LINUX_AF_INET6 = 10,
 	LINUX_SOCK_STREAM = 1,
+	LINUX_SOCK_DGRAM = 2,
 	LINUX_SOCK_NONBLOCK = 00004000,
 	LINUX_SOCK_CLOEXEC = 02000000,
 	LINUX_SOCKET_UNIX_STREAM = 1,
 	LINUX_SOCKET_UTMPD = 2,
+	LINUX_SOCKET_NET_UDP = 3,
+	LINUX_SOCKET_NET_TCP = 4,
+	LINUX_IPPROTO_TCP = 6,
+	LINUX_IPPROTO_UDP = 17,
 	LINUX_DT_FIFO = 1,
 	LINUX_DT_CHR = 2,
 	LINUX_DT_REG = 8,
@@ -263,6 +273,7 @@ static u64 procfs_service;
 static u64 tmpfs_service;
 static u64 devfs_service;
 static u64 unionfs_service;
+static u64 net_service;
 
 static u64 resolve_service(u64 service, unsigned int rights);
 static void linux_process_reset(struct linux_process *process);
@@ -4787,25 +4798,231 @@ static long linux_chdir(struct linux_process *process, u64 path_len,
 	return 0;
 }
 
+struct linux_sockaddr {
+	u64 family;
+	u64 hi;
+	u64 lo;
+	u64 port;
+};
+
+static long linux_net_call(u64 type, u64 cap, u64 cap_rights,
+			   u64 word0, u64 word1, u64 word2, u64 word3,
+			   struct bunix_msg *reply)
+{
+	const u64 net = linux_cached_service(BUNIX_SERVICE_NET, &net_service);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NET,
+		.type = (unsigned int)type,
+		.sender = 0,
+		.cap_rights = cap_rights,
+		.reply = 0,
+		.cap = cap,
+		.words = { word0, word1, word2, word3 },
+	};
+
+	if (net == 0 || bunix_ipc_call(net, &request, reply) != 0 ||
+	    reply->words[0] != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static long linux_parse_sockaddr(u64 buffer, u64 len,
+				 struct linux_sockaddr *out)
+{
+	unsigned char raw[28];
+	u64 family;
+
+	if (buffer == 0 || out == 0) {
+		return -LINUX_EFAULT;
+	}
+	if (len > sizeof(raw)) {
+		len = sizeof(raw);
+	}
+	if (len < 2 || bunix_buffer_read(buffer, 0, raw, len) != 0) {
+		return -LINUX_EFAULT;
+	}
+	family = (u64)raw[0] | ((u64)raw[1] << 8);
+	out->family = family;
+	out->hi = 0;
+	out->lo = 0;
+	out->port = 0;
+	if (family == LINUX_AF_INET) {
+		if (len < 8) {
+			return -LINUX_EINVAL;
+		}
+		out->port = ((u64)raw[2] << 8) | raw[3];
+		out->lo = ((u64)raw[4] << 24) | ((u64)raw[5] << 16) |
+			  ((u64)raw[6] << 8) | raw[7];
+		return 0;
+	}
+	if (family == LINUX_AF_INET6) {
+		if (len < 28) {
+			return -LINUX_EINVAL;
+		}
+		out->port = ((u64)raw[2] << 8) | raw[3];
+		for (u64 i = 8; i < 16; i++) {
+			out->hi = (out->hi << 8) | raw[i];
+		}
+		for (u64 i = 16; i < 24; i++) {
+			out->lo = (out->lo << 8) | raw[i];
+		}
+		return 0;
+	}
+	return -LINUX_EAFNOSUPPORT;
+}
+
 static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 			 u64 protocol)
 {
 	const u64 base_type = type & ~(LINUX_SOCK_NONBLOCK |
 				       LINUX_SOCK_CLOEXEC);
+	struct bunix_msg reply;
+	u64 net_type;
+	u64 net_family;
 	long fd;
 
-	if (domain != LINUX_AF_UNIX) {
+	if (domain != LINUX_AF_UNIX &&
+	    domain != LINUX_AF_INET &&
+	    domain != LINUX_AF_INET6) {
 		return -LINUX_EAFNOSUPPORT;
 	}
-	if (base_type != LINUX_SOCK_STREAM || protocol != 0) {
+	if (domain == LINUX_AF_UNIX &&
+	    (base_type != LINUX_SOCK_STREAM || protocol != 0)) {
 		return -LINUX_EPROTONOSUPPORT;
 	}
+	if (domain == LINUX_AF_UNIX) {
+		fd = alloc_fd(process, LINUX_FD_SOCKET,
+			      LINUX_SOCKET_UNIX_STREAM, 0);
+		if (fd >= 0 && (type & LINUX_SOCK_CLOEXEC) != 0) {
+			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
+		}
+		return fd;
+	}
 
-	fd = alloc_fd(process, LINUX_FD_SOCKET, LINUX_SOCKET_UNIX_STREAM, 0);
+	net_family = domain == LINUX_AF_INET ? BUNIX_NET_ADDR_FAMILY_IPV4 :
+		     BUNIX_NET_ADDR_FAMILY_IPV6;
+	if (base_type == LINUX_SOCK_DGRAM &&
+	    (protocol == 0 || protocol == LINUX_IPPROTO_UDP)) {
+		net_type = BUNIX_NET_UDP_OPEN;
+	} else if (base_type == LINUX_SOCK_STREAM &&
+		   (protocol == 0 || protocol == LINUX_IPPROTO_TCP)) {
+		net_type = BUNIX_NET_TCP_OPEN;
+	} else {
+		return -LINUX_EPROTONOSUPPORT;
+	}
+	if (linux_net_call(net_type, 0, 0, net_family, 0, 0, 0,
+			   &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	fd = alloc_fd(process, LINUX_FD_SOCKET,
+		      net_type == BUNIX_NET_UDP_OPEN ?
+		      LINUX_SOCKET_NET_UDP : LINUX_SOCKET_NET_TCP,
+		      domain);
+	if (fd >= 0) {
+		process->fds[fd].offset = reply.words[1];
+	}
 	if (fd >= 0 && (type & LINUX_SOCK_CLOEXEC) != 0) {
 		process->fds[fd].flags |= LINUX_FD_CLOEXEC;
 	}
 	return fd;
+}
+
+static long linux_bind(struct linux_process *process, u64 fd, u64 addr_len,
+		       u64 addr_buffer)
+{
+	struct linux_sockaddr addr;
+	struct bunix_msg reply;
+	long parsed;
+	u64 op;
+
+	if (fd >= process->fd_capacity ||
+	    process->fds[fd].kind != LINUX_FD_SOCKET) {
+		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle != LINUX_SOCKET_NET_UDP &&
+	    process->fds[fd].handle != LINUX_SOCKET_NET_TCP) {
+		return -LINUX_EINVAL;
+	}
+	parsed = linux_parse_sockaddr(addr_buffer, addr_len, &addr);
+	if (parsed != 0) {
+		return parsed;
+	}
+	if (addr.family != process->fds[fd].size) {
+		return -LINUX_EAFNOSUPPORT;
+	}
+	op = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
+	     BUNIX_NET_UDP_BIND : BUNIX_NET_TCP_BIND;
+	return linux_net_call(op, 0, 0, process->fds[fd].offset,
+			      addr.hi, addr.lo, addr.port, &reply) == 0 ?
+	       0 : -LINUX_EADDRINUSE;
+}
+
+static long linux_listen(struct linux_process *process, u64 fd, u64 backlog)
+{
+	struct bunix_msg reply;
+
+	if (fd >= process->fd_capacity ||
+	    process->fds[fd].kind != LINUX_FD_SOCKET) {
+		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle != LINUX_SOCKET_NET_TCP) {
+		return -LINUX_EPROTONOSUPPORT;
+	}
+	return linux_net_call(BUNIX_NET_TCP_LISTEN, 0, 0,
+			      process->fds[fd].offset, backlog, 0, 0,
+			      &reply) == 0 ? 0 : -LINUX_EINVAL;
+}
+
+static long linux_accept(struct linux_process *process, u64 fd, u64 flags)
+{
+	struct bunix_msg reply;
+	long new_fd;
+
+	if (fd >= process->fd_capacity ||
+	    process->fds[fd].kind != LINUX_FD_SOCKET) {
+		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle != LINUX_SOCKET_NET_TCP) {
+		return -LINUX_EPROTONOSUPPORT;
+	}
+	if (linux_net_call(BUNIX_NET_TCP_ACCEPT, 0, 0,
+			   process->fds[fd].offset, 0, 0, 0, &reply) != 0) {
+		return -LINUX_EAGAIN;
+	}
+	new_fd = alloc_fd(process, LINUX_FD_SOCKET, LINUX_SOCKET_NET_TCP,
+			  process->fds[fd].size);
+	if (new_fd < 0) {
+		return new_fd;
+	}
+	process->fds[new_fd].offset = reply.words[1];
+	if ((flags & LINUX_SOCK_CLOEXEC) != 0) {
+		process->fds[new_fd].flags |= LINUX_FD_CLOEXEC;
+	}
+	return new_fd;
+}
+
+static long linux_shutdown(struct linux_process *process, u64 fd, u64 how)
+{
+	struct bunix_msg reply;
+	u64 net_how = 0;
+
+	if (fd >= process->fd_capacity ||
+	    process->fds[fd].kind != LINUX_FD_SOCKET) {
+		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle != LINUX_SOCKET_NET_TCP) {
+		return -LINUX_EPROTONOSUPPORT;
+	}
+	if (how == 0 || how == 2) {
+		net_how |= 1;
+	}
+	if (how == 1 || how == 2) {
+		net_how |= 2;
+	}
+	return linux_net_call(BUNIX_NET_TCP_SHUTDOWN, 0, 0,
+			      process->fds[fd].offset, net_how, 0, 0,
+			      &reply) == 0 ? 0 : -LINUX_ENOTCONN;
 }
 
 static long linux_connect(struct linux_process *process, u64 fd, u64 addr_len,
@@ -4815,6 +5032,10 @@ static long linux_connect(struct linux_process *process, u64 fd, u64 addr_len,
 	char path[LINUX_MAX_PATH];
 	u64 path_len = 0;
 	unsigned int family;
+	struct linux_sockaddr net_addr;
+	struct bunix_msg reply;
+	long parsed;
+	u64 op;
 
 	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
@@ -4831,6 +5052,25 @@ static long linux_connect(struct linux_process *process, u64 fd, u64 addr_len,
 	family = ((unsigned int)(unsigned char)addr[0]) |
 		 ((unsigned int)(unsigned char)addr[1] << 8);
 	if (family != LINUX_AF_UNIX) {
+		if (process->fds[fd].handle != LINUX_SOCKET_NET_UDP &&
+		    process->fds[fd].handle != LINUX_SOCKET_NET_TCP) {
+			return -LINUX_EAFNOSUPPORT;
+		}
+		parsed = linux_parse_sockaddr(addr_buffer, addr_len, &net_addr);
+		if (parsed != 0) {
+			return parsed;
+		}
+		if (net_addr.family != process->fds[fd].size) {
+			return -LINUX_EAFNOSUPPORT;
+		}
+		op = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
+		     BUNIX_NET_UDP_CONNECT : BUNIX_NET_TCP_CONNECT;
+		return linux_net_call(op, 0, 0, process->fds[fd].offset,
+				      net_addr.hi, net_addr.lo, net_addr.port,
+				      &reply) == 0 ? 0 : -LINUX_ECONNREFUSED;
+	}
+	if (process->fds[fd].handle != LINUX_SOCKET_UNIX_STREAM &&
+	    process->fds[fd].handle != LINUX_SOCKET_UTMPD) {
 		return -LINUX_EAFNOSUPPORT;
 	}
 	for (u64 i = 2; i < addr_len && path_len + 1 < sizeof(path); i++) {
@@ -4856,10 +5096,23 @@ static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 			 u64 buffer)
 {
 	char command;
+	struct bunix_msg reply;
+	u64 op;
 
 	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
 		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
+	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
+		op = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
+		     BUNIX_NET_UDP_SEND : BUNIX_NET_TCP_WRITE;
+		if (linux_net_call(op, buffer, BUNIX_RIGHT_RECV,
+				   process->fds[fd].offset, len, 0, 0,
+				   &reply) != 0) {
+			return -LINUX_EPIPE;
+		}
+		return (long)reply.words[1];
 	}
 	if (process->fds[fd].handle != LINUX_SOCKET_UTMPD) {
 		return -LINUX_EINVAL;
@@ -4884,9 +5137,23 @@ static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 			   u64 buffer)
 {
+	struct bunix_msg reply;
+	u64 op;
+
 	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
 		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
+	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
+		op = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
+		     BUNIX_NET_UDP_RECV : BUNIX_NET_TCP_READ;
+		if (linux_net_call(op, buffer, BUNIX_RIGHT_SEND,
+				   process->fds[fd].offset, len, 0, 0,
+				   &reply) != 0) {
+			return -LINUX_EAGAIN;
+		}
+		return (long)reply.words[1];
 	}
 	return utmps_recv_response(&process->fds[fd], len, buffer);
 }
@@ -4923,11 +5190,39 @@ static long linux_pollfd(struct linux_process *process, long fd, u64 events)
 	case LINUX_FD_FILE:
 	case LINUX_FD_DIR:
 	case LINUX_FD_SOCKET:
-		if ((events & LINUX_POLLIN) != 0) {
-			revents |= LINUX_POLLIN;
-		}
-		if ((events & LINUX_POLLOUT) != 0) {
-			revents |= LINUX_POLLOUT;
+		if (process->fds[fd].kind == LINUX_FD_SOCKET &&
+		    (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
+		     process->fds[fd].handle == LINUX_SOCKET_NET_TCP)) {
+			struct bunix_msg reply;
+			u64 net_events = 0;
+			const u64 op =
+				process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
+				BUNIX_NET_UDP_POLL : BUNIX_NET_TCP_POLL;
+
+			if (linux_net_call(op, 0, 0, process->fds[fd].offset,
+					   0, 0, 0, &reply) != 0) {
+				revents |= LINUX_POLLERR;
+				break;
+			}
+			net_events = reply.words[1];
+			if ((events & LINUX_POLLIN) != 0 &&
+			    (net_events & 1) != 0) {
+				revents |= LINUX_POLLIN;
+			}
+			if ((events & LINUX_POLLOUT) != 0 &&
+			    (net_events & 2) != 0) {
+				revents |= LINUX_POLLOUT;
+			}
+			if ((net_events & 4) != 0) {
+				revents |= LINUX_POLLHUP;
+			}
+		} else {
+			if ((events & LINUX_POLLIN) != 0) {
+				revents |= LINUX_POLLIN;
+			}
+			if ((events & LINUX_POLLOUT) != 0) {
+				revents |= LINUX_POLLOUT;
+			}
 		}
 		break;
 	case LINUX_FD_PIPE_READ:
@@ -5013,6 +5308,10 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 			return 0;
 		}
 		return linux_pipe_read_available(pipe, len, buffer);
+	}
+	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
+	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
+		return linux_recvfrom(process, fd, len, buffer);
 	}
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
 		return -LINUX_EISDIR;
@@ -5116,6 +5415,10 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 		pipe->len += nwritten;
 		linux_pipe_wake_reader(pipe);
 		return (long)nwritten;
+	}
+	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
+	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
+		return linux_sendto(process, fd, len, buffer);
 	}
 	if (process->fds[fd].kind == LINUX_FD_FILE) {
 		u64 done = 0;
@@ -5260,6 +5563,16 @@ static long linux_close(struct linux_process *process, u64 fd)
 
 		linux_pipe_ref_drop(&process->fds[fd]);
 		linux_pipe_wake_reader(linux_pipe_find(pipe_id));
+	}
+	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
+	    (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
+	     process->fds[fd].handle == LINUX_SOCKET_NET_TCP)) {
+		struct bunix_msg reply;
+		const u64 op = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
+			       BUNIX_NET_UDP_CLOSE : BUNIX_NET_TCP_CLOSE;
+
+		(void)linux_net_call(op, 0, 0, process->fds[fd].offset,
+				     0, 0, 0, &reply);
 	}
 	process->fds[fd].kind = 0;
 	process->fds[fd].handle = 0;
@@ -6184,6 +6497,35 @@ int main(void)
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
+			break;
+		case BUNIX_LINUX_BIND:
+			reply.words[0] = (u64)linux_bind(process,
+							 message.words[0],
+							 message.words[1],
+							 message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_LISTEN:
+			reply.words[0] = (u64)linux_listen(process,
+							   message.words[0],
+							   message.words[1]);
+			break;
+		case BUNIX_LINUX_ACCEPT:
+			reply.words[0] = (u64)linux_accept(process,
+							   message.words[0],
+							   0);
+			break;
+		case BUNIX_LINUX_ACCEPT4:
+			reply.words[0] = (u64)linux_accept(process,
+							   message.words[0],
+							   message.words[1]);
+			break;
+		case BUNIX_LINUX_SHUTDOWN:
+			reply.words[0] = (u64)linux_shutdown(process,
+							     message.words[0],
+							     message.words[1]);
 			break;
 		case BUNIX_LINUX_SENDTO:
 			reply.words[0] = (u64)linux_sendto(process,

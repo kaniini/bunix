@@ -107,8 +107,12 @@ enum {
 	LINUX_SYSCALL_SENDFILE = 40,
 	LINUX_SYSCALL_SOCKET = 41,
 	LINUX_SYSCALL_CONNECT = 42,
+	LINUX_SYSCALL_ACCEPT = 43,
 	LINUX_SYSCALL_SENDTO = 44,
 	LINUX_SYSCALL_RECVFROM = 45,
+	LINUX_SYSCALL_SHUTDOWN = 48,
+	LINUX_SYSCALL_BIND = 49,
+	LINUX_SYSCALL_LISTEN = 50,
 	LINUX_SYSCALL_FCNTL = 72,
 	LINUX_SYSCALL_FLOCK = 73,
 	LINUX_SYSCALL_GETCWD = 79,
@@ -172,6 +176,7 @@ enum {
 	LINUX_AT_SYMLINK_NOFOLLOW = 0x100,
 	LINUX_AT_EMPTY_PATH = 0x1000,
 	LINUX_SYSCALL_PPOLL = 271,
+	LINUX_SYSCALL_ACCEPT4 = 288,
 	LINUX_SYSCALL_SET_ROBUST_LIST = 273,
 	LINUX_SYSCALL_UTIMENSAT = 280,
 	LINUX_SYSCALL_DUP3 = 292,
@@ -1026,11 +1031,14 @@ static int linux_syscall_forwards_scalar(u64 number)
 	case LINUX_SYSCALL_GETSID:
 	case LINUX_SYSCALL_SETPGID:
 	case LINUX_SYSCALL_SOCKET:
+	case LINUX_SYSCALL_ACCEPT:
 	case LINUX_SYSCALL_KILL:
 	case LINUX_SYSCALL_REBOOT:
 	case LINUX_SYSCALL_FTRUNCATE:
 	case LINUX_SYSCALL_FCHMOD:
 	case LINUX_SYSCALL_FCHOWN:
+	case LINUX_SYSCALL_LISTEN:
+	case LINUX_SYSCALL_SHUTDOWN:
 		return 1;
 	default:
 		return 0;
@@ -3926,6 +3934,26 @@ poll_again:
 		return linux_forward_input_buffer(linux, reply_port, &request,
 						  arg1, len, TASK_RIGHT_RECV);
 	}
+	case LINUX_SYSCALL_BIND: {
+		const u64 len = arg2 > LINUX_MAX_SOCKADDR ?
+				LINUX_MAX_SOCKADDR : arg2;
+
+		if (arg1 == 0 || len == 0) {
+			return arg1 == 0 ? (u64)-LINUX_EFAULT :
+			       linux_einval_u64(__func__, __LINE__);
+		}
+		request.type = LINUX_SYSCALL_BIND;
+		request.words[0] = arg0;
+		request.words[1] = len;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		return linux_forward_input_buffer(linux, reply_port, &request,
+						  arg1, len, TASK_RIGHT_RECV);
+	}
+	case LINUX_SYSCALL_ACCEPT4:
+		return linux_forward_words(linux, reply_port,
+					   LINUX_SYSCALL_ACCEPT4,
+					   arg0, arg3, 0);
 	case LINUX_SYSCALL_SENDTO: {
 		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
 				LINUX_MAX_SYSCALL_BUFFER : arg2;
