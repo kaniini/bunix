@@ -178,6 +178,10 @@ Implementation notes:
   already maps into VFS metadata.  It inserts a new directory entry, increments
   the source inode link count, and rolls back the directory entry if the link
   count update fails.  Directory hardlinks remain rejected.
+- `SYMLINK_BUFFER` now supports ext2 fast symlinks whose target fits in the
+  inode block field.  The server writes the inline target bytes into the inode,
+  inserts a symlink directory entry, and supports unlinking these zero-block
+  symlinks.  Long symlinks that need data blocks remain a follow-up slice.
 
 Tasks:
 
