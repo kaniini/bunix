@@ -1,0 +1,53 @@
+Implement deterministic external-network smoke tests for VirtIO-net.
+
+Problem:
+
+- Exploration 018 brings up a userspace VirtIO-net driver and NET0
+  packet-interface boundary, but it intentionally stops short of proving real
+  external traffic.
+- External smoke tests need more than a NIC driver: NET0 must produce and
+  consume Ethernet frames, resolve neighbors, and the test harness must own a
+  deterministic host-side packet peer.
+
+Dependencies:
+
+- Requires the VirtIO-net driver and packet-interface route state from
+  `018-virtio-net.txt`.
+- Requires IRQ-driven or otherwise reliable completion delivery from
+  `025-virtio-irq-driven-completions.txt`, or a conscious decision that bounded
+  polling is still acceptable for the first smoke target.
+
+Constraints:
+
+- Keep the NIC driver in userspace and keep Linux socket semantics out of the
+  driver.
+- NET0 owns Ethernet, ARP, IPv6 neighbor discovery, route lookup, packet
+  filtering, and protocol-stack state.
+- The host-side topology must be deterministic and harness-owned.  Do not rely
+  on ambient host network configuration.
+
+Tasks:
+
+- [ ] Choose the first deterministic host backend: isolated QEMU socket,
+      tap+namespace, or constrained QEMU user networking with explicit packet
+      probes.
+- [ ] Add Ethernet encapsulation and decapsulation in NET0 for packet-interface
+      routes.
+- [ ] Implement ARP for IPv4 on packet interfaces, including request, reply,
+      cache state, timeout, and `/proc/net/arp` observability.
+- [ ] Implement enough IPv6 neighbor discovery for link-local and localhost-safe
+      smoke tests, or explicitly defer IPv6 external traffic with a documented
+      test gap.
+- [ ] Add packet-interface egress queueing from UDP/TCP route lookup into
+      `BUNIX_NET_PACKET_TX_ENQUEUE`.
+- [ ] Add packet-interface ingress dispatch from `BUNIX_NET_PACKET_RX_SUBMIT`
+      into Ethernet, ARP/ND, IPv4, IPv6, UDP, and TCP paths.
+- [ ] Add host-side traffic generator support for deterministic RX and TX
+      frames.
+- [ ] Add smoke tests for ARP, IPv4 UDP egress/ingress, IPv4 TCP connect or
+      accept, route fallback behavior, `/proc/net/dev` counters, and clean
+      guest poweroff.
+- [ ] Add equivalent IPv6 smoke tests once neighbor discovery is present.
+- [ ] Document remaining production-networking work after the first smoke tests:
+      DHCP/SLAAC, DNS, firewall/filtering, packet capture, offload negotiation,
+      multiqueue policy, and performance counters.

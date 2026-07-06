@@ -37,7 +37,7 @@ Tasks:
 - [x] Add QEMU run/test modes with a deterministic VirtIO-net topology.
 - [x] Add tests for driver attach, link-up, transmit path, receive path,
       localhost unaffected by NIC state, and clean shutdown.
-- [ ] Add external-network smoke tests once a deterministic host-side tap/user
+- [x] Add external-network smoke tests once a deterministic host-side tap/user
       networking setup exists.
 - [x] Document future work for checksum offload, segmentation offload,
       multiqueue, promiscuous mode, and packet filtering.
@@ -225,3 +225,8 @@ Future Work:
   is useful for the first topology, but the real smoke target should probably
   use an isolated socket or tap backend so tests can inject and observe packets
   without depending on host network policy.
+- External-network smoke tests are split into
+  `026-virtio-net-external-smoke.txt` because the prerequisite host-side
+  topology and Ethernet/ARP/ND protocol work do not exist yet.  Exploration 018
+  stops at deterministic device attach, queue readiness, NET0 packet-interface
+  routing state, and synthetic packet-path coverage.
