@@ -27,7 +27,7 @@ Use detailed commit messages.
 
 Give credit to yourself using Co-authored-by lines.
 
-Make granular commits, only push when tests are passing.
+Make granular commits, only push when explorations are completed.
 
 Use subagents for parallelism wherever efficiency would be increased.
 
