@@ -143,6 +143,10 @@ Implementation notes:
   file growth/allocation for now, and uses a mutable server-owned copy of the
   generated boot test image so the ext2 boot test can prove VFS write
   forwarding and hardlink-visible data updates without claiming persistence.
+- Shrink-only `TRUNCATE` is now implemented for open regular-file handles.  It
+  updates inode size metadata and is covered through the same hardlink-visible
+  ext2 boot selftest, but it intentionally does not allocate blocks for growth
+  or free blocks on shrink yet.
 
 Tasks:
 

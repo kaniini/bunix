@@ -226,6 +226,14 @@ static u64 load_le32(const unsigned char *buffer, u64 offset)
 	       ((u64)buffer[offset + 3] << 24);
 }
 
+static void store_le32(unsigned char *buffer, u64 offset, u64 value)
+{
+	buffer[offset] = (unsigned char)(value & 0xff);
+	buffer[offset + 1] = (unsigned char)((value >> 8) & 0xff);
+	buffer[offset + 2] = (unsigned char)((value >> 16) & 0xff);
+	buffer[offset + 3] = (unsigned char)((value >> 24) & 0xff);
+}
+
 static int text_eq_len(const char *text, const char *name, u64 name_len)
 {
 	u64 i;
@@ -657,16 +665,15 @@ static long load_group_descriptors(struct ext2_mount *mount)
 	return 0;
 }
 
-static long read_inode(const struct ext2_mount *mount, u64 ino,
-		       struct ext2_inode *inode)
+static long inode_disk_offset(const struct ext2_mount *mount, u64 ino,
+			      u64 *out)
 {
-	unsigned char raw[EXT2_INODE_MIN_SIZE];
 	u64 group_index;
 	u64 inode_index;
 	const struct ext2_group *group;
 	u64 offset;
 
-	if (mount == 0 || inode == 0 ||
+	if (mount == 0 || out == 0 ||
 	    ino == 0 ||
 	    ino > mount->super.inodes_count ||
 	    (ino - 1) / mount->super.inodes_per_group >=
@@ -682,7 +689,19 @@ static long read_inode(const struct ext2_mount *mount, u64 ino,
 	    offset > (u64)-1 - inode_index * mount->super.inode_size) {
 		return -1;
 	}
-	offset += inode_index * mount->super.inode_size;
+	*out = offset + inode_index * mount->super.inode_size;
+	return 0;
+}
+
+static long read_inode(const struct ext2_mount *mount, u64 ino,
+		       struct ext2_inode *inode)
+{
+	unsigned char raw[EXT2_INODE_MIN_SIZE];
+	u64 offset;
+
+	if (inode_disk_offset(mount, ino, &offset) != 0) {
+		return -1;
+	}
 	if (offset > mount->image_size ||
 	    sizeof(raw) > mount->image_size - offset ||
 	    mount_read_bytes(mount, offset, raw, sizeof(raw)) != 0) {
@@ -706,6 +725,31 @@ static long read_inode(const struct ext2_mount *mount, u64 ino,
 	if ((inode->mode & EXT2_S_IFMT) == EXT2_S_IFREG) {
 		inode->size |= load_le32(raw, 108) << 32;
 	}
+	return 0;
+}
+
+static long write_inode_size(struct ext2_mount *mount, u64 ino,
+			     struct ext2_inode *inode, u64 size)
+{
+	unsigned char raw[4];
+	u64 offset;
+
+	if (mount == 0 || inode == 0 ||
+	    inode_disk_offset(mount, ino, &offset) != 0) {
+		return -1;
+	}
+	store_le32(raw, 0, size & 0xffffffff);
+	if (mount_write_bytes(mount, offset + 4, raw, sizeof(raw)) != 0) {
+		return -1;
+	}
+	if ((inode->mode & EXT2_S_IFMT) == EXT2_S_IFREG) {
+		store_le32(raw, 0, size >> 32);
+		if (mount_write_bytes(mount, offset + 108, raw,
+				      sizeof(raw)) != 0) {
+			return -1;
+		}
+	}
+	inode->size = size;
 	return 0;
 }
 
@@ -1518,6 +1562,29 @@ static void reply_write_file(struct ext2_open *open,
 	reply->words[1] = done;
 }
 
+static void reply_truncate(struct ext2_open *open,
+			   const struct bunix_msg *message,
+			   struct bunix_msg *reply)
+{
+	const u64 size = message->words[1];
+
+	if (open == 0 ||
+	    ext2_inode_vfs_type(&open->inode) != BUNIX_VFS_TYPE_REGULAR) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (size > open->inode.size) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	if (write_inode_size(&root_mount, open->ino, &open->inode, size) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = size;
+}
+
 static long load_initial_mount(struct ext2_mount *mount)
 {
 	unsigned char raw[EXT2_SUPER_SIZE];
@@ -1642,6 +1709,10 @@ int main(void)
 			case BUNIX_VFS_WRITE_FILE_BUFFER:
 				reply_write_file(open_from_handle(message.words[0]),
 						 &message, &reply);
+				break;
+			case BUNIX_VFS_TRUNCATE:
+				reply_truncate(open_from_handle(message.words[0]),
+					       &message, &reply);
 				break;
 			case BUNIX_VFS_CLOSE:
 				if (open_from_handle(message.words[0]) == 0) {

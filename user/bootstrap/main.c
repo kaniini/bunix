@@ -408,6 +408,36 @@ static long vfs_write_text(u64 vfs, const char *path, u64 offset,
 	return 0;
 }
 
+static long vfs_truncate_path(u64 vfs, const char *path, u64 size)
+{
+	u64 handle = 0;
+	u64 type = 0;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_TRUNCATE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, size, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (vfs_open_path(vfs, path, &handle, &type) != 0 ||
+	    type != BUNIX_VFS_TYPE_REGULAR) {
+		vfs_close_handle(vfs, handle);
+		return -1;
+	}
+	request.words[0] = handle;
+	if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		vfs_close_handle(vfs, handle);
+		return -1;
+	}
+	vfs_close_handle(vfs, handle);
+	return 0;
+}
+
 static long vfs_stat_path(u64 vfs, const char *path, u64 *size, u64 *ino,
 			  u64 *nlink, u64 *type)
 {
@@ -620,6 +650,12 @@ static long ext2_readonly_selftest(u64 vfs)
 	    vfs_read_text(vfs, "/mnt/ext2/hard/hello-hard", text,
 			  sizeof(text)) != 0 ||
 	    !str_eq(text, "EXT2 hello\n")) {
+		return -1;
+	}
+	if (vfs_truncate_path(vfs, "/mnt/ext2/hello.txt", 4) != 0 ||
+	    vfs_read_text(vfs, "/mnt/ext2/hard/hello-hard", text,
+			  sizeof(text)) != 0 ||
+	    !str_eq(text, "EXT2")) {
 		return -1;
 	}
 	return 0;
