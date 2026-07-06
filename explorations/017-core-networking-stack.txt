@@ -38,7 +38,7 @@ Tasks:
       read/write, close, half-close, reset/error behavior, and backlog limits.
 - [ ] Add Linux syscall compatibility for the socket operations needed by
       BusyBox, musl, OpenRC tools, and simple client/server test programs.
-- [ ] Implement address and route tables for `127.0.0.0/8`, `::1/128`, and
+- [x] Implement address and route tables for `127.0.0.0/8`, `::1/128`, and
       future interface routes.
 - [ ] Add observability through procfs or Bunix-native tools for interfaces,
       sockets, TCP/UDP state, and packet counters.
@@ -171,3 +171,7 @@ Progress:
 - Extended Linux-personality socket boot coverage to AF_INET6.  `nettest` now
   verifies IPv4 and IPv6 localhost UDP plus IPv4 and IPv6 localhost TCP through
   the Linux syscall bridge, with boot markers for each protocol-family pair.
+- Added the initial NET0 route table with loopback routes for `127.0.0.0/8`
+  and `::1/128`.  UDP and TCP bind/connect/sendto validation now resolves
+  local destinations through route lookup instead of hard-coded address checks,
+  leaving a concrete insertion point for future interface and NIC routes.

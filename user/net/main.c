@@ -49,6 +49,14 @@ struct net_addr {
 	u64 port;
 };
 
+struct net_route {
+	u64 family;
+	u64 prefix_hi;
+	u64 prefix_lo;
+	u64 prefix_len;
+	u64 iface;
+};
+
 struct udp_datagram {
 	struct udp_datagram *next;
 	struct net_addr source;
@@ -114,6 +122,22 @@ static struct net_interface loopback = {
 	.tx_packets = 0,
 	.rx_drops = 0,
 	.tx_drops = 0,
+};
+static const struct net_route routes[] = {
+	{
+		.family = BUNIX_NET_ADDR_FAMILY_IPV4,
+		.prefix_hi = 0,
+		.prefix_lo = 0x7f000000,
+		.prefix_len = 8,
+		.iface = NET_IFACE_LO,
+	},
+	{
+		.family = BUNIX_NET_ADDR_FAMILY_IPV6,
+		.prefix_hi = 0,
+		.prefix_lo = 1,
+		.prefix_len = 128,
+		.iface = NET_IFACE_LO,
+	},
 };
 static struct net_packet *loopback_rx_head;
 static struct net_packet *loopback_rx_tail;
@@ -257,13 +281,42 @@ static void reply_loopback_recv(struct bunix_msg *reply,
 	bunix_free(packet);
 }
 
-static int net_addr_is_loopback(u64 family, u64 hi, u64 lo)
+static int net_route_matches(const struct net_route *route, u64 family,
+			     u64 hi, u64 lo)
 {
-	if (family == BUNIX_NET_ADDR_FAMILY_IPV4) {
-		return hi == 0 && ((lo >> 24) & 0xff) == 127;
+	if (route == 0 || route->family != family) {
+		return 0;
 	}
-	if (family == BUNIX_NET_ADDR_FAMILY_IPV6) {
-		return hi == 0 && lo == 1;
+	if (family == BUNIX_NET_ADDR_FAMILY_IPV4) {
+		const u64 mask = route->prefix_len == 0 ? 0 :
+				 ~((1ull << (32 - route->prefix_len)) - 1);
+
+		return hi == 0 && route->prefix_hi == 0 &&
+		       ((lo & mask) == (route->prefix_lo & mask));
+	}
+	if (family == BUNIX_NET_ADDR_FAMILY_IPV6 &&
+	    route->prefix_len == 128) {
+		return hi == route->prefix_hi && lo == route->prefix_lo;
+	}
+	return 0;
+}
+
+static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo)
+{
+	for (u64 i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
+		if (net_route_matches(&routes[i], family, hi, lo)) {
+			return &routes[i];
+		}
+	}
+	return 0;
+}
+
+static int net_addr_is_local(u64 family, u64 hi, u64 lo)
+{
+	const struct net_route *route = net_route_lookup(family, hi, lo);
+
+	if (route != 0 && route->iface == NET_IFACE_LO) {
+		return 1;
 	}
 	return 0;
 }
@@ -390,7 +443,7 @@ static long udp_bind_socket(struct udp_socket *socket, u64 hi, u64 lo,
 {
 	if (socket == 0 ||
 	    (!net_addr_is_wildcard(socket->family, hi, lo) &&
-	     !net_addr_is_loopback(socket->family, hi, lo))) {
+	     !net_addr_is_local(socket->family, hi, lo))) {
 		return -1;
 	}
 	if (port == 0) {
@@ -429,8 +482,8 @@ static void reply_udp_connect(struct bunix_msg *reply,
 	struct udp_socket *socket = udp_find(message->words[0]);
 
 	if (socket == 0 ||
-	    !net_addr_is_loopback(socket->family, message->words[1],
-				  message->words[2]) ||
+	    !net_addr_is_local(socket->family, message->words[1],
+			       message->words[2]) ||
 	    message->words[3] == 0 || message->words[3] > 65535) {
 		reply->words[0] = (u64)-1;
 		return;
@@ -500,7 +553,7 @@ static int udp_deliver_to(struct udp_socket *source, const struct net_addr *dest
 
 	if (source == 0 || dest_addr == 0 ||
 	    source->family != dest_addr->family ||
-	    !net_addr_is_loopback(source->family, dest_addr->hi, dest_addr->lo) ||
+	    !net_addr_is_local(source->family, dest_addr->hi, dest_addr->lo) ||
 	    dest_addr->port == 0 || dest_addr->port > 65535) {
 		return -1;
 	}
@@ -771,7 +824,7 @@ static long tcp_bind_socket(struct tcp_socket *socket, u64 hi, u64 lo,
 	if (socket == 0 ||
 	    socket->state == NET_TCP_STATE_CLOSED ||
 	    (!net_addr_is_wildcard(socket->family, hi, lo) &&
-	     !net_addr_is_loopback(socket->family, hi, lo))) {
+	     !net_addr_is_local(socket->family, hi, lo))) {
 		return -1;
 	}
 	if (port == 0) {
@@ -872,8 +925,8 @@ static void reply_tcp_connect(struct bunix_msg *reply,
 	struct tcp_socket *server;
 
 	if (client == 0 || client->state != NET_TCP_STATE_OPEN ||
-	    !net_addr_is_loopback(client->family, message->words[1],
-				  message->words[2]) ||
+	    !net_addr_is_local(client->family, message->words[1],
+			       message->words[2]) ||
 	    message->words[3] == 0 || message->words[3] > 65535) {
 		reply->words[0] = (u64)-1;
 		return;
