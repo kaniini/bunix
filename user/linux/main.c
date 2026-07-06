@@ -269,9 +269,10 @@ static void linux_process_reset(struct linux_process *process);
 static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
-static void tty_cancel_reader(struct linux_process *process);
-static int tty_read_queue_push(char c);
-static void tty_wake_reader(void);
+static int linux_tty_read_queue_push(struct linux_tty *tty, char c);
+static void linux_tty_wake_reader(struct linux_tty *tty);
+static void linux_tty_cancel_reader(struct linux_tty *tty,
+				    struct linux_process *process);
 static u64 string_len(const char *text);
 static long linux_check_name_max(const char *path);
 static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
@@ -2052,7 +2053,7 @@ static void linux_process_exit_status(struct linux_process *process, u64 status,
 		return;
 	}
 
-	tty_cancel_reader(process);
+	linux_tty_cancel_reader(&console_tty, process);
 	linux_close_process_fds(process);
 	linux_reparent_children(process);
 	process->exited = 1;
@@ -2498,39 +2499,39 @@ static long linux_setsid(struct linux_process *process)
 	return (long)process->sid;
 }
 
-static void tty_init(void)
+static void linux_tty_init(struct linux_tty *tty)
 {
-	if (console_tty.termios[LINUX_TERM_CC + LINUX_VMIN] != 0) {
+	if (tty == 0 || tty->termios[LINUX_TERM_CC + LINUX_VMIN] != 0) {
 		return;
 	}
 
-	zero_bytes(console_tty.termios, sizeof(console_tty.termios));
-	store_u32(console_tty.termios, LINUX_TERM_IFLAG, LINUX_ICRNL);
-	store_u32(console_tty.termios, LINUX_TERM_OFLAG,
+	zero_bytes(tty->termios, sizeof(tty->termios));
+	store_u32(tty->termios, LINUX_TERM_IFLAG, LINUX_ICRNL);
+	store_u32(tty->termios, LINUX_TERM_OFLAG,
 		  LINUX_OPOST | LINUX_ONLCR);
-	store_u32(console_tty.termios, LINUX_TERM_CFLAG,
+	store_u32(tty->termios, LINUX_TERM_CFLAG,
 		  LINUX_CS8 | LINUX_CREAD);
-	store_u32(console_tty.termios, LINUX_TERM_LFLAG,
+	store_u32(tty->termios, LINUX_TERM_LFLAG,
 		  LINUX_ISIG | LINUX_ICANON | LINUX_ECHO |
 		  LINUX_ECHOE | LINUX_ECHOK);
-	console_tty.termios[LINUX_TERM_LINE] = 0;
-	console_tty.termios[LINUX_TERM_CC + LINUX_VINTR] = 3;
-	console_tty.termios[LINUX_TERM_CC + LINUX_VERASE] = 0x7f;
-	console_tty.termios[LINUX_TERM_CC + LINUX_VEOF] = 4;
-	console_tty.termios[LINUX_TERM_CC + LINUX_VMIN] = 1;
-	console_tty.termios[LINUX_TERM_CC + LINUX_VTIME] = 0;
+	tty->termios[LINUX_TERM_LINE] = 0;
+	tty->termios[LINUX_TERM_CC + LINUX_VINTR] = 3;
+	tty->termios[LINUX_TERM_CC + LINUX_VERASE] = 0x7f;
+	tty->termios[LINUX_TERM_CC + LINUX_VEOF] = 4;
+	tty->termios[LINUX_TERM_CC + LINUX_VMIN] = 1;
+	tty->termios[LINUX_TERM_CC + LINUX_VTIME] = 0;
 }
 
-static unsigned int tty_lflag(void)
+static unsigned int linux_tty_lflag(struct linux_tty *tty)
 {
-	tty_init();
-	return load_u32(console_tty.termios, LINUX_TERM_LFLAG);
+	linux_tty_init(tty);
+	return tty != 0 ? load_u32(tty->termios, LINUX_TERM_LFLAG) : 0;
 }
 
-static unsigned int tty_iflag(void)
+static unsigned int linux_tty_iflag(struct linux_tty *tty)
 {
-	tty_init();
-	return load_u32(console_tty.termios, LINUX_TERM_IFLAG);
+	linux_tty_init(tty);
+	return tty != 0 ? load_u32(tty->termios, LINUX_TERM_IFLAG) : 0;
 }
 
 static void tty_echo(const char *text, u64 len)
@@ -2538,70 +2539,77 @@ static void tty_echo(const char *text, u64 len)
 	(void)bunix_console_write(text, len);
 }
 
-static void tty_queue_cursor_position_report(void)
+static void linux_tty_queue_cursor_position_report(struct linux_tty *tty)
 {
 	static const char report[] = "\033[1;1R";
 
 	for (u64 i = 0; i < sizeof(report) - 1; i++) {
-		(void)tty_read_queue_push(report[i]);
+		(void)linux_tty_read_queue_push(tty, report[i]);
 	}
-	tty_wake_reader();
+	linux_tty_wake_reader(tty);
 }
 
-static void tty_output_event(char c)
+static void linux_tty_output_event(struct linux_tty *tty, char c)
 {
 	static const char query[] = "\033[6n";
 
-	if (c == query[console_tty.cpr_state]) {
-		console_tty.cpr_state++;
-		if (console_tty.cpr_state == sizeof(query) - 1) {
-			console_tty.cpr_state = 0;
-			tty_queue_cursor_position_report();
+	if (tty == 0) {
+		return;
+	}
+
+	if (c == query[tty->cpr_state]) {
+		tty->cpr_state++;
+		if (tty->cpr_state == sizeof(query) - 1) {
+			tty->cpr_state = 0;
+			linux_tty_queue_cursor_position_report(tty);
 		}
 		return;
 	}
-	console_tty.cpr_state = c == query[0] ? 1 : 0;
+	tty->cpr_state = c == query[0] ? 1 : 0;
 }
 
-static int tty_read_queue_push(char c)
+static int linux_tty_read_queue_push(struct linux_tty *tty, char c)
 {
-	if (console_tty.read_queue_len >= sizeof(console_tty.read_queue)) {
+	if (tty == 0 || tty->read_queue_len >= sizeof(tty->read_queue)) {
 		return 0;
 	}
-	console_tty.read_queue[(console_tty.read_queue_start +
-				console_tty.read_queue_len) %
-			       sizeof(console_tty.read_queue)] = c;
-	console_tty.read_queue_len++;
+	tty->read_queue[(tty->read_queue_start + tty->read_queue_len) %
+			sizeof(tty->read_queue)] = c;
+	tty->read_queue_len++;
 	return 1;
 }
 
-static long tty_read_available(u64 len, u64 buffer)
+static int linux_tty_can_read(struct linux_tty *tty)
+{
+	return tty != 0 && tty->read_queue_len != 0;
+}
+
+static long linux_tty_read_available(struct linux_tty *tty, u64 len,
+				     u64 buffer)
 {
 	u64 nread;
 
-	if (buffer == 0) {
+	if (tty == 0 || buffer == 0) {
 		return -LINUX_EBADF;
 	}
-	if (console_tty.read_queue_len == 0) {
+	if (tty->read_queue_len == 0) {
 		return -LINUX_EAGAIN;
 	}
-	nread = len < console_tty.read_queue_len ? len : console_tty.read_queue_len;
+	nread = len < tty->read_queue_len ? len : tty->read_queue_len;
 	for (u64 i = 0; i < nread; i++) {
-		write_buffer[i] =
-			console_tty.read_queue[(console_tty.read_queue_start + i) %
-					       sizeof(console_tty.read_queue)];
+		write_buffer[i] = tty->read_queue[(tty->read_queue_start + i) %
+						  sizeof(tty->read_queue)];
 	}
-	console_tty.read_queue_start =
-		(console_tty.read_queue_start + nread) %
-		sizeof(console_tty.read_queue);
-	console_tty.read_queue_len -= nread;
+	tty->read_queue_start =
+		(tty->read_queue_start + nread) % sizeof(tty->read_queue);
+	tty->read_queue_len -= nread;
 	if (bunix_buffer_write(buffer, 0, write_buffer, nread) != 0) {
 		return -LINUX_EFAULT;
 	}
 	return (long)nread;
 }
 
-static void tty_wake_reader(void)
+static void linux_tty_wake_reader(struct linux_tty *tty)
 {
 	struct bunix_msg reply = {
 		.protocol = BUNIX_PROTO_LINUX,
@@ -2616,17 +2624,17 @@ static void tty_wake_reader(void)
 	u64 buffer;
 	long nread;
 
-	if (console_tty.reader_reply == 0 || console_tty.read_queue_len == 0) {
+	if (tty == 0 || tty->reader_reply == 0 || tty->read_queue_len == 0) {
 		return;
 	}
 
-	reply_handle = console_tty.reader_reply;
-	buffer = console_tty.reader_buffer;
-	console_tty.reader_pid = 0;
-	console_tty.reader_reply = 0;
-	console_tty.reader_buffer = 0;
-	nread = tty_read_available(console_tty.reader_len, buffer);
-	console_tty.reader_len = 0;
+	reply_handle = tty->reader_reply;
+	buffer = tty->reader_buffer;
+	tty->reader_pid = 0;
+	tty->reader_reply = 0;
+	tty->reader_buffer = 0;
+	nread = linux_tty_read_available(tty, tty->reader_len, buffer);
+	tty->reader_len = 0;
 	reply.words[0] = (u64)nread;
 	(void)bunix_ipc_send(reply_handle, &reply);
 	if (buffer != 0) {
@@ -2634,46 +2642,51 @@ static void tty_wake_reader(void)
 	}
 }
 
-static void tty_cancel_reader(struct linux_process *process)
+static void linux_tty_cancel_reader(struct linux_tty *tty,
+				    struct linux_process *process)
 {
-	if (process == 0 || console_tty.reader_pid != process->pid) {
+	if (tty == 0 || process == 0 || tty->reader_pid != process->pid) {
 		return;
 	}
-	if (console_tty.reader_buffer != 0) {
-		bunix_handle_close(console_tty.reader_buffer);
+	if (tty->reader_buffer != 0) {
+		bunix_handle_close(tty->reader_buffer);
 	}
-	console_tty.reader_pid = 0;
-	console_tty.reader_reply = 0;
-	console_tty.reader_buffer = 0;
-	console_tty.reader_len = 0;
+	tty->reader_pid = 0;
+	tty->reader_reply = 0;
+	tty->reader_buffer = 0;
+	tty->reader_len = 0;
 }
 
-static long tty_termios_get(u64 buffer)
+static long linux_tty_termios_get(struct linux_tty *tty, u64 buffer)
 {
-	tty_init();
-	return bunix_buffer_write(buffer, 0, console_tty.termios,
-				  sizeof(console_tty.termios)) == 0 ?
+	linux_tty_init(tty);
+	if (tty == 0) {
+		return -LINUX_EBADF;
+	}
+	return bunix_buffer_write(buffer, 0, tty->termios,
+				  sizeof(tty->termios)) == 0 ?
 	       0 : -LINUX_EFAULT;
 }
 
-static long tty_termios_set(u64 buffer)
+static long linux_tty_termios_set(struct linux_tty *tty, u64 buffer)
 {
-	if (buffer == 0 ||
-	    bunix_buffer_read(buffer, 0, console_tty.termios,
-			      sizeof(console_tty.termios)) != 0) {
+	if (tty == 0 || buffer == 0 ||
+	    bunix_buffer_read(buffer, 0, tty->termios,
+			      sizeof(tty->termios)) != 0) {
 		return -LINUX_EFAULT;
 	}
-	console_tty.line_len = 0;
-	if (console_tty.termios[LINUX_TERM_CC + LINUX_VMIN] == 0) {
-		console_tty.termios[LINUX_TERM_CC + LINUX_VMIN] = 1;
+	tty->line_len = 0;
+	if (tty->termios[LINUX_TERM_CC + LINUX_VMIN] == 0) {
+		tty->termios[LINUX_TERM_CC + LINUX_VMIN] = 1;
 	}
 	return 0;
 }
 
-static void tty_interrupt_foreground(void)
+static void linux_tty_interrupt_foreground(struct linux_tty *tty)
 {
 	struct linux_process *reader =
-		console_tty.reader_pid != 0 ? linux_process_find_pid(console_tty.reader_pid) : 0;
+		tty != 0 && tty->reader_pid != 0 ?
+		linux_process_find_pid(tty->reader_pid) : 0;
 
 	if (reader != 0) {
 		(void)linux_signal_process(reader, LINUX_SIGINT);
@@ -2707,11 +2720,16 @@ static void tty_interrupt_foreground(void)
 	}
 }
 
-static void tty_input_event(char c)
+static void linux_tty_input_event(struct linux_tty *tty, char c)
 {
-	const unsigned int lflag = tty_lflag();
-	const unsigned int iflag = tty_iflag();
-	const char intr = console_tty.termios[LINUX_TERM_CC + LINUX_VINTR];
+	const unsigned int lflag = linux_tty_lflag(tty);
+	const unsigned int iflag = linux_tty_iflag(tty);
+	const char intr = tty != 0 ? tty->termios[LINUX_TERM_CC + LINUX_VINTR] :
+			    0;
+
+	if (tty == 0) {
+		return;
+	}
 
 	if (c == '\r' && (iflag & LINUX_ICRNL) != 0) {
 		c = '\n';
@@ -2721,8 +2739,8 @@ static void tty_input_event(char c)
 		if ((lflag & LINUX_ECHO) != 0) {
 			tty_echo("^C\n", 3);
 		}
-		console_tty.line_len = 0;
-		tty_interrupt_foreground();
+		tty->line_len = 0;
+		linux_tty_interrupt_foreground(tty);
 		return;
 	}
 
@@ -2730,68 +2748,97 @@ static void tty_input_event(char c)
 		if ((lflag & LINUX_ECHO) != 0) {
 			tty_echo(&c, 1);
 		}
-		(void)tty_read_queue_push(c);
-		tty_wake_reader();
+		(void)linux_tty_read_queue_push(tty, c);
+		linux_tty_wake_reader(tty);
 		return;
 	}
 
-	if ((c == console_tty.termios[LINUX_TERM_CC + LINUX_VERASE] || c == '\b') &&
-	    console_tty.line_len != 0) {
-		console_tty.line_len--;
+	if ((c == tty->termios[LINUX_TERM_CC + LINUX_VERASE] || c == '\b') &&
+	    tty->line_len != 0) {
+		tty->line_len--;
 		if ((lflag & LINUX_ECHO) != 0) {
 			tty_echo("\b \b", 3);
 		}
 		return;
 	}
 	if ((unsigned char)c < 0x20 && c != '\n' &&
-	    c != console_tty.termios[LINUX_TERM_CC + LINUX_VEOF]) {
+	    c != tty->termios[LINUX_TERM_CC + LINUX_VEOF]) {
 		return;
 	}
-	if (c != console_tty.termios[LINUX_TERM_CC + LINUX_VEOF]) {
-		if (console_tty.line_len < sizeof(console_tty.line)) {
-			console_tty.line[console_tty.line_len++] = c;
+	if (c != tty->termios[LINUX_TERM_CC + LINUX_VEOF]) {
+		if (tty->line_len < sizeof(tty->line)) {
+			tty->line[tty->line_len++] = c;
 		}
 		if ((lflag & LINUX_ECHO) != 0) {
 			tty_echo(&c, 1);
 		}
 	}
-	if (c != '\n' && c != console_tty.termios[LINUX_TERM_CC + LINUX_VEOF] &&
-	    console_tty.line_len < sizeof(console_tty.line)) {
+	if (c != '\n' && c != tty->termios[LINUX_TERM_CC + LINUX_VEOF] &&
+	    tty->line_len < sizeof(tty->line)) {
 		return;
 	}
 
-	for (u64 i = 0; i < console_tty.line_len; i++) {
-		if (!tty_read_queue_push(console_tty.line[i])) {
+	for (u64 i = 0; i < tty->line_len; i++) {
+		if (!linux_tty_read_queue_push(tty, tty->line[i])) {
 			break;
 		}
 	}
-	console_tty.line_len = 0;
-	tty_wake_reader();
+	tty->line_len = 0;
+	linux_tty_wake_reader(tty);
 }
 
-static long tty_read(struct linux_process *process, u64 len, u64 buffer,
-		     u64 reply_handle, int *blocked)
+static long linux_tty_read(struct linux_tty *tty, struct linux_process *process,
+			   u64 len, u64 buffer, u64 reply_handle,
+			   int *blocked)
 {
 	long nread;
 
+	if (tty == 0 || process == 0) {
+		return -LINUX_EBADF;
+	}
 	if (len == 0) {
 		return 0;
 	}
-	nread = tty_read_available(len, buffer);
+	nread = linux_tty_read_available(tty, len, buffer);
 	if (nread != -(long)LINUX_EAGAIN) {
 		return nread;
 	}
-	if (reply_handle == 0 || console_tty.reader_reply != 0) {
+	if (reply_handle == 0 || tty->reader_reply != 0) {
 		return -LINUX_EAGAIN;
 	}
-	console_tty.reader_pid = process->pid;
-	console_tty.reader_reply = reply_handle;
-	console_tty.reader_buffer = buffer;
-	console_tty.reader_len = len;
+	tty->reader_pid = process->pid;
+	tty->reader_reply = reply_handle;
+	tty->reader_buffer = buffer;
+	tty->reader_len = len;
 	if (blocked != 0) {
 		*blocked = 1;
 	}
 	return 0;
+}
+
+static long linux_tty_write_buffer(struct linux_tty *tty, u64 len, u64 buffer)
+{
+	if (tty == 0) {
+		return -LINUX_EBADF;
+	}
+	if (buffer == 0) {
+		return -LINUX_EFAULT;
+	}
+
+	for (u64 done = 0; done < len;) {
+		const u64 chunk = len - done > sizeof(write_buffer) ?
+				  sizeof(write_buffer) : len - done;
+
+		if (bunix_buffer_read(buffer, done, write_buffer, chunk) != 0) {
+			return done != 0 ? (long)done : -(long)LINUX_EFAULT;
+		}
+		for (u64 i = 0; i < chunk; i++) {
+			linux_tty_output_event(tty, write_buffer[i]);
+		}
+		bunix_console_write((const char *)write_buffer, chunk);
+		done += chunk;
+	}
+	return (long)len;
 }
 
 static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
@@ -2807,11 +2854,11 @@ static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
 
 	switch (request) {
 	case LINUX_TCGETS:
-		return tty_termios_get(buffer);
+		return linux_tty_termios_get(&console_tty, buffer);
 	case LINUX_TCSETS:
 	case LINUX_TCSETSW:
 	case LINUX_TCSETSF:
-		return tty_termios_set(buffer);
+		return linux_tty_termios_set(&console_tty, buffer);
 	case LINUX_TIOCGPGRP:
 		if (buffer == 0) {
 			return -LINUX_EFAULT;
@@ -4865,7 +4912,8 @@ static long linux_pollfd(struct linux_process *process, long fd, u64 events)
 	}
 	switch (process->fds[fd].kind) {
 	case LINUX_FD_CONSOLE:
-		if ((events & LINUX_POLLIN) != 0 && console_tty.read_queue_len != 0) {
+		if ((events & LINUX_POLLIN) != 0 &&
+		    linux_tty_can_read(&console_tty)) {
 			revents |= LINUX_POLLIN;
 		}
 		if ((events & LINUX_POLLOUT) != 0) {
@@ -4940,7 +4988,8 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	}
 
 	if (process->fds[fd].kind == LINUX_FD_CONSOLE) {
-		return tty_read(process, len, buffer, reply_handle, blocked);
+		return linux_tty_read(&console_tty, process, len, buffer,
+				      reply_handle, blocked);
 	}
 	if (process->fds[fd].kind == LINUX_FD_PIPE_READ) {
 		struct linux_pipe *pipe = linux_pipe_find(process->fds[fd].handle);
@@ -5130,20 +5179,7 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 	}
 
 	(void)process;
-	for (u64 done = 0; done < len;) {
-		const u64 chunk = len - done > sizeof(write_buffer) ?
-				  sizeof(write_buffer) : len - done;
-
-		if (bunix_buffer_read(buffer, done, write_buffer, chunk) != 0) {
-			return done != 0 ? (long)done : -(long)LINUX_EFAULT;
-		}
-		for (u64 i = 0; i < chunk; i++) {
-			tty_output_event(write_buffer[i]);
-		}
-		bunix_console_write((const char *)write_buffer, chunk);
-		done += chunk;
-	}
-	return (long)len;
+	return linux_tty_write_buffer(&console_tty, len, buffer);
 }
 
 static long linux_sendfile(struct linux_process *process, u64 out_fd,
@@ -5575,7 +5611,9 @@ int main(void)
 
 		reply.type = message.type;
 		if (message.type == BUNIX_LINUX_TTY_INPUT) {
-			tty_input_event((char)(unsigned char)message.words[0]);
+			linux_tty_input_event(&console_tty,
+					      (char)(unsigned char)
+					      message.words[0]);
 			continue;
 		}
 		if (message.type == BUNIX_LINUX_REGISTER_PROCESS) {

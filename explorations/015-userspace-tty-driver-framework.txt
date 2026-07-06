@@ -37,9 +37,9 @@ Tasks:
       hardware RPC protocol instead of direct kernel console ownership.
 - [x] Keep early console output available until the serial driver is online,
       then hand off normal console writes/input to the userspace path.
-- [ ] Refactor TTY line discipline into a clear server-side layer that can be
+- [x] Refactor TTY line discipline into a clear server-side layer that can be
       shared by serial console, future virtual terminals, and PTYs.
-- [ ] Route Linux `/dev/console`, `/dev/tty`, stdin/stdout/stderr, `poll(2)`,
+- [x] Route Linux `/dev/console`, `/dev/tty`, stdin/stdout/stderr, `poll(2)`,
       and terminal ioctls through the TTY layer rather than serial-specific
       shortcuts.
 - [ ] Add tests for boot console handoff, login/password echo behavior,
@@ -112,6 +112,18 @@ Progress:
   username line, avoiding password typeahead leakage.
 - Fixed the shell harness to relogin before user shards if a prior selected
   shard intentionally ended at the login prompt.
+- Refactored the Linux TTY line discipline so the core helpers operate on an
+  explicit `struct linux_tty *` state object.  Linux console fd read, write,
+  poll readiness, input delivery, CPR handling, termios get/set, and reader
+  cancellation now route through the TTY layer rather than directly reaching
+  into global serial-console state.
+
+Needs:
+
+- The full aggregate `make test-shell` still needs a harness/drain cleanup.
+  Relevant focused shards pass independently, but the aggregate can start later
+  shards while prior command output is still draining after the userspace serial
+  input path made input delivery faster.
 
 Portability notes:
 
