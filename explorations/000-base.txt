@@ -9,9 +9,14 @@ An exploration is considered complete when all tasks are completed.
 
 When an exploration is considered complete:
  - Move the exploration from ./explorations/ to ./explorations/completed/.
- - Move to the next unfinished exploration and update this file.
+ - Look to see if there are any other explorations in ./explorations/,
+   (other than 000-base.txt) and if so,
+   move to the next unfinished exploration and update this file.
 
-The goal is considered achieved when no further explorations are completed.
+If an exploration is considered complete, but has follow-up items or
+unfulfilled needs, plan a new exploration and move to it.
+
+The goal is considered achieved when no further explorations are available.
 
 Update task list with needs.
 
