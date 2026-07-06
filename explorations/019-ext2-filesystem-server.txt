@@ -138,6 +138,11 @@ Implementation notes:
   with sector read-modify-write for unaligned ranges and exposes flush when
   negotiated.  Ext2 metadata mutation should build on that writable block
   capability rather than writing to Multiboot2 module memory.
+- The first ext2 mutating operation is in-place regular-file writes through
+  `WRITE_FILE_BUFFER`.  It updates existing mapped data blocks only, refuses
+  file growth/allocation for now, and uses a mutable server-owned copy of the
+  generated boot test image so the ext2 boot test can prove VFS write
+  forwarding and hardlink-visible data updates without claiming persistence.
 
 Tasks:
 

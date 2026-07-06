@@ -98,6 +98,7 @@ struct ext2_mount {
 	u64 block;
 	u64 image_size;
 	u64 use_boot_data;
+	unsigned char *image_data;
 	struct ext2_super super;
 	struct ext2_group *groups;
 };
@@ -385,6 +386,60 @@ static long block_read_bytes(u64 block, u64 offset, unsigned char *out, u64 len)
 	return 0;
 }
 
+static long block_write_once(u64 block, u64 offset, const unsigned char *data,
+			     u64 len)
+{
+	const long buffer = bunix_buffer_create(len == 0 ? 1 : len);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_BLOCK,
+		.type = BUNIX_BLOCK_WRITE_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = 0,
+		.words = { offset, len, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (data == 0 || buffer < 0) {
+		return -1;
+	}
+	request.cap = (u64)buffer;
+	if ((len != 0 &&
+	     bunix_buffer_write((u64)buffer, 0, data, len) != 0) ||
+	    bunix_ipc_call(block, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[1] != len) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
+static long block_write_bytes(u64 block, u64 offset, const unsigned char *data,
+			      u64 len)
+{
+	u64 done = 0;
+
+	if (data == 0) {
+		return -1;
+	}
+	while (done < len) {
+		u64 chunk = len - done;
+
+		if (chunk > EXT2_BLOCK_READ_MAX) {
+			chunk = EXT2_BLOCK_READ_MAX;
+		}
+		if (block_write_once(block, offset + done, data + done,
+				     chunk) != 0) {
+			return -1;
+		}
+		done += chunk;
+	}
+	return 0;
+}
+
 static long mount_read_bytes(const struct ext2_mount *mount, u64 offset,
 			     unsigned char *out, u64 len)
 {
@@ -394,9 +449,35 @@ static long mount_read_bytes(const struct ext2_mount *mount, u64 offset,
 		return -1;
 	}
 	if (mount->use_boot_data != 0) {
+		if (mount->image_data != 0) {
+			for (u64 i = 0; i < len; i++) {
+				out[i] = mount->image_data[offset + i];
+			}
+			return 0;
+		}
 		return bunix_boot_module_read(offset, out, len);
 	}
 	return block_read_bytes(mount->block, offset, out, len);
+}
+
+static long mount_write_bytes(struct ext2_mount *mount, u64 offset,
+			      const unsigned char *data, u64 len)
+{
+	if (mount == 0 || data == 0 ||
+	    offset > mount->image_size ||
+	    len > mount->image_size - offset) {
+		return -1;
+	}
+	if (mount->image_data != 0) {
+		for (u64 i = 0; i < len; i++) {
+			mount->image_data[offset + i] = data[i];
+		}
+		return 0;
+	}
+	if (mount->use_boot_data != 0) {
+		return -1;
+	}
+	return block_write_bytes(mount->block, offset, data, len);
 }
 
 static long parse_super(const unsigned char *raw, u64 image_size,
@@ -846,6 +927,28 @@ static long read_mapped_block(const struct ext2_mount *mount,
 		return -1;
 	}
 	return 0;
+}
+
+static long write_mapped_block(struct ext2_mount *mount,
+			       const struct ext2_inode *inode, u64 logical,
+			       const unsigned char *data)
+{
+	u64 physical;
+	u64 offset;
+
+	if (mount == 0 || inode == 0 || data == 0 ||
+	    map_logical_block(mount, inode, logical, &physical) != 0 ||
+	    physical == 0 ||
+	    !block_range_valid(mount, physical, 1)) {
+		return -1;
+	}
+	offset = block_to_offset(mount, physical);
+	if (offset == (u64)-1 ||
+	    offset > mount->image_size ||
+	    mount->super.block_size > mount->image_size - offset) {
+		return -1;
+	}
+	return mount_write_bytes(mount, offset, data, mount->super.block_size);
 }
 
 static long read_dirent_at(const struct ext2_mount *mount,
@@ -1359,6 +1462,62 @@ static void reply_read_file(struct ext2_open *open,
 	reply->words[1] = done;
 }
 
+static void reply_write_file(struct ext2_open *open,
+			     const struct bunix_msg *message,
+			     struct bunix_msg *reply)
+{
+	unsigned char *block;
+	u64 offset;
+	u64 len;
+	u64 done = 0;
+
+	if (open == 0 ||
+	    ext2_inode_vfs_type(&open->inode) != BUNIX_VFS_TYPE_REGULAR ||
+	    message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	offset = message->words[1];
+	len = message->words[2];
+	if (offset > open->inode.size ||
+	    len > open->inode.size - offset) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		reply->words[1] = 0;
+		return;
+	}
+	block = (unsigned char *)bunix_calloc(1, root_mount.super.block_size);
+	if (block == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	while (done < len) {
+		const u64 file_offset = offset + done;
+		const u64 logical = file_offset / root_mount.super.block_size;
+		const u64 block_offset = file_offset % root_mount.super.block_size;
+		u64 chunk = root_mount.super.block_size - block_offset;
+
+		if (chunk > len - done) {
+			chunk = len - done;
+		}
+		if (read_mapped_block(&root_mount, &open->inode,
+				      logical, block) != 0 ||
+		    bunix_buffer_read(message->cap, done,
+				      block + block_offset, chunk) != 0 ||
+		    write_mapped_block(&root_mount, &open->inode,
+				       logical, block) != 0) {
+			bunix_free(block);
+			reply->words[0] = (u64)-1;
+			reply->words[1] = done;
+			return;
+		}
+		done += chunk;
+	}
+	bunix_free(block);
+	reply->words[0] = 0;
+	reply->words[1] = done;
+}
+
 static long load_initial_mount(struct ext2_mount *mount)
 {
 	unsigned char raw[EXT2_SUPER_SIZE];
@@ -1399,9 +1558,14 @@ int main(void)
 	ext2_size = bunix_boot_module_size();
 	root_mount.image_size = ext2_size;
 	root_mount.use_boot_data = ext2_size != 0;
-	if (root_mount.use_boot_data != 0 &&
-	    load_initial_mount(&root_mount) == 0) {
-		root_mount_ready = 1;
+	if (root_mount.use_boot_data != 0) {
+		root_mount.image_data = (unsigned char *)bunix_alloc(ext2_size);
+		if (root_mount.image_data != 0 &&
+		    bunix_boot_module_read(0, root_mount.image_data,
+					   ext2_size) == 0 &&
+		    load_initial_mount(&root_mount) == 0) {
+			root_mount_ready = 1;
+		}
 	} else if (root_mount.use_boot_data == 0 &&
 		   (block = resolve_service(BUNIX_SERVICE_BLOCK,
 					    BUNIX_RIGHT_SEND)) != 0) {
@@ -1474,6 +1638,10 @@ int main(void)
 			case BUNIX_VFS_READ_FILE_BUFFER:
 				reply_read_file(open_from_handle(message.words[0]),
 						&message, &reply);
+				break;
+			case BUNIX_VFS_WRITE_FILE_BUFFER:
+				reply_write_file(open_from_handle(message.words[0]),
+						 &message, &reply);
 				break;
 			case BUNIX_VFS_CLOSE:
 				if (open_from_handle(message.words[0]) == 0) {

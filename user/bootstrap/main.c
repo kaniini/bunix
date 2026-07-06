@@ -365,6 +365,49 @@ static long vfs_read_text(u64 vfs, const char *path, char *out, u64 out_size)
 	return 0;
 }
 
+static long vfs_open_path(u64 vfs, const char *path, u64 *handle, u64 *type);
+static void vfs_close_handle(u64 vfs, u64 handle);
+
+static long vfs_write_text(u64 vfs, const char *path, u64 offset,
+			   const char *text, u64 len)
+{
+	u64 handle = 0;
+	u64 type = 0;
+	const long buffer = len != 0 ? bunix_buffer_create(len) : -1;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_WRITE_FILE_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { 0, offset, len, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, text, len) != 0 ||
+	    vfs_open_path(vfs, path, &handle, &type) != 0 ||
+	    type != BUNIX_VFS_TYPE_REGULAR) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		vfs_close_handle(vfs, handle);
+		return -1;
+	}
+	request.words[0] = handle;
+	if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[1] != len) {
+		bunix_handle_close((u64)buffer);
+		vfs_close_handle(vfs, handle);
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	vfs_close_handle(vfs, handle);
+	return 0;
+}
+
 static long vfs_stat_path(u64 vfs, const char *path, u64 *size, u64 *ino,
 			  u64 *nlink, u64 *type)
 {
@@ -568,6 +611,15 @@ static long ext2_readonly_selftest(u64 vfs)
 			  0, 0, &sparse_type) != 0 ||
 	    sparse_type != BUNIX_VFS_TYPE_REGULAR ||
 	    sparse_size < 8192) {
+		return -1;
+	}
+	if (vfs_write_text(vfs, "/mnt/ext2/hello.txt", 0, "EXT2", 4) != 0 ||
+	    vfs_read_text(vfs, "/mnt/ext2/hello.txt", text,
+			  sizeof(text)) != 0 ||
+	    !str_eq(text, "EXT2 hello\n") ||
+	    vfs_read_text(vfs, "/mnt/ext2/hard/hello-hard", text,
+			  sizeof(text)) != 0 ||
+	    !str_eq(text, "EXT2 hello\n")) {
 		return -1;
 	}
 	return 0;
