@@ -431,7 +431,9 @@ separate runtime ESP copy and writes logs under `build/test-runs/<run-id>/`.
 Shard SMP policy comes from `tools/shell-shards.tsv`; use `BUNIX_TEST_JOBS` to
 raise or lower host concurrency. For debugging, `BUNIX_VM_SMP_OVERRIDE`,
 `BUNIX_VM_MEMORY_OVERRIDE`, and `BUNIX_QEMU_TIMEOUT_OVERRIDE` force worker vCPU
-count, RAM, and QEMU timeout respectively.
+count, RAM, and QEMU timeout respectively. `BUNIX_TEST_STOP_ON_FAIL=1` stops
+scheduling new shard batches after a failure, and `BUNIX_TEST_RETRIES=N`
+preserves per-attempt logs under each shard directory.
 
 `make test-rootfs-tool` is a host-side regression for the rootfs image builder;
 it creates more than 128 entries to verify the builder's dynamic entry table.

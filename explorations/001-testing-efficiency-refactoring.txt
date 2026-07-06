@@ -330,7 +330,7 @@ Plan:
    - The run directory gets `summary.tsv` with shard name, status, seconds,
      artifact path, and reason after all active workers finish.
 
-17. Add stop policy and retry policy
+17. Add stop policy and retry policy [DONE]
    Support:
 
    - Run all shards and summarize all failures.
@@ -338,6 +338,16 @@ Plan:
      finish or be killed cleanly.
    - Optional `BUNIX_TEST_RETRIES=1` for suspected timing flakes, with both
      attempts preserved.
+
+   Result:
+
+   - The default runner behavior still schedules all selected shards and
+     summarizes every result.
+   - `BUNIX_TEST_STOP_ON_FAIL=1` stops scheduling new batches after a failed
+     batch while preserving completed active-worker artifacts and marking later
+     shards as skipped.
+   - `BUNIX_TEST_RETRIES=N` retries failed workers up to `N` times and
+     preserves every attempt under `attempt-<n>/`.
 
 18. Schedule using shard cost metadata
    Use each shard's declared cost and timeout to launch long shards first and

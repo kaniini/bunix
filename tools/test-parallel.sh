@@ -25,6 +25,8 @@ default_jobs() {
 }
 
 jobs=${BUNIX_TEST_JOBS:-$(default_jobs)}
+retries=${BUNIX_TEST_RETRIES:-0}
+stop_on_fail=${BUNIX_TEST_STOP_ON_FAIL:-0}
 
 case "$jobs" in
 ''|*[!0-9]*)
@@ -37,13 +39,29 @@ case "$jobs" in
 	;;
 esac
 
+case "$retries" in
+''|*[!0-9]*)
+	echo "BUNIX_TEST_RETRIES must be a non-negative integer" >&2
+	exit 2
+	;;
+esac
+
+case "$stop_on_fail" in
+1|yes|true|on) stop_on_fail=1 ;;
+0|no|false|off|'') stop_on_fail=0 ;;
+*)
+	echo "BUNIX_TEST_STOP_ON_FAIL must be 0/1, yes/no, true/false, or on/off" >&2
+	exit 2
+	;;
+esac
+
 if [ ! -r "$manifest" ]; then
 	echo "shell shard manifest is not readable: $manifest" >&2
 	exit 2
 fi
 
 mkdir -p "$run_dir"
-echo "test-parallel status=plan run_id=$run_id jobs=$jobs set=$test_set artifact=$run_dir"
+echo "test-parallel status=plan run_id=$run_id jobs=$jobs retries=$retries stop_on_fail=$stop_on_fail set=$test_set artifact=$run_dir"
 
 selected_shards() {
 	awk -F '\t' -v set="$test_set" '
@@ -144,34 +162,50 @@ run_worker() {
 	parts=$(worker_parts "$name")
 	worker_dir=$run_dir/$name
 	start=$(date +%s)
+	max_attempts=$((retries + 1))
+	attempt=1
+	status=fail
+	rc=1
+	reason=
 
 	mkdir -p "$worker_dir"
 	echo "test-parallel name=$name status=start smp=$worker_smp memory=$worker_memory timeout=$worker_timeout cost=$cost clean_boot=$clean_boot artifact=$worker_dir"
 
-	if BUNIX_TEST_RUN_ID="$run_id-$name" \
-	    BUNIX_TEST_RUNTIME_DIR="$worker_dir/runtime" \
-	    FAILURE_DIR="$worker_dir/failures" \
-	    BUNIX_SHELL_PART="$parts" \
-	    SMP="$worker_smp" \
-	    QEMU_MEMORY="$worker_memory" \
-	    QEMU_TIMEOUT="$worker_timeout" \
-	    "$make_cmd" test-shell-part >"$worker_dir/stdout.log" 2>"$worker_dir/stderr.log"; then
-		status=ok
-		rc=0
-	else
-		status=fail
-		rc=1
-	fi
+	while [ "$attempt" -le "$max_attempts" ]; do
+		attempt_dir=$worker_dir/attempt-$attempt
+		mkdir -p "$attempt_dir"
+		echo "test-parallel name=$name status=attempt attempt=$attempt max_attempts=$max_attempts artifact=$attempt_dir"
+
+		if BUNIX_TEST_RUN_ID="$run_id-$name-a$attempt" \
+		    BUNIX_TEST_RUNTIME_DIR="$attempt_dir/runtime" \
+		    FAILURE_DIR="$attempt_dir/failures" \
+		    BUNIX_SHELL_PART="$parts" \
+		    SMP="$worker_smp" \
+		    QEMU_MEMORY="$worker_memory" \
+		    QEMU_TIMEOUT="$worker_timeout" \
+		    "$make_cmd" test-shell-part >"$attempt_dir/stdout.log" 2>"$attempt_dir/stderr.log"; then
+			status=ok
+			rc=0
+			reason=
+			break
+		fi
+
+		reason=$(sed -n '1p' "$attempt_dir/stderr.log" | tr '\t' ' ')
+		attempt=$((attempt + 1))
+	done
 
 	now=$(date +%s)
 	seconds=$((now - start))
 	echo "$status" > "$worker_dir/status"
 	echo "$seconds" > "$worker_dir/seconds"
-	if [ "$status" != ok ]; then
-		sed -n '1p' "$worker_dir/stderr.log" | tr '\t' ' ' > "$worker_dir/reason"
-	else
-		: > "$worker_dir/reason"
+	final_attempt=$attempt
+	if [ "$final_attempt" -gt "$max_attempts" ]; then
+		final_attempt=$max_attempts
 	fi
+	echo "$final_attempt" > "$worker_dir/attempts"
+	cp "$worker_dir/attempt-$final_attempt/stdout.log" "$worker_dir/stdout.log" 2>/dev/null || : > "$worker_dir/stdout.log"
+	cp "$worker_dir/attempt-$final_attempt/stderr.log" "$worker_dir/stderr.log" 2>/dev/null || : > "$worker_dir/stderr.log"
+	printf '%s\n' "$reason" > "$worker_dir/reason"
 	echo "test-parallel name=$name status=$status seconds=$seconds artifact=$worker_dir"
 	return "$rc"
 }
@@ -191,9 +225,21 @@ count=0
 overall=0
 launched=0
 skipped=0
+stopped=0
 
 while IFS='	' read -r name smp memory timeout_seconds cost clean_boot; do
 	if [ -z "$name" ]; then
+		continue
+	fi
+	if [ "$stopped" -eq 1 ]; then
+		echo "test-parallel name=$name status=skip reason=stopped-after-failure"
+		mkdir -p "$run_dir/$name"
+		echo skip > "$run_dir/$name/status"
+		echo 0 > "$run_dir/$name/seconds"
+		echo stopped-after-failure > "$run_dir/$name/reason"
+		echo 0 > "$run_dir/$name/attempts"
+		echo "$name" >> "$run_dir/shards.txt"
+		skipped=$((skipped + 1))
 		continue
 	fi
 	if [ "$name" = root-mount-soak ]; then
@@ -202,6 +248,7 @@ while IFS='	' read -r name smp memory timeout_seconds cost clean_boot; do
 		echo skip > "$run_dir/$name/status"
 		echo 0 > "$run_dir/$name/seconds"
 		echo unimplemented > "$run_dir/$name/reason"
+		echo 0 > "$run_dir/$name/attempts"
 		echo "$name" >> "$run_dir/shards.txt"
 		skipped=$((skipped + 1))
 		continue
@@ -217,6 +264,9 @@ while IFS='	' read -r name smp memory timeout_seconds cost clean_boot; do
 		# shellcheck disable=SC2086
 		if ! wait_batch $pids; then
 			overall=1
+			if [ "$stop_on_fail" -eq 1 ]; then
+				stopped=1
+			fi
 		fi
 		pids=
 		count=0
@@ -229,6 +279,9 @@ if [ "$count" -gt 0 ]; then
 	# shellcheck disable=SC2086
 	if ! wait_batch $pids; then
 		overall=1
+		if [ "$stop_on_fail" -eq 1 ]; then
+			stopped=1
+		fi
 	fi
 fi
 
