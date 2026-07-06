@@ -145,7 +145,10 @@ enum {
 	BUNIX_VFS_STAT_RDEV = 48,
 	BUNIX_VFS_STAT_BLKSIZE = 56,
 	BUNIX_VFS_STAT_BLOCKS = 64,
-	BUNIX_VFS_STAT_BYTES = 72,
+	BUNIX_VFS_STAT_ATIME = 72,
+	BUNIX_VFS_STAT_MTIME = 80,
+	BUNIX_VFS_STAT_CTIME = 88,
+	BUNIX_VFS_STAT_BYTES = 96,
 	BUNIX_VFS_DEV_ROOTFS = 1,
 	BUNIX_VFS_DEV_TMPFS = 2,
 	BUNIX_VFS_DEV_PROCFS = 3,
@@ -564,10 +567,11 @@ static inline u64 bunix_load_u64_le(const unsigned char *buffer, u64 offset)
 	return value;
 }
 
-static inline void bunix_vfs_stat_pack(unsigned char *buffer, u64 size,
-				       u64 mode_type, u64 owner, u64 dev,
-				       u64 ino, u64 nlink, u64 rdev,
-				       u64 blksize, u64 blocks)
+static inline void bunix_vfs_stat_pack_times(unsigned char *buffer, u64 size,
+					     u64 mode_type, u64 owner, u64 dev,
+					     u64 ino, u64 nlink, u64 rdev,
+					     u64 blksize, u64 blocks,
+					     u64 atime, u64 mtime, u64 ctime)
 {
 	for (u64 i = 0; i < BUNIX_VFS_STAT_BYTES; i++) {
 		buffer[i] = 0;
@@ -583,6 +587,18 @@ static inline void bunix_vfs_stat_pack(unsigned char *buffer, u64 size,
 	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_BLKSIZE,
 			   blksize == 0 ? 4096 : blksize);
 	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_BLOCKS, blocks);
+	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_ATIME, atime);
+	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_MTIME, mtime);
+	bunix_store_u64_le(buffer, BUNIX_VFS_STAT_CTIME, ctime);
+}
+
+static inline void bunix_vfs_stat_pack(unsigned char *buffer, u64 size,
+				       u64 mode_type, u64 owner, u64 dev,
+				       u64 ino, u64 nlink, u64 rdev,
+				       u64 blksize, u64 blocks)
+{
+	bunix_vfs_stat_pack_times(buffer, size, mode_type, owner, dev, ino,
+				  nlink, rdev, blksize, blocks, 0, 0, 0);
 }
 
 static inline long bunix_syscall0(long number)
@@ -830,6 +846,24 @@ static inline long bunix_vfs_stat_write(u64 buffer, u64 offset, u64 size,
 	}
 	bunix_vfs_stat_pack(stat, size, mode_type, owner, dev, ino, nlink,
 			    rdev, blksize, blocks);
+	return bunix_buffer_write(buffer, offset, stat, sizeof(stat));
+}
+
+static inline long bunix_vfs_stat_write_times(u64 buffer, u64 offset, u64 size,
+					      u64 mode_type, u64 owner,
+					      u64 dev, u64 ino, u64 nlink,
+					      u64 rdev, u64 blksize,
+					      u64 blocks, u64 atime,
+					      u64 mtime, u64 ctime)
+{
+	unsigned char stat[BUNIX_VFS_STAT_BYTES];
+
+	if (buffer == 0) {
+		return -1;
+	}
+	bunix_vfs_stat_pack_times(stat, size, mode_type, owner, dev, ino,
+				  nlink, rdev, blksize, blocks, atime, mtime,
+				  ctime);
 	return bunix_buffer_write(buffer, offset, stat, sizeof(stat));
 }
 

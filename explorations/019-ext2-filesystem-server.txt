@@ -119,6 +119,12 @@ Implementation notes:
   sparse block handling.  `READ_FILE_BUFFER` streams regular-file contents into
   the caller buffer and directory iteration uses the same mapper, so large
   directories can traverse indirect blocks too.
+- The VFS stat record now carries atime, mtime, and ctime seconds in addition
+  to the original identity fields.  Ext2 `STAT_PATH_META_BUFFER` and
+  `STAT_META` replies map inode number, mode/type, uid/gid, size, link count,
+  512-byte block count, device identity, rdev, block size, and timestamps into
+  Linux stat/statx through the Linux server.  Filesystems that use the older
+  stat helper continue to emit zero timestamps.
 
 Tasks:
 
@@ -133,7 +139,7 @@ Tasks:
 - [x] Implement directory lookup and readdir for ext2 directory entries.
 - [x] Implement file read for direct, singly indirect, doubly indirect, and
       triply indirect blocks as needed by realistic images.
-- [ ] Implement metadata mapping into Linux stat/statx fields: inode number,
+- [x] Implement metadata mapping into Linux stat/statx fields: inode number,
       mode, uid/gid, size, link count, timestamps, blocks, and device identity.
 - [ ] Add readonly mount tests using a generated ext2 image with files,
       directories, symlinks, hardlinks, long names, and sparse-ish files.

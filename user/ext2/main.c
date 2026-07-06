@@ -74,6 +74,9 @@ struct ext2_inode {
 	u64 mode;
 	u64 uid;
 	u64 size;
+	u64 atime;
+	u64 ctime;
+	u64 mtime;
 	u64 gid;
 	u64 links_count;
 	u64 blocks;
@@ -574,11 +577,17 @@ static long read_inode(const struct ext2_mount *mount, u64 ino,
 	inode->mode = load_le16(raw, 0);
 	inode->uid = load_le16(raw, 2);
 	inode->size = load_le32(raw, 4);
+	inode->atime = load_le32(raw, 8);
+	inode->ctime = load_le32(raw, 12);
+	inode->mtime = load_le32(raw, 16);
 	inode->gid = load_le16(raw, 24);
 	inode->links_count = load_le16(raw, 26);
 	inode->blocks = load_le32(raw, 28);
 	for (u64 i = 0; i < 15; i++) {
 		inode->block[i] = load_le32(raw, 40 + i * 4);
+	}
+	if ((inode->mode & EXT2_S_IFMT) == EXT2_S_IFREG) {
+		inode->size |= load_le32(raw, 108) << 32;
 	}
 	return 0;
 }
@@ -1010,6 +1019,66 @@ static int read_resolved_path(const struct bunix_msg *message, char *path)
 	return 0;
 }
 
+static u64 stat_buffer_offset(const struct bunix_msg *message)
+{
+	if (message->type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
+		return message->words[0] + message->words[1];
+	}
+	return message->words[1];
+}
+
+static u64 ext2_inode_rdev(const struct ext2_inode *inode)
+{
+	if (inode == 0 ||
+	    ext2_inode_vfs_type(inode) != BUNIX_VFS_TYPE_CHARACTER) {
+		return 0;
+	}
+	return inode->block[0];
+}
+
+static void reply_stat_inode(const struct bunix_msg *message,
+			     struct bunix_msg *reply, u64 ino,
+			     const struct ext2_inode *inode)
+{
+	const u64 type = ext2_inode_vfs_type(inode);
+	const u64 mode = inode->mode & 07777;
+	const u64 mode_type = mode | (type << 32);
+	const u64 owner = inode->uid | (inode->gid << 32);
+	const u64 rdev = ext2_inode_rdev(inode);
+
+	if (type == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = inode->size;
+	reply->words[2] = mode_type;
+	reply->words[3] = owner;
+	if (message->cap != 0 &&
+	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0) {
+		(void)bunix_vfs_stat_write_times(
+			message->cap, stat_buffer_offset(message), inode->size,
+			mode_type, owner, BUNIX_VFS_DEV_EXT2, ino,
+			inode->links_count, rdev, root_mount.super.block_size,
+			inode->blocks, inode->atime, inode->mtime,
+			inode->ctime);
+	}
+}
+
+static void reply_path_stat(const struct bunix_msg *message,
+			    struct bunix_msg *reply, const char *path)
+{
+	struct ext2_inode inode;
+	u64 ino;
+
+	if (!root_mount_ready ||
+	    lookup_path(&root_mount, path, &ino, &inode) != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	reply_stat_inode(message, reply, ino, &inode);
+}
+
 static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 		       const char *path)
 {
@@ -1221,6 +1290,26 @@ int main(void)
 					reply_open(&message, &reply, path);
 				}
 				break;
+			case BUNIX_VFS_STAT_PATH_META_BUFFER:
+				if (read_resolved_path(&message, path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply_path_stat(&message, &reply, path);
+				}
+				break;
+			case BUNIX_VFS_STAT_META: {
+				struct ext2_open *open =
+					open_from_handle(message.words[0]);
+
+				if (open == 0) {
+					reply.words[0] = (u64)-1;
+				} else {
+					reply_stat_inode(&message, &reply,
+							 open->ino,
+							 &open->inode);
+				}
+				break;
+			}
 			case BUNIX_VFS_READDIR_BUFFER:
 				reply_readdir(open_from_handle(message.words[0]),
 					      &message, &reply);

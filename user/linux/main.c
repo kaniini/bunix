@@ -3952,7 +3952,8 @@ static long linux_chownat(struct linux_process *process, u64 dirfd,
 static long linux_stat_write_identity(u64 stat_buffer, u64 mode, u64 uid,
 				      u64 gid, u64 size, u64 dev, u64 ino,
 				      u64 nlink, u64 rdev, u64 blksize,
-				      u64 blocks)
+				      u64 blocks, u64 atime, u64 mtime,
+				      u64 ctime)
 {
 	char stat[LINUX_STAT_SIZE];
 
@@ -3971,6 +3972,9 @@ static long linux_stat_write_identity(u64 stat_buffer, u64 mode, u64 uid,
 	store_u64(stat, 48, size);
 	store_u64(stat, 56, blksize != 0 ? blksize : 4096);
 	store_u64(stat, 64, blocks);
+	store_u64(stat, 72, atime);
+	store_u64(stat, 88, mtime);
+	store_u64(stat, 104, ctime);
 
 	return bunix_buffer_write(stat_buffer, 0, stat, sizeof(stat)) == 0 ?
 		0 : -LINUX_EFAULT;
@@ -3981,7 +3985,7 @@ static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
 {
 	return linux_stat_write_identity(stat_buffer, mode, uid, gid, size,
 					 1, 1, 1, 0, 4096,
-					 (size + 511) / 512);
+					 (size + 511) / 512, 0, 0, 0);
 }
 
 struct linux_vfs_stat {
@@ -3994,6 +3998,9 @@ struct linux_vfs_stat {
 	u64 rdev;
 	u64 blksize;
 	u64 blocks;
+	u64 atime;
+	u64 mtime;
+	u64 ctime;
 };
 
 static void linux_vfs_stat_from_reply(struct linux_vfs_stat *stat,
@@ -4009,6 +4016,9 @@ static void linux_vfs_stat_from_reply(struct linux_vfs_stat *stat,
 	stat->rdev = 0;
 	stat->blksize = 4096;
 	stat->blocks = (stat->size + 511) / 512;
+	stat->atime = 0;
+	stat->mtime = 0;
+	stat->ctime = 0;
 }
 
 static void linux_vfs_stat_from_buffer(struct linux_vfs_stat *stat,
@@ -4023,6 +4033,9 @@ static void linux_vfs_stat_from_buffer(struct linux_vfs_stat *stat,
 	stat->rdev = bunix_load_u64_le(buffer, BUNIX_VFS_STAT_RDEV);
 	stat->blksize = bunix_load_u64_le(buffer, BUNIX_VFS_STAT_BLKSIZE);
 	stat->blocks = bunix_load_u64_le(buffer, BUNIX_VFS_STAT_BLOCKS);
+	stat->atime = bunix_load_u64_le(buffer, BUNIX_VFS_STAT_ATIME);
+	stat->mtime = bunix_load_u64_le(buffer, BUNIX_VFS_STAT_MTIME);
+	stat->ctime = bunix_load_u64_le(buffer, BUNIX_VFS_STAT_CTIME);
 	if (stat->dev == 0) {
 		stat->dev = 1;
 	}
@@ -4049,12 +4062,15 @@ static long linux_stat_from_vfs_stat(u64 stat_buffer,
 					 stat->owner >> 32,
 					 stat->size, stat->dev, stat->ino,
 					 stat->nlink, stat->rdev,
-					 stat->blksize, stat->blocks);
+					 stat->blksize, stat->blocks,
+					 stat->atime, stat->mtime,
+					 stat->ctime);
 }
 
 static long linux_statx_write(u64 statx_buffer, u64 mode, u64 uid, u64 gid,
 			      u64 size, u64 dev, u64 ino, u64 nlink,
-			      u64 rdev, u64 blksize, u64 blocks)
+			      u64 rdev, u64 blksize, u64 blocks,
+			      u64 atime, u64 mtime, u64 ctime)
 {
 	char statx[LINUX_STATX_SIZE];
 
@@ -4072,10 +4088,13 @@ static long linux_statx_write(u64 statx_buffer, u64 mode, u64 uid, u64 gid,
 	store_u64(statx, 32, ino != 0 ? ino : 1);
 	store_u64(statx, 40, size);
 	store_u64(statx, 48, blocks);
-	store_u32(statx, 64, (unsigned int)(rdev >> 32));
-	store_u32(statx, 68, (unsigned int)rdev);
-	store_u32(statx, 72, (unsigned int)(dev >> 32));
-	store_u32(statx, 76, (unsigned int)dev);
+	store_u64(statx, 64, atime);
+	store_u64(statx, 96, ctime);
+	store_u64(statx, 112, mtime);
+	store_u32(statx, 128, (unsigned int)(rdev >> 32));
+	store_u32(statx, 132, (unsigned int)rdev);
+	store_u32(statx, 136, (unsigned int)(dev >> 32));
+	store_u32(statx, 140, (unsigned int)dev);
 
 	return bunix_buffer_write(statx_buffer, 0, statx, sizeof(statx)) == 0 ?
 		0 : -LINUX_EFAULT;
@@ -4091,7 +4110,8 @@ static long linux_statx_from_vfs_stat(u64 statx_buffer,
 				 stat->owner & 0xffffffff,
 				 stat->owner >> 32, stat->size, stat->dev,
 				 stat->ino, stat->nlink, stat->rdev,
-				 stat->blksize, stat->blocks);
+				 stat->blksize, stat->blocks, stat->atime,
+				 stat->mtime, stat->ctime);
 }
 
 static int linux_stat_buffer_is_zero(const unsigned char *buffer)
