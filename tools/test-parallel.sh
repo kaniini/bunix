@@ -6,7 +6,7 @@ ovmf=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE.fd}
 test_set=${BUNIX_TEST_SET:-${BUNIX_SHELL_PART:-all}}
 run_root=${BUNIX_TEST_RUN_ROOT:-build/test-runs}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
-make_cmd=${MAKE:-make}
+worker_cmd=${BUNIX_TEST_WORKER:-}
 run_dir=$run_root/$run_id
 
 default_jobs() {
@@ -252,6 +252,9 @@ echo "test-parallel status=plan run_id=$run_id jobs=$jobs retries=$retries stop_
 
 worker_parts() {
 	case "$1" in
+	tmpfs-extended)
+		echo "tmpfs-basic-linux-tests,tmpfs-extended"
+		;;
 	root-tmpfs-chown)
 		echo "tmpfs-basic-linux-tests,root-tmpfs-chown"
 		;;
@@ -299,14 +302,34 @@ run_worker() {
 		mkdir -p "$attempt_dir"
 		echo "test-parallel name=$name status=attempt attempt=$attempt max_attempts=$max_attempts artifact=$attempt_dir"
 
-		if BUNIX_TEST_RUN_ID="$run_id-$name-a$attempt" \
-		    BUNIX_TEST_RUNTIME_DIR="$attempt_dir/runtime" \
-		    FAILURE_DIR="$attempt_dir/failures" \
-		    BUNIX_SHELL_PART="$parts" \
-		    SMP="$worker_smp" \
-		    QEMU_MEMORY="$worker_memory" \
-		    QEMU_TIMEOUT="$worker_timeout" \
-		    "$make_cmd" test-shell-part >"$attempt_dir/stdout.log" 2>"$attempt_dir/stderr.log"; then
+		if [ -n "$worker_cmd" ]; then
+			if BUNIX_TEST_RUN_ID="$run_id-$name-a$attempt" \
+			    BUNIX_TEST_RUNTIME_DIR="$attempt_dir/runtime" \
+			    FAILURE_DIR="$attempt_dir/failures" \
+			    BUNIX_SHELL_PART="$parts" \
+			    SMP="$worker_smp" \
+			    QEMU_MEMORY="$worker_memory" \
+			    QEMU_TIMEOUT="$worker_timeout" \
+			    "$worker_cmd" test-shell-part >"$attempt_dir/stdout.log" 2>"$attempt_dir/stderr.log"; then
+				attempt_ok=1
+			else
+				attempt_ok=0
+			fi
+		else
+			if BUNIX_TEST_RUN_ID="$run_id-$name-a$attempt" \
+			    BUNIX_TEST_RUNTIME_DIR="$attempt_dir/runtime" \
+			    FAILURE_DIR="$attempt_dir/failures" \
+			    BUNIX_SHELL_PART="$parts" \
+			    SMP="$worker_smp" \
+			    QEMU_MEMORY="$worker_memory" \
+			    QEMU_TIMEOUT="$worker_timeout" \
+			    sh tools/test-shell.sh >"$attempt_dir/stdout.log" 2>"$attempt_dir/stderr.log"; then
+				attempt_ok=1
+			else
+				attempt_ok=0
+			fi
+		fi
+		if [ "$attempt_ok" -eq 1 ]; then
 			status=ok
 			rc=0
 			reason=

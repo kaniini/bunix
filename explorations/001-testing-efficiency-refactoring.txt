@@ -233,8 +233,8 @@ Plan:
    - Each worker gets a unique `build/test-runs/<run-id>/<shard>/` output
      directory, per-worker runtime directory, per-worker failure directory, and
      metadata-derived `SMP`/`QEMU_TIMEOUT`.
-   - The `root-tmpfs-chown` worker runs its required tmpfs setup shard in the
-     same VM so it is independently schedulable.
+   - The `tmpfs-extended` and `root-tmpfs-chown` workers run their required
+     tmpfs setup shard in the same VM so they are independently schedulable.
 
    Need:
 
@@ -289,6 +289,12 @@ Plan:
      shards.
    - Worker start lines include the resource metadata used for scheduling, so
      SMP policy is visible per shard.
+
+   Need:
+
+   - Current runnable shards request `SMP=2`; `SMP=1` guests exit during early
+     server startup and should be investigated separately before adding
+     uniprocessor shard coverage.
 
 15. Make QEMU worker resources configurable [DONE]
    Support runner-level knobs:

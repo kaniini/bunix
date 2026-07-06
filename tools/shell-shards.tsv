@@ -1,15 +1,15 @@
 # name	phase	smp	memory	timeout	cost	clean_boot	description
 smoke	user	2	128M	90	1	no	Fast boot-marker, login, minimal VFS/procfs, and sysrace smoke target.
-login-smoke	user	1	128M	120	1	no	Login environment, uptime/uname/id/groups, /usr/bin/env, access checks, stty, basic sleep, signal, and kill probes.
-exec-argv-pipe	user	1	128M	120	1	no	Pipes, argv/env expansion, large argv/env, and initial procfs read through the login shell.
-rootfs-vfs-proc-dev	user	1	128M	150	2	no	Rootfs stat/list/readlink, long paths, cwd/dotdot/slash resolution, procfs files, and devfs zero/urandom checks.
+login-smoke	user	2	128M	120	1	no	Login environment, uptime/uname/id/groups, /usr/bin/env, access checks, stty, basic sleep, signal, and kill probes.
+exec-argv-pipe	user	2	128M	120	1	no	Pipes, argv/env expansion, large argv/env, and initial procfs read through the login shell.
+rootfs-vfs-proc-dev	user	2	128M	150	2	no	Rootfs stat/list/readlink, long paths, cwd/dotdot/slash resolution, procfs files, and devfs zero/urandom checks.
 tmpfs-basic-linux-tests	user	2	128M	180	3	no	/tmp and /run writes, append/excl/truncate/unlink, bundled Linux regression binaries, proc tools, mount listing, mkdir basics, and dev console write.
-path-limits-statfs	user	1	128M	180	2	no	Deep tmpfs path creation, pathmaxtest, patherrtest, and df/statfs checks.
-union-root-user	user	1	128M	180	3	no	Unionfs lower rename/copy-up, root-created upper entries, long/name-max entries, and unlink behavior from the user phase.
-tmpfs-extended	user	1	128M	240	4	no	Tmpfs ownership, mkdir, long names, name max, touch, fifo, hardlink, rmdir, rename, chmod, chown denial, symlink, plus user-created union symlink/hardlink.
-large-io-mount	user	1	128M	150	2	no	Large /dev/zero write, mmap/read stress, and user tmpfs mount lifecycle on /mnt.
-interactive-tty	user	1	128M	180	3	no	Denied secret read, shell survival, backspace editing, foreground cat Ctrl-C, background watch, and exit back to login.
+path-limits-statfs	user	2	128M	180	2	no	Deep tmpfs path creation, pathmaxtest, patherrtest, and df/statfs checks.
+union-root-user	user	2	128M	180	3	no	Unionfs lower rename/copy-up, root-created upper entries, long/name-max entries, and unlink behavior from the user phase.
+tmpfs-extended	user	2	128M	240	4	no	Tmpfs ownership, mkdir, long names, name max, touch, fifo, hardlink, rmdir, rename, chmod, chown denial, symlink, plus user-created union symlink/hardlink.
+large-io-mount	user	2	128M	150	2	no	Large /dev/zero write, mmap/read stress, and user tmpfs mount lifecycle on /mnt.
+interactive-tty	user	2	128M	180	3	no	Denied secret read, shell survival, backspace editing, foreground cat Ctrl-C, background watch, and exit back to login.
 root-login-union	root	2	128M	180	4	no	Root login identity/env, secret access, root unionfs lower-parent create/copy-up, and pinned-route/busy-mount guards.
-root-tmpfs-chown	root	1	128M	90	1	no	Privileged chown of /tmp/bunix-write.txt and root logout; depends on tmpfs-basic-linux-tests creating the file.
-long-login	root	1	128M	120	1	no	Long username/password login regression and final shell regression marker.
+root-tmpfs-chown	root	2	128M	90	1	no	Privileged chown of /tmp/bunix-write.txt and root logout; depends on tmpfs-basic-linux-tests creating the file.
+long-login	root	2	128M	120	1	no	Long username/password login regression and final shell regression marker.
 root-mount-soak	root	2	128M	240	5	yes	Root-only mount/umount race soaking; clean boot preferred once implemented.

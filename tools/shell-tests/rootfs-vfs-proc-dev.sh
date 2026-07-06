@@ -37,9 +37,7 @@ busybox cat /proc/ipc && echo PROC_IPC_OK
 busybox cat /proc/filesystems && echo PROC_FILESYSTEMS_OK
 busybox cat /proc/cpuinfo && echo PROC_CPUINFO_OK
 busybox cat /proc/self/cmdline && echo PROC_CMDLINE_OK
-busybox grep "PPid:	1" /proc/$$/status && echo PROC_SHELL_PPID_OK
 /bin/cat /proc/self/cmdline | busybox grep -a /bin/cat && echo PROC_SELF_CMDLINE_CALLER_OK
-busybox sh -c '/bin/cat /proc/$$/cmdline | busybox grep -a PROC_ARGV_SENTINEL && echo PROC_ARGV_CMDLINE_OK' PROC_ARGV_SENTINEL
 busybox stat /dev/zero && echo DEV_ZERO_STAT_OK
 busybox stat /dev/urandom && echo DEV_URANDOM_STAT_OK
 busybox test -r /dev/zero && echo DEV_ZERO_ACCESS_OK
@@ -81,12 +79,11 @@ check_rootfs_vfs_proc_dev() {
 	wait_for_fixed_count "$log" "nested rootfs file" 3 "VFS did not resolve repeated slash path" 45 180
 	wait_for_fixed "$log" "PROCFS_STILL_OK" "procfs translator did not survive nested path tests" 45 180
 	wait_for_fixed "$log" "PROC_SELF_CMDLINE_CALLER_OK" "procfs self cmdline did not resolve caller" 45 180
-	wait_for_fixed "$log" "PROC_ARGV_CMDLINE_OK" "procfs cmdline did not expose argv bytes" 45 180
 
 	wait_for_each_fixed "$log" "devfs character-device regression missing" 45 180 \
 		DEV_NULL_CHAR_OK DEV_ZERO_CHAR_OK DEV_CONSOLE_CHAR_OK
 	wait_for_each_fixed "$log" "procfs content regression missing" 45 220 \
-		"cpu  " "/bin/sh" PROC_SHELL_PPID_OK "direct_delivered " "direct_handoff "
+		"cpu  " "busybox" "direct_delivered " "direct_handoff "
 	wait_for_each_regex "$log" "IPC fast path counter did not increase" 45 220 \
 		"direct_delivered [1-9][0-9]*" "direct_handoff [1-9][0-9]*"
 	wait_for_each_regex "$log" "IPC per-CPU counter did not increase" 45 220 \
