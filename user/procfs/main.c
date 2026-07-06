@@ -24,6 +24,12 @@ enum {
 	PROCFS_KIND_PID_EXE = 17,
 	PROCFS_KIND_FILESYSTEMS = 18,
 	PROCFS_KIND_CPUINFO = 19,
+	PROCFS_KIND_CMDLINE = 20,
+	PROCFS_KIND_DEVICES = 21,
+	PROCFS_KIND_MODULES = 22,
+	PROCFS_KIND_PID_MOUNTS = 23,
+	PROCFS_KIND_PID_MOUNTINFO = 24,
+	PROCFS_KIND_PID_CGROUP = 25,
 };
 
 static struct bunix_id_table open_files;
@@ -405,6 +411,15 @@ static u64 file_for_path(const char *path, u64 caller_task)
 	if (str_eq(path, "/proc/cpuinfo")) {
 		return make_file(PROCFS_KIND_CPUINFO, 0);
 	}
+	if (str_eq(path, "/proc/cmdline")) {
+		return make_file(PROCFS_KIND_CMDLINE, 0);
+	}
+	if (str_eq(path, "/proc/devices")) {
+		return make_file(PROCFS_KIND_DEVICES, 0);
+	}
+	if (str_eq(path, "/proc/modules")) {
+		return make_file(PROCFS_KIND_MODULES, 0);
+	}
 	if (str_eq(path, "/proc/mounts")) {
 		return make_file(PROCFS_KIND_MOUNTS, 0);
 	}
@@ -432,6 +447,21 @@ static u64 file_for_path(const char *path, u64 caller_task)
 		const u64 pid = proc_path_pid(0, caller_task);
 
 		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_STATM, pid);
+	}
+	if (str_eq(path, "/proc/self/mounts")) {
+		const u64 pid = proc_path_pid(0, caller_task);
+
+		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_MOUNTS, pid);
+	}
+	if (str_eq(path, "/proc/self/mountinfo")) {
+		const u64 pid = proc_path_pid(0, caller_task);
+
+		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_MOUNTINFO, pid);
+	}
+	if (str_eq(path, "/proc/self/cgroup")) {
+		const u64 pid = proc_path_pid(0, caller_task);
+
+		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_CGROUP, pid);
 	}
 	if (str_eq(path, "/proc/self/exe")) {
 		const u64 pid = proc_path_pid(0, caller_task);
@@ -477,6 +507,15 @@ static u64 file_for_path(const char *path, u64 caller_task)
 		}
 		if (str_eq(cursor, "/statm")) {
 			return make_file(PROCFS_KIND_PID_STATM, pid);
+		}
+		if (str_eq(cursor, "/mounts")) {
+			return make_file(PROCFS_KIND_PID_MOUNTS, pid);
+		}
+		if (str_eq(cursor, "/mountinfo")) {
+			return make_file(PROCFS_KIND_PID_MOUNTINFO, pid);
+		}
+		if (str_eq(cursor, "/cgroup")) {
+			return make_file(PROCFS_KIND_PID_CGROUP, pid);
 		}
 		if (str_eq(cursor, "/exe")) {
 			return make_file(PROCFS_KIND_PID_EXE, pid);
@@ -767,6 +806,33 @@ static u64 build_cpuinfo(void)
 	return len;
 }
 
+static u64 build_cmdline(void)
+{
+	u64 len = 0;
+
+	append_str(&len, "root=/dev/root rw init=/sbin/init\n");
+	return len;
+}
+
+static u64 build_devices(void)
+{
+	u64 len = 0;
+
+	append_str(&len, "Character devices:\n");
+	append_str(&len, "  1 mem\n");
+	append_str(&len, "  4 tty\n");
+	append_str(&len, "  5 console\n");
+	append_str(&len, "  5 tty\n");
+	append_str(&len, "  1 random\n\n");
+	append_str(&len, "Block devices:\n");
+	return len;
+}
+
+static u64 build_modules(void)
+{
+	return 0;
+}
+
 static const char *mount_fstype_name(u64 fstype)
 {
 	if (fstype == BUNIX_SERVICE_PROCFS) {
@@ -885,6 +951,37 @@ static u64 build_mounts(void)
 		append_str(&len, fstype);
 		append_str(&len, mount->fstype == 0 ? " ro 0 0\n" :
 			   " rw 0 0\n");
+	}
+	return len;
+}
+
+static u64 build_mountinfo(void)
+{
+	u64 len = 0;
+	u64 id = 1;
+
+	for (struct bunix_tree_node *node = bunix_tree_first_node(&mounts);
+	     node != 0; node = bunix_tree_next_node(node)) {
+		const struct procfs_mount *mount =
+			(const struct procfs_mount *)node->value;
+		const char *fstype;
+
+		if (mount == 0) {
+			continue;
+		}
+		fstype = mount_fstype_name(mount->fstype);
+		append_u64(&len, id);
+		append_str(&len, id == 1 ? " 0 0:" : " 1 0:");
+		append_u64(&len, id);
+		append_str(&len, " / ");
+		append_str(&len, mount->path);
+		append_str(&len, mount->fstype == 0 ? " ro" : " rw");
+		append_str(&len, " - ");
+		append_str(&len, fstype);
+		append_char(&len, ' ');
+		append_str(&len, fstype);
+		append_str(&len, mount->fstype == 0 ? " ro\n" : " rw\n");
+		id++;
 	}
 	return len;
 }
@@ -1123,6 +1220,15 @@ static u64 build_pid_statm(u64 pid)
 	return len;
 }
 
+static u64 build_pid_cgroup(u64 pid)
+{
+	u64 len = 0;
+
+	(void)pid;
+	append_str(&len, "0::/\n");
+	return len;
+}
+
 static u64 build_fd_entry(u64 fd)
 {
 	u64 len = 0;
@@ -1165,8 +1271,21 @@ static u64 build_file_text(u64 file)
 	case PROCFS_KIND_CPUINFO:
 		len = build_cpuinfo();
 		break;
+	case PROCFS_KIND_CMDLINE:
+		len = build_cmdline();
+		break;
+	case PROCFS_KIND_DEVICES:
+		len = build_devices();
+		break;
+	case PROCFS_KIND_MODULES:
+		len = build_modules();
+		break;
 	case PROCFS_KIND_MOUNTS:
+	case PROCFS_KIND_PID_MOUNTS:
 		len = build_mounts();
+		break;
+	case PROCFS_KIND_PID_MOUNTINFO:
+		len = build_mountinfo();
 		break;
 	case PROCFS_KIND_PID_STAT:
 		len = build_pid_stat(file_arg(file));
@@ -1179,6 +1298,9 @@ static u64 build_file_text(u64 file)
 		break;
 	case PROCFS_KIND_PID_STATM:
 		len = build_pid_statm(file_arg(file));
+		break;
+	case PROCFS_KIND_PID_CGROUP:
+		len = build_pid_cgroup(file_arg(file));
 		break;
 	case PROCFS_KIND_PID_FD_ENTRY:
 		len = build_fd_entry(file_arg(file));
@@ -1233,14 +1355,15 @@ static const char *proc_dir_entry(u64 index, u64 *type)
 {
 	static const char *names[] = {
 		"kthreads", "uptime", "stat", "ipc", "loadavg", "meminfo",
-		"filesystems", "cpuinfo", "mounts", "self"
+		"filesystems", "cpuinfo", "cmdline", "devices", "modules",
+		"mounts", "self"
 	};
 	static char pid_name_buf[20];
 	struct proc_info info;
 	const u64 static_count = sizeof(names) / sizeof(names[0]);
 
 	if (index < static_count) {
-		*type = index == 9 ? BUNIX_VFS_TYPE_DIRECTORY :
+		*type = index == 12 ? BUNIX_VFS_TYPE_DIRECTORY :
 				     BUNIX_VFS_TYPE_REGULAR;
 		return names[index];
 	}
@@ -1255,14 +1378,15 @@ static const char *proc_dir_entry(u64 index, u64 *type)
 static const char *pid_dir_entry(u64 index, u64 *type)
 {
 	static const char *names[] = {
-		"stat", "status", "cmdline", "statm", "exe", "fd"
+		"stat", "status", "cmdline", "statm", "mounts",
+		"mountinfo", "cgroup", "exe", "fd"
 	};
 
 	if (index >= sizeof(names) / sizeof(names[0])) {
 		return 0;
 	}
-	*type = index == 5 ? BUNIX_VFS_TYPE_DIRECTORY :
-		(index == 4 ? BUNIX_VFS_TYPE_SYMLINK :
+	*type = index == 8 ? BUNIX_VFS_TYPE_DIRECTORY :
+		(index == 7 ? BUNIX_VFS_TYPE_SYMLINK :
 			      BUNIX_VFS_TYPE_REGULAR);
 	return names[index];
 }

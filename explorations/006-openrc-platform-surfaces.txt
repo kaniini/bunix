@@ -5,6 +5,6 @@ Implement the kernel/server filesystem and device surfaces OpenRC expects.
 - [x] Let Alpine boot without synthetic-rootfs-only `/etc/execs` and `/etc/spawns` bootstrap files.
 - [x] Add missing devfs nodes needed for early OpenRC and BusyBox tools.
 - [x] Add the minimal sysfs translator/server surface needed for OpenRC probing.
-- [ ] Fill procfs gaps needed by OpenRC scripts and common applets.
+- [x] Fill procfs gaps needed by OpenRC scripts and common applets.
 - [ ] Verify permissions, ownership, mode bits, and mount behavior match Linux enough for OpenRC.
-- [ ] Add focused sharded tests for each new surface.
+- [x] Add focused sharded tests for each new surface.
