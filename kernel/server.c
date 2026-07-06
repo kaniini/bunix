@@ -174,9 +174,7 @@ static u64 launch_user_image(const char *name, struct task *parent,
 		}
 	}
 
-	if (parent == 0) {
-		grant_bootstrap_caps(task, name);
-	}
+	grant_bootstrap_caps(task, name);
 
 	for (u64 page = 0; page < USER_STACK_PAGES; page++) {
 		const u64 vaddr = USER_STACK_TOP - (page + 1) * VM_PAGE_SIZE;
@@ -355,10 +353,6 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 	}
 
 	if (str_eq(server_name, "virtio-bus")) {
-		task_grant_port(task, ipc_port_find("console"),
-				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
-		task_grant_port(task, ipc_port_find("names"),
-				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
 		task_grant_hw_resource(task, &pci_config_ports, TASK_RIGHT_SEND);
 		return;
 	}

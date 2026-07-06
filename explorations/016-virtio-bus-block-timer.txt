@@ -140,3 +140,6 @@ Progress:
   `0xcf8..0xcff` and added a bus-0 PCI config scanner using the 32-bit port I/O
   helpers.  The server now dynamically records matching VirtIO PCI functions
   and reports the discovered count through `DEV0` enumeration.
+- Fixed supplemental boot grants so bootstrap-launched module servers can still
+  receive kernel-granted hardware resources.  A direct boot harness run with
+  `-device virtio-blk-pci` now reports `virtio-bus: ready devices=1`.
