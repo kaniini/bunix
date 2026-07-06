@@ -55,11 +55,16 @@ struct net_addr {
 };
 
 struct net_route {
+	struct net_route *next;
 	u64 family;
 	u64 prefix_hi;
 	u64 prefix_lo;
 	u64 prefix_len;
 	u64 iface;
+	u64 gateway_hi;
+	u64 gateway_lo;
+	u64 flags;
+	u64 metric;
 };
 
 struct udp_datagram {
@@ -135,20 +140,31 @@ static struct net_interface *packet_ifaces;
 static u64 next_packet_iface_id = 2;
 static const struct net_route routes[] = {
 	{
+		.next = 0,
 		.family = BUNIX_NET_ADDR_FAMILY_IPV4,
 		.prefix_hi = 0,
 		.prefix_lo = 0x7f000000,
 		.prefix_len = 8,
 		.iface = NET_IFACE_LO,
+		.gateway_hi = 0,
+		.gateway_lo = 0,
+		.flags = 1,
+		.metric = 0,
 	},
 	{
+		.next = 0,
 		.family = BUNIX_NET_ADDR_FAMILY_IPV6,
 		.prefix_hi = 0,
 		.prefix_lo = 1,
 		.prefix_len = 128,
 		.iface = NET_IFACE_LO,
+		.gateway_hi = 0,
+		.gateway_lo = 0,
+		.flags = 1,
+		.metric = 0,
 	},
 };
+static struct net_route *dynamic_routes;
 static struct net_packet *loopback_rx_head;
 static struct net_packet *loopback_rx_tail;
 static struct udp_socket *udp_sockets;
@@ -203,6 +219,22 @@ static u64 interface_count(void)
 	return count;
 }
 
+static struct net_interface *interface_at(u64 index)
+{
+	if (index == 0) {
+		return &loopback;
+	}
+	index--;
+	for (struct net_interface *iface = packet_ifaces; iface != 0;
+	     iface = iface->next) {
+		if (index == 0) {
+			return iface;
+		}
+		index--;
+	}
+	return 0;
+}
+
 static void reply_interface_count(struct bunix_msg *reply)
 {
 	reply->words[0] = 0;
@@ -213,6 +245,22 @@ static void reply_interface_info(struct bunix_msg *reply,
 				 const struct bunix_msg *message)
 {
 	struct net_interface *iface = interface_find(message->words[0]);
+
+	if (iface == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+
+	reply->words[0] = 0;
+	reply->words[1] = iface->id;
+	reply->words[2] = iface->flags;
+	reply->words[3] = iface->mtu;
+}
+
+static void reply_interface_at(struct bunix_msg *reply,
+			       const struct bunix_msg *message)
+{
+	struct net_interface *iface = interface_at(message->words[0]);
 
 	if (iface == 0) {
 		reply->words[0] = (u64)-1;
@@ -314,6 +362,124 @@ static void reply_packet_interface_link(struct bunix_msg *reply,
 	reply->words[1] = iface->id;
 	reply->words[2] = iface->flags;
 	reply->words[3] = iface->mtu;
+}
+
+static int net_route_valid_prefix(u64 family, u64 prefix_len)
+{
+	if (family == BUNIX_NET_ADDR_FAMILY_IPV4) {
+		return prefix_len <= 32;
+	}
+	if (family == BUNIX_NET_ADDR_FAMILY_IPV6) {
+		return prefix_len <= 128;
+	}
+	return 0;
+}
+
+static u64 route_count(void)
+{
+	u64 count = sizeof(routes) / sizeof(routes[0]);
+
+	for (const struct net_route *route = dynamic_routes; route != 0;
+	     route = route->next) {
+		count++;
+	}
+	return count;
+}
+
+static const struct net_route *route_at(u64 index)
+{
+	for (const struct net_route *route = dynamic_routes; route != 0;
+	     route = route->next) {
+		if (index == 0) {
+			return route;
+		}
+		index--;
+	}
+	if (index < sizeof(routes) / sizeof(routes[0])) {
+		return &routes[index];
+	}
+	return 0;
+}
+
+static void route_info_store(struct bunix_net_route_info *info,
+			     const struct net_route *route)
+{
+	if (info == 0 || route == 0) {
+		return;
+	}
+	info->family = route->family;
+	info->prefix_hi = route->prefix_hi;
+	info->prefix_lo = route->prefix_lo;
+	info->prefix_len = route->prefix_len;
+	info->iface = route->iface;
+	info->gateway_hi = route->gateway_hi;
+	info->gateway_lo = route->gateway_lo;
+	info->flags = route->flags;
+	info->metric = route->metric;
+}
+
+static void reply_route_add(struct bunix_msg *reply,
+			    const struct bunix_msg *message)
+{
+	struct bunix_net_route_info info;
+	struct net_route *route;
+
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    bunix_buffer_read(message->cap, 0, &info, sizeof(info)) != 0 ||
+	    interface_find(info.iface) == 0 ||
+	    !net_route_valid_prefix(info.family, info.prefix_len)) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	route = (struct net_route *)bunix_calloc(1, sizeof(*route));
+	if (route == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	route->family = info.family;
+	route->prefix_hi = info.prefix_hi;
+	route->prefix_lo = info.prefix_lo;
+	route->prefix_len = info.prefix_len;
+	route->iface = info.iface;
+	route->gateway_hi = info.gateway_hi;
+	route->gateway_lo = info.gateway_lo;
+	route->flags = info.flags;
+	route->metric = info.metric;
+	route->next = dynamic_routes;
+	dynamic_routes = route;
+	reply->words[0] = 0;
+	reply->words[1] = route->iface;
+	reply->words[2] = route_count();
+	reply->words[3] = route->prefix_len;
+}
+
+static void reply_route_count(struct bunix_msg *reply)
+{
+	reply->words[0] = 0;
+	reply->words[1] = route_count();
+}
+
+static void reply_route_at(struct bunix_msg *reply,
+			   const struct bunix_msg *message)
+{
+	const struct net_route *route = route_at(message->words[0]);
+	struct bunix_net_route_info info;
+
+	if (route == 0 || message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	route_info_store(&info, route);
+	if (bunix_buffer_write(message->cap, 0, &info, sizeof(info)) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = route->iface;
+	reply->words[2] = route->family;
+	reply->words[3] = route->prefix_len;
 }
 
 static void reply_observe_socket_count(struct bunix_msg *reply)
@@ -568,14 +734,32 @@ static int net_route_matches(const struct net_route *route, u64 family,
 	return 0;
 }
 
-static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo)
+static const struct net_route *net_route_lookup_in_list(
+	const struct net_route *list, u64 family, u64 hi, u64 lo,
+	const struct net_route *best)
 {
-	for (u64 i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
-		if (net_route_matches(&routes[i], family, hi, lo)) {
-			return &routes[i];
+	for (const struct net_route *route = list; route != 0;
+	     route = route->next) {
+		if (net_route_matches(route, family, hi, lo) &&
+		    (best == 0 || route->prefix_len > best->prefix_len)) {
+			best = route;
 		}
 	}
-	return 0;
+	return best;
+}
+
+static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo)
+{
+	const struct net_route *best = 0;
+
+	best = net_route_lookup_in_list(dynamic_routes, family, hi, lo, best);
+	for (u64 i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
+		if (net_route_matches(&routes[i], family, hi, lo) &&
+		    (best == 0 || routes[i].prefix_len > best->prefix_len)) {
+			best = &routes[i];
+		}
+	}
+	return best;
 }
 
 static int net_addr_is_local(u64 family, u64 hi, u64 lo)
@@ -1508,6 +1692,9 @@ int main(void)
 		case BUNIX_NET_INTERFACE_STATS:
 			reply_interface_stats(&reply, &message);
 			break;
+		case BUNIX_NET_INTERFACE_AT:
+			reply_interface_at(&reply, &message);
+			break;
 		case BUNIX_NET_LOOPBACK_SEND:
 			reply_loopback_send(&reply, &message);
 			break;
@@ -1600,6 +1787,15 @@ int main(void)
 			break;
 		case BUNIX_NET_PACKET_TX_COMPLETE:
 			reply_packet_tx_complete(&reply, &message);
+			break;
+		case BUNIX_NET_ROUTE_ADD:
+			reply_route_add(&reply, &message);
+			break;
+		case BUNIX_NET_ROUTE_COUNT:
+			reply_route_count(&reply);
+			break;
+		case BUNIX_NET_ROUTE_AT:
+			reply_route_at(&reply, &message);
 			break;
 		default:
 			reply.words[0] = (u64)-1;

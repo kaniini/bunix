@@ -726,6 +726,7 @@ test-boot-virtio-net: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/check-markers.sh too
 	grep -aF "virtio-net: negotiated" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: queues ready" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: attached iface=" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "virtio-net: route ready" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: rx ready" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: tx ready" $(BUILD_DIR)/serial.log >/dev/null
 

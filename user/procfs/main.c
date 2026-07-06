@@ -767,6 +767,23 @@ static void append_hex_fixed(u64 *len, u64 value, u64 digits)
 	}
 }
 
+static void append_ipv4_route_hex(u64 *len, u64 value)
+{
+	for (u64 i = 0; i < 4; i++) {
+		append_hex_fixed(len, (value >> (i * 8)) & 0xff, 2);
+	}
+}
+
+static void append_net_iface_name(u64 *len, u64 iface, u64 flags)
+{
+	if ((flags & BUNIX_NET_IFACE_FLAG_LOOPBACK) != 0 || iface == 1) {
+		append_str(len, "lo");
+		return;
+	}
+	append_str(len, "eth");
+	append_u64(len, iface >= 2 ? iface - 2 : 0);
+}
+
 static void u64_to_dec(char *out, u64 out_size, u64 value)
 {
 	char tmp[20];
@@ -1228,38 +1245,91 @@ static u64 build_ipc(void)
 static u64 build_net_dev(void)
 {
 	u64 len = 0;
-	struct bunix_msg info;
+	struct bunix_msg count;
 	struct bunix_msg stats;
 
 	append_str(&len, "Inter-|   Receive                                                |  Transmit\n");
 	append_str(&len, " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n");
-	if (net_call(BUNIX_NET_INTERFACE_INFO, 1, &info) != 0 ||
-	    net_call(BUNIX_NET_INTERFACE_STATS, 1, &stats) != 0) {
+	if (net_call(BUNIX_NET_INTERFACE_COUNT, 0, &count) != 0) {
 		return len;
 	}
-	append_str(&len, "    lo: ");
-	append_u64(&len, stats.words[1]);
-	append_char(&len, ' ');
-	append_u64(&len, stats.words[1]);
-	append_str(&len, " 0 ");
-	append_u64(&len, stats.words[3]);
-	append_str(&len, " 0 0 0 0 ");
-	append_u64(&len, stats.words[2]);
-	append_char(&len, ' ');
-	append_u64(&len, stats.words[2]);
-	append_str(&len, " 0 ");
-	append_u64(&len, stats.words[3]);
-	append_str(&len, " 0 0 0 0\n");
-	(void)info;
+	for (u64 i = 0; i < count.words[1]; i++) {
+		struct bunix_msg info;
+		u64 iface;
+		u64 flags;
+
+		if (net_call(BUNIX_NET_INTERFACE_AT, i, &info) != 0) {
+			continue;
+		}
+		iface = info.words[1];
+		flags = info.words[2];
+		if (net_call(BUNIX_NET_INTERFACE_STATS, iface, &stats) != 0) {
+			continue;
+		}
+		append_str(&len, "    ");
+		append_net_iface_name(&len, iface, flags);
+		append_str(&len, ": ");
+		append_u64(&len, stats.words[1]);
+		append_char(&len, ' ');
+		append_u64(&len, stats.words[1]);
+		append_str(&len, " 0 ");
+		append_u64(&len, stats.words[3]);
+		append_str(&len, " 0 0 0 0 ");
+		append_u64(&len, stats.words[2]);
+		append_char(&len, ' ');
+		append_u64(&len, stats.words[2]);
+		append_str(&len, " 0 ");
+		append_u64(&len, stats.words[3]);
+		append_str(&len, " 0 0 0 0\n");
+	}
 	return len;
 }
 
 static u64 build_net_route(void)
 {
 	u64 len = 0;
+	struct bunix_msg count;
+	long buffer;
 
 	append_str(&len, "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n");
-	append_str(&len, "lo\t0000007F\t00000000\t0001\t0\t0\t0\t000000FF\t0\t0\t0\n");
+	if (net_call(BUNIX_NET_ROUTE_COUNT, 0, &count) != 0) {
+		return len;
+	}
+	buffer = bunix_buffer_create(sizeof(struct bunix_net_route_info));
+	if (buffer <= 0) {
+		return len;
+	}
+	for (u64 i = 0; i < count.words[1]; i++) {
+		struct bunix_net_route_info route;
+		struct bunix_msg reply;
+		struct bunix_msg iface;
+		u64 mask;
+
+		if (net_call_buffer(BUNIX_NET_ROUTE_AT, i, (u64)buffer,
+				    &reply) != 0 ||
+		    bunix_buffer_read((u64)buffer, 0, &route,
+				      sizeof(route)) != 0 ||
+		    route.family != BUNIX_NET_ADDR_FAMILY_IPV4 ||
+		    net_call(BUNIX_NET_INTERFACE_INFO, route.iface,
+			     &iface) != 0) {
+			continue;
+		}
+		mask = route.prefix_len == 0 ? 0 :
+		       ~((1ull << (32 - route.prefix_len)) - 1) & 0xffffffffull;
+		append_net_iface_name(&len, route.iface, iface.words[2]);
+		append_char(&len, '\t');
+		append_ipv4_route_hex(&len, route.prefix_lo);
+		append_char(&len, '\t');
+		append_ipv4_route_hex(&len, route.gateway_lo);
+		append_char(&len, '\t');
+		append_hex_fixed(&len, route.flags == 0 ? 1 : route.flags, 4);
+		append_str(&len, "\t0\t0\t");
+		append_u64(&len, route.metric);
+		append_char(&len, '\t');
+		append_ipv4_route_hex(&len, mask);
+		append_str(&len, "\t0\t0\t0\n");
+	}
+	bunix_handle_close((u64)buffer);
 	return len;
 }
 

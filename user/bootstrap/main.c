@@ -1263,6 +1263,75 @@ static long net_packet_interface_selftest(u64 net)
 		bunix_handle_close((u64)buffer);
 		return -1;
 	}
+	request.type = BUNIX_NET_INTERFACE_AT;
+	request.words[0] = 1;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] != iface_id) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	{
+		struct bunix_net_route_info route = {
+			.family = BUNIX_NET_ADDR_FAMILY_IPV4,
+			.prefix_hi = 0,
+			.prefix_lo = 0x0a120000ull,
+			.prefix_len = 16,
+			.iface = iface_id,
+			.gateway_hi = 0,
+			.gateway_lo = 0,
+			.flags = 1,
+			.metric = 25,
+		};
+		u64 route_count;
+		int found = 0;
+
+		if (bunix_buffer_write((u64)buffer, 0, &route,
+				       sizeof(route)) != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_ROUTE_ADD;
+		request.cap = (u64)buffer;
+		request.cap_rights = BUNIX_RIGHT_RECV;
+		request.words[0] = 0;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_ROUTE_COUNT;
+		request.cap = 0;
+		request.cap_rights = 0;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0 || reply.words[1] < 3) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		route_count = reply.words[1];
+		for (u64 i = 0; i < route_count; i++) {
+			request.type = BUNIX_NET_ROUTE_AT;
+			request.cap = (u64)buffer;
+			request.cap_rights = BUNIX_RIGHT_SEND;
+			request.words[0] = i;
+			if (bunix_ipc_call(net, &request, &reply) != 0 ||
+			    reply.words[0] != 0 ||
+			    bunix_buffer_read((u64)buffer, 0, &route,
+					      sizeof(route)) != 0) {
+				bunix_handle_close((u64)buffer);
+				return -1;
+			}
+			if (route.iface == iface_id &&
+			    route.family == BUNIX_NET_ADDR_FAMILY_IPV4 &&
+			    route.prefix_lo == 0x0a120000ull &&
+			    route.prefix_len == 16) {
+				found = 1;
+			}
+		}
+		if (!found) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+	}
 	bunix_handle_close((u64)buffer);
 	return 0;
 }
@@ -1279,6 +1348,7 @@ int main(void)
 	const char net_udp_ok[] = "bootstrap: net udp ok\n";
 	const char net_tcp_ok[] = "bootstrap: net tcp ok\n";
 	const char net_packet_ok[] = "bootstrap: net packet iface ok\n";
+	const char net_route_ok[] = "bootstrap: net route ok\n";
 	char file[17];
 	u64 console;
 	u64 vm;
@@ -1358,6 +1428,7 @@ int main(void)
 	bunix_console_log(net_udp_ok, sizeof(net_udp_ok) - 1);
 	bunix_console_log(net_tcp_ok, sizeof(net_tcp_ok) - 1);
 	bunix_console_log(net_packet_ok, sizeof(net_packet_ok) - 1);
+	bunix_console_log(net_route_ok, sizeof(net_route_ok) - 1);
 	if (bunix_cmdline_has("virtio-blk-block-test") <= 0) {
 		bunix_launch_module_with_caps("block", fs_caps,
 					      sizeof(fs_caps) /

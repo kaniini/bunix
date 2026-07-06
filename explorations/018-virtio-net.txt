@@ -32,7 +32,7 @@ Tasks:
 - [x] Implement VirtIO-net feature negotiation, RX/TX virtqueues, buffer
       replenishment, transmit completion, receive delivery, and device reset.
 - [x] Add support for MAC address discovery/configuration and basic link state.
-- [ ] Integrate the driver with the network stack interface registry and route
+- [x] Integrate the driver with the network stack interface registry and route
       management.
 - [x] Add QEMU run/test modes with a deterministic VirtIO-net topology.
 - [ ] Add tests for driver attach, link-up, transmit path, receive path,
@@ -177,3 +177,11 @@ Progress:
   reports completions back through `BUNIX_NET_PACKET_TX_COMPLETE`.  NET0 does
   not yet provide route-backed Ethernet egress packets, so the dedicated boot
   test currently covers TX idle readiness with `virtio-net: tx ready`.
+- Added NET0 route-management and indexed interface RPCs.  Packet interfaces
+  can now be discovered by index, dynamic routes can be added and enumerated,
+  route lookup considers dynamic routes plus static loopback routes, and
+  `/proc/net/dev` plus `/proc/net/route` are built from NET0 state instead of
+  hardcoded loopback rows.  Bootstrap covers the route API with
+  `bootstrap: net route ok`; `virtio-net.server` installs a deterministic
+  QEMU-user `10.0.2.0/24` route for its interface and logs
+  `virtio-net: route ready`.

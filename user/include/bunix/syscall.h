@@ -329,6 +329,10 @@ enum {
 	BUNIX_NET_PACKET_RX_SUBMIT = 32,
 	BUNIX_NET_PACKET_TX_DEQUEUE = 33,
 	BUNIX_NET_PACKET_TX_COMPLETE = 34,
+	BUNIX_NET_INTERFACE_AT = 35,
+	BUNIX_NET_ROUTE_ADD = 36,
+	BUNIX_NET_ROUTE_COUNT = 37,
+	BUNIX_NET_ROUTE_AT = 38,
 	BUNIX_NET_IFACE_FLAG_UP = 1 << 0,
 	BUNIX_NET_IFACE_FLAG_LOOPBACK = 1 << 1,
 	BUNIX_NET_IFACE_FLAG_BROADCAST = 1 << 2,
@@ -524,6 +528,18 @@ struct bunix_net_packet_info {
 	u64 len;
 	u64 flags;
 	u64 reserved;
+};
+
+struct bunix_net_route_info {
+	u64 family;
+	u64 prefix_hi;
+	u64 prefix_lo;
+	u64 prefix_len;
+	u64 iface;
+	u64 gateway_hi;
+	u64 gateway_lo;
+	u64 flags;
+	u64 metric;
 };
 
 static inline void bunix_store_u64_le(unsigned char *buffer, u64 offset,

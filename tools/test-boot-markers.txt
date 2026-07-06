@@ -86,6 +86,7 @@ bootstrap: net loopback ok
 bootstrap: net udp ok
 bootstrap: net tcp ok
 bootstrap: net packet iface ok
+bootstrap: net route ok
 rootfs: online
 vfs: online
 procfs: online

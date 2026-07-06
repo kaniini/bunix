@@ -76,6 +76,8 @@ net: loopback lo ipv4=127.0.0.1 ipv6=::1
 bootstrap: net loopback ok
 bootstrap: net udp ok
 bootstrap: net tcp ok
+bootstrap: net packet iface ok
+bootstrap: net route ok
 rootfs: online
 vfs: online
 procfs: online

@@ -625,6 +625,45 @@ static int attach_net_interface(struct virtio_net_device *device)
 	return info.id >= 2 ? 0 : -1;
 }
 
+static int add_qemu_user_route(struct virtio_net_device *device)
+{
+	struct bunix_net_route_info route = {
+		.family = BUNIX_NET_ADDR_FAMILY_IPV4,
+		.prefix_hi = 0,
+		.prefix_lo = 0x0a000200ull,
+		.prefix_len = 24,
+		.iface = device->iface_id,
+		.gateway_hi = 0,
+		.gateway_lo = 0,
+		.flags = 1,
+		.metric = 100,
+	};
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NET,
+		.type = BUNIX_NET_ROUTE_ADD,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	long buffer = bunix_buffer_create(sizeof(route));
+
+	if (buffer <= 0) {
+		return -1;
+	}
+	request.cap = (u64)buffer;
+	if (bunix_buffer_write((u64)buffer, 0, &route, sizeof(route)) != 0 ||
+	    bunix_ipc_call(device->net_service, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
 static int init_device(struct virtio_net_device *device)
 {
 	struct bunix_msg reply;
@@ -692,10 +731,15 @@ static int init_device(struct virtio_net_device *device)
 	    attach_net_interface(device) != 0) {
 		return -1;
 	}
+	if (add_qemu_user_route(device) != 0) {
+		return -1;
+	}
 	if (replenish_rx(device) != 0) {
 		return -1;
 	}
 	log_iface(device->iface_id, device->mtu);
+	log_text("virtio-net: route ready\n",
+		 text_len("virtio-net: route ready\n"));
 	log_text("virtio-net: rx ready\n", text_len("virtio-net: rx ready\n"));
 	log_text("virtio-net: tx ready\n", text_len("virtio-net: tx ready\n"));
 	(void)poll_rx_bounded(device);
