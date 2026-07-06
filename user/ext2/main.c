@@ -1459,6 +1459,39 @@ static long write_direct_file_block(struct ext2_mount *mount, u64 ino,
 	return mount_write_bytes(mount, offset, data, mount->super.block_size);
 }
 
+static long free_direct_blocks_from(struct ext2_mount *mount, u64 ino,
+				    struct ext2_inode *inode,
+				    u64 first_logical)
+{
+	const u64 sectors = mount != 0 ? mount->super.block_size / 512 : 0;
+
+	if (mount == 0 || inode == 0 || sectors == 0 ||
+	    first_logical > EXT2_NDIR_BLOCKS) {
+		return -1;
+	}
+	for (u64 logical = first_logical; logical < EXT2_NDIR_BLOCKS;
+	     logical++) {
+		const u64 block = inode->block[logical];
+
+		if (block == 0) {
+			continue;
+		}
+		if (write_inode_direct_block(mount, ino, inode, logical, 0) != 0 ||
+		    free_block(mount, block) != 0) {
+			return -1;
+		}
+		if (inode->blocks >= sectors) {
+			if (write_inode_blocks(mount, ino, inode,
+					       inode->blocks - sectors) != 0) {
+				return -1;
+			}
+		} else if (write_inode_blocks(mount, ino, inode, 0) != 0) {
+			return -1;
+		}
+	}
+	return 0;
+}
+
 static long read_dirent_at(const struct ext2_mount *mount,
 			   const struct ext2_inode *directory, u64 offset,
 			   struct ext2_dirent *entry)
@@ -2284,6 +2317,8 @@ static void reply_truncate(struct ext2_open *open,
 			   struct bunix_msg *reply)
 {
 	const u64 size = message->words[1];
+	const u64 keep_blocks = size == 0 ? 0 :
+				((size - 1) / root_mount.super.block_size) + 1;
 
 	if (open == 0 ||
 	    ext2_inode_vfs_type(&open->inode) != BUNIX_VFS_TYPE_REGULAR) {
@@ -2292,6 +2327,15 @@ static void reply_truncate(struct ext2_open *open,
 	}
 	if (size > open->inode.size) {
 		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	if (keep_blocks > EXT2_NDIR_BLOCKS) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	if (free_direct_blocks_from(&root_mount, open->ino, &open->inode,
+				    keep_blocks) != 0) {
+		reply->words[0] = (u64)-1;
 		return;
 	}
 	if (write_inode_size(&root_mount, open->ino, &open->inode, size) != 0) {

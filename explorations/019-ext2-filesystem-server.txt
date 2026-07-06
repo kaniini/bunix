@@ -165,6 +165,10 @@ Implementation notes:
   updates `i_blocks`, writes data, and then updates inode size.  Sparse writes,
   indirect block allocation, block freeing on truncate, and directory growth
   remain follow-up slices.
+- Shrink `TRUNCATE` now frees no-longer-reachable direct blocks, clears direct
+  inode pointers, updates block bitmap/free-count metadata, updates `i_blocks`,
+  and then writes the new inode size.  Indirect block truncation remains a
+  follow-up because this write path still allocates only direct blocks.
 
 Tasks:
 

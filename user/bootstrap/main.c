@@ -594,7 +594,7 @@ static long vfs_create_path_buffer(u64 vfs, const char *path, u64 mode)
 
 static long vfs_stat_path(u64 vfs, const char *path, u64 *size, u64 *ino,
 			  u64 *nlink, u64 *type, u64 *mode, u64 *uid,
-			  u64 *gid)
+			  u64 *gid, u64 *blocks)
 {
 	const char cwd[] = "/";
 	const u64 cwd_len = sizeof(cwd);
@@ -651,6 +651,9 @@ static long vfs_stat_path(u64 vfs, const char *path, u64 *size, u64 *ino,
 	}
 	if (gid != 0) {
 		*gid = owner >> 32;
+	}
+	if (blocks != 0) {
+		*blocks = bunix_load_u64_le(stat, BUNIX_VFS_STAT_BLOCKS);
 	}
 	bunix_handle_close((u64)buffer);
 	return 0;
@@ -780,6 +783,7 @@ static long ext2_readonly_selftest(u64 vfs)
 	u64 hello_mode = 0;
 	u64 hello_uid = 0;
 	u64 hello_gid = 0;
+	u64 hello_blocks = 0;
 
 	if (vfs_read_text(vfs, "/mnt/ext2/hello.txt", text,
 			  sizeof(text)) != 0 ||
@@ -793,12 +797,12 @@ static long ext2_readonly_selftest(u64 vfs)
 	}
 	if (vfs_stat_path(vfs, "/mnt/ext2/hello.txt", &hello_size,
 			  &hello_ino, &hello_nlink, &hello_type, 0, 0,
-			  0) != 0 ||
+			  0, 0) != 0 ||
 	    hello_size != sizeof(hello) - 1 ||
 	    hello_type != BUNIX_VFS_TYPE_REGULAR ||
 	    hello_nlink < 2 ||
 	    vfs_stat_path(vfs, "/mnt/ext2/hard/hello-hard", 0, &hard_ino,
-			  &hard_nlink, 0, 0, 0, 0) != 0 ||
+			  &hard_nlink, 0, 0, 0, 0, 0) != 0 ||
 	    hard_ino != hello_ino ||
 	    hard_nlink != hello_nlink) {
 		return -1;
@@ -810,7 +814,7 @@ static long ext2_readonly_selftest(u64 vfs)
 		return -1;
 	}
 	if (vfs_stat_path(vfs, "/mnt/ext2/sparse-ish.bin", &sparse_size,
-			  0, 0, &sparse_type, 0, 0, 0) != 0 ||
+			  0, 0, &sparse_type, 0, 0, 0, 0) != 0 ||
 	    sparse_type != BUNIX_VFS_TYPE_REGULAR ||
 	    sparse_size < 8192) {
 		return -1;
@@ -833,7 +837,7 @@ static long ext2_readonly_selftest(u64 vfs)
 	if (vfs_chmod_path(vfs, "/mnt/ext2/hello.txt", 0600) != 0 ||
 	    vfs_chown_path(vfs, "/mnt/ext2/hello.txt", 123, 45) != 0 ||
 	    vfs_stat_path(vfs, "/mnt/ext2/hard/hello-hard", 0, 0, 0, 0,
-			  &hello_mode, &hello_uid, &hello_gid) != 0 ||
+			  &hello_mode, &hello_uid, &hello_gid, 0) != 0 ||
 	    hello_mode != 0600 ||
 	    hello_uid != 123 ||
 	    hello_gid != 45) {
@@ -842,7 +846,7 @@ static long ext2_readonly_selftest(u64 vfs)
 	if (vfs_chmod_path_buffer(vfs, "/mnt/ext2/hello.txt", 0644) != 0 ||
 	    vfs_chown_path_buffer(vfs, "/mnt/ext2/hello.txt", 321, 54) != 0 ||
 	    vfs_stat_path(vfs, "/mnt/ext2/hard/hello-hard", 0, 0, 0, 0,
-			  &hello_mode, &hello_uid, &hello_gid) != 0 ||
+			  &hello_mode, &hello_uid, &hello_gid, 0) != 0 ||
 	    hello_mode != 0644 ||
 	    hello_uid != 321 ||
 	    hello_gid != 54) {
@@ -851,7 +855,7 @@ static long ext2_readonly_selftest(u64 vfs)
 	if (vfs_create_path_buffer(vfs, "/mnt/ext2/created.txt", 0640) != 0 ||
 	    vfs_stat_path(vfs, "/mnt/ext2/created.txt", &hello_size, 0, 0,
 			  &hello_type, &hello_mode, &hello_uid,
-			  &hello_gid) != 0 ||
+			  &hello_gid, 0) != 0 ||
 	    hello_size != 0 ||
 	    hello_type != BUNIX_VFS_TYPE_REGULAR ||
 	    hello_mode != 0640 ||
@@ -866,9 +870,18 @@ static long ext2_readonly_selftest(u64 vfs)
 			  sizeof(text)) != 0 ||
 	    !str_eq(text, "created ok\n") ||
 	    vfs_stat_path(vfs, "/mnt/ext2/created.txt", &hello_size, 0, 0,
-			  &hello_type, 0, 0, 0) != 0 ||
+			  &hello_type, 0, 0, 0, &hello_blocks) != 0 ||
 	    hello_size != 11 ||
-	    hello_type != BUNIX_VFS_TYPE_REGULAR) {
+	    hello_type != BUNIX_VFS_TYPE_REGULAR ||
+	    hello_blocks == 0) {
+		return -1;
+	}
+	if (vfs_truncate_path(vfs, "/mnt/ext2/created.txt", 0) != 0 ||
+	    vfs_stat_path(vfs, "/mnt/ext2/created.txt", &hello_size, 0, 0,
+			  &hello_type, 0, 0, 0, &hello_blocks) != 0 ||
+	    hello_size != 0 ||
+	    hello_type != BUNIX_VFS_TYPE_REGULAR ||
+	    hello_blocks != 0) {
 		return -1;
 	}
 	return 0;
