@@ -162,9 +162,16 @@ Stress coverage slice:
   churn against the EEVDF accounting path, but it does not yet cover CPU-bound
   fairness, affinity, SMP stealing, or interactive latency under sustained CPU
   load.
+- Linux `sched_yield(2)` now maps directly onto the Bunix `thread_yield()`
+  primitive.  `schedstress` mixes CPU-bound spin work, explicit Linux yields,
+  sleep wakeups, pipes, fork, wait, and `/proc/sched` counter checks, giving
+  the current scheduler a repeatable Linux-personality churn test.
 - Verification for this slice:
   - `make build/modules/schedstress.user`
   - `BUNIX_TEST_SET=tmpfs-basic-linux-tests make test-parallel`
+  - `make`
+  - `BUNIX_TEST_SET=tmpfs-basic-linux-tests make test-parallel` after
+    adding Linux `sched_yield(2)` support
 
 Tasks:
 

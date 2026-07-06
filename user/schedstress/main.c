@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,8 +72,16 @@ static int worker_main(int worker, int write_fd)
 	char done = (char)('A' + worker);
 
 	for (int i = 0; i < ITERATIONS; i++) {
-		checksum = checksum * 1103515245ul + (unsigned long)i;
-		if (nanosleep(&delay, 0) != 0 && errno != EINTR) {
+		for (int spin = 0; spin < 4096; spin++) {
+			checksum = checksum * 1103515245ul +
+				   (unsigned long)i + (unsigned long)spin;
+		}
+		if ((i % 3) == 0) {
+			if (sched_yield() != 0) {
+				perror("schedstress sched_yield");
+				return 1;
+			}
+		} else if (nanosleep(&delay, 0) != 0 && errno != EINTR) {
 			perror("schedstress nanosleep");
 			return 1;
 		}

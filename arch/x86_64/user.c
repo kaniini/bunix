@@ -98,6 +98,7 @@ enum {
 	LINUX_SYSCALL_ACCESS = 21,
 	LINUX_SYSCALL_PIPE = 22,
 	LINUX_SYSCALL_SELECT = 23,
+	LINUX_SYSCALL_SCHED_YIELD = 24,
 	LINUX_SYSCALL_NANOSLEEP = 35,
 	LINUX_SYSCALL_DUP = 32,
 	LINUX_SYSCALL_DUP2 = 33,
@@ -3350,6 +3351,8 @@ static const char *linux_syscall_name(u64 number)
 		return "poll";
 	case LINUX_SYSCALL_SELECT:
 		return "select";
+	case LINUX_SYSCALL_SCHED_YIELD:
+		return "sched_yield";
 	case LINUX_SYSCALL_MMAP:
 		return "mmap";
 	case LINUX_SYSCALL_MPROTECT:
@@ -4140,6 +4143,9 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return (u64)-LINUX_ENOTTY;
 	case LINUX_SYSCALL_FCNTL:
 		break;
+	case LINUX_SYSCALL_SCHED_YIELD:
+		thread_yield();
+		return 0;
 	case LINUX_SYSCALL_NANOSLEEP:
 		return linux_sleep_relative(arg0, arg1);
 	case LINUX_SYSCALL_CLOCK_NANOSLEEP:
