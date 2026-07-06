@@ -3,6 +3,7 @@ smoke	user	2	128M	90	1	no	Fast boot-marker, login, minimal VFS/procfs, and sysra
 smoke-up	user	1	128M	90	1	no	One-vCPU boot-marker, login, minimal VFS/procfs, and sysrace smoke target.
 login-smoke	user	2	128M	120	1	no	Login environment, uptime/uname/id/groups, /usr/bin/env, access checks, stty, basic sleep, signal, and kill probes.
 exec-argv-pipe	user	2	128M	120	1	no	Pipes, argv/env expansion, large argv/env, and initial procfs read through the login shell.
+procfs-cmdline	user	2	128M	120	1	no	Live non-self procfs cmdline/status coverage without shell $$ assumptions.
 rootfs-vfs-proc-dev	user	2	128M	150	2	no	Rootfs stat/list/readlink, long paths, cwd/dotdot/slash resolution, procfs files, and devfs zero/urandom checks.
 tmpfs-basic-linux-tests	user	2	128M	180	3	no	/tmp and /run writes, append/excl/truncate/unlink, bundled Linux regression binaries, proc tools, mount listing, mkdir basics, and dev console write.
 path-limits-statfs	user	2	128M	180	2	no	Deep tmpfs path creation, pathmaxtest, patherrtest, and df/statfs checks.

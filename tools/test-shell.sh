@@ -20,6 +20,7 @@ shell_parts=${BUNIX_SHELL_PART:-all}
 . "$script_dir/shell-tests/smoke.sh"
 . "$script_dir/shell-tests/login-smoke.sh"
 . "$script_dir/shell-tests/exec-argv-pipe.sh"
+. "$script_dir/shell-tests/procfs-cmdline.sh"
 . "$script_dir/shell-tests/rootfs-vfs-proc-dev.sh"
 . "$script_dir/shell-tests/tmpfs-basic-linux-tests.sh"
 . "$script_dir/shell-tests/path-limits-statfs.sh"
@@ -219,7 +220,7 @@ require_supported_parts() {
 	for part do
 		case "$part" in
 		all|vfs|procfs|devfs|tmpfs|path|statfs|large-io|mount|\
-		smoke|login-smoke|exec-argv-pipe|rootfs-vfs-proc-dev|\
+		smoke|login-smoke|exec-argv-pipe|procfs-cmdline|rootfs-vfs-proc-dev|\
 		tmpfs-basic-linux-tests|path-limits-statfs|union-root-user|\
 		tmpfs-extended|large-io-mount|interactive-tty|root-login-union|\
 		root-tmpfs-chown|long-login|root-mount-soak)
@@ -295,6 +296,11 @@ if part_selected exec-argv-pipe; then
 	run_exec_argv_pipe
 fi
 
+if part_selected procfs-cmdline; then
+	begin_shard procfs-cmdline
+	run_procfs_cmdline
+fi
+
 if part_selected rootfs-vfs-proc-dev; then
 	begin_shard rootfs-vfs-proc-dev
 	run_rootfs_vfs_proc_dev
@@ -333,6 +339,11 @@ fi
 if part_selected rootfs-vfs-proc-dev; then
 	check_rootfs_vfs_proc_dev
 	finish_shard rootfs-vfs-proc-dev
+fi
+
+if part_selected procfs-cmdline; then
+	check_procfs_cmdline
+	finish_shard procfs-cmdline
 fi
 
 if part_selected path-limits-statfs; then

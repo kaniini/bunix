@@ -77,10 +77,18 @@ Plan:
    - Mapped `smoke-up` to the existing smoke script body in the parallel
      worker, using the new UP boot marker set.
 
-4. Tighten procfs cmdline coverage
+4. Tighten procfs cmdline coverage [DONE]
    Add a dedicated procfs command-line shard or helper that proves argv bytes for
    a live non-self process without relying on unstable shell `$$` expansion.
    Keep rootfs/VFS/devfs coverage focused on stable `/proc/self` behavior.
+
+   Result:
+
+   - Added a `procfs-cmdline` shard.
+   - The shard backgrounds a `busybox sleep 20` child, discovers the live
+     non-self process id through `ps`, and checks `/proc/$pid/status` and
+     `/proc/$pid/cmdline`.
+   - Existing rootfs/VFS/devfs procfs checks remain focused on `/proc/self`.
 
 5. Re-run and complete the gate
    Run narrow tests for each fixed shard, then run full `make test`. When all
