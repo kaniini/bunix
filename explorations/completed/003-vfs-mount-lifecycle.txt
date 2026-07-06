@@ -78,7 +78,17 @@ Plan:
      cycles.
    - The pinned-cwd busy denial check also uses `/mnt` directly.
 
-5. Validate and complete
+5. Validate and complete [DONE]
    Run narrow same-path mount coverage, `root-mount-soak`, and then full
    `make test`. Move this exploration to `explorations/completed/` when all
    tasks pass.
+
+   Result:
+
+   - Focused same-path `/mnt` remount reproducer passed.
+   - Focused pinned-cwd busy-unmount reproducer passed.
+   - `BUNIX_TEST_SET=root-mount-soak BUNIX_TEST_JOBS=1
+     BUNIX_TEST_STOP_ON_FAIL=1 make test-parallel` passed.
+   - Full `make test` passed.
+   - Run id: `20260706T020220Z-12624`.
+   - Result: 16 shards launched, 0 skipped, all passed.
