@@ -1,0 +1,8 @@
+Implement the kernel/server filesystem and device surfaces OpenRC expects.
+
+- [ ] Inventory OpenRC startup accesses against `/dev`, `/proc`, `/sys`, `/run`, and `/tmp`.
+- [ ] Add missing devfs nodes needed for early OpenRC and BusyBox tools.
+- [ ] Add the minimal sysfs translator/server surface needed for OpenRC probing.
+- [ ] Fill procfs gaps needed by OpenRC scripts and common applets.
+- [ ] Verify permissions, ownership, mode bits, and mount behavior match Linux enough for OpenRC.
+- [ ] Add focused sharded tests for each new surface.

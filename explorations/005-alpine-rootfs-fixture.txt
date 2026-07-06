@@ -1,0 +1,8 @@
+Build a minimal Alpine rootfs fixture for OpenRC boot testing.
+
+- [ ] Define the rootfs source and reproducibility contract.
+- [ ] Build or import a minimal Alpine userspace with BusyBox, musl, OpenRC, and base config.
+- [ ] Package the fixture without GPL contamination in the kernel or servers; GPL userspace is acceptable.
+- [ ] Teach the build/test harness how to select the Alpine rootfs fixture separately from the current synthetic rootfs.
+- [ ] Add a smoke test that can inspect `/etc/alpine-release`, `/sbin/init`, OpenRC config, and required symlinks.
+- [ ] Document how to refresh the fixture.

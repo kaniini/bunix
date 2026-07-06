@@ -12,8 +12,8 @@ Poweroff and deterministic test exit:
 
 OpenRC/Alpine boot preparation plan:
 
-- [ ] Write follow-up explorations for building a minimal Alpine rootfs fixture.
-- [ ] Write follow-up explorations for remaining devfs/procfs/sysfs surfaces OpenRC expects.
-- [ ] Write follow-up explorations for Linux compatibility gaps discovered by OpenRC startup.
-- [ ] Write follow-up explorations for booting `/sbin/init` from Alpine and capturing service logs.
-- [ ] Write follow-up explorations for sharded OpenRC boot regression coverage.
+- [x] Write follow-up explorations for building a minimal Alpine rootfs fixture.
+- [x] Write follow-up explorations for remaining devfs/procfs/sysfs surfaces OpenRC expects.
+- [x] Write follow-up explorations for Linux compatibility gaps discovered by OpenRC startup.
+- [x] Write follow-up explorations for booting `/sbin/init` from Alpine and capturing service logs.
+- [x] Write follow-up explorations for sharded OpenRC boot regression coverage.

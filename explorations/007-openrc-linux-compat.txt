@@ -1,0 +1,8 @@
+Close Linux personality gaps discovered by OpenRC userspace.
+
+- [ ] Boot the Alpine fixture far enough to collect strace-style logs from OpenRC startup.
+- [ ] Triage missing or incorrect syscalls by startup phase and impact.
+- [ ] Implement high-priority syscall fixes in narrow slices with reproducer tests.
+- [ ] Ensure process/session/task identity remains consistent across Bunix tasks and Linux PIDs.
+- [ ] Verify OpenRC shell scripts, service supervision, and BusyBox applets run without harness-only assumptions.
+- [ ] Keep unsupported Linux behavior explicit with useful diagnostics.
