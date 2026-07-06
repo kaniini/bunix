@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 006-openrc-platform-surfaces.txt
+The current exploration is: 007-openrc-linux-compat.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.
