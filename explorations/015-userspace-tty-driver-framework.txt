@@ -95,6 +95,9 @@ Progress:
   in the `HWR0` protocol and remains to be wired to real IRQ dispatch.
 - Added a boot marker for `console: driver online` so the synthetic and Alpine
   boot checks assert that the userspace console-driver registration path ran.
+- Moved Linux TTY mutable state into a `struct linux_tty` instance.  Behavior is
+  unchanged, but the line discipline now has a concrete state object boundary
+  for the later split into a reusable TTY server layer.
 
 Portability notes:
 
