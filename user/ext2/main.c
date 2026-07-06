@@ -289,6 +289,22 @@ static int text_starts_with(const char *text, const char *prefix)
 	return 1;
 }
 
+static int path_has_prefix_child(const char *path, const char *prefix)
+{
+	u64 i = 0;
+
+	if (path == 0 || prefix == 0) {
+		return 0;
+	}
+	while (prefix[i] != 0) {
+		if (path[i] != prefix[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return i > 1 && path[i] == '/';
+}
+
 static u64 div_round_up(u64 value, u64 divisor)
 {
 	return divisor == 0 ? 0 : (value + divisor - 1) / divisor;
@@ -2000,6 +2016,51 @@ static long replace_dirent_inode(struct ext2_mount *mount,
 	return -1;
 }
 
+static long update_dotdot(struct ext2_mount *mount,
+			  const struct ext2_inode *directory, u64 parent_ino)
+{
+	unsigned char *block;
+	long result = -1;
+
+	if (mount == 0 || directory == 0 ||
+	    ext2_inode_vfs_type(directory) != BUNIX_VFS_TYPE_DIRECTORY ||
+	    directory->block[0] == 0 ||
+	    !block_range_valid(mount, directory->block[0], 1)) {
+		return -1;
+	}
+	block = (unsigned char *)bunix_calloc(1, mount->super.block_size);
+	if (block == 0) {
+		return -1;
+	}
+	if (read_mapped_block(mount, directory, 0, block) == 0) {
+		u64 offset = 0;
+
+		while (offset + 8 <= mount->super.block_size &&
+		       offset < directory->size) {
+			const u64 rec_len = load_le16(block, offset + 4);
+			const u64 name_len = block[offset + 6];
+
+			if (rec_len < 8 ||
+			    (rec_len & 3) != 0 ||
+			    rec_len > mount->super.block_size - offset ||
+			    name_len > rec_len - 8) {
+				break;
+			}
+			if (name_len == 2 &&
+			    text_eq_len("..", (const char *)block + offset + 8,
+					name_len)) {
+				store_le32(block, offset, parent_ino);
+				result = write_mapped_block(mount, directory, 0,
+							    block);
+				break;
+			}
+			offset += rec_len;
+		}
+	}
+	bunix_free(block);
+	return result;
+}
+
 static int directory_is_empty(const struct ext2_mount *mount,
 			      const struct ext2_inode *directory)
 {
@@ -2536,6 +2597,25 @@ static long release_unlinked_inode(struct ext2_mount *mount, u64 ino,
 	return 0;
 }
 
+static long release_unlinked_directory(struct ext2_mount *mount, u64 ino,
+				       struct ext2_inode *inode)
+{
+	if (mount == 0 || inode == 0 ||
+	    ext2_inode_vfs_type(inode) != BUNIX_VFS_TYPE_DIRECTORY ||
+	    inode_has_indirect_blocks(inode) ||
+	    !inode_has_direct_data_blocks(inode) ||
+	    !directory_is_empty(mount, inode)) {
+		return -1;
+	}
+	if (free_direct_blocks_from(mount, ino, inode, 0) != 0 ||
+	    adjust_group_used_dirs(mount, ino, -1) != 0 ||
+	    clear_inode(mount, ino) != 0 ||
+	    free_inode(mount, ino) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
 static void reply_unlink(struct bunix_msg *reply, const char *path)
 {
 	char parent_path[EXT2_MAX_PATH];
@@ -2599,7 +2679,12 @@ static void reply_rename(struct bunix_msg *reply, const char *old_path,
 	u64 source_type;
 	u64 target_type;
 	u64 file_type;
+	u64 old_parent_links;
+	u64 new_parent_links;
 	int target_exists;
+	int source_is_dir;
+	int target_is_dir = 0;
+	int moved_parent;
 
 	if (!root_mount_ready) {
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
@@ -2630,16 +2715,19 @@ static void reply_rename(struct bunix_msg *reply, const char *old_path,
 		return;
 	}
 	source_type = ext2_inode_vfs_type(&source_inode);
-	if (source_type == BUNIX_VFS_TYPE_DIRECTORY) {
-		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
-		return;
-	}
+	source_is_dir = source_type == BUNIX_VFS_TYPE_DIRECTORY;
+	moved_parent = source_is_dir && old_parent_ino != new_parent_ino;
 	if ((source_type != BUNIX_VFS_TYPE_REGULAR &&
-	     source_type != BUNIX_VFS_TYPE_SYMLINK) ||
+	     source_type != BUNIX_VFS_TYPE_SYMLINK &&
+	     source_type != BUNIX_VFS_TYPE_DIRECTORY) ||
 	    (source_type == BUNIX_VFS_TYPE_REGULAR &&
 	     inode_has_indirect_blocks(&source_inode)) ||
 	    (source_type == BUNIX_VFS_TYPE_SYMLINK &&
-	     source_inode.blocks != 0)) {
+	     source_inode.blocks != 0) ||
+	    (source_type == BUNIX_VFS_TYPE_DIRECTORY &&
+	     (inode_has_indirect_blocks(&source_inode) ||
+	      !inode_has_direct_data_blocks(&source_inode) ||
+	      path_has_prefix_child(new_path, old_path)))) {
 		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 		return;
 	}
@@ -2660,28 +2748,61 @@ static void reply_rename(struct bunix_msg *reply, const char *old_path,
 	}
 	if (target_exists) {
 		target_type = ext2_inode_vfs_type(&target_inode);
-		if (target_type == BUNIX_VFS_TYPE_DIRECTORY) {
+		target_is_dir = target_type == BUNIX_VFS_TYPE_DIRECTORY;
+		if (target_is_dir && !source_is_dir) {
 			reply->words[0] = BUNIX_VFS_ERR_ISDIR;
 			return;
 		}
+		if (!target_is_dir && source_is_dir) {
+			reply->words[0] = BUNIX_VFS_ERR_NOTDIR;
+			return;
+		}
 		if ((target_type != BUNIX_VFS_TYPE_REGULAR &&
-		     target_type != BUNIX_VFS_TYPE_SYMLINK) ||
+		     target_type != BUNIX_VFS_TYPE_SYMLINK &&
+		     target_type != BUNIX_VFS_TYPE_DIRECTORY) ||
 		    (target_type == BUNIX_VFS_TYPE_REGULAR &&
 		     inode_has_indirect_blocks(&target_inode)) ||
 		    (target_type == BUNIX_VFS_TYPE_SYMLINK &&
-		     target_inode.blocks != 0)) {
+		     target_inode.blocks != 0) ||
+		    (target_type == BUNIX_VFS_TYPE_DIRECTORY &&
+		     (inode_has_indirect_blocks(&target_inode) ||
+		      !inode_has_direct_data_blocks(&target_inode) ||
+		      !directory_is_empty(&root_mount, &target_inode)))) {
 			reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 			return;
 		}
+	}
+	old_parent_links = old_parent_inode.links_count;
+	new_parent_links = new_parent_inode.links_count;
+	if (moved_parent &&
+	    (old_parent_links == 0 ||
+	     (!target_exists && new_parent_links == 0xffff))) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	if (moved_parent &&
+	    update_dotdot(&root_mount, &source_inode, new_parent_ino) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (target_exists) {
 		if (replace_dirent_inode(&root_mount, &new_parent_inode,
 					 target_ino, new_name, source_ino,
 					 file_type) != 0) {
+			if (moved_parent) {
+				(void)update_dotdot(&root_mount, &source_inode,
+						    old_parent_ino);
+			}
 			reply->words[0] = (u64)-1;
 			return;
 		}
 	} else if (insert_dirent_existing_space(&root_mount, &new_parent_inode,
 						source_ino, new_name,
 						file_type) != 0) {
+		if (moved_parent) {
+			(void)update_dotdot(&root_mount, &source_inode,
+					    old_parent_ino);
+		}
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -2691,12 +2812,29 @@ static void reply_rename(struct bunix_msg *reply, const char *old_path,
 			(void)remove_dirent(&root_mount, &new_parent_inode,
 					    source_ino, new_name);
 		}
+		if (moved_parent) {
+			(void)update_dotdot(&root_mount, &source_inode,
+					    old_parent_ino);
+		}
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (moved_parent &&
+	    (write_inode_links(&root_mount, old_parent_ino, &old_parent_inode,
+			       old_parent_links - 1) != 0 ||
+	     (!target_exists &&
+	      write_inode_links(&root_mount, new_parent_ino, &new_parent_inode,
+				new_parent_links + 1) != 0))) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
 	if (target_exists &&
-	    release_unlinked_inode(&root_mount, target_ino,
-				   &target_inode) != 0) {
+	    ((target_is_dir &&
+	      release_unlinked_directory(&root_mount, target_ino,
+					 &target_inode) != 0) ||
+	     (!target_is_dir &&
+	      release_unlinked_inode(&root_mount, target_ino,
+				     &target_inode) != 0))) {
 		reply->words[0] = (u64)-1;
 		return;
 	}

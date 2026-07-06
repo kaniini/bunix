@@ -1206,6 +1206,24 @@ static long ext2_readonly_selftest(u64 vfs)
 	    vfs_readdir_has(vfs, "/mnt/ext2", "newdir") == 0) {
 		return -1;
 	}
+	if (vfs_mkdir_path_buffer(vfs, "/mnt/ext2/rename-dir-a", 0755) != 0 ||
+	    vfs_mkdir_path_buffer(vfs, "/mnt/ext2/rename-dir-b", 0755) != 0 ||
+	    vfs_mkdir_path_buffer(vfs, "/mnt/ext2/rename-dir-a/child",
+				  0755) != 0 ||
+	    vfs_mkdir_path_buffer(vfs, "/mnt/ext2/rename-dir-b/target",
+				  0755) != 0 ||
+	    vfs_rename_path_buffer(vfs, "/mnt/ext2/rename-dir-a/child",
+				   "/mnt/ext2/rename-dir-b/target", 0) != 0 ||
+	    vfs_stat_path(vfs, "/mnt/ext2/rename-dir-a/child", 0, 0, 0,
+			  0, 0, 0, 0, 0) == 0 ||
+	    vfs_stat_path(vfs, "/mnt/ext2/rename-dir-b/target", 0, 0, 0,
+			  &dir_type, 0, 0, 0, 0) != 0 ||
+	    dir_type != BUNIX_VFS_TYPE_DIRECTORY ||
+	    vfs_rmdir_path_buffer(vfs, "/mnt/ext2/rename-dir-a") != 0 ||
+	    vfs_rmdir_path_buffer(vfs, "/mnt/ext2/rename-dir-b/target") != 0 ||
+	    vfs_rmdir_path_buffer(vfs, "/mnt/ext2/rename-dir-b") != 0) {
+		return -1;
+	}
 	return 0;
 }
 

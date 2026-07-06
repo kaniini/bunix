@@ -187,12 +187,12 @@ Implementation notes:
   `..`, update parent link counts and group used-directory counts, accept
   nested file creation through reusable directory-entry space, reject non-empty
   removal, and free the directory block plus inode on successful removal.
-- `RENAME_BUFFER` now supports regular files and fast symlinks in the current
-  direct-block write subset.  It handles same-filesystem path-buffer renames,
-  `NOREPLACE`, replacement of regular files or fast symlinks, link-count
-  updates for replaced targets, and rollback of newly inserted destination
-  entries if removing the old name fails.  Directory rename remains a follow-up
-  because it needs `..` updates and parent link-count transitions.
+- `RENAME_BUFFER` now supports regular files, fast symlinks, and direct-block
+  directories in the current write subset.  It handles same-filesystem
+  path-buffer renames, `NOREPLACE`, replacement of compatible regular files,
+  fast symlinks, or empty directories, link-count updates for replaced targets,
+  rollback of newly inserted destination entries if removing the old name
+  fails, `..` updates for moved directories, and parent link-count transitions.
 
 Tasks:
 
