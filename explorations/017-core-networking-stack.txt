@@ -156,9 +156,9 @@ Progress:
   `getsockname`, `getpeername`, socket options, and dedicated userland tests.
 - Added `nettest`, a static musl Linux-personality boot test that opens
   AF_INET sockets through the Linux server and verifies localhost UDP
-  connect/send/recv plus TCP bind/listen/connect/poll/accept/read/write.  The
-  x86_64 bridge now grants `DUP` on Linux read/write/send/recv shared buffers
-  where the Linux server forwards them to NET0.  Explicit-destination UDP
-  `sendto` has initial NET0 and Linux-server plumbing but is not yet marked
-  complete because the first boot test exposed a delivery bug; keep it as a
-  focused follow-up before closing the Linux socket compatibility task.
+  explicit-destination `sendto`/recv plus TCP
+  bind/listen/connect/poll/accept/read/write.  The x86_64 bridge now grants
+  `DUP` on Linux read/write/send/recv shared buffers where the Linux server
+  forwards them to NET0.  Remaining Linux socket work includes sockaddr return
+  paths, `getsockname`, `getpeername`, socket options, IPv6 userland coverage,
+  and teardown/permission edge cases.

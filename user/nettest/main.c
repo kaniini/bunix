@@ -36,12 +36,10 @@ static void udp_test(void)
 		die("nettest: udp bind failed\n");
 	}
 	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	if (connect(client, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-		die("nettest: udp connect failed\n");
-	}
-	if (send(client, payload, sizeof(payload), 0) !=
+	if (sendto(client, payload, sizeof(payload), 0,
+		   (struct sockaddr *)&addr, sizeof(addr)) !=
 	    (ssize_t)sizeof(payload)) {
-		die("nettest: udp send failed\n");
+		die("nettest: udp sendto failed\n");
 	}
 	nread = recvfrom(server, buffer, sizeof(buffer), 0, 0, 0);
 	if (nread != (ssize_t)sizeof(payload) ||
