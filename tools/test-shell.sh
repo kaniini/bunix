@@ -6,6 +6,7 @@ ovmf=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE.fd}
 esp=${ESP_DIR:-build/esp}
 timeout_cmd=${TIMEOUT:-timeout}
 qemu_timeout=${QEMU_TIMEOUT:-180s}
+qemu_memory=${QEMU_MEMORY:-128M}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-shell-test.$run_id}
 log=$tmp/serial.log
@@ -123,7 +124,7 @@ start_qemu() {
 	cat "$pipe.out" > "$log" &
 	cat_pid=$!
 
-	TMPDIR=$tmp $timeout_cmd "$qemu_timeout" "$qemu" -enable-kvm -machine q35 -cpu host -m 128M \
+	TMPDIR=$tmp $timeout_cmd "$qemu_timeout" "$qemu" -enable-kvm -machine q35 -cpu host -m "$qemu_memory" \
 		-smp "${SMP:-2}" \
 		-drive if=pflash,format=raw,readonly=on,file="$ovmf" \
 		-drive format=raw,file=fat:rw:"$runtime_esp" \

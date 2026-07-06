@@ -290,7 +290,7 @@ Plan:
    - Worker start lines include the resource metadata used for scheduling, so
      SMP policy is visible per shard.
 
-15. Make QEMU worker resources configurable
+15. Make QEMU worker resources configurable [DONE]
    Support runner-level knobs:
 
    - `BUNIX_TEST_JOBS` for number of concurrent VMs.
@@ -298,6 +298,19 @@ Plan:
    - Optional `BUNIX_VM_MEMORY_OVERRIDE` to force RAM for debugging.
    - Optional `BUNIX_QEMU_TIMEOUT_OVERRIDE` to force timeouts for debugging.
    - Optional CPU affinity later if host scheduling gets noisy.
+
+   Result:
+
+   - `tools/test-parallel.sh` supports `BUNIX_VM_SMP_OVERRIDE`,
+     `BUNIX_VM_MEMORY_OVERRIDE`, and `BUNIX_QEMU_TIMEOUT_OVERRIDE`, while using
+     shard metadata by default.
+   - `tools/test-shell.sh` and `tools/test-command.sh` honor `QEMU_MEMORY` so
+     worker memory can vary per shard or per override.
+   - `README.md` documents the override knobs.
+
+   Need:
+
+   - CPU affinity remains a later tuning knob if host scheduling gets noisy.
 
 16. Add isolated artifact and summary output
    Each worker should write under a unique directory such as:

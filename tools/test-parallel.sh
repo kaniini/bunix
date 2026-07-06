@@ -119,6 +119,17 @@ worker_parts() {
 	esac
 }
 
+effective_timeout() {
+	if [ -n "${BUNIX_QEMU_TIMEOUT_OVERRIDE:-}" ]; then
+		case "$BUNIX_QEMU_TIMEOUT_OVERRIDE" in
+		*[!0-9]*) echo "$BUNIX_QEMU_TIMEOUT_OVERRIDE" ;;
+		*) echo "${BUNIX_QEMU_TIMEOUT_OVERRIDE}s" ;;
+		esac
+		return
+	fi
+	echo "${1}s"
+}
+
 run_worker() {
 	name=$1
 	smp=$2
@@ -126,19 +137,23 @@ run_worker() {
 	timeout_seconds=$4
 	cost=$5
 	clean_boot=$6
+	worker_smp=${BUNIX_VM_SMP_OVERRIDE:-$smp}
+	worker_memory=${BUNIX_VM_MEMORY_OVERRIDE:-$memory}
+	worker_timeout=$(effective_timeout "$timeout_seconds")
 	parts=$(worker_parts "$name")
 	worker_dir=$run_root/$run_id/$name
 	start=$(date +%s)
 
 	mkdir -p "$worker_dir"
-	echo "test-parallel name=$name status=start smp=$smp memory=$memory timeout=${timeout_seconds}s cost=$cost clean_boot=$clean_boot artifact=$worker_dir"
+	echo "test-parallel name=$name status=start smp=$worker_smp memory=$worker_memory timeout=$worker_timeout cost=$cost clean_boot=$clean_boot artifact=$worker_dir"
 
 	if BUNIX_TEST_RUN_ID="$run_id-$name" \
 	    BUNIX_TEST_RUNTIME_DIR="$worker_dir/runtime" \
 	    FAILURE_DIR="$worker_dir/failures" \
 	    BUNIX_SHELL_PART="$parts" \
-	    SMP="$smp" \
-	    QEMU_TIMEOUT="${timeout_seconds}s" \
+	    SMP="$worker_smp" \
+	    QEMU_MEMORY="$worker_memory" \
+	    QEMU_TIMEOUT="$worker_timeout" \
 	    "$make_cmd" test-shell-part >"$worker_dir/stdout.log" 2>"$worker_dir/stderr.log"; then
 		status=ok
 		rc=0

@@ -429,7 +429,9 @@ The parallel runner defaults to half the online CPU count capped at eight
 workers until QEMU memory pressure is better characterized. Each worker gets a
 separate runtime ESP copy and writes logs under `build/test-runs/<run-id>/`.
 Shard SMP policy comes from `tools/shell-shards.tsv`; use `BUNIX_TEST_JOBS` to
-raise or lower host concurrency.
+raise or lower host concurrency. For debugging, `BUNIX_VM_SMP_OVERRIDE`,
+`BUNIX_VM_MEMORY_OVERRIDE`, and `BUNIX_QEMU_TIMEOUT_OVERRIDE` force worker vCPU
+count, RAM, and QEMU timeout respectively.
 
 `make test-rootfs-tool` is a host-side regression for the rootfs image builder;
 it creates more than 128 entries to verify the builder's dynamic entry table.
