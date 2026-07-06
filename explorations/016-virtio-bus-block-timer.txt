@@ -164,3 +164,17 @@ Progress:
   handles rather than raw I/O privilege.  This unblocks VirtIO common config,
   notify, ISR, and device config access once drivers begin consuming `DEV0`
   resources.
+- Switched the deterministic QEMU VirtIO block topology to modern-only PCI with
+  `disable-legacy=on`, enabled PCI command I/O/memory/bus-master bits for
+  discovered VirtIO functions, and fixed 64-bit BAR base/size handling in both
+  userspace discovery and the kernel BAR-grant validator.  This is required for
+  modern VirtIO devices whose config BARs live above 4 GiB.
+- `virtio-bus.server` now records common/notify/ISR/device config resource
+  indices, reads nonzero device feature bits through the modern common config,
+  exposes `DEV0 READ_FEATURES`, and implements an initial
+  `DEV0 NEGOTIATE_FEATURES` path that resets status, sets ACKNOWLEDGE/DRIVER,
+  writes both 32-bit driver feature banks, and verifies FEATURES_OK.  Queue
+  setup, notification, interrupt ack, and driver ownership remain open.
+- `test-boot-virtio` now asserts modern VirtIO enumeration and rejects a zero
+  feature-read marker, giving coverage for PCI capability parsing, 64-bit BAR
+  grants, and common-config MMIO reads during boot.

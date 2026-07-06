@@ -9,6 +9,9 @@ enum {
 	PCI_CONFIG_DATA = 4,
 	PCI_VENDOR_NONE = 0xffff,
 	PCI_COMMAND = 0x04,
+	PCI_COMMAND_IO = 1 << 0,
+	PCI_COMMAND_MEMORY = 1 << 1,
+	PCI_COMMAND_BUS_MASTER = 1 << 2,
 	PCI_STATUS = 0x06,
 	PCI_BAR0 = 0x10,
 	PCI_CAP_PTR = 0x34,
@@ -22,6 +25,11 @@ enum {
 	VIRTIO_PCI_CAP_NOTIFY_CFG = 2,
 	VIRTIO_PCI_CAP_ISR_CFG = 3,
 	VIRTIO_PCI_CAP_DEVICE_CFG = 4,
+	VIRTIO_PCI_COMMON_DEVICE_FEATURE_SELECT = 0x00,
+	VIRTIO_PCI_COMMON_DEVICE_FEATURE = 0x04,
+	VIRTIO_PCI_COMMON_DRIVER_FEATURE_SELECT = 0x08,
+	VIRTIO_PCI_COMMON_DRIVER_FEATURE = 0x0c,
+	VIRTIO_PCI_COMMON_DEVICE_STATUS = 0x14,
 };
 
 struct virtio_bus_device {
@@ -106,6 +114,27 @@ static void log_device(const struct virtio_bus_device *device, u64 index)
 	bunix_console_log(line, offset);
 }
 
+static void log_features(const struct virtio_bus_device *device, u64 index)
+{
+	char line[112];
+	u64 offset = 0;
+
+	if (device == 0) {
+		return;
+	}
+	line[0] = '\0';
+	append_text(line, sizeof(line), &offset, "virtio-bus: features index=");
+	append_u64(line, sizeof(line), &offset, index);
+	append_text(line, sizeof(line), &offset, " device=");
+	append_u64(line, sizeof(line), &offset,
+		   device->info.features.device_features);
+	append_text(line, sizeof(line), &offset, " common=");
+	append_u64(line, sizeof(line), &offset,
+		   device->info.transport.common_cfg_resource);
+	append_char(line, sizeof(line), &offset, '\n');
+	bunix_console_log(line, offset);
+}
+
 static long register_service(u64 service, u64 handle)
 {
 	struct bunix_msg request = {
@@ -156,6 +185,20 @@ static long pci_config_write32(u64 bus, u64 slot, u64 function, u64 offset,
 	}
 	return bunix_hw_port_out32(VIRTIO_BUS_HANDLE_PCI_CONFIG,
 				   PCI_CONFIG_DATA, value);
+}
+
+static void pci_enable_device(u64 bus, u64 slot, u64 function)
+{
+	const long value = pci_config_read32(bus, slot, function, PCI_COMMAND);
+	u64 command;
+
+	if (value < 0) {
+		return;
+	}
+	command = ((u64)value & 0xffffu) | PCI_COMMAND_IO |
+		  PCI_COMMAND_MEMORY | PCI_COMMAND_BUS_MASTER;
+	(void)pci_config_write32(bus, slot, function, PCI_COMMAND,
+				 ((u64)value & 0xffff0000u) | command);
 }
 
 static long pci_config_read8(u64 bus, u64 slot, u64 function, u64 offset)
@@ -238,6 +281,142 @@ static void resource_add(struct virtio_bus_device *device, u64 type, u64 ops,
 	resource->flags = flags;
 }
 
+static struct bunix_device_resource *
+resource_find_flag(struct virtio_bus_device *device, u64 flag, u64 *index)
+{
+	if (device == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < device->resource_count; i++) {
+		if ((device->resources[i].flags & flag) != 0) {
+			if (index != 0) {
+				*index = i;
+			}
+			return &device->resources[i];
+		}
+	}
+	return 0;
+}
+
+static void record_virtio_resources(struct virtio_bus_device *device)
+{
+	u64 index;
+
+	if (resource_find_flag(device,
+			       BUNIX_DEV_RESOURCE_FLAG_VIRTIO_COMMON_CFG,
+			       &index) != 0) {
+		device->info.transport.common_cfg_resource = index;
+	}
+	if (resource_find_flag(device,
+			       BUNIX_DEV_RESOURCE_FLAG_VIRTIO_NOTIFY_CFG,
+			       &index) != 0) {
+		device->info.transport.notify_resource = index;
+	}
+	if (resource_find_flag(device,
+			       BUNIX_DEV_RESOURCE_FLAG_VIRTIO_ISR_CFG,
+			       &index) != 0) {
+		device->info.transport.isr_resource = index;
+	}
+	if (resource_find_flag(device,
+			       BUNIX_DEV_RESOURCE_FLAG_VIRTIO_DEVICE_CFG,
+			       &index) != 0) {
+		device->info.transport.device_cfg_resource = index;
+	}
+}
+
+static int virtio_common_read_device_features(struct virtio_bus_device *device,
+					      u64 *features)
+{
+	struct bunix_device_resource *common =
+		resource_find_flag(device,
+				   BUNIX_DEV_RESOURCE_FLAG_VIRTIO_COMMON_CFG,
+				   0);
+	long low;
+	long high;
+
+	if (common == 0 || common->handle == 0 || features == 0) {
+		return -1;
+	}
+	if (bunix_hw_mmio_write32(common->handle,
+				  VIRTIO_PCI_COMMON_DEVICE_FEATURE_SELECT,
+				  0) != 0) {
+		return -1;
+	}
+	low = bunix_hw_mmio_read32(common->handle,
+				   VIRTIO_PCI_COMMON_DEVICE_FEATURE);
+	if (bunix_hw_mmio_write32(common->handle,
+				  VIRTIO_PCI_COMMON_DEVICE_FEATURE_SELECT,
+				  1) != 0) {
+		return -1;
+	}
+	high = bunix_hw_mmio_read32(common->handle,
+				    VIRTIO_PCI_COMMON_DEVICE_FEATURE);
+	if (low < 0 || high < 0) {
+		return -1;
+	}
+	*features = ((u64)low & 0xffffffffu) |
+		    (((u64)high & 0xffffffffu) << 32);
+	device->info.features.device_features = *features;
+	return 0;
+}
+
+static int virtio_common_write_driver_features(struct virtio_bus_device *device,
+					       u64 features)
+{
+	struct bunix_device_resource *common =
+		resource_find_flag(device,
+				   BUNIX_DEV_RESOURCE_FLAG_VIRTIO_COMMON_CFG,
+				   0);
+
+	if (common == 0 || common->handle == 0) {
+		return -1;
+	}
+	if (bunix_hw_mmio_write32(common->handle,
+				  VIRTIO_PCI_COMMON_DRIVER_FEATURE_SELECT,
+				  0) != 0 ||
+	    bunix_hw_mmio_write32(common->handle,
+				  VIRTIO_PCI_COMMON_DRIVER_FEATURE,
+				  features & 0xffffffffu) != 0 ||
+	    bunix_hw_mmio_write32(common->handle,
+				  VIRTIO_PCI_COMMON_DRIVER_FEATURE_SELECT,
+				  1) != 0 ||
+	    bunix_hw_mmio_write32(common->handle,
+				  VIRTIO_PCI_COMMON_DRIVER_FEATURE,
+				  (features >> 32) & 0xffffffffu) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static int virtio_common_set_status(struct virtio_bus_device *device, u64 status)
+{
+	struct bunix_device_resource *common =
+		resource_find_flag(device,
+				   BUNIX_DEV_RESOURCE_FLAG_VIRTIO_COMMON_CFG,
+				   0);
+
+	if (common == 0 || common->handle == 0) {
+		return -1;
+	}
+	return bunix_hw_mmio_write8(common->handle,
+				    VIRTIO_PCI_COMMON_DEVICE_STATUS,
+				    status & 0xff) == 0 ? 0 : -1;
+}
+
+static long virtio_common_get_status(struct virtio_bus_device *device)
+{
+	struct bunix_device_resource *common =
+		resource_find_flag(device,
+				   BUNIX_DEV_RESOURCE_FLAG_VIRTIO_COMMON_CFG,
+				   0);
+
+	if (common == 0 || common->handle == 0) {
+		return -1;
+	}
+	return bunix_hw_mmio_read8(common->handle,
+				   VIRTIO_PCI_COMMON_DEVICE_STATUS);
+}
+
 static void scan_pci_bars(struct virtio_bus_device *device, u64 bus, u64 slot,
 			  u64 function)
 {
@@ -245,9 +424,13 @@ static void scan_pci_bars(struct virtio_bus_device *device, u64 bus, u64 slot,
 		const u64 offset = PCI_BAR0 + bar * 4;
 		const long original = pci_config_read32(bus, slot, function,
 							offset);
+		long original_high = 0;
 		long mask_value;
+		long mask_high_value = 0;
 		u64 raw;
+		u64 raw_high = 0;
 		u64 mask;
+		u64 mask_high = 0;
 		u64 size;
 		u64 base;
 		u64 flags = 0;
@@ -255,16 +438,40 @@ static void scan_pci_bars(struct virtio_bus_device *device, u64 bus, u64 slot,
 		if (original < 0 || original == 0) {
 			continue;
 		}
+		raw = (u64)original & 0xffffffffu;
+		if ((raw & PCI_BAR_IO) == 0 &&
+		    (raw & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
+			if (bar + 1 >= 6) {
+				continue;
+			}
+			original_high = pci_config_read32(bus, slot, function,
+							  offset + 4);
+			if (original_high < 0) {
+				continue;
+			}
+			(void)pci_config_write32(bus, slot, function,
+						 offset + 4, 0xffffffffu);
+		}
 		(void)pci_config_write32(bus, slot, function, offset,
 					 0xffffffffu);
 		mask_value = pci_config_read32(bus, slot, function, offset);
+		if ((raw & PCI_BAR_IO) == 0 &&
+		    (raw & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
+			mask_high_value = pci_config_read32(bus, slot, function,
+							    offset + 4);
+		}
 		(void)pci_config_write32(bus, slot, function, offset,
 					 (u64)original);
+		if ((raw & PCI_BAR_IO) == 0 &&
+		    (raw & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
+			(void)pci_config_write32(bus, slot, function,
+						 offset + 4,
+						 (u64)original_high);
+		}
 		if (mask_value <= 0) {
 			continue;
 		}
 
-		raw = (u64)original & 0xffffffffu;
 		mask = (u64)mask_value & 0xffffffffu;
 		if ((raw & PCI_BAR_IO) != 0) {
 			base = raw & ~0x3ull;
@@ -282,6 +489,13 @@ static void scan_pci_bars(struct virtio_bus_device *device, u64 bus, u64 slot,
 		size = (~(mask & ~0xfull) + 1) & 0xffffffffu;
 		const u64 original_bar = bar;
 		if ((raw & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
+			if (mask_high_value < 0) {
+				continue;
+			}
+			raw_high = (u64)original_high & 0xffffffffu;
+			mask_high = (u64)mask_high_value & 0xffffffffu;
+			base = ((raw_high << 32) | raw) & ~0xfull;
+			size = ~(((mask_high << 32) | mask) & ~0xfull) + 1;
 			flags |= BUNIX_DEV_RESOURCE_FLAG_PCI_MEM64;
 			bar++;
 		}
@@ -422,8 +636,12 @@ static void scan_pci_function(u64 bus, u64 slot, u64 function)
 	info->features.driver_features = 0;
 	info->features.required_features = 0;
 	info->features.negotiated_features = 0;
+	pci_enable_device(bus, slot, function);
 	scan_pci_bars(&device_record, bus, slot, function);
 	scan_virtio_capabilities(&device_record, bus, slot, function);
+	record_virtio_resources(&device_record);
+	(void)virtio_common_read_device_features(&device_record,
+						 &info->features.device_features);
 	(void)device_push(&device_record);
 }
 
@@ -492,6 +710,78 @@ static void reply_device_resource(struct bunix_msg *reply, u64 device_index,
 	reply->cap_rights = resource->handle != 0 ? BUNIX_RIGHT_SEND : 0;
 }
 
+static void reply_read_features(struct bunix_msg *reply, u64 device_index)
+{
+	struct virtio_bus_device *device;
+	u64 features;
+
+	if (device_index >= device_count) {
+		reply_no_device(reply);
+		return;
+	}
+	device = &devices[device_index];
+	if (virtio_common_read_device_features(device, &features) != 0) {
+		reply_no_device(reply);
+		return;
+	}
+	reply->words[0] = BUNIX_DEV_OK;
+	reply->words[1] = features;
+	reply->words[2] = device->info.transport.common_cfg_resource;
+	reply->words[3] = device->info.transport.device_type;
+}
+
+static void reply_negotiate_features(struct bunix_msg *reply, u64 device_index,
+				     u64 required_features,
+				     u64 optional_features)
+{
+	struct virtio_bus_device *device;
+	u64 device_features;
+	u64 driver_features;
+	long status;
+
+	if (device_index >= device_count) {
+		reply_no_device(reply);
+		return;
+	}
+	device = &devices[device_index];
+	if (virtio_common_set_status(device, 0) != 0 ||
+	    virtio_common_set_status(device,
+				     BUNIX_VIRTIO_STATUS_ACKNOWLEDGE) != 0 ||
+	    virtio_common_set_status(device,
+				     bunix_virtio_status_driver_start()) != 0 ||
+	    virtio_common_read_device_features(device, &device_features) != 0 ||
+	    bunix_virtio_negotiate_features(device_features,
+					    required_features,
+					    optional_features,
+					    &driver_features) != 0 ||
+	    virtio_common_write_driver_features(device, driver_features) != 0 ||
+	    virtio_common_set_status(device,
+				     bunix_virtio_status_features_ok()) != 0) {
+		(void)virtio_common_set_status(device,
+					       BUNIX_VIRTIO_STATUS_FAILED);
+		reply_no_device(reply);
+		return;
+	}
+
+	status = virtio_common_get_status(device);
+	if (status < 0 ||
+	    (((u64)status & BUNIX_VIRTIO_STATUS_FEATURES_OK) == 0)) {
+		(void)virtio_common_set_status(
+			device, bunix_virtio_status_failed(
+					bunix_virtio_status_driver_start()));
+		reply_no_device(reply);
+		return;
+	}
+
+	device->info.features.required_features = required_features;
+	device->info.features.driver_features = driver_features;
+	device->info.features.negotiated_features = driver_features;
+	reply->words[0] = BUNIX_DEV_OK;
+	reply->words[1] = device_features;
+	reply->words[2] = driver_features;
+	reply->words[3] = (u64)status & 0xff;
+}
+
 static void reply_no_device(struct bunix_msg *reply)
 {
 	reply->words[0] = BUNIX_DEV_ERR_NOENT;
@@ -509,6 +799,7 @@ int main(void)
 	scan_pci_bus0();
 	for (u64 i = 0; i < device_count; i++) {
 		log_device(&devices[i], i);
+		log_features(&devices[i], i);
 	}
 	if (register_service(BUNIX_SERVICE_DEVICE, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
@@ -543,10 +834,16 @@ int main(void)
 			reply_device_resource(&reply, message.words[0],
 					      message.words[1]);
 			break;
+		case BUNIX_DEV_READ_FEATURES:
+			reply_read_features(&reply, message.words[0]);
+			break;
+		case BUNIX_DEV_NEGOTIATE_FEATURES:
+			reply_negotiate_features(&reply, message.words[0],
+						 message.words[1],
+						 message.words[2]);
+			break;
 		case BUNIX_DEV_BIND_DRIVER:
 		case BUNIX_DEV_RESET:
-		case BUNIX_DEV_READ_FEATURES:
-		case BUNIX_DEV_NEGOTIATE_FEATURES:
 		case BUNIX_DEV_SETUP_QUEUE:
 		case BUNIX_DEV_NOTIFY_QUEUE:
 		case BUNIX_DEV_ACK_INTERRUPT:

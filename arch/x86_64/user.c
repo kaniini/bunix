@@ -5110,15 +5110,36 @@ static int pci_bar_info(u64 bus, u64 slot, u64 function, u64 bar,
 {
 	const u64 offset = PCI_BAR0 + bar * 4;
 	const u32 original = pci_config_read32(bus, slot, function, offset);
+	u32 original_high = 0;
 	u32 mask;
+	u32 mask_high = 0;
 
 	if (bar >= 6 || original == 0 || type == 0 || base == 0 || size == 0) {
 		return -1;
 	}
 
+	if ((original & PCI_BAR_IO) == 0 &&
+	    (original & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
+		if (bar + 1 >= 6) {
+			return -1;
+		}
+		original_high = pci_config_read32(bus, slot, function,
+						  offset + 4);
+		pci_config_write32(bus, slot, function, offset + 4,
+				   0xffffffffu);
+	}
 	pci_config_write32(bus, slot, function, offset, 0xffffffffu);
 	mask = pci_config_read32(bus, slot, function, offset);
+	if ((original & PCI_BAR_IO) == 0 &&
+	    (original & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
+		mask_high = pci_config_read32(bus, slot, function, offset + 4);
+	}
 	pci_config_write32(bus, slot, function, offset, original);
+	if ((original & PCI_BAR_IO) == 0 &&
+	    (original & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
+		pci_config_write32(bus, slot, function, offset + 4,
+				   original_high);
+	}
 	if (mask == 0 || mask == 0xffffffffu) {
 		return -1;
 	}
@@ -5131,11 +5152,18 @@ static int pci_bar_info(u64 bus, u64 slot, u64 function, u64 bar,
 	}
 
 	*type = TASK_HW_RESOURCE_MMIO;
+	if ((original & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
+		const u64 raw = ((u64)original_high << 32) |
+				((u64)original & 0xffffffffu);
+		const u64 mask64 = ((u64)mask_high << 32) |
+				   ((u64)mask & 0xffffffffu);
+
+		*base = raw & ~0xfull;
+		*size = (~(mask64 & ~0xfull) + 1ull);
+		return *size != 0 ? 0 : -1;
+	}
 	*base = original & ~0xfull;
 	*size = (~(mask & ~0xfu) + 1u) & 0xffffffffu;
-	if ((original & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
-		/* 64-bit BAR high halves are not consumed until MMIO users exist. */
-	}
 	return *size != 0 ? 0 : -1;
 }
 
@@ -5305,69 +5333,99 @@ static int hw_mmio_validate(u64 handle, u64 offset, u64 width, u32 op,
 static u64 native_sys_hw_mmio_read8(const struct native_syscall_args *args)
 {
 	volatile void *addr;
+	struct vm_space *space;
+	u8 value;
 
 	if (hw_mmio_validate(args->arg0, args->arg1, 1, TASK_HW_OP_READ,
 			     &addr) != 0) {
 		return (u64)-1;
 	}
-	return *(volatile const u8 *)addr;
+	space = task_vm_space(task_current());
+	vm_rpc_activate_space(vm_kernel_space());
+	value = *(volatile const u8 *)addr;
+	vm_rpc_activate_space(space);
+	return value;
 }
 
 static u64 native_sys_hw_mmio_write8(const struct native_syscall_args *args)
 {
 	volatile void *addr;
+	struct vm_space *space;
 
 	if (hw_mmio_validate(args->arg0, args->arg1, 1, TASK_HW_OP_WRITE,
 			     &addr) != 0) {
 		return (u64)-1;
 	}
+	space = task_vm_space(task_current());
+	vm_rpc_activate_space(vm_kernel_space());
 	*(volatile u8 *)addr = (u8)args->arg2;
+	vm_rpc_activate_space(space);
 	return 0;
 }
 
 static u64 native_sys_hw_mmio_read16(const struct native_syscall_args *args)
 {
 	volatile void *addr;
+	struct vm_space *space;
+	u16 value;
 
 	if (hw_mmio_validate(args->arg0, args->arg1, 2, TASK_HW_OP_READ,
 			     &addr) != 0) {
 		return (u64)-1;
 	}
-	return *(volatile const u16 *)addr;
+	space = task_vm_space(task_current());
+	vm_rpc_activate_space(vm_kernel_space());
+	value = *(volatile const u16 *)addr;
+	vm_rpc_activate_space(space);
+	return value;
 }
 
 static u64 native_sys_hw_mmio_write16(const struct native_syscall_args *args)
 {
 	volatile void *addr;
+	struct vm_space *space;
 
 	if (hw_mmio_validate(args->arg0, args->arg1, 2, TASK_HW_OP_WRITE,
 			     &addr) != 0) {
 		return (u64)-1;
 	}
+	space = task_vm_space(task_current());
+	vm_rpc_activate_space(vm_kernel_space());
 	*(volatile u16 *)addr = (u16)args->arg2;
+	vm_rpc_activate_space(space);
 	return 0;
 }
 
 static u64 native_sys_hw_mmio_read32(const struct native_syscall_args *args)
 {
 	volatile void *addr;
+	struct vm_space *space;
+	u32 value;
 
 	if (hw_mmio_validate(args->arg0, args->arg1, 4, TASK_HW_OP_READ,
 			     &addr) != 0) {
 		return (u64)-1;
 	}
-	return *(volatile const u32 *)addr;
+	space = task_vm_space(task_current());
+	vm_rpc_activate_space(vm_kernel_space());
+	value = *(volatile const u32 *)addr;
+	vm_rpc_activate_space(space);
+	return value;
 }
 
 static u64 native_sys_hw_mmio_write32(const struct native_syscall_args *args)
 {
 	volatile void *addr;
+	struct vm_space *space;
 
 	if (hw_mmio_validate(args->arg0, args->arg1, 4, TASK_HW_OP_WRITE,
 			     &addr) != 0) {
 		return (u64)-1;
 	}
+	space = task_vm_space(task_current());
+	vm_rpc_activate_space(vm_kernel_space());
 	*(volatile u32 *)addr = (u32)args->arg2;
+	vm_rpc_activate_space(space);
 	return 0;
 }
 
