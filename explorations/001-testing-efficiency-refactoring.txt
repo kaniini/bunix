@@ -74,11 +74,14 @@ Plan:
    - `tools/shell-tests/union-root-user.sh` owns user-session unionfs lower
      rename, lower hardlink copy-up, root upper writes, long names, readdir, and
      unlink behavior.
+   - `tools/shell-tests/tmpfs-extended.sh` owns tmpfs ownership baseline,
+     long-name/name-max coverage, touch, fifo, hardlink, directory rename,
+     chmod/chown denial, symlink, and union user link checks.
 
    Needs:
 
    - Extract the remaining user-phase batches:
-     `tmpfs-extended`, `large-io-mount`, and `interactive-tty`.
+     `large-io-mount` and `interactive-tty`.
    - Extract the root-phase batches:
      `root-login-union`, `root-tmpfs-chown`, `long-login`, and
      `root-mount-soak`.
