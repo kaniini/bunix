@@ -129,13 +129,20 @@ struct exec_strings {
 	char **envp;
 };
 
+struct pending_exec_replace {
+	u64 token;
+	u64 task_handle;
+};
+
 static struct bunix_map processes_by_pid;
 static struct bunix_map processes_by_task_id;
 static struct bunix_map processes_by_linux_pid;
 static struct bunix_map pending_linux_exits;
+static struct bunix_map pending_exec_replaces;
 static struct bunix_tree exec_registry;
 static u64 next_pid = 1;
 static u64 first_linux_pid;
+static u64 next_exec_replace_token = 1;
 static unsigned char segment_buffer[PROC_SEGMENT_MAX];
 static const char proc_online[] = "proc: online\n";
 static const char proc_ready[] = "proc: ready\n";
@@ -625,6 +632,76 @@ out:
 		if (*path != 0) {
 			bunix_free(*path);
 			*path = 0;
+		}
+		exec_strings_free(strings);
+	}
+	return result;
+}
+
+static int exec_strings_from_replace_buffer(const struct bunix_msg *message,
+					    char **load_path,
+					    char **execfn_path,
+					    struct exec_strings *strings)
+{
+	unsigned char *buffer;
+	u64 total;
+	u64 pos = 0;
+	int result = -1;
+
+	if (message == 0 || load_path == 0 || execfn_path == 0 ||
+	    strings == 0 || message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    message->words[1] == 0 ||
+	    message->words[1] > PROC_SPAWN_BUFFER_MAX ||
+	    message->words[2] == 0 ||
+	    message->words[2] > message->words[1] ||
+	    message->words[3] > message->words[1]) {
+		return -1;
+	}
+	total = message->words[1];
+	buffer = (unsigned char *)bunix_alloc(total);
+	if (buffer == 0) {
+		return -1;
+	}
+	if (bunix_buffer_read(message->cap, 0, buffer, total) != 0) {
+		goto out;
+	}
+	if (spawn_buffer_string(buffer, &pos, total, load_path) != 0 ||
+	    spawn_buffer_string(buffer, &pos, total, execfn_path) != 0) {
+		goto out;
+	}
+
+	strings->argc = message->words[2];
+	strings->envc = message->words[3];
+	strings->argv = (char **)bunix_calloc(strings->argc, sizeof(char *));
+	strings->envp = strings->envc == 0 ? 0 :
+		(char **)bunix_calloc(strings->envc, sizeof(char *));
+	if (strings->argv == 0 || (strings->envc != 0 && strings->envp == 0)) {
+		goto out;
+	}
+	for (u64 i = 0; i < strings->argc; i++) {
+		if (spawn_buffer_string(buffer, &pos, total,
+					&strings->argv[i]) != 0) {
+			goto out;
+		}
+	}
+	for (u64 i = 0; i < strings->envc; i++) {
+		if (spawn_buffer_string(buffer, &pos, total,
+					&strings->envp[i]) != 0) {
+			goto out;
+		}
+	}
+	result = pos == total ? 0 : -1;
+out:
+	bunix_free(buffer);
+	if (result != 0) {
+		if (*load_path != 0) {
+			bunix_free(*load_path);
+			*load_path = 0;
+		}
+		if (*execfn_path != 0) {
+			bunix_free(*execfn_path);
+			*execfn_path = 0;
 		}
 		exec_strings_free(strings);
 	}
@@ -1215,36 +1292,32 @@ static int elf_phdr_table_size(const struct elf64_ehdr *ehdr, u64 file_size,
 	return 0;
 }
 
-static long exec_path(u64 vfs, struct process *process,
-		      const char *path, const char *task_name,
-		      u64 linux_parent_pid, u64 login_uid, int set_login,
-		      u64 session_id, int linux_personality,
-		      const struct exec_strings *strings, u64 *linux_pid)
+static long load_task_image(u64 vfs, u64 task, int clear_existing,
+			    const char *load_path,
+			    const char *execfn_path,
+			    const struct exec_strings *strings, u64 *entry,
+			    u64 *stack)
 {
-	const struct bunix_launch_cap caps[] = {
-		{ PROC_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
-		{ PROC_HANDLE_TIME, BUNIX_RIGHT_SEND, 0 },
-		{ BUNIX_HANDLE_SELF, BUNIX_RIGHT_SEND, 0 },
-		{ PROC_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
-	};
 	struct elf64_ehdr ehdr;
 	struct elf64_ehdr interp_ehdr;
 	struct elf64_phdr *phdrs = 0;
 	struct elf64_phdr *interp_phdrs = 0;
 	struct elf64_phdr *aux_phdrs = 0;
-	struct exec_info exec;
+	struct exec_info exec = { 0, 0, 0, 0, 0 };
 	struct vfs_file file = { 0, 0, 0 };
 	struct vfs_file interp_file = { 0, 0, 0 };
 	char interp_path[PROC_EXEC_PATH_MAX];
 	u64 phdr_bytes = 0;
 	u64 interp_phdr_bytes = 0;
 	long io_buffer;
-	long task;
-	u64 stack = 0;
 	u64 load_bias = 0;
 	u64 interp_bias = 0;
 	u64 start_entry = 0;
-	long bunix_id = 0;
+	long result = -1;
+
+	if (load_path == 0 || execfn_path == 0 || entry == 0 || stack == 0) {
+		return -1;
+	}
 
 	io_buffer = bunix_buffer_create(PROC_SEGMENT_MAX);
 	if (io_buffer <= 0) {
@@ -1252,20 +1325,17 @@ static long exec_path(u64 vfs, struct process *process,
 				  sizeof("proc: exec buffer failed\n") - 1);
 		return -1;
 	}
-	if (vfs_open(vfs, path, &file) != 0) {
+	if (vfs_open(vfs, load_path, &file) != 0) {
 		bunix_console_log("proc: exec open failed\n",
 				  sizeof("proc: exec open failed\n") - 1);
-		bunix_handle_close((u64)io_buffer);
-		return -1;
+		goto out;
 	}
 	if (vfs_read_file(vfs, file.handle, file.size, 0,
 			  (unsigned char *)&ehdr, sizeof(ehdr),
 			  (u64)io_buffer) != 0) {
 		bunix_console_log("proc: exec ehdr read failed\n",
 				  sizeof("proc: exec ehdr read failed\n") - 1);
-		vfs_close(vfs, file.handle);
-		bunix_handle_close((u64)io_buffer);
-		return -1;
+		goto out;
 	}
 	if (read_magic(ehdr.ident) != ELF_MAGIC ||
 	    ehdr.ident[4] != ELFCLASS64 ||
@@ -1275,31 +1345,21 @@ static long exec_path(u64 vfs, struct process *process,
 	    elf_phdr_table_size(&ehdr, file.size, &phdr_bytes) != 0) {
 		bunix_console_log("proc: exec elf invalid\n",
 				  sizeof("proc: exec elf invalid\n") - 1);
-		vfs_close(vfs, file.handle);
-		bunix_handle_close((u64)io_buffer);
-		return -1;
+		goto out;
 	}
 	phdrs = (struct elf64_phdr *)bunix_alloc(phdr_bytes);
 	aux_phdrs = (struct elf64_phdr *)bunix_alloc(phdr_bytes);
 	if (phdrs == 0 || aux_phdrs == 0) {
 		bunix_console_log("proc: exec phdr alloc failed\n",
 				  sizeof("proc: exec phdr alloc failed\n") - 1);
-		bunix_free(phdrs);
-		bunix_free(aux_phdrs);
-		vfs_close(vfs, file.handle);
-		bunix_handle_close((u64)io_buffer);
-		return -1;
+		goto out;
 	}
 	if (vfs_read_file(vfs, file.handle, file.size, ehdr.phoff,
 			  (unsigned char *)phdrs, phdr_bytes,
 			  (u64)io_buffer) != 0) {
 		bunix_console_log("proc: exec phdr read failed\n",
 				  sizeof("proc: exec phdr read failed\n") - 1);
-		bunix_free(phdrs);
-		bunix_free(aux_phdrs);
-		vfs_close(vfs, file.handle);
-		bunix_handle_close((u64)io_buffer);
-		return -1;
+		goto out;
 	}
 	load_bias = ehdr.type == ET_DYN ? PROC_DYN_LOAD_BIAS : 0;
 	for (u64 i = 0; i < ehdr.phnum; i++) {
@@ -1318,11 +1378,7 @@ static long exec_path(u64 vfs, struct process *process,
 					     interp_path, sizeof(interp_path),
 					     (u64)io_buffer);
 	if (interp < 0) {
-		bunix_free(phdrs);
-		bunix_free(aux_phdrs);
-		vfs_close(vfs, file.handle);
-		bunix_handle_close((u64)io_buffer);
-		return -1;
+		goto out;
 	}
 	if (interp > 0) {
 		if (vfs_open(vfs, interp_path, &interp_file) != 0 ||
@@ -1337,14 +1393,7 @@ static long exec_path(u64 vfs, struct process *process,
 		    interp_ehdr.machine != EM_X86_64 ||
 		    elf_phdr_table_size(&interp_ehdr, interp_file.size,
 					&interp_phdr_bytes) != 0) {
-			if (interp_file.handle != 0) {
-				vfs_close(vfs, interp_file.handle);
-			}
-			bunix_free(phdrs);
-			bunix_free(aux_phdrs);
-			vfs_close(vfs, file.handle);
-			bunix_handle_close((u64)io_buffer);
-			return -1;
+			goto out;
 		}
 		interp_phdrs = (struct elf64_phdr *)bunix_alloc(interp_phdr_bytes);
 		if (interp_phdrs == 0 ||
@@ -1353,45 +1402,82 @@ static long exec_path(u64 vfs, struct process *process,
 				  (unsigned char *)interp_phdrs,
 				  interp_phdr_bytes,
 				  (u64)io_buffer) != 0) {
-			if (interp_file.handle != 0) {
-				vfs_close(vfs, interp_file.handle);
-			}
-			bunix_free(interp_phdrs);
-			bunix_free(phdrs);
-			bunix_free(aux_phdrs);
-			vfs_close(vfs, file.handle);
-			bunix_handle_close((u64)io_buffer);
-			return -1;
+			goto out;
 		}
 		interp_bias = interp_ehdr.type == ET_DYN ?
 			      PROC_INTERP_LOAD_BIAS : 0;
 		start_entry = interp_ehdr.entry + interp_bias;
 	}
 
+	if (clear_existing && bunix_task_clear(task) != 0) {
+		goto out;
+	}
+
+	if (map_load_segments(vfs, &file, phdrs, ehdr.phnum, task,
+			      load_bias, (u64)io_buffer) != 0 ||
+	    (interp_file.handle != 0 &&
+	     map_load_segments(vfs, &interp_file, interp_phdrs,
+			       interp_ehdr.phnum, task,
+			       interp_bias, (u64)io_buffer) != 0)) {
+		goto out;
+	}
+
+	if (interp_file.handle == 0 &&
+	    apply_relative_relocations(vfs, &file, phdrs, ehdr.phnum,
+				       task, load_bias,
+				       (u64)io_buffer) != 0) {
+		goto out;
+	}
+
+	if (build_initial_stack(task, execfn_path, &exec, load_bias,
+				interp_bias, strings, stack) != 0) {
+		goto out;
+	}
+
+	*entry = start_entry;
+	result = 0;
+
+out:
+	if (interp_file.handle != 0) {
+		vfs_close(vfs, interp_file.handle);
+	}
+	if (file.handle != 0) {
+		vfs_close(vfs, file.handle);
+	}
+	if (io_buffer > 0) {
+		bunix_handle_close((u64)io_buffer);
+	}
+	bunix_free(interp_phdrs);
+	bunix_free(phdrs);
+	bunix_free(aux_phdrs);
+	return result;
+}
+
+static long exec_path(u64 vfs, struct process *process,
+		      const char *path, const char *task_name,
+		      u64 linux_parent_pid, u64 login_uid, int set_login,
+		      u64 session_id, int linux_personality,
+		      const struct exec_strings *strings, u64 *linux_pid)
+{
+	const struct bunix_launch_cap caps[] = {
+		{ PROC_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
+		{ PROC_HANDLE_TIME, BUNIX_RIGHT_SEND, 0 },
+		{ BUNIX_HANDLE_SELF, BUNIX_RIGHT_SEND, 0 },
+		{ PROC_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+	};
+	long task;
+	u64 stack = 0;
+	u64 start_entry = 0;
+	long bunix_id = 0;
+
 	task = bunix_task_create(task_name);
 	if (task < 0) {
-		if (interp_file.handle != 0) {
-			vfs_close(vfs, interp_file.handle);
-		}
-		bunix_free(interp_phdrs);
-		bunix_free(phdrs);
-		bunix_free(aux_phdrs);
-		vfs_close(vfs, file.handle);
-		bunix_handle_close((u64)io_buffer);
 		return -1;
 	}
 	bunix_id = bunix_task_id((u64)task);
 	if (bunix_id <= 0 ||
 	    bunix_map_set(&processes_by_task_id, (u64)bunix_id,
 			  (u64)process) != 0) {
-		if (interp_file.handle != 0) {
-			vfs_close(vfs, interp_file.handle);
-		}
-		bunix_free(interp_phdrs);
-		bunix_free(phdrs);
-		bunix_free(aux_phdrs);
-		vfs_close(vfs, file.handle);
-		bunix_handle_close((u64)io_buffer);
 		bunix_handle_close((u64)task);
 		return -1;
 	}
@@ -1401,73 +1487,15 @@ static long exec_path(u64 vfs, struct process *process,
 	for (u64 i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {
 		if (bunix_task_grant((u64)task, caps[i].handle,
 				     caps[i].rights) != 0) {
-			if (interp_file.handle != 0) {
-				vfs_close(vfs, interp_file.handle);
-			}
-			bunix_free(interp_phdrs);
-			bunix_free(phdrs);
-			bunix_free(aux_phdrs);
-			vfs_close(vfs, file.handle);
-			bunix_handle_close((u64)io_buffer);
 			bunix_handle_close((u64)task);
 			return -1;
 		}
 	}
-	if (map_load_segments(vfs, &file, phdrs, ehdr.phnum, (u64)task,
-			      load_bias, (u64)io_buffer) != 0 ||
-	    (interp_file.handle != 0 &&
-	     map_load_segments(vfs, &interp_file, interp_phdrs,
-			       interp_ehdr.phnum, (u64)task,
-			       interp_bias, (u64)io_buffer) != 0)) {
-		if (interp_file.handle != 0) {
-			vfs_close(vfs, interp_file.handle);
-		}
-		bunix_free(interp_phdrs);
-		bunix_free(phdrs);
-		bunix_free(aux_phdrs);
-		vfs_close(vfs, file.handle);
-		bunix_handle_close((u64)io_buffer);
+	if (load_task_image(vfs, (u64)task, 0, path, path, strings,
+			    &start_entry, &stack) != 0) {
 		bunix_handle_close((u64)task);
 		return -1;
 	}
-
-	if (interp_file.handle == 0 &&
-	    apply_relative_relocations(vfs, &file, phdrs, ehdr.phnum,
-				       (u64)task, load_bias,
-				       (u64)io_buffer) != 0) {
-		if (interp_file.handle != 0) {
-			vfs_close(vfs, interp_file.handle);
-		}
-		bunix_free(interp_phdrs);
-		bunix_free(phdrs);
-		bunix_free(aux_phdrs);
-		vfs_close(vfs, file.handle);
-		bunix_handle_close((u64)io_buffer);
-		bunix_handle_close((u64)task);
-		return -1;
-	}
-
-	if (build_initial_stack((u64)task, path, &exec, load_bias,
-				interp_bias, strings, &stack) != 0) {
-		if (interp_file.handle != 0) {
-			vfs_close(vfs, interp_file.handle);
-		}
-		bunix_free(interp_phdrs);
-		bunix_free(phdrs);
-		bunix_free(aux_phdrs);
-		vfs_close(vfs, file.handle);
-		bunix_handle_close((u64)io_buffer);
-		bunix_handle_close((u64)task);
-		return -1;
-	}
-	if (interp_file.handle != 0) {
-		vfs_close(vfs, interp_file.handle);
-	}
-	vfs_close(vfs, file.handle);
-	bunix_handle_close((u64)io_buffer);
-	bunix_free(interp_phdrs);
-	bunix_free(phdrs);
-	bunix_free(aux_phdrs);
 	if (linux_personality) {
 		if (register_linux_process((u64)bunix_id, process->pid,
 					   linux_parent_pid, session_id,
@@ -1726,6 +1754,95 @@ static long register_linux_child_process(u64 linux_pid, u64 task_id, u64 ppid,
 	return 0;
 }
 
+static u64 exec_replace_begin(u64 task_handle)
+{
+	struct pending_exec_replace *pending;
+	u64 token;
+
+	if (task_handle == 0) {
+		return 0;
+	}
+
+	pending = (struct pending_exec_replace *)
+		bunix_calloc(1, sizeof(*pending));
+	if (pending == 0) {
+		return 0;
+	}
+
+	token = next_exec_replace_token++;
+	if (token == 0) {
+		token = next_exec_replace_token++;
+	}
+	pending->token = token;
+	pending->task_handle = task_handle;
+	if (bunix_map_set(&pending_exec_replaces, token, (u64)pending) != 0) {
+		bunix_free(pending);
+		return 0;
+	}
+
+	return token;
+}
+
+static struct pending_exec_replace *exec_replace_take(u64 token)
+{
+	struct pending_exec_replace *pending =
+		(struct pending_exec_replace *)
+			bunix_map_get(&pending_exec_replaces, token);
+
+	if (pending != 0) {
+		(void)bunix_map_remove(&pending_exec_replaces, token);
+	}
+	return pending;
+}
+
+static void exec_replace_free(struct pending_exec_replace *pending)
+{
+	if (pending == 0) {
+		return;
+	}
+	if (pending->task_handle != 0) {
+		bunix_handle_close(pending->task_handle);
+	}
+	bunix_free(pending);
+}
+
+static long exec_replace_from_message(u64 vfs, const struct bunix_msg *message,
+				      u64 *entry, u64 *stack)
+{
+	struct pending_exec_replace *pending;
+	struct exec_strings strings = { 0, 0, 0, 0 };
+	char *load_path = 0;
+	char *execfn_path = 0;
+	long result = -1;
+
+	if (message == 0 || entry == 0 || stack == 0 ||
+	    message->words[0] == 0) {
+		return -1;
+	}
+
+	pending = exec_replace_take(message->words[0]);
+	if (pending == 0) {
+		return -1;
+	}
+
+	if (exec_strings_from_replace_buffer(message, &load_path, &execfn_path,
+					     &strings) == 0) {
+		result = load_task_image(vfs, pending->task_handle, 1,
+					 load_path, execfn_path, &strings,
+					 entry, stack);
+	}
+
+	if (load_path != 0) {
+		bunix_free(load_path);
+	}
+	if (execfn_path != 0) {
+		bunix_free(execfn_path);
+	}
+	exec_strings_free(&strings);
+	exec_replace_free(pending);
+	return result;
+}
+
 int main(void)
 {
 	struct bunix_msg message;
@@ -1734,6 +1851,7 @@ int main(void)
 	bunix_map_init(&processes_by_task_id);
 	bunix_map_init(&processes_by_linux_pid);
 	bunix_map_init(&pending_linux_exits);
+	bunix_map_init(&pending_exec_replaces);
 	bunix_tree_init(&exec_registry);
 	bunix_console_log(proc_online, sizeof(proc_online) - 1);
 	if (register_service(BUNIX_SERVICE_PROC, BUNIX_HANDLE_SELF) != 0) {
@@ -1802,6 +1920,48 @@ int main(void)
 				bunix_handle_close(message.cap);
 			}
 			break;
+		case BUNIX_PROC_EXEC_REPLACE_TASK: {
+			u64 token = 0;
+
+			if (message.cap != 0 &&
+			    (message.cap_rights & BUNIX_RIGHT_SEND) != 0) {
+				token = exec_replace_begin(message.cap);
+			}
+			if (token != 0) {
+				message.cap = 0;
+				reply.words[0] = 0;
+				reply.words[1] = token;
+			} else {
+				reply.words[0] = (u64)-1;
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		}
+		case BUNIX_PROC_EXEC_REPLACE_BUFFER: {
+			u64 entry = 0;
+			u64 stack = 0;
+			u64 vfs = resolve_service(BUNIX_SERVICE_VFS,
+						  BUNIX_RIGHT_SEND);
+
+			if (vfs != 0 &&
+			    exec_replace_from_message(vfs, &message, &entry,
+						      &stack) == 0) {
+				reply.words[0] = 0;
+				reply.words[1] = entry;
+				reply.words[2] = stack;
+			} else {
+				reply.words[0] = (u64)-1;
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			if (vfs != 0) {
+				bunix_handle_close(vfs);
+			}
+			break;
+		}
 		case BUNIX_PROC_WAIT: {
 			struct process *process = process_find(message.words[0]);
 

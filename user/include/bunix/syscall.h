@@ -38,6 +38,7 @@ enum {
 	BUNIX_SYSCALL_IPC_STATS = -60,
 	BUNIX_SYSCALL_VM_STATS = -62,
 	BUNIX_SYSCALL_MACHINE_POWER = -64,
+	BUNIX_SYSCALL_TASK_CLEAR = -66,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
@@ -244,6 +245,8 @@ enum {
 	BUNIX_PROC_CMDLINE_BUFFER = 13,
 	BUNIX_PROC_SET_CMDLINE_BUFFER = 14,
 	BUNIX_PROC_INFO_BY_TASK = 15,
+	BUNIX_PROC_EXEC_REPLACE_TASK = 16,
+	BUNIX_PROC_EXEC_REPLACE_BUFFER = 17,
 	BUNIX_SERVICE_CONSOLE = BUNIX_PROTO_CONSOLE,
 	BUNIX_SERVICE_VM = BUNIX_PROTO_VM,
 	BUNIX_SERVICE_TIME = BUNIX_PROTO_TIME,
@@ -563,6 +566,11 @@ static inline long bunix_task_start_at(u64 task, u64 entry, u64 stack)
 static inline long bunix_task_kill(u64 task)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_TASK_KILL, task);
+}
+
+static inline long bunix_task_clear(u64 task)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_TASK_CLEAR, task);
 }
 
 static inline long bunix_buffer_create(u64 size)

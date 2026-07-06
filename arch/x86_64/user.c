@@ -58,6 +58,7 @@ enum {
 	SYSCALL_IPC_STATS = -60,
 	SYSCALL_VM_STATS = -62,
 	SYSCALL_MACHINE_POWER = -64,
+	SYSCALL_TASK_CLEAR = -66,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -5452,6 +5453,11 @@ static u64 native_sys_task_kill(const struct native_syscall_args *args)
 	return (u64)server_task_kill(task_current(), args->arg0);
 }
 
+static u64 native_sys_task_clear(const struct native_syscall_args *args)
+{
+	return (u64)server_task_clear(task_current(), args->arg0);
+}
+
 static u64 native_sys_buffer_create(const struct native_syscall_args *args)
 {
 	struct shared_buffer *buffer = buffer_create(args->arg0);
@@ -5773,6 +5779,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	  native_sys_task_clone_range },
 	{ SYSCALL_CONSOLE_READ, "console_read", native_sys_console_read },
 	{ SYSCALL_TASK_KILL, "task_kill", native_sys_task_kill },
+	{ SYSCALL_TASK_CLEAR, "task_clear", native_sys_task_clear },
 	{ SYSCALL_EARLY_CONSOLE_WRITE, "early_console_write",
 	  native_sys_early_console_write },
 	{ SYSCALL_EARLY_CONSOLE_LOG, "early_console_log",

@@ -638,6 +638,37 @@ int server_task_kill(struct task *parent, u64 task_handle)
 	return task_kill(task);
 }
 
+int server_task_clear(struct task *parent, u64 task_handle)
+{
+	struct task *task = task_from_handle(parent, task_handle,
+					    TASK_RIGHT_SEND);
+
+	if (task == 0) {
+		return -1;
+	}
+
+	while (task_vm_region_count(task) != 0) {
+		const struct task_vm_region *region = task_vm_region_at(task, 0);
+
+		if (region == 0) {
+			return -1;
+		}
+
+		const u64 base = region->base;
+		const u64 len = region->len;
+
+		if (vm_unmap_user_range(task_vm_space(task), base, len) != 0) {
+			return -1;
+		}
+		if (task_remove_vm_region(task, base, len) != 0) {
+			return -1;
+		}
+	}
+
+	task_clear_vm_regions(task);
+	return 0;
+}
+
 struct task *server_task_fork_current_stopped(
 	const struct arch_syscall_frame *frame)
 {

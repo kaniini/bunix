@@ -22,7 +22,7 @@ Additional finding:
 
 - [x] Inventory the current `arch/x86_64/user.c` exec path and separate
       architecture mechanics from Linux personality policy.
-- [ ] Define an exec request/reply protocol between the syscall entry path,
+- [x] Define an exec request/reply protocol between the syscall entry path,
       Linux server, proc server, and VM/task primitives.
 - [x] Move shebang parsing and argv rewriting out of arch code while keeping
       Linux-compatible interpreter argument semantics.
@@ -56,6 +56,12 @@ Progress:
 - Added task handles as IPC capabilities.  This is required for the next
   protocol step, where the syscall path can hand proc/Linux-server authority
   over the existing task being replaced instead of requiring a fresh spawn.
+- Added a native `task_clear` primitive and proc-side
+  `BUNIX_PROC_EXEC_REPLACE_TASK` / `BUNIX_PROC_EXEC_REPLACE_BUFFER` protocol.
+  The protocol uses a two-step token handoff so the syscall path can deliver
+  both the target task capability and the exec argument buffer without widening
+  IPC messages.  Proc now has a shared segment-oriented `load_task_image()`
+  helper used by spawn and ready for exec replacement.
 
 Validation so far:
 
