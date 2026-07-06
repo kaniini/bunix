@@ -169,6 +169,11 @@ Implementation notes:
   inode pointers, updates block bitmap/free-count metadata, updates `i_blocks`,
   and then writes the new inode size.  Indirect block truncation remains a
   follow-up because this write path still allocates only direct blocks.
+- `UNLINK_BUFFER` now supports regular files in the direct-block subset.  It
+  removes the directory entry, decrements link count for multi-link files, and
+  frees direct data blocks plus the inode when the removed name was the final
+  link.  Symlink, directory, and indirect-block unlink handling remain
+  follow-up slices.
 
 Tasks:
 
