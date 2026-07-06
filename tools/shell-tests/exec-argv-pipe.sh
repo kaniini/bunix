@@ -15,6 +15,7 @@ busybox sh -c 'test "$300" = x300 && echo BUSYBOX_ARGV300_OK' _ "$@"
 i=1
 while [ "$i" -le 300 ]; do eval "BUNIX_EXEC_ENV_$i=x$i; export BUNIX_EXEC_ENV_$i"; i=$((i + 1)); done
 busybox sh -c 'test "$BUNIX_EXEC_ENV_300" = x300 && echo BUSYBOX_ENV300_OK'
+/bin/shebangtest ok
 EOF_EXEC_ARGV_PIPE
 }
 
@@ -24,6 +25,7 @@ check_exec_argv_pipe() {
 	wait_for_fixed "$log" "BUSYBOX_ARGV300_OK" "busybox large-argv regression command did not complete" 45 160
 	wait_for_fixed "$log" "BUSYBOX_LONG_ENV_OK" "busybox long-env regression command did not complete" 45 160
 	wait_for_fixed "$log" "BUSYBOX_ENV300_OK" "busybox large-env regression command did not complete" 45 160
+	wait_for_fixed "$log" "SHEBANG_EXEC_OK" "shebang exec regression command did not complete" 45 160
 	wait_for_fixed "$log" "PIPE_OK" "busybox echo pipe did not complete" 45 180
 	wait_for_fixed "$log" "PIPE_FILE_OK" "busybox cat pipe did not complete" 45 180
 	wait_for_fixed "$log" "PROCFS_OK" "procfs translator read did not complete" 45 180

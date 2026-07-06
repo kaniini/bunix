@@ -3284,8 +3284,9 @@ static long linux_chownat(struct linux_process *process, u64 dirfd,
 	return result;
 }
 
-static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
-			     u64 size)
+static long linux_stat_write_identity(u64 stat_buffer, u64 mode, u64 uid,
+				      u64 gid, u64 size, u64 dev, u64 ino,
+				      u64 nlink)
 {
 	char stat[LINUX_STAT_SIZE];
 
@@ -3294,9 +3295,9 @@ static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
 	}
 
 	zero_bytes(stat, sizeof(stat));
-	store_u64(stat, 0, 1);
-	store_u64(stat, 8, 1);
-	store_u64(stat, 16, 1);
+	store_u64(stat, 0, dev != 0 ? dev : 1);
+	store_u64(stat, 8, ino != 0 ? ino : 1);
+	store_u64(stat, 16, nlink != 0 ? nlink : 1);
 	store_u32(stat, 24, (unsigned int)mode);
 	store_u32(stat, 28, (unsigned int)uid);
 	store_u32(stat, 32, (unsigned int)gid);
@@ -3308,16 +3309,25 @@ static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
 		0 : -LINUX_EFAULT;
 }
 
-static long linux_stat_from_vfs_meta(u64 stat_buffer,
-				     const struct bunix_msg *reply)
+static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
+			     u64 size)
+{
+	return linux_stat_write_identity(stat_buffer, mode, uid, gid, size,
+					 1, 1, 1);
+}
+
+static long linux_fstat_from_vfs_meta(u64 stat_buffer,
+				      const struct bunix_msg *reply,
+				      u64 handle)
 {
 	const u64 mode = reply->words[2] & 0xffffffff;
 	const u64 type = reply->words[2] >> 32;
 
-	return linux_stat_write(stat_buffer, linux_mode_for_type(type, mode),
-				reply->words[3] & 0xffffffff,
-				reply->words[3] >> 32,
-				reply->words[1]);
+	return linux_stat_write_identity(stat_buffer,
+					 linux_mode_for_type(type, mode),
+					 reply->words[3] & 0xffffffff,
+					 reply->words[3] >> 32,
+					 reply->words[1], 1, handle, 1);
 }
 
 static long linux_statx_write(u64 statx_buffer, u64 mode, u64 uid, u64 gid,
@@ -3559,7 +3569,8 @@ static long linux_fstat(struct linux_process *process, u64 fd, u64 stat_buffer)
 		return linux_vfs_error(reply.words[0]);
 	}
 
-	return linux_stat_from_vfs_meta(stat_buffer, &reply);
+	return linux_fstat_from_vfs_meta(stat_buffer, &reply,
+					 process->fds[fd].handle);
 }
 
 static long linux_ftruncate(struct linux_process *process, u64 fd, u64 length)

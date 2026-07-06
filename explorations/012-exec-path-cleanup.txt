@@ -1,0 +1,27 @@
+Clean up Linux exec and shebang handling.
+
+The x86 syscall path currently owns too much Linux personality policy:
+argument collection, environment collection, shebang parsing, ELF loading,
+interpreter loading, auxv construction, proc registration, and command-line
+publication all live in `arch/x86_64/user.c`.  That is useful for early
+bringup, but it is the wrong long-term boundary for a portable microkernel.
+
+This exploration should preserve the working behavior from
+`007-openrc-linux-compat.txt`, then move policy out of arch code in small
+testable pieces.
+
+- [ ] Inventory the current `arch/x86_64/user.c` exec path and separate
+      architecture mechanics from Linux personality policy.
+- [ ] Define an exec request/reply protocol between the syscall entry path,
+      Linux server, proc server, and VM/task primitives.
+- [ ] Move shebang parsing and argv rewriting out of arch code while keeping
+      Linux-compatible interpreter argument semantics.
+- [ ] Move ELF and PT_INTERP policy toward shared proc/Linux-server helpers,
+      leaving arch code responsible only for final register/stack activation
+      details that are truly architecture-specific.
+- [ ] Preserve `AT_EXECFN`, argv, envp, auxv, credentials, process identity,
+      and Bunix task/Linux PID mappings across the refactor.
+- [ ] Add regression tests covering ELF exec, dynamic PT_INTERP exec,
+      shebang exec with interpreter arguments, recursive shebang limits, and
+      invalid script diagnostics.
+- [ ] Keep the resulting design portable enough for the future ARM port.

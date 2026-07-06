@@ -9,13 +9,30 @@ Findings:
 - Local musl `ldso` source shows loaded DSOs are de-duplicated with `fstat()`
   `st_dev`/`st_ino`; Bunix currently reports constant Linux stat identity for
   many files, so distinct shared objects can look identical.
-- Fixing `/sbin/openrc` dependency loading should therefore wait for
-  `011-vfs-stat-identity.txt` rather than using handle-derived inode shortcuts.
+- The real VFS-backed fix for `/sbin/openrc` dependency identity should
+  happen in `011-vfs-stat-identity.txt`; until then, the Linux personality
+  needs a narrow compatibility shim so OpenRC can keep booting.
+- A later Alpine boot reaches OpenRC script startup, but script execution
+  fails with `Invalid argument` for `/usr/libexec/rc/sh/init-early.sh`,
+  `/usr/libexec/rc/sh/init.sh`, and `gendepends.sh`; this points at missing
+  Linux `execve()` shebang handling rather than a VFS issue.
+- Until `011-vfs-stat-identity.txt` lands, Linux `fstat()` must keep a
+  temporary handle-derived inode identity so musl does not collapse distinct
+  OpenRC DSOs such as `librc` and `libeinfo`.
+- With the temporary `fstat()` identity shim restored and shebang handling in
+  place, Alpine OpenRC starts, mounts `/proc`, and advances to
+  `checkpath: owner 'root:uucp' not found`.
 
-- [ ] Boot the Alpine fixture far enough to collect strace-style logs from OpenRC startup.
-- [ ] Teach the Linux personality to load dynamic executable dependencies needed by OpenRC, including `/sbin/openrc` resolving `libeinfo` symbols.
-- [ ] Triage missing or incorrect syscalls by startup phase and impact.
-- [ ] Implement high-priority syscall fixes in narrow slices with reproducer tests.
+- [x] Boot the Alpine fixture far enough to collect strace-style logs from OpenRC startup.
+- [x] Identify the OpenRC dynamic-loader stat identity issue and defer the
+      real VFS metadata fix to `011-vfs-stat-identity.txt`.
+- [x] Implement Linux `execve()` shebang handling so OpenRC shell scripts run
+      through their interpreter instead of failing with `EINVAL`.
+- [x] Add a focused regression test for script execution with interpreter
+      arguments.
+- [ ] Triage remaining missing or incorrect syscalls by startup phase and impact.
+- [ ] Implement remaining high-priority syscall fixes in narrow slices with
+      reproducer tests.
 - [ ] Ensure process/session/task identity remains consistent across Bunix tasks and Linux PIDs.
 - [ ] Verify OpenRC shell scripts, service supervision, and BusyBox applets run without harness-only assumptions.
 - [ ] Keep unsupported Linux behavior explicit with useful diagnostics.

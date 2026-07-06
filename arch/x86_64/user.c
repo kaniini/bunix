@@ -216,6 +216,8 @@ enum {
 	LINUX_EXEC_MAX_STRING_BYTES = 384 * 1024,
 	LINUX_MAX_GROUPS = 65536,
 	LINUX_PROC_CMDLINE_MAX = 4096,
+	LINUX_SHEBANG_MAX = 256,
+	LINUX_SHEBANG_MAX_DEPTH = 4,
 	LINUX_EXEC_DYN_LOAD_BIAS = 0x400000,
 	LINUX_EXEC_INTERP_LOAD_BIAS = 0x600000,
 	LINUX_EXEC_STACK_TOP = 0x800000,
@@ -2649,6 +2651,154 @@ static int linux_exec_collect_env(u64 user_envp, struct linux_exec_args *args)
 	return 0;
 }
 
+static char *linux_exec_dup_cstr(const char *value)
+{
+	const u64 len = value == 0 ? 0 : str_len(value) + 1;
+	char *copy;
+
+	if (len == 0 || len > LINUX_EXEC_MAX_STRING) {
+		return 0;
+	}
+	copy = (char *)slab_alloc(len);
+	if (copy == 0) {
+		return 0;
+	}
+	mem_copy((u8 *)copy, (const u8 *)value, len);
+	return copy;
+}
+
+static int linux_exec_parse_shebang(const u8 *image, u64 image_size,
+				    char **interp_out, char **arg_out)
+{
+	u64 end = 0;
+	u64 pos = 2;
+	u64 interp_start;
+	u64 interp_end;
+	u64 arg_start;
+	u64 arg_end;
+	char *interp;
+	char *arg = 0;
+
+	if (interp_out == 0 || arg_out == 0) {
+		return -LINUX_EFAULT;
+	}
+	*interp_out = 0;
+	*arg_out = 0;
+	if (image == 0 || image_size < 2 || image[0] != '#' ||
+	    image[1] != '!') {
+		return 0;
+	}
+	while (end < image_size && end < LINUX_SHEBANG_MAX &&
+	       image[end] != '\n' && image[end] != '\r' &&
+	       image[end] != '\0') {
+		end++;
+	}
+	while (pos < end && (image[pos] == ' ' || image[pos] == '\t')) {
+		pos++;
+	}
+	interp_start = pos;
+	while (pos < end && image[pos] != ' ' && image[pos] != '\t') {
+		pos++;
+	}
+	interp_end = pos;
+	if (interp_start == interp_end ||
+	    image[interp_start] != '/' ||
+	    interp_end - interp_start >= LINUX_EXEC_MAX_PATH) {
+		return -LINUX_EINVAL;
+	}
+	interp = (char *)slab_alloc(interp_end - interp_start + 1);
+	if (interp == 0) {
+		return -LINUX_ENOMEM;
+	}
+	mem_copy((u8 *)interp, image + interp_start,
+		 interp_end - interp_start);
+	interp[interp_end - interp_start] = '\0';
+
+	while (pos < end && (image[pos] == ' ' || image[pos] == '\t')) {
+		pos++;
+	}
+	arg_start = pos;
+	arg_end = end;
+	while (arg_end > arg_start &&
+	       (image[arg_end - 1] == ' ' || image[arg_end - 1] == '\t')) {
+		arg_end--;
+	}
+	if (arg_end > arg_start) {
+		arg = (char *)slab_alloc(arg_end - arg_start + 1);
+		if (arg == 0) {
+			slab_free(interp);
+			return -LINUX_ENOMEM;
+		}
+		mem_copy((u8 *)arg, image + arg_start, arg_end - arg_start);
+		arg[arg_end - arg_start] = '\0';
+	}
+
+	*interp_out = interp;
+	*arg_out = arg;
+	return 1;
+}
+
+static int linux_exec_rewrite_shebang_args(struct linux_exec_args *args,
+					   const char *script_path,
+					   char *interp, char *interp_arg)
+{
+	const u64 tail = args->argc > 1 ? args->argc - 1 : 0;
+	const u64 prefix = interp_arg == 0 ? 2 : 3;
+	const u64 new_argc = prefix + tail;
+	char **next;
+	char *script_copy;
+	u64 new_bytes = 0;
+	u64 index = 0;
+
+	if (args == 0 || script_path == 0 || interp == 0 ||
+	    new_argc > LINUX_EXEC_MAX_POINTERS) {
+		return -LINUX_EINVAL;
+	}
+	next = (char **)slab_zalloc(new_argc * sizeof(next[0]));
+	if (next == 0) {
+		return -LINUX_ENOMEM;
+	}
+	script_copy = linux_exec_dup_cstr(script_path);
+	if (script_copy == 0) {
+		slab_free(next);
+		return -LINUX_ENOMEM;
+	}
+	new_bytes += str_len(interp) + 1;
+	if (interp_arg != 0) {
+		new_bytes += str_len(interp_arg) + 1;
+	}
+	new_bytes += str_len(script_copy) + 1;
+	for (u64 i = 1; i < args->argc; i++) {
+		new_bytes += str_len(args->argv[i]) + 1;
+	}
+	for (u64 i = 0; i < args->envc; i++) {
+		new_bytes += str_len(args->envp[i]) + 1;
+	}
+	if (new_bytes > LINUX_EXEC_MAX_STRING_BYTES) {
+		slab_free(script_copy);
+		slab_free(next);
+		return -LINUX_E2BIG;
+	}
+
+	next[index++] = interp;
+	if (interp_arg != 0) {
+		next[index++] = interp_arg;
+	}
+	next[index++] = script_copy;
+	for (u64 i = 1; i < args->argc; i++) {
+		next[index++] = args->argv[i];
+		args->argv[i] = 0;
+	}
+	if (args->argc != 0) {
+		slab_free(args->argv[0]);
+	}
+	slab_free(args->argv);
+	args->argv = next;
+	args->argc = new_argc;
+	args->bytes = new_bytes;
+	return 0;
+}
+
 static void linux_exec_credentials_load(struct task *task,
 					struct linux_exec_credentials *creds)
 {
@@ -2869,6 +3019,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			const char *user_path)
 {
 	char path[LINUX_EXEC_MAX_PATH];
+	char load_path[LINUX_EXEC_MAX_PATH];
 	struct linux_exec_args args;
 	struct linux_exec_credentials creds;
 	u64 image_size = 0;
@@ -2898,6 +3049,7 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	if (path_result != 0) {
 		return (u64)path_result;
 	}
+	mem_copy((u8 *)load_path, (const u8 *)path, str_len(path) + 1);
 	arg_result = linux_exec_collect_args(path, frame->arg1, &args);
 	if (arg_result == 0) {
 		arg_result = linux_exec_collect_env(frame->arg2, &args);
@@ -2907,20 +3059,56 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		return (u64)arg_result;
 	}
 
-	read_result = linux_vfs_read_file(task, path, &image, 0, &image_size);
-	if (read_result != 0) {
-		linux_exec_args_free(&args);
-		return read_result == -2 ? (u64)-LINUX_ENOMEM :
-		       (read_result == -1 ? (u64)-LINUX_EIO :
-			(u64)read_result);
-	}
-	const int validate_result = linux_exec_validate(image, image_size,
-						       &exec);
-	if (validate_result != 0) {
+	for (u64 depth = 0; depth < LINUX_SHEBANG_MAX_DEPTH; depth++) {
+		read_result = linux_vfs_read_file(task, load_path, &image, 0,
+						  &image_size);
+		if (read_result != 0) {
+			linux_exec_args_free(&args);
+			return read_result == -2 ? (u64)-LINUX_ENOMEM :
+			       (read_result == -1 ? (u64)-LINUX_EIO :
+				(u64)read_result);
+		}
+		const int validate_result =
+			linux_exec_validate(image, image_size, &exec);
+		if (validate_result == 0) {
+			break;
+		}
+		linux_exec_image_free(&exec);
+		if (validate_result == -2) {
+			slab_free(image);
+			linux_exec_args_free(&args);
+			return (u64)-LINUX_ENOMEM;
+		}
+
+		char *script_interp = 0;
+		char *script_arg = 0;
+		const int script_result =
+			linux_exec_parse_shebang(image, image_size,
+						 &script_interp, &script_arg);
 		slab_free(image);
-		linux_exec_args_free(&args);
-		return validate_result == -2 ? (u64)-LINUX_ENOMEM :
-		       linux_einval_u64(__func__, __LINE__);
+		image = 0;
+		image_size = 0;
+		if (script_result <= 0 ||
+		    depth + 1 == LINUX_SHEBANG_MAX_DEPTH) {
+			slab_free(script_interp);
+			slab_free(script_arg);
+			linux_exec_args_free(&args);
+			return script_result < 0 ? (u64)script_result :
+			       linux_einval_u64(__func__, __LINE__);
+		}
+		const u64 script_interp_len = str_len(script_interp) + 1;
+		const int rewrite_result =
+			linux_exec_rewrite_shebang_args(&args, load_path,
+							script_interp,
+							script_arg);
+		if (rewrite_result != 0) {
+			slab_free(script_interp);
+			slab_free(script_arg);
+			linux_exec_args_free(&args);
+			return (u64)rewrite_result;
+		}
+		mem_copy((u8 *)load_path, (const u8 *)args.argv[0],
+			 script_interp_len);
 	}
 
 	load_bias = exec.ehdr.type == ELF_TYPE_DYN ? LINUX_EXEC_DYN_LOAD_BIAS : 0;
