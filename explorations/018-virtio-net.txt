@@ -123,3 +123,21 @@ Packet-Device Protocol:
   non-regression before external packet routing exists.  Actual external
   IPv4/IPv6 traffic requires later ARP/ND, Ethernet encapsulation, route
   installation, and deterministic host networking tests.
+
+Progress:
+
+- Added the initial shared VirtIO-net ABI in `bunix/virtio.h`: device type 1,
+  common VirtIO-net feature bits, link-status bits, packed device config, and
+  packed packet header records.  The first driver should require only
+  `VERSION_1`, avoid offloads, and optionally consume `MAC`/`STATUS`/`MTU`.
+- Reserved NET0 packet-interface RPCs and records in `bunix/syscall.h` for
+  driver attach, link updates, RX submission, TX dequeue, and TX completion.
+- Implemented the first NET0 packet-interface registry.  Packet devices receive
+  dynamic interface IDs starting at 2, can publish MTU/MAC/UP/RUNNING/BROADCAST
+  state, can submit RX frames for accounting, and expose counters through the
+  existing interface info/stats RPCs.  TX dequeue currently returns no packet
+  because Ethernet encapsulation and route-backed egress queues are not in this
+  slice.
+- Bootstrap now self-tests the packet-interface registry by attaching a
+  synthetic NIC, setting link state, submitting one RX frame, checking interface
+  count/stats, and emitting `bootstrap: net packet iface ok`.

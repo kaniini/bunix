@@ -1159,6 +1159,114 @@ static long net_tcp_selftest(u64 net, u64 family)
 	return 0;
 }
 
+static long net_packet_interface_selftest(u64 net)
+{
+	struct bunix_net_packet_interface_info iface = {
+		.id = 0,
+		.flags = BUNIX_NET_IFACE_FLAG_BROADCAST,
+		.mtu = 1500,
+		.mac_hi = 0x020000000000ull,
+		.mac_lo = 0x000000001801ull,
+		.rx_packets = 0,
+		.tx_packets = 0,
+		.rx_drops = 0,
+		.tx_drops = 0,
+	};
+	struct {
+		struct bunix_net_packet_info info;
+		unsigned char frame[64];
+	} packet;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NET,
+		.type = BUNIX_NET_PACKET_INTERFACE_ATTACH,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	long buffer;
+	u64 iface_id;
+
+	if (net == 0) {
+		return -1;
+	}
+	buffer = bunix_buffer_create(sizeof(packet));
+	if (buffer <= 0) {
+		return -1;
+	}
+	if (bunix_buffer_write((u64)buffer, 0, &iface, sizeof(iface)) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.cap = (u64)buffer;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] < 2 ||
+	    bunix_buffer_read((u64)buffer, 0, &iface, sizeof(iface)) != 0 ||
+	    iface.id != reply.words[1]) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	iface_id = reply.words[1];
+
+	request.type = BUNIX_NET_PACKET_INTERFACE_LINK;
+	request.cap = 0;
+	request.cap_rights = 0;
+	request.words[0] = iface_id;
+	request.words[1] = BUNIX_NET_IFACE_FLAG_UP |
+			   BUNIX_NET_IFACE_FLAG_RUNNING |
+			   BUNIX_NET_IFACE_FLAG_BROADCAST;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    (reply.words[2] & BUNIX_NET_IFACE_FLAG_RUNNING) == 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+
+	packet.info.iface = iface_id;
+	packet.info.len = sizeof(packet.frame);
+	packet.info.flags = 0;
+	packet.info.reserved = 0;
+	for (u64 i = 0; i < sizeof(packet.frame); i++) {
+		packet.frame[i] = (unsigned char)i;
+	}
+	if (bunix_buffer_write((u64)buffer, 0, &packet, sizeof(packet)) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_NET_PACKET_RX_SUBMIT;
+	request.cap = (u64)buffer;
+	request.cap_rights = BUNIX_RIGHT_RECV;
+	request.words[0] = iface_id;
+	request.words[1] = sizeof(packet.frame);
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[2] != sizeof(packet.frame)) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+
+	request.type = BUNIX_NET_INTERFACE_COUNT;
+	request.cap = 0;
+	request.cap_rights = 0;
+	request.words[0] = 0;
+	request.words[1] = 0;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] < 2) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_NET_INTERFACE_STATS;
+	request.words[0] = iface_id;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] != 1) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
 int main(void)
 {
 	const char launching[] = "bootstrap: launching servers\n";
@@ -1170,6 +1278,7 @@ int main(void)
 	const char net_loopback_ok[] = "bootstrap: net loopback ok\n";
 	const char net_udp_ok[] = "bootstrap: net udp ok\n";
 	const char net_tcp_ok[] = "bootstrap: net tcp ok\n";
+	const char net_packet_ok[] = "bootstrap: net packet iface ok\n";
 	char file[17];
 	u64 console;
 	u64 vm;
@@ -1241,12 +1350,14 @@ int main(void)
 	    net_udp_selftest(net, BUNIX_NET_ADDR_FAMILY_IPV4) != 0 ||
 	    net_udp_selftest(net, BUNIX_NET_ADDR_FAMILY_IPV6) != 0 ||
 	    net_tcp_selftest(net, BUNIX_NET_ADDR_FAMILY_IPV4) != 0 ||
-	    net_tcp_selftest(net, BUNIX_NET_ADDR_FAMILY_IPV6) != 0) {
+	    net_tcp_selftest(net, BUNIX_NET_ADDR_FAMILY_IPV6) != 0 ||
+	    net_packet_interface_selftest(net) != 0) {
 		return 1;
 	}
 	bunix_console_log(net_loopback_ok, sizeof(net_loopback_ok) - 1);
 	bunix_console_log(net_udp_ok, sizeof(net_udp_ok) - 1);
 	bunix_console_log(net_tcp_ok, sizeof(net_tcp_ok) - 1);
+	bunix_console_log(net_packet_ok, sizeof(net_packet_ok) - 1);
 	if (bunix_cmdline_has("virtio-blk-block-test") <= 0) {
 		bunix_launch_module_with_caps("block", fs_caps,
 					      sizeof(fs_caps) /
