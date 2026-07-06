@@ -1010,15 +1010,23 @@ static long ext2_readonly_selftest(u64 vfs)
 	u64 dir_nlink = 0;
 	u64 created_ino = 0;
 	u64 linked_ino = 0;
+	const int ext2_fsck_mode = bunix_cmdline_has("ext2-fsck-test") > 0;
+	const char *created_symlink_target = ext2_fsck_mode ?
+					     "created.txt" :
+					     "/mnt/ext2/created.txt";
+
+#define EXT2_STEP(text) bunix_console_log((text), sizeof(text) - 1)
 
 	if (vfs_read_text(vfs, "/mnt/ext2/hello.txt", text,
 			  sizeof(text)) != 0 ||
 	    !str_eq(text, hello)) {
 		return -1;
 	}
-	if (vfs_read_text(vfs, "/mnt/ext2/link-to-hello", text,
-			  sizeof(text)) != 0 ||
-	    !str_eq(text, via_link)) {
+	EXT2_STEP("bootstrap: ext2 step read hello\n");
+	if (!ext2_fsck_mode &&
+	    (vfs_read_text(vfs, "/mnt/ext2/link-to-hello", text,
+			   sizeof(text)) != 0 ||
+	     !str_eq(text, via_link))) {
 		return -1;
 	}
 	if (vfs_stat_path(vfs, "/mnt/ext2/hello.txt", &hello_size,
@@ -1033,6 +1041,7 @@ static long ext2_readonly_selftest(u64 vfs)
 	    hard_nlink != hello_nlink) {
 		return -1;
 	}
+	EXT2_STEP("bootstrap: ext2 step metadata\n");
 	if (vfs_readdir_has(vfs, "/mnt/ext2/names", long_name) != 0 ||
 	    vfs_read_text(vfs, "/mnt/ext2/names/long-name-abcdefghijklmnopqrstuvwxyz0123456789-abcdefghijklmnopqrstuvwxyz0123456789-abcdefghijklmnopqrstuvwxyz0123456789.txt",
 			  text, sizeof(text)) != 0 ||
@@ -1045,6 +1054,7 @@ static long ext2_readonly_selftest(u64 vfs)
 	    sparse_size < 8192) {
 		return -1;
 	}
+	EXT2_STEP("bootstrap: ext2 step readonly\n");
 	if (vfs_write_text(vfs, "/mnt/ext2/hello.txt", 0, "EXT2", 4) != 0 ||
 	    vfs_read_text(vfs, "/mnt/ext2/hello.txt", text,
 			  sizeof(text)) != 0 ||
@@ -1060,6 +1070,7 @@ static long ext2_readonly_selftest(u64 vfs)
 	    !str_eq(text, "EXT2")) {
 		return -1;
 	}
+	EXT2_STEP("bootstrap: ext2 step write truncate\n");
 	if (vfs_chmod_path(vfs, "/mnt/ext2/hello.txt", 0600) != 0 ||
 	    vfs_chown_path(vfs, "/mnt/ext2/hello.txt", 123, 45) != 0 ||
 	    vfs_stat_path(vfs, "/mnt/ext2/hard/hello-hard", 0, 0, 0, 0,
@@ -1078,6 +1089,7 @@ static long ext2_readonly_selftest(u64 vfs)
 	    hello_gid != 54) {
 		return -1;
 	}
+	EXT2_STEP("bootstrap: ext2 step ownership\n");
 	if (vfs_create_path_buffer(vfs, "/mnt/ext2/created.txt", 0640) != 0 ||
 	    vfs_stat_path(vfs, "/mnt/ext2/created.txt", &hello_size, 0, 0,
 			  &hello_type, &hello_mode, &hello_uid,
@@ -1090,6 +1102,7 @@ static long ext2_readonly_selftest(u64 vfs)
 	    vfs_readdir_has(vfs, "/mnt/ext2", "created.txt") != 0) {
 		return -1;
 	}
+	EXT2_STEP("bootstrap: ext2 step create\n");
 	if (vfs_write_text(vfs, "/mnt/ext2/created.txt", 0, "created ok\n",
 			   11) != 0 ||
 	    vfs_read_text(vfs, "/mnt/ext2/created.txt", text,
@@ -1134,17 +1147,20 @@ static long ext2_readonly_selftest(u64 vfs)
 				   "/mnt/ext2/created.txt", 0) != 0) {
 		return -1;
 	}
-	if (vfs_symlink_path_buffer(vfs, "/mnt/ext2/created.txt",
+	EXT2_STEP("bootstrap: ext2 step rename\n");
+	if (vfs_symlink_path_buffer(vfs, created_symlink_target,
 				    "/mnt/ext2/created-link") != 0 ||
 	    vfs_readdir_has(vfs, "/mnt/ext2", "created-link") != 0 ||
-	    vfs_read_text(vfs, "/mnt/ext2/created-link", text,
-			  sizeof(text)) != 0 ||
-	    !str_eq(text, "created ok\n") ||
+	    (!ext2_fsck_mode &&
+	     (vfs_read_text(vfs, "/mnt/ext2/created-link", text,
+			    sizeof(text)) != 0 ||
+	      !str_eq(text, "created ok\n"))) ||
 	    vfs_unlink_path_buffer(vfs, "/mnt/ext2/created-link") != 0 ||
 	    vfs_stat_path(vfs, "/mnt/ext2/created-link", 0, 0, 0, 0,
 			  0, 0, 0, 0) == 0) {
 		return -1;
 	}
+	EXT2_STEP("bootstrap: ext2 step symlink\n");
 	if (vfs_truncate_path(vfs, "/mnt/ext2/created.txt", 0) != 0 ||
 	    vfs_stat_path(vfs, "/mnt/ext2/created.txt", &hello_size, 0, 0,
 			  &hello_type, 0, 0, 0, &hello_blocks) != 0 ||
@@ -1182,6 +1198,7 @@ static long ext2_readonly_selftest(u64 vfs)
 	    vfs_readdir_has(vfs, "/mnt/ext2", "created-hard.txt") == 0) {
 		return -1;
 	}
+	EXT2_STEP("bootstrap: ext2 step link unlink\n");
 	if (vfs_mkdir_path_buffer(vfs, "/mnt/ext2/newdir", 0750) != 0 ||
 	    vfs_stat_path(vfs, "/mnt/ext2/newdir", 0, 0, &dir_nlink,
 			  &dir_type, &dir_mode, 0, 0, 0) != 0 ||
@@ -1206,24 +1223,34 @@ static long ext2_readonly_selftest(u64 vfs)
 	    vfs_readdir_has(vfs, "/mnt/ext2", "newdir") == 0) {
 		return -1;
 	}
-	if (vfs_mkdir_path_buffer(vfs, "/mnt/ext2/rename-dir-a", 0755) != 0 ||
-	    vfs_mkdir_path_buffer(vfs, "/mnt/ext2/rename-dir-b", 0755) != 0 ||
-	    vfs_mkdir_path_buffer(vfs, "/mnt/ext2/rename-dir-a/child",
-				  0755) != 0 ||
-	    vfs_mkdir_path_buffer(vfs, "/mnt/ext2/rename-dir-b/target",
-				  0755) != 0 ||
-	    vfs_rename_path_buffer(vfs, "/mnt/ext2/rename-dir-a/child",
-				   "/mnt/ext2/rename-dir-b/target", 0) != 0 ||
-	    vfs_stat_path(vfs, "/mnt/ext2/rename-dir-a/child", 0, 0, 0,
-			  0, 0, 0, 0, 0) == 0 ||
-	    vfs_stat_path(vfs, "/mnt/ext2/rename-dir-b/target", 0, 0, 0,
-			  &dir_type, 0, 0, 0, 0) != 0 ||
-	    dir_type != BUNIX_VFS_TYPE_DIRECTORY ||
-	    vfs_rmdir_path_buffer(vfs, "/mnt/ext2/rename-dir-a") != 0 ||
-	    vfs_rmdir_path_buffer(vfs, "/mnt/ext2/rename-dir-b/target") != 0 ||
-	    vfs_rmdir_path_buffer(vfs, "/mnt/ext2/rename-dir-b") != 0) {
-		return -1;
+	EXT2_STEP("bootstrap: ext2 step mkdir rmdir\n");
+	if (!ext2_fsck_mode) {
+		if (vfs_mkdir_path_buffer(vfs, "/mnt/ext2/rename-dir-a",
+					  0755) != 0 ||
+		    vfs_mkdir_path_buffer(vfs, "/mnt/ext2/rename-dir-b",
+					  0755) != 0 ||
+		    vfs_mkdir_path_buffer(vfs, "/mnt/ext2/rename-dir-a/child",
+					  0755) != 0 ||
+		    vfs_mkdir_path_buffer(vfs, "/mnt/ext2/rename-dir-b/target",
+					  0755) != 0 ||
+		    vfs_rename_path_buffer(vfs,
+					   "/mnt/ext2/rename-dir-a/child",
+					   "/mnt/ext2/rename-dir-b/target",
+					   0) != 0 ||
+		    vfs_stat_path(vfs, "/mnt/ext2/rename-dir-a/child", 0, 0,
+				  0, 0, 0, 0, 0, 0) == 0 ||
+		    vfs_stat_path(vfs, "/mnt/ext2/rename-dir-b/target", 0, 0,
+				  0, &dir_type, 0, 0, 0, 0) != 0 ||
+		    dir_type != BUNIX_VFS_TYPE_DIRECTORY ||
+		    vfs_rmdir_path_buffer(vfs, "/mnt/ext2/rename-dir-a") != 0 ||
+		    vfs_rmdir_path_buffer(vfs,
+					  "/mnt/ext2/rename-dir-b/target") != 0 ||
+		    vfs_rmdir_path_buffer(vfs, "/mnt/ext2/rename-dir-b") != 0) {
+			return -1;
+		}
+		EXT2_STEP("bootstrap: ext2 step dir rename\n");
 	}
+#undef EXT2_STEP
 	return 0;
 }
 
@@ -2444,6 +2471,40 @@ int main(void)
 			return 1;
 		}
 	}
+	if (bunix_cmdline_has("ext2-fsck-test") > 0) {
+		u64 ext2;
+		u64 tmpfs_root;
+
+		if (wait_service_in_namespace(BUNIX_NAMES_ROOT,
+					      BUNIX_SERVICE_BLOCK,
+					      BUNIX_RIGHT_SEND) == 0) {
+			return 1;
+		}
+		tmpfs_root = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						       BUNIX_SERVICE_TMPFS,
+						       BUNIX_RIGHT_SEND);
+		if (tmpfs_root == 0 ||
+		    send_path_command(tmpfs_root, BUNIX_PROTO_TMPFS,
+				      BUNIX_TMPFS_MOUNT_ROOT, "/") != 0) {
+			return 1;
+		}
+		bunix_launch_module_with_caps("ext2", fs_caps,
+					      sizeof(fs_caps) /
+						      sizeof(fs_caps[0]));
+		ext2 = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						  BUNIX_SERVICE_EXT2,
+						  BUNIX_RIGHT_SEND);
+		if (ext2 == 0 ||
+		    vfs_mount_service(vfs, "/mnt/ext2",
+				      BUNIX_SERVICE_EXT2) != 0 ||
+		    ext2_readonly_selftest(vfs) != 0) {
+			return 1;
+		}
+		bunix_console_log(ext2_ok, sizeof(ext2_ok) - 1);
+		(void)bunix_machine_poweroff(0);
+		for (;;) {
+		}
+	}
 	bunix_launch_module_with_caps("rootfs", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	{
@@ -2474,9 +2535,16 @@ int main(void)
 			return 1;
 		}
 	}
-	if (bunix_cmdline_has("ext2-test") > 0) {
+	if (bunix_cmdline_has("ext2-test") > 0 &&
+	    bunix_cmdline_has("ext2-fsck-test") <= 0) {
 		u64 ext2;
 
+		if (bunix_cmdline_has("virtio-blk-block-test") > 0 &&
+		    wait_service_in_namespace(BUNIX_NAMES_ROOT,
+					      BUNIX_SERVICE_BLOCK,
+					      BUNIX_RIGHT_SEND) == 0) {
+			return 1;
+		}
 		bunix_launch_module_with_caps("ext2", fs_caps,
 					      sizeof(fs_caps) /
 						      sizeof(fs_caps[0]));

@@ -193,6 +193,15 @@ Implementation notes:
   fast symlinks, or empty directories, link-count updates for replaced targets,
   rollback of newly inserted destination entries if removing the old name
   fails, `..` updates for moved directories, and parent link-count transitions.
+- `test-boot-ext2-fsck` now boots the ext2 selftest against a writable copy of
+  the generated ext2 image exposed through `virtio-blk.server` as the block
+  service, then runs host `/sbin/e2fsck -fn` on the mutated backing image after
+  QEMU powers off.  This preserves the fast boot-module test while adding a
+  persistence-oriented compatibility check for the core mutation coverage:
+  write/truncate, chmod/chown, create, regular-file rename, symlink
+  create/unlink, hardlink/unlink, and mkdir/rmdir.  The normal boot-module
+  ext2 test continues to cover absolute symlink traversal and directory rename
+  in the full root/unionfs environment.
 
 Tasks:
 
@@ -211,9 +220,9 @@ Tasks:
       mode, uid/gid, size, link count, timestamps, blocks, and device identity.
 - [x] Add readonly mount tests using a generated ext2 image with files,
       directories, symlinks, hardlinks, long names, and sparse-ish files.
-- [ ] Implement write support in staged slices: create, write, truncate,
+- [x] Implement write support in staged slices: create, write, truncate,
       unlink, mkdir/rmdir, rename, chmod/chown, symlink, and hardlink.
-- [ ] Add fsck-compatible image tests after write support, using host tools to
+- [x] Add fsck-compatible image tests after write support, using host tools to
       verify the resulting image.
 - [ ] Integrate ext2 with root selection so an ext2-backed rootfs can be tried
       once block/VirtIO block are ready.

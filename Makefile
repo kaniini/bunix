@@ -16,6 +16,10 @@ EXT2_TEST_ESP_DIR := $(BUILD_DIR)/esp-ext2
 EXT2_TEST_EFI_BOOT_APP := $(EXT2_TEST_ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 EXT2_TEST_GRUB_STANDALONE_CFG := $(BUILD_DIR)/grub-standalone-ext2.cfg
 EXT2_TEST_CMDLINE ?= log=info ext2-test
+EXT2_FSCK_TEST_ESP_DIR := $(BUILD_DIR)/esp-ext2-fsck
+EXT2_FSCK_TEST_EFI_BOOT_APP := $(EXT2_FSCK_TEST_ESP_DIR)/EFI/BOOT/BOOTX64.EFI
+EXT2_FSCK_TEST_GRUB_STANDALONE_CFG := $(BUILD_DIR)/grub-standalone-ext2-fsck.cfg
+EXT2_FSCK_TEST_CMDLINE ?= log=info virtio-blk-test virtio-blk-block-test ext2-fsck-test
 EFI_BOOT_IMG := $(BUILD_DIR)/bunixos-efi.iso
 EFI_BOOT_APP := $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 GRUB_CFG := $(BUILD_DIR)/grub.cfg
@@ -118,8 +122,10 @@ BLOCK_IMAGE := $(if $(filter alpine,$(ROOTFS_FLAVOR)),$(ALPINE_BLOCK_IMAGE),$(SY
 VIRTIO_BLOCK_IMAGE ?= $(BLOCK_IMAGE)
 VIRTIO_BLK_TEST_IMAGE := $(BUILD_DIR)/virtio-blk-test.img
 EXT2_TEST_IMAGE := $(BUILD_DIR)/modules/ext2-test.img
+EXT2_FSCK_TEST_IMAGE := $(BUILD_DIR)/ext2-fsck-test.img
 QEMU_VIRTIO_BLK_ARGS := -drive if=none,id=bunix-virtio0,format=raw,readonly=on,file=$(VIRTIO_BLOCK_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
 QEMU_VIRTIO_BLK_TEST_ARGS := -drive if=none,id=bunix-virtio0,format=raw,file=$(VIRTIO_BLK_TEST_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
+QEMU_EXT2_FSCK_TEST_ARGS := -drive if=none,id=bunix-virtio0,format=raw,file=$(EXT2_FSCK_TEST_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
 QEMU_VIRTIO_NET_ARGS := -netdev user,id=bunix-net0,restrict=on -device virtio-net-pci,disable-legacy=on,netdev=bunix-net0,mac=52:54:00:18:00:01,bus=pcie.0,addr=0x7
 TEST_BOOT_MARKERS := $(if $(filter alpine,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine.txt,tools/test-boot-markers.txt)
 ROOTFS_FLAVOR_STAMP := $(BUILD_DIR)/rootfs-flavor.stamp
@@ -259,7 +265,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-virtio test-boot-virtio-net test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool test-alpine-rootfs list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
+.PHONY: all clean run run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-virtio test-boot-virtio-net test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool test-alpine-rootfs list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -522,6 +528,11 @@ $(VIRTIO_BLK_TEST_IMAGE): $(BLOCK_IMAGE)
 $(EXT2_TEST_IMAGE): tools/build-ext2-test-image.sh
 	sh tools/build-ext2-test-image.sh $@
 
+$(EXT2_FSCK_TEST_IMAGE): $(EXT2_TEST_IMAGE) FORCE
+	cp $< $@
+	chmod u+w $@
+	/sbin/e2fsck -fn $@ >/dev/null
+
 $(GRUB_CFG): boot/grub.cfg FORCE
 	mkdir -p $(BUILD_DIR)
 	sed 's|@KERNEL_CMDLINE@|$(KERNEL_CMDLINE)|g' $< > $@.tmp
@@ -551,6 +562,14 @@ $(EXT2_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 	sed -e 's|@KERNEL_CMDLINE@|$(EXT2_TEST_CMDLINE)|g' \
 		-e '/rootfs\.server/a module2 /modules/ext2.server ext2' \
 		-e '/disk0\.img/a module2 /modules/ext2-test.img ext2disk' \
+		$< > $@.tmp
+	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
+
+$(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
+	mkdir -p $(BUILD_DIR)
+	sed -e 's|@KERNEL_CMDLINE@|$(EXT2_FSCK_TEST_CMDLINE)|g' \
+		-e '/rootfs\.server/a module2 /modules/ext2.server ext2' \
+		-e '/virtio-bus\.server/a module2 /modules/virtio-blk.server virtio-blk' \
 		$< > $@.tmp
 	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
 
@@ -682,6 +701,39 @@ $(EXT2_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_F
 		"modules/ext2-test.img=$(EXT2_TEST_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
+$(EXT2_FSCK_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(EXT2_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VIRTIO_BLK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
+		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
+	fi
+	mkdir -p $(EXT2_FSCK_TEST_ESP_DIR)/EFI/BOOT $(EXT2_FSCK_TEST_ESP_DIR)/boot
+	cp $(KERNEL) $(EXT2_FSCK_TEST_ESP_DIR)/boot/bunixos.kernel
+	$(GRUB_MKSTANDALONE) -O x86_64-efi -o $@ \
+		"boot/grub/grub.cfg=$(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG)" \
+		"boot/bunixos.kernel=$(KERNEL)" \
+		"modules/console.server=$(CONSOLE_MODULE)" \
+		"modules/names.server=$(NAMES_MODULE)" \
+		"modules/bootstrap.server=$(BOOTSTRAP_MODULE)" \
+		"modules/time.server=$(TIME_MODULE)" \
+		"modules/user.server=$(USER_MODULE)" \
+		"modules/linux.server=$(LINUX_SERVER_MODULE)" \
+		"modules/proc.server=$(PROC_MODULE)" \
+		"modules/procfs.server=$(PROCFS_MODULE)" \
+		"modules/tmpfs.server=$(TMPFS_MODULE)" \
+		"modules/devfs.server=$(DEVFS_MODULE)" \
+		"modules/sysfs.server=$(SYSFS_MODULE)" \
+		"modules/utmpfs.server=$(UTMPFS_MODULE)" \
+		"modules/rootfs.server=$(ROOTFS_MODULE)" \
+		"modules/unionfs.server=$(UNIONFS_MODULE)" \
+		"modules/ext2.server=$(EXT2_MODULE)" \
+		"modules/block.server=$(BLOCK_MODULE)" \
+		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
+		"modules/net.server=$(NET_MODULE)" \
+		"modules/virtio-blk.server=$(VIRTIO_BLK_MODULE)" \
+		"modules/vfs.server=$(VFS_MODULE)" \
+		"modules/ping.server=$(PING_MODULE)" \
+		"modules/disk0.img=$(BLOCK_IMAGE)" \
+		"modules/vm.server=modules/vm.server"
+
 $(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
@@ -763,6 +815,15 @@ test-boot-ext2: $(EXT2_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.
 	ESP_DIR=$(EXT2_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log tools/test-boot-markers-ext2.txt
+
+test-boot-ext2-fsck: $(EXT2_FSCK_TEST_EFI_BOOT_APP) $(EXT2_FSCK_TEST_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-ext2-fsck.txt
+	ESP_DIR=$(EXT2_FSCK_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log \
+		BUNIX_BOOT_PHASE=marker-poweroff BUNIX_BOOT_MARKER="machine: poweroff" \
+		QEMU_EXTRA_ARGS="$(QEMU_EXT2_FSCK_TEST_ARGS)" sh tools/test-boot.sh
+	sh tools/check-markers.sh $(BUILD_DIR)/serial.log tools/test-boot-markers-ext2-fsck.txt
+	grep -aF "virtio-blk: block online" $(BUILD_DIR)/serial.log >/dev/null
+	/sbin/e2fsck -fn $(EXT2_FSCK_TEST_IMAGE) >/dev/null
 
 test-boot-virtio: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

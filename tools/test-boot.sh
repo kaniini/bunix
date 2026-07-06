@@ -100,6 +100,21 @@ start_qemu() {
 }
 
 start_qemu
+if [ "$boot_phase" = marker-poweroff ]; then
+	marker=${BUNIX_BOOT_MARKER:-}
+	if [ -z "$marker" ]; then
+		fail_boot "BUNIX_BOOT_MARKER is required for marker-poweroff phase" 80
+	fi
+	wait_for_fixed_boot "$marker" "boot marker did not appear: $marker" 80 160
+	if wait "$qemu_pid"; then
+		qemu_pid=
+		echo "boot marker poweroff ok"
+		exit 0
+	fi
+	qemu_status=$?
+	qemu_pid=
+	fail_boot "qemu exited with status $qemu_status" 220
+fi
 wait_for_fixed_boot "login: " "login prompt did not appear" 80 160
 
 sleep 3
