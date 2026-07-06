@@ -436,6 +436,9 @@ scheduling new shard batches after a failure, and `BUNIX_TEST_RETRIES=N`
 preserves per-attempt logs under each shard directory. The runner checks KVM,
 OVMF, file descriptors, disk space, and obvious RAM pressure before scheduling;
 `BUNIX_TEST_SKIP_HOST_CHECKS=1` is intended only for dry harness tests.
+`make test-prune-artifacts` removes old successful `build/test-runs/` entries
+while keeping the newest ten and any run with failures; set
+`BUNIX_TEST_KEEP_RUNS=N` or `BUNIX_TEST_PRUNE_DRY_RUN=1` to adjust pruning.
 
 `make test-rootfs-tool` is a host-side regression for the rootfs image builder;
 it creates more than 128 entries to verify the builder's dynamic entry table.

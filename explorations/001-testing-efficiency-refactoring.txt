@@ -377,12 +377,20 @@ Plan:
    - `BUNIX_TEST_SKIP_HOST_CHECKS=1` exists for dry scheduler tests only.
    - `README.md` documents the sanity checks.
 
-20. Add parallel artifact pruning
+20. Add parallel artifact pruning [DONE]
    Add a safe helper for old run directories:
 
    make test-prune-artifacts
 
    Keep the newest N runs or runs with failures by default.
+
+   Result:
+
+   - Added `tools/test-prune-artifacts.sh` and `make test-prune-artifacts`.
+   - The helper keeps the newest `BUNIX_TEST_KEEP_RUNS` runs, defaulting to 10,
+     and preserves any run whose summary or shard status records a failure.
+   - `BUNIX_TEST_PRUNE_DRY_RUN=1` reports pruning decisions without deleting
+     directories.
 
 21. Improve 'make test' parallelism
    Build on the earlier sharding changes by collapsing make test

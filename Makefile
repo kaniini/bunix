@@ -202,7 +202,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-kernel run-iso test test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-shell-static test-shell-dynamic test-rootfs-tool list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
+.PHONY: all clean run run-kernel run-iso test test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -531,6 +531,9 @@ test-shell-parallel: $(EFI_BOOT_APP)
 		sh tools/test-parallel.sh
 
 test-parallel: test-shell-parallel
+
+test-prune-artifacts:
+	sh tools/test-prune-artifacts.sh
 
 test-command: $(EFI_BOOT_APP)
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
