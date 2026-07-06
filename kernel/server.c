@@ -846,7 +846,7 @@ static void console_input_thread(void *arg)
 	for (;;) {
 		char c;
 
-		if (!console_poll_control_input(&c)) {
+		if (!console_try_read_char(&c)) {
 			thread_sleep_ns(10000000ull);
 			continue;
 		}

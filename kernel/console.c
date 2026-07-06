@@ -297,6 +297,14 @@ int console_can_read(void)
 	return can_read;
 }
 
+int console_try_read_char(char *out)
+{
+	if (out == 0) {
+		return 0;
+	}
+	return serial_try_getc(out);
+}
+
 static void console_queue_input_raw(const char *text)
 {
 	const u64 flags = spin_lock_irqsave(&console_input_lock);

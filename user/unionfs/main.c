@@ -1608,6 +1608,13 @@ static void forward_open_handle(struct bunix_msg *message,
 			stat_root_dir(reply);
 		} else if (message->type == BUNIX_VFS_READDIR_BUFFER) {
 			readdir_merged(open, message, reply);
+		} else if ((message->type == BUNIX_VFS_CHMOD ||
+			    message->type == BUNIX_VFS_CHOWN) &&
+			   open->remote_handle != 0) {
+			message->words[0] = open->remote_handle;
+			if (bunix_ipc_call(open->service, message, reply) != 0) {
+				reply->words[0] = (u64)-1;
+			}
 		} else {
 			reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 		}

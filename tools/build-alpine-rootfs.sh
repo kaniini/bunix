@@ -15,6 +15,29 @@ apk_packages=${ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc}
 rootfs_tool=${ROOTFS_TOOL:-build/tools/mkrootfs}
 login=${LOGIN_MODULE:-build/modules/login.user}
 
+merge_account_file() {
+	base=$1
+	overlay=$2
+	tmp=$base.bunix-merge
+
+	awk -F: '
+		FNR == NR {
+			replace[$1] = 1
+			lines[++line_count] = $0
+			next
+		}
+		!($1 in replace) {
+			print
+		}
+		END {
+			for (i = 1; i <= line_count; i++) {
+				print lines[i]
+			}
+		}
+	' "$overlay" "$base" > "$tmp"
+	mv "$tmp" "$base"
+}
+
 rm -rf "$stage"
 mkdir -p "$root" "$(dirname "$out")" "$artifact_dir"
 
@@ -45,9 +68,9 @@ rm -f "$root/bin/login"
 cp "$login" "$root/bin/login"
 chmod 0555 "$root/bin/login"
 
-cp modules/passwd "$root/etc/passwd"
-cp modules/shadow "$root/etc/shadow"
-cp modules/group "$root/etc/group"
+merge_account_file "$root/etc/passwd" modules/passwd
+merge_account_file "$root/etc/shadow" modules/shadow
+merge_account_file "$root/etc/group" modules/group
 chmod 0444 "$root/etc/passwd" "$root/etc/group"
 chmod 0400 "$root/etc/shadow"
 

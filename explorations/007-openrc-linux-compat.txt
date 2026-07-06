@@ -22,6 +22,15 @@ Findings:
 - With the temporary `fstat()` identity shim restored and shebang handling in
   place, Alpine OpenRC starts, mounts `/proc`, and advances to
   `checkpath: owner 'root:uucp' not found`.
+- The Alpine rootfs overlay must merge Bunix login credentials into the apk
+  account database instead of replacing `/etc/passwd`, `/etc/shadow`, and
+  `/etc/group`; replacing them drops system groups such as `uucp`.
+- After preserving apk account entries and forwarding unionfs directory
+  `chown`/`chmod` to upper handles, OpenRC passes `/run/lock` ownership
+  correction and reaches a later fork/pipe supervision phase.
+- Linux TTY reads must not call the blocking early console read syscall inside
+  the Linux server.  A process waiting for terminal input can otherwise stop
+  unrelated Linux IPC such as `wait4`, pipe wakeups, and process exits.
 
 - [x] Boot the Alpine fixture far enough to collect strace-style logs from OpenRC startup.
 - [x] Identify the OpenRC dynamic-loader stat identity issue and defer the
@@ -30,7 +39,12 @@ Findings:
       through their interpreter instead of failing with `EINVAL`.
 - [x] Add a focused regression test for script execution with interpreter
       arguments.
+- [x] Preserve Alpine system users/groups while overlaying Bunix login
+      credentials into the Alpine fixture.
+- [x] Keep Linux TTY reads from blocking the whole Linux personality server.
 - [ ] Triage remaining missing or incorrect syscalls by startup phase and impact.
+- [ ] Debug the remaining OpenRC fork/pipe supervision stall after `/run/lock`
+      correction.
 - [ ] Implement remaining high-priority syscall fixes in narrow slices with
       reproducer tests.
 - [ ] Ensure process/session/task identity remains consistent across Bunix tasks and Linux PIDs.

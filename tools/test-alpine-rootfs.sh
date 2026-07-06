@@ -86,6 +86,31 @@ require_symlink_target() {
 	fi
 }
 
+entry_content() {
+	path=$1
+	index=$(find_entry "$path") || {
+		echo "missing alpine rootfs file: $path" >&2
+		exit 1
+	}
+	actual_type=$(entry_type "$index")
+	if [ "$actual_type" != 1 ]; then
+		echo "wrong alpine rootfs file type for $path: $actual_type" >&2
+		exit 1
+	fi
+	offset=$(entry_offset "$index")
+	size=$(entry_size_bytes "$index")
+	dd if="$image" bs=1 skip="$offset" count="$size" 2>/dev/null
+}
+
+require_file_contains() {
+	path=$1
+	needle=$2
+	if ! entry_content "$path" | grep -F "$needle" >/dev/null 2>&1; then
+		echo "alpine rootfs $path missing: $needle" >&2
+		exit 1
+	fi
+}
+
 require_entry /etc/alpine-release 1
 require_entry /bin/busybox 1
 require_entry /bin/login 1
@@ -96,6 +121,9 @@ require_entry /sbin/init 3
 require_entry /etc/runlevels/default/bunix-login 3
 require_symlink_target /sbin/init /bin/busybox
 require_symlink_target /lib/libc.musl-x86_64.so.1 ld-musl-x86_64.so.1
+require_file_contains /etc/group "uucp:"
+require_file_contains /etc/passwd "kaniini:x:1000:1000:"
+require_file_contains /etc/shadow "root:root"
 
 if ! grep -aF "/bin/login" "$image" >/dev/null 2>&1; then
 	echo "alpine rootfs inittab/login service does not reference Bunix login" >&2
