@@ -100,7 +100,9 @@ ALPINE_BLOCK_IMAGE := $(BUILD_DIR)/modules/alpine-disk0.img
 ROOTFS_FLAVOR ?= synthetic
 BLOCK_IMAGE := $(if $(filter alpine,$(ROOTFS_FLAVOR)),$(ALPINE_BLOCK_IMAGE),$(SYNTHETIC_BLOCK_IMAGE))
 VIRTIO_BLOCK_IMAGE ?= $(BLOCK_IMAGE)
+VIRTIO_BLK_TEST_IMAGE := $(BUILD_DIR)/virtio-blk-test.img
 QEMU_VIRTIO_BLK_ARGS := -drive if=none,id=bunix-virtio0,format=raw,readonly=on,file=$(VIRTIO_BLOCK_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
+QEMU_VIRTIO_BLK_TEST_ARGS := -drive if=none,id=bunix-virtio0,format=raw,file=$(VIRTIO_BLK_TEST_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
 TEST_BOOT_MARKERS := $(if $(filter alpine,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine.txt,tools/test-boot-markers.txt)
 ROOTFS_FLAVOR_STAMP := $(BUILD_DIR)/rootfs-flavor.stamp
 PARALLEL_TEST_SET := $(if $(BUNIX_TEST_SET),$(BUNIX_TEST_SET),all)
@@ -475,6 +477,11 @@ $(ROOTFS_FLAVOR_STAMP): FORCE
 		printf '%s\n' '$(ROOTFS_FLAVOR)' > $@; \
 	fi
 
+$(VIRTIO_BLK_TEST_IMAGE): $(BLOCK_IMAGE)
+	mkdir -p $(dir $@)
+	cp $(BLOCK_IMAGE) $@
+	chmod u+w $@
+
 $(GRUB_CFG): boot/grub.cfg FORCE
 	mkdir -p $(BUILD_DIR)
 	sed 's|@KERNEL_CMDLINE@|$(KERNEL_CMDLINE)|g' $< > $@.tmp
@@ -631,13 +638,15 @@ test-boot-virtio: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools
 	! grep -aF "virtio-bus: features index=0 device=0 " $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-bus: ready devices=1" $(BUILD_DIR)/serial.log >/dev/null
 
-test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
+test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) $(VIRTIO_BLK_TEST_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
 	ESP_DIR=$(VIRTIO_BLK_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log \
-		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_BLK_ARGS)" sh tools/test-boot.sh
+		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_BLK_TEST_ARGS)" sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
 	grep -aF "bootstrap: virtio-blk test" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-blk: read ok" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "virtio-blk: write ok" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "virtio-blk: flush ok" $(BUILD_DIR)/serial.log >/dev/null
 
 test-shell: $(EFI_BOOT_APP)
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

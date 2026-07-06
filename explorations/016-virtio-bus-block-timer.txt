@@ -221,3 +221,11 @@ Progress:
   uses a 4-byte alignment instead of a legacy 4 KiB used-ring alignment, keeping
   the queue-0 test ring inside one shared-buffer page until a real contiguous
   DMA allocator exists.
+- Extended the dedicated block-driver boot test to exercise read, write, and
+  flush completions.  `virtio-blk.server` now tracks `next_avail` and
+  `seen_used`, reuses descriptor head 0 only after completion, submits IN, OUT,
+  and optional FLUSH requests through the same helper, and negotiates the
+  VirtIO block flush feature as optional.  `test-boot-virtio-blk` now copies the
+  root block image to a writable scratch image before booting QEMU, so the
+  normal VirtIO boot target remains read-only while the driver test can write
+  sector 0 back and flush it.
