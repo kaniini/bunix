@@ -1,0 +1,62 @@
+Build a deeper scheduler benchmark and policy-control test suite.
+
+Problem:
+
+- Exploration 020 brought up the EEVDF-inspired scheduler, basic scheduler
+  statistics, `/proc/sched`, Linux `sched_yield(2)`, and a first scheduler
+  stress test.  That is enough to make scheduler behavior observable in normal
+  tests, but it is not a full benchmark suite.
+- Harder questions need dedicated policy controls and repeatable measurements:
+  sustained CPU-bound fairness, starvation thresholds, explicit affinity masks,
+  migration behavior, server RPC latency under CPU pressure, and interactive
+  shell latency under load.
+- Those tests should not depend on ad hoc wall-clock guesses hidden inside
+  broad filesystem shards.  They should be explicit benchmark/stress artifacts
+  with clear counters and pass/fail thresholds.
+
+Dependencies:
+
+- Exploration 020 must be complete.
+- Bunix should expose explicit scheduler policy controls before this work tries
+  to test hard affinity or class/weight behavior.  The existing task metadata
+  is enough to describe policy, but not enough to grant or adjust it from a
+  capability-controlled scheduler policy server.
+
+Design direction:
+
+- Extend `/proc/sched` or add a dedicated scheduler stats RPC with stable
+  per-task/per-thread counters: runtime, runnable wait, wake-to-run latency,
+  preemptions, migrations, class, weight, priority, CPU, and affinity mask.
+- Add a native scheduler-policy server or protocol that grants attenuated
+  scheduling rights: class changes, priority changes, weight changes, and CPU
+  affinity masks.
+- Build focused stress binaries rather than burying all scheduler checks in
+  broad VFS shards.  Keep the current `schedstress` as a smoke-level churn
+  test, then add deeper CPU and IPC benchmarks with deterministic output.
+- Prefer relative comparisons between competing workers inside one guest boot
+  over brittle host wall-clock thresholds.
+
+Tasks:
+
+- [ ] Define the scheduler policy RPC/capability model for class, priority,
+      weight, and affinity changes without allowing ambient self-promotion.
+- [ ] Expose per-thread scheduler statistics sufficient for fairness and
+      latency tests, including task/thread IDs that can be correlated with
+      Linux PIDs through proc/linux server state.
+- [ ] Add a CPU-bound fairness benchmark that runs equal-weight workers and
+      verifies bounded runtime skew.
+- [ ] Add a starvation benchmark with mixed CPU-bound and sleeping/yielding
+      workers, verifying that interactive workers keep bounded wake-to-run
+      latency.
+- [ ] Add an IPC/server latency benchmark that drives repeated RPCs while
+      background CPU workers are runnable.
+- [ ] Add an interactive shell latency test that runs commands under background
+      CPU load and checks bounded command completion using scheduler counters
+      rather than only host wall time.
+- [ ] Add SMP migration and idle-balancing tests once migration policy exists:
+      prove idle CPUs pull work, migrations are counted, and virtual runtime is
+      preserved.
+- [ ] Add affinity tests once capability-scoped CPU masks exist: pin workers,
+      verify they run on allowed CPUs, and verify invalid masks are rejected.
+- [ ] Add comparison reporting for key shards and scheduler benchmarks so
+      future scheduler changes can see runtime/counter deltas.
