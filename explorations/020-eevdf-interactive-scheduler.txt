@@ -32,21 +32,69 @@ Constraints:
 - The design must handle SMP placement, migration, idle balancing, affinity,
   preemption, timer ticks, and future real-time-ish classes cleanly.
 
+Current scheduler inventory:
+
+- `kernel/sched.c` owns Bunix task/thread objects, task handles, task VM-region
+  metadata, per-task IPC affinity, per-CPU run queues, sleep queues, blocking,
+  wakeups, direct IPC handoff, preemption, and teardown/reaping.
+- Tasks are low-level Bunix objects with kernel-assigned `task->pid` values;
+  those IDs are not Linux PIDs.  Threads are the scheduler entities.  Linux
+  processes/LWPs are layered over Bunix tasks by the Linux/proc servers.
+- The old policy was per-CPU FIFO: `run_queue` had only `head`, `tail`,
+  `count`, and `idle`; enqueue appended, pick-next popped from the head, and a
+  fixed 5-tick user-mode quantum triggered preemption when another local
+  thread was runnable.
+- SMP placement was conservative: new threads used explicit CPU placement,
+  task IPC affinity, or least-loaded round-robin auto placement.  Wakeups
+  returned a blocked thread to its recorded `thread->cpu_id`; cross-CPU wakeups
+  sent a scheduler IPI only when the target run queue had been idle.
+- Blocking/yield/sleep paths switch back to the per-CPU scheduler thread.
+  Sleepers live in a global tick-ordered sleep list protected by `sleep_lock`.
+  Direct IPC handoff can bypass the scheduler when sender and receiver are on
+  the same CPU and the handoff is not nested.
+- Timer preemption currently happens only from user-mode timer interrupts.
+  Kernel/server code normally yields, blocks, or sleeps explicitly, so server
+  responsiveness depends heavily on wakeup ordering and IPC handoff.
+
+Initial EEVDF policy slice:
+
+- The scheduler entity is the Bunix thread.  Each thread now carries a base
+  weight, virtual runtime, eligible time, virtual deadline, deterministic
+  enqueue sequence, execution-start tick, blocked-since tick, runtime ticks,
+  wakeup count, migration count, and preemption count.
+- Initial weights are uniform (`1024`) for all threads.  That preserves
+  existing semantics while making weight/class policy an explicit next layer
+  instead of baking Linux process identity into the scheduler.
+- Runtime accounting charges running threads on timer ticks and voluntary
+  exits from the CPU: yield, block, sleep, direct handoff, preemption, and
+  thread exit.  Virtual runtime advances by `runtime * 1024 / weight`.
+- Per-CPU run queues are now ordered by virtual deadline with deterministic
+  tie-breaking on eligible time, enqueue sequence, and TID.  This replaces
+  FIFO pick-next with an EEVDF-inspired earliest-deadline policy while keeping
+  bounded O(n) insertion cost suitable for the current small-kernel stage.
+- Interactive wakeups get bounded sleep credit.  A thread that was blocked can
+  receive up to 20 ticks of virtual-runtime credit when it wakes, clamped to
+  the target CPU's minimum virtual runtime.  This favors IPC, terminal input,
+  and server replies without allowing unbounded negative lag.
+- Direct IPC handoff is preserved.  When handoff cannot happen, the receiver is
+  enqueued through the same wakeup path and receives the bounded interactive
+  credit.
+
 Tasks:
 
-- [ ] Inventory the current task/thread/runqueue/preemption/SMP code and
+- [x] Inventory the current task/thread/runqueue/preemption/SMP code and
       document existing invariants.
-- [ ] Define scheduler entities, weights, virtual runtime/lag, eligible time,
+- [x] Define scheduler entities, weights, virtual runtime/lag, eligible time,
       virtual deadlines, and how Bunix threads map into those entities.
-- [ ] Define interactivity heuristics: wakeup bonus, sleep credit, IPC/server
+- [x] Define interactivity heuristics: wakeup bonus, sleep credit, IPC/server
       wakeups, terminal input latency, and guardrails against gaming.
 - [ ] Define scheduling classes or priorities for kernel/server/user work,
       including how capabilities or policy servers may grant scheduling rights.
 - [ ] Design SMP run queues, load tracking, migration, CPU affinity, idle CPU
       selection, and cross-CPU wakeup behavior.
-- [ ] Implement EEVDF-style pick-next logic with deterministic tie-breaking and
+- [x] Implement EEVDF-style pick-next logic with deterministic tie-breaking and
       bounded accounting cost.
-- [ ] Integrate preemption decisions for wakeups, timer ticks, IPC fast paths,
+- [x] Integrate preemption decisions for wakeups, timer ticks, IPC fast paths,
       blocking, yield, and task exit.
 - [ ] Add instrumentation for runnable latency, wakeup-to-run time, runtime
       share, migrations, preemptions, and per-CPU load.
