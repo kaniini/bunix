@@ -20,6 +20,7 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$script_dir/shell-tests/path-limits-statfs.sh"
 . "$script_dir/shell-tests/union-root-user.sh"
 . "$script_dir/shell-tests/tmpfs-extended.sh"
+. "$script_dir/shell-tests/large-io-mount.sh"
 BUNIX_COLLECT_FAILURES=1
 BUNIX_FAILURE_DIR=$failure_dir
 BUNIX_QEMU_LOG=$qemu_log
@@ -148,23 +149,7 @@ run_tmpfs_basic_linux_tests
 run_path_limits_statfs
 run_union_root_user
 run_tmpfs_extended
-send_script <<'EOF_LARGE_IO'
-busybox head -c 8192 /dev/zero > /tmp/linux-big-write.bin
-busybox test "$(busybox stat -c "%s" /tmp/linux-big-write.bin)" = "8192" && echo LINUX_BIG_WRITE_OK
-/bin/mmapbig && echo MMAPBIG_OK
-/bin/mmaphuge
-/bin/readbig && echo READBIG_OK
-EOF_LARGE_IO
-wait_for_fixed "$log" "READBIG_OK" "pre-mount shell commands did not drain" 45 220
-send_script <<'EOF_MOUNT_TMPFS'
-mount -t tmpfs tmpfs /mnt&&echo MNT_OK
-echo MNT_PAYLOAD>/mnt/linux-mount.txt
-cat /mnt/linux-mount.txt&&echo MNT_CAT
-mount|busybox grep /mnt&&echo MNT_LIST
-umount /mnt&&echo UMNT_OK
-mount|busybox grep /mnt||echo UMNT_GONE
-test ! -e /mnt/linux-mount.txt&&echo UMNT_HIDE
-EOF_MOUNT_TMPFS
+run_large_io_mount
 
 check_login_smoke
 
@@ -183,7 +168,7 @@ wait_for_each_fixed_count "$log" 2 "append payload missing from file output" 45 
 	TMP_APPEND_ONE TMP_APPEND_TWO TMP_LONG_READDIR_PAYLOAD TMP_NAME_MAX_PAYLOAD \
 	TMP_NAME255_PAYLOAD PATHMAX2_TMP_PAYLOAD UNION_ROOT_BASE_PAYLOAD \
 	UNION_ROOT_APPEND_PAYLOAD UNION_ROOT_LONG_PAYLOAD UNION_NAME_MAX_PAYLOAD
-wait_for_fixed "$log" "READBIG_OK" "large Linux read did not complete" 45 220
+check_large_io_mount
 wait_for_each_fixed "$log" "procfs content regression missing" 45 220 \
 	"cpu  " "/bin/sh" PROC_SHELL_PPID_OK "direct_delivered " "direct_handoff "
 wait_for_each_regex "$log" "IPC fast path counter did not increase" 45 220 \

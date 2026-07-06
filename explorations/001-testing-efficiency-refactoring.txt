@@ -77,11 +77,13 @@ Plan:
    - `tools/shell-tests/tmpfs-extended.sh` owns tmpfs ownership baseline,
      long-name/name-max coverage, touch, fifo, hardlink, directory rename,
      chmod/chown denial, symlink, and union user link checks.
+   - `tools/shell-tests/large-io-mount.sh` owns large `/dev/zero` writes,
+     mmap/read stress helpers, and user-session tmpfs mount/umount coverage.
 
    Needs:
 
    - Extract the remaining user-phase batches:
-     `large-io-mount` and `interactive-tty`.
+     `interactive-tty`.
    - Extract the root-phase batches:
      `root-login-union`, `root-tmpfs-chown`, `long-login`, and
      `root-mount-soak`.
