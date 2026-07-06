@@ -7,13 +7,11 @@ Context carried forward:
 - `tools/test-parallel.sh` runs workers directly through `tools/test-shell.sh`
   after the Makefile has built the immutable ESP, avoiding recursive make races
   in shared build outputs.
-- All currently runnable shell shards request `SMP=2`. `SMP=1` guests exit
-  during early server startup and should not be used as passing shard metadata
-  until the kernel boot path is fixed.
+- The shard manifest now includes `smoke-up`, a passing `SMP=1` boot smoke
+  shard. The other coverage shards continue to request `SMP=2`.
 - `tmpfs-extended` and `root-tmpfs-chown` compose their same-boot tmpfs setup
   dependency inside the worker.
-- `root-mount-soak` is still listed in `tools/shell-shards.tsv` but skipped by
-  the runner because the harness does not implement it yet.
+- `root-mount-soak` is implemented and no longer skipped.
 
 Milestone: close known gaps in the parallel shard gate
 
@@ -90,7 +88,13 @@ Plan:
      `/proc/$pid/cmdline`.
    - Existing rootfs/VFS/devfs procfs checks remain focused on `/proc/self`.
 
-5. Re-run and complete the gate
+5. Re-run and complete the gate [DONE]
    Run narrow tests for each fixed shard, then run full `make test`. When all
    shards pass without skips and full tests pass, move this exploration to
    `explorations/completed/`.
+
+   Result:
+
+   - Ran `make test`.
+   - Run id: `20260706T015007Z-4867`.
+   - Result: 16 shards launched, 0 skipped, all passed.

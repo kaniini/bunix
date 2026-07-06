@@ -1,0 +1,45 @@
+Project plan: fix repeated mount lifecycle on the same mountpoint
+
+Context carried forward:
+
+- `root-mount-soak` now passes by using unique `/mnt/soak-*` mountpoints.
+- During implementation, repeatedly mounting and unmounting tmpfs on the same
+  `/mnt` mountpoint left `/mnt` busy after the first cycle.
+- The parallel gate is green, so this can be investigated as a focused VFS and
+  mount lifecycle bug rather than hidden inside the parallel harness work.
+
+Milestone: make same-path mount/umount reuse reliable
+
+Goal:
+
+- Allow repeated mount and unmount operations on the same mountpoint when no
+  live cwd/open route pins remain.
+- Preserve busy unmount denial when a task genuinely pins a mount route.
+- Replace the `root-mount-soak` unique-mountpoint workaround with same-path
+  coverage once the lifecycle bug is fixed.
+
+Plan:
+
+1. Reproduce same-path mountpoint busy state
+   Add or run a focused root shell reproducer that mounts tmpfs on `/mnt`,
+   writes and verifies a file, unmounts, checks hidden state, then repeats the
+   same sequence on `/mnt` and captures the exact failing operation.
+
+2. Trace VFS route pin and mount refcounts
+   Inspect VFS mount, route pin, cwd, open-file, and unmount paths. Add
+   temporary or trace-level diagnostics if needed to distinguish stale route
+   pins from a genuine live reference.
+
+3. Fix stale mount lifecycle state
+   Update the VFS and relevant filesystem/server code so a clean unmount fully
+   releases route state for the mountpoint while still rejecting unmounts pinned
+   by cwd or open handles.
+
+4. Convert `root-mount-soak` to same-path reuse
+   Change the root mount soak shard to repeatedly reuse `/mnt` directly, keeping
+   the existing pinned-cwd busy denial coverage.
+
+5. Validate and complete
+   Run narrow same-path mount coverage, `root-mount-soak`, and then full
+   `make test`. Move this exploration to `explorations/completed/` when all
+   tasks pass.
