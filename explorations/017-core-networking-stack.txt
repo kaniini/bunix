@@ -1,0 +1,49 @@
+Implement the core networking framework: localhost, IPv4, IPv6, TCP, and UDP.
+
+Problem:
+
+- Linux userspace will increasingly expect sockets to behave like a real
+  network stack, not just minimal compatibility stubs.
+- Before real NIC drivers, Bunix needs an internal networking framework with
+  loopback, IPv4, IPv6, UDP, and TCP semantics.
+
+Constraints:
+
+- Keep the network stack as userspace servers where possible, with kernel
+  involvement limited to IPC, capabilities, event delivery, and low-level
+  driver resources.
+- Preserve OCAP direction: sockets, interfaces, routes, and packet flows should
+  be represented by explicit capabilities rather than ambient global authority.
+- Linux PID/process identity may differ from Bunix task identity, so socket
+  ownership, credentials, and visibility must be mediated through the Linux
+  personality and user/proc servers.
+- Start with localhost and deterministic tests before external networking.
+
+Tasks:
+
+- [ ] Inventory current Linux socket syscall handling and all ENOSYS/EINVAL
+      paths for `socket`, `bind`, `connect`, `listen`, `accept`, `send*`,
+      `recv*`, `getsockname`, `getpeername`, `setsockopt`, and `poll`.
+- [ ] Define the networking server split: socket API/personality adapter,
+      protocol stack, routing/interface manager, loopback device, and future
+      NIC driver boundary.
+- [ ] Define capability objects for sockets, interfaces, routes, packet queues,
+      and privileged operations such as binding low ports or configuring
+      addresses.
+- [ ] Implement loopback interface lifecycle and packet delivery independent of
+      physical NICs.
+- [ ] Implement UDP over IPv4 and IPv6, including bind/connect/send/recv,
+      wildcard addresses, ephemeral ports, checksums, and poll readiness.
+- [ ] Implement enough TCP for localhost streams: listen, accept, connect,
+      read/write, close, half-close, reset/error behavior, and backlog limits.
+- [ ] Add Linux syscall compatibility for the socket operations needed by
+      BusyBox, musl, OpenRC tools, and simple client/server test programs.
+- [ ] Implement address and route tables for `127.0.0.0/8`, `::1/128`, and
+      future interface routes.
+- [ ] Add observability through procfs or Bunix-native tools for interfaces,
+      sockets, TCP/UDP state, and packet counters.
+- [ ] Add tests for IPv4 localhost UDP, IPv6 localhost UDP, IPv4 localhost TCP,
+      IPv6 localhost TCP, poll/select readiness behavior, connection teardown,
+      and permission checks.
+- [ ] Document the boundary where real NIC drivers, including VirtIO-net, plug
+      into the stack.

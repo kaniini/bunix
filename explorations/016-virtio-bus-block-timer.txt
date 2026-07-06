@@ -1,0 +1,48 @@
+Map out and implement the VirtIO bus, VirtIO block, and VirtIO timer path.
+
+Problem:
+
+- Bunix currently relies on narrow bringup devices and ad hoc platform
+  surfaces.  To run more realistic guests and root filesystems, it needs a
+  proper VirtIO foundation.
+- The immediate targets are VirtIO bus enumeration, a VirtIO block driver, and
+  a timer source suitable for portable scheduling/time work.
+
+Constraints:
+
+- Keep device drivers in userspace where practical.  Kernel involvement should
+  be limited to resource discovery, capability-scoped hardware access, DMA
+  safety, interrupts, and task/VM primitives.
+- Design the bus layer around transports, not only QEMU x86.  PCI/MMIO VirtIO
+  should be separable so ARM MMIO VirtIO can be added later.
+- Do not hand arbitrary I/O or DMA authority to drivers.  Capabilities should
+  attenuate access to specific device BAR/MMIO ranges, IRQs, and DMA buffers.
+- Keep block-device APIs compatible with the existing block/VFS direction so
+  rootfs mounting can move from static module images to device-backed storage.
+
+Tasks:
+
+- [ ] Inventory current block, timer, interrupt, PCI/platform discovery, and
+      hardware-access paths.
+- [ ] Define a generic device-resource model for userspace drivers: MMIO/PIO
+      ranges, IRQs, DMA windows, feature bits, queue memory, and reset.
+- [ ] Implement or plan the required VirtIO transport layer, starting with PCI
+      on x86_64 and leaving a clean MMIO transport path for ARM.
+- [ ] Implement VirtIO feature negotiation, status transitions, queue setup,
+      descriptor rings, avail/used rings, notifications, and interrupt acks.
+- [ ] Add a userspace VirtIO bus manager/server that discovers devices and
+      grants attenuated device capabilities to matching drivers.
+- [ ] Implement a VirtIO block userspace driver with read/write/flush support,
+      request queueing, completion handling, and error translation.
+- [ ] Connect VirtIO block to the existing block server or replace the current
+      block backend behind the same VFS-facing protocol.
+- [ ] Define the VirtIO timer requirement precisely.  If standard VirtIO does
+      not provide the desired timer device, decide whether the right target is
+      virtio-rng/console, HPET/APIC timer abstraction, or a platform timer
+      server that shares the same driver framework.
+- [ ] Add QEMU run/test modes that boot with VirtIO block and deterministic
+      device topology.
+- [ ] Add tests for bus enumeration, feature negotiation failures, block reads,
+      block writes, flushes, interrupt-driven completions, and clean poweroff.
+- [ ] Document the ARM porting shape for VirtIO MMIO transport and timer
+      selection.

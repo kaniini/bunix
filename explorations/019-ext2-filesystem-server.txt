@@ -1,0 +1,42 @@
+Implement ext2 as a filesystem server.
+
+Problem:
+
+- Bunix needs a real disk-backed filesystem path beyond rootfs/tmpfs/unionfs
+  scaffolding.
+- ext2 is a small enough on-disk format to bring up as an initial persistent
+  filesystem server and exercise the VFS/block-device boundary.
+
+Constraints:
+
+- ext2 should live in userspace as a filesystem server mounted through VFS.
+- The server should consume a block-device capability rather than assume a
+  specific storage backend.  It should work with the current block server first
+  and later with VirtIO block.
+- Keep the initial implementation conservative: correctness and clear failure
+  modes before journaling-like behavior or aggressive caching.
+- Do not put ext2 parsing policy in the kernel.
+
+Tasks:
+
+- [ ] Inventory the current VFS translator protocol, block server protocol,
+      tmpfs/rootfs/unionfs server patterns, and mount lifecycle.
+- [ ] Define the ext2 server mount contract: block device capability, readonly
+      versus read-write mode, block size support, feature flags, and root inode.
+- [ ] Implement superblock parsing and validation, including unsupported
+      incompat/ro-compat feature diagnostics.
+- [ ] Implement block group descriptor loading, inode table access, block
+      bitmap/inode bitmap helpers, and safe bounds checks.
+- [ ] Implement directory lookup and readdir for ext2 directory entries.
+- [ ] Implement file read for direct, singly indirect, doubly indirect, and
+      triply indirect blocks as needed by realistic images.
+- [ ] Implement metadata mapping into Linux stat/statx fields: inode number,
+      mode, uid/gid, size, link count, timestamps, blocks, and device identity.
+- [ ] Add readonly mount tests using a generated ext2 image with files,
+      directories, symlinks, hardlinks, long names, and sparse-ish files.
+- [ ] Implement write support in staged slices: create, write, truncate,
+      unlink, mkdir/rmdir, rename, chmod/chown, symlink, and hardlink.
+- [ ] Add fsck-compatible image tests after write support, using host tools to
+      verify the resulting image.
+- [ ] Integrate ext2 with root selection so an ext2-backed rootfs can be tried
+      once block/VirtIO block are ready.

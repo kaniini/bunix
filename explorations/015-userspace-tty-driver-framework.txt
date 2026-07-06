@@ -1,0 +1,49 @@
+Refactor the TTY layer around a userspace device-driver framework.
+
+Problem:
+
+- Console and TTY behavior has grown from early bringup code into kernel and
+  server paths that know too much about the serial console.
+- The next design step is to split early console from real TTY/device handling,
+  move the serial console into a userspace driver, and keep privileged hardware
+  operations behind narrow kernel RPCs.
+
+Constraints:
+
+- Preserve a minimal early console for boot diagnostics before userspace
+  drivers are online.
+- The serial console driver should run in userspace and communicate with the
+  kernel only through explicit privileged hardware-operation RPCs.
+- Do not expose arbitrary I/O privilege to drivers.  Capabilities should
+  attenuate access to specific port/MMIO/interrupt resources.
+- Keep the design portable: x86 port I/O is one backend, but the framework
+  should be able to support ARM MMIO UARTs later.
+- Existing Linux TTY behavior must keep working through the refactor:
+  canonical input, echo, password suppression, Ctrl-C, backspace, poll
+  readiness, session/login behavior, and `/dev/console`/`/dev/tty` routing.
+
+Tasks:
+
+- [ ] Inventory current console, devfs, Linux TTY, login, interrupt, and input
+      paths and identify which pieces are early-console-only versus real TTY.
+- [ ] Define a device-driver RPC protocol for privileged hardware operations:
+      port I/O, MMIO read/write, interrupt binding, interrupt ack/mask, and
+      timer-safe notification.
+- [ ] Add kernel capability objects for hardware resources with attenuation to
+      specific port ranges, MMIO ranges, IRQ vectors, and operation masks.
+- [ ] Create an initial userspace driver framework with driver registration,
+      resource discovery, interrupt/event delivery, and lifecycle diagnostics.
+- [ ] Move the serial console implementation into a userspace driver using the
+      hardware RPC protocol instead of direct kernel console ownership.
+- [ ] Keep early console output available until the serial driver is online,
+      then hand off normal console writes/input to the userspace path.
+- [ ] Refactor TTY line discipline into a clear server-side layer that can be
+      shared by serial console, future virtual terminals, and PTYs.
+- [ ] Route Linux `/dev/console`, `/dev/tty`, stdin/stdout/stderr, `poll(2)`,
+      and terminal ioctls through the TTY layer rather than serial-specific
+      shortcuts.
+- [ ] Add tests for boot console handoff, login/password echo behavior,
+      backspace, Ctrl-C, poll readiness, foreground process interruption, and
+      shell logout/login respawn.
+- [ ] Document how the framework will map to future ARM UART drivers without
+      relying on x86 port I/O assumptions.

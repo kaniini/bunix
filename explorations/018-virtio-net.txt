@@ -1,0 +1,43 @@
+Implement a VirtIO-net driver and attach it to the core networking stack.
+
+Problem:
+
+- After the core networking stack exists, Bunix needs a real paravirtual NIC
+  driver so guests can communicate beyond localhost under QEMU.
+- VirtIO-net should plug into the VirtIO bus framework and the networking
+  stack without bypassing capability boundaries.
+
+Dependencies:
+
+- Requires the VirtIO bus/resource framework from
+  `016-virtio-bus-block-timer.txt`.
+- Requires the network interface/packet-driver boundary from
+  `017-core-networking-stack.txt`.
+
+Constraints:
+
+- Keep the VirtIO-net driver in userspace.
+- Kernel hardware authority should be limited to scoped device resources,
+  DMA-safe buffers, queue notifications, and interrupt/event delivery.
+- The driver should expose a packet interface to the networking stack rather
+  than Linux socket semantics directly.
+- Preserve a path for both PCI VirtIO on x86_64 and MMIO VirtIO for future ARM.
+
+Tasks:
+
+- [ ] Inventory QEMU VirtIO-net device modes, feature bits, queue layout, MAC
+      address configuration, and interrupt behavior.
+- [ ] Define the packet-device protocol between NIC drivers and the network
+      interface manager.
+- [ ] Implement VirtIO-net feature negotiation, RX/TX virtqueues, buffer
+      replenishment, transmit completion, receive delivery, and device reset.
+- [ ] Add support for MAC address discovery/configuration and basic link state.
+- [ ] Integrate the driver with the network stack interface registry and route
+      management.
+- [ ] Add QEMU run/test modes with a deterministic VirtIO-net topology.
+- [ ] Add tests for driver attach, link-up, transmit path, receive path,
+      localhost unaffected by NIC state, and clean shutdown.
+- [ ] Add external-network smoke tests once a deterministic host-side tap/user
+      networking setup exists.
+- [ ] Document future work for checksum offload, segmentation offload,
+      multiqueue, promiscuous mode, and packet filtering.
