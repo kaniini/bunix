@@ -1,0 +1,34 @@
+Debug and fix Linux-visible uptime accounting.
+
+Problem:
+
+- `uptime(1)` can report `0` seconds even after Bunix has been running for
+  several minutes.
+- This is likely a Linux personality accounting bug, a time server/kernel tick
+  accounting bug, or an incomplete `/proc/uptime`/`sysinfo(2)` implementation.
+
+Constraints:
+
+- Keep Linux process time separate from Bunix task identity, but expose
+  Linux-compatible uptime semantics to Linux userspace.
+- Preserve Bunix-native observability where useful; Linux-visible uptime should
+  not require pretending Bunix boot and Linux init are the same event unless
+  that is explicitly chosen.
+- Prefer a narrow reproducer over long manual waits.
+
+Tasks:
+
+- [ ] Identify whether BusyBox `uptime` reads `/proc/uptime`, calls
+      `sysinfo(2)`, consults utmp, or combines multiple sources on Bunix.
+- [ ] Add strace/log coverage showing the exact Linux ABI path used by
+      `uptime(1)`.
+- [ ] Audit kernel timer, time server, procfs, and Linux server uptime sources
+      for inconsistent epochs or unadvanced counters.
+- [ ] Define the intended epochs for Bunix kernel uptime, Linux personality
+      uptime, and per-session/login accounting.
+- [ ] Implement the missing or incorrect uptime source using a monotonic
+      kernel/time-server primitive rather than wall-clock time.
+- [ ] Add a narrow test that waits a bounded interval and asserts Linux-visible
+      uptime advances.
+- [ ] Verify `busybox uptime`, `/proc/uptime`, and any implemented `sysinfo(2)`
+      path agree closely enough for Linux userspace.
