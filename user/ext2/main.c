@@ -1937,6 +1937,69 @@ static long remove_dirent(struct ext2_mount *mount,
 	return -1;
 }
 
+static long replace_dirent_inode(struct ext2_mount *mount,
+				 const struct ext2_inode *directory,
+				 u64 old_ino, const char *name, u64 new_ino,
+				 u64 file_type)
+{
+	const u64 name_len = text_len(name);
+	unsigned char *block;
+
+	if (mount == 0 || directory == 0 || name == 0 ||
+	    name_len == 0 || name_len > EXT2_NAME_MAX ||
+	    ext2_inode_vfs_type(directory) != BUNIX_VFS_TYPE_DIRECTORY) {
+		return -1;
+	}
+	block = (unsigned char *)bunix_calloc(1, mount->super.block_size);
+	if (block == 0) {
+		return -1;
+	}
+	for (u64 block_index = 0;
+	     block_index * mount->super.block_size < directory->size;
+	     block_index++) {
+		u64 offset = 0;
+
+		if (read_mapped_block(mount, directory, block_index,
+				      block) != 0) {
+			bunix_free(block);
+			return -1;
+		}
+		while (offset + 8 <= mount->super.block_size &&
+		       block_index * mount->super.block_size + offset <
+			       directory->size) {
+			const u64 entry_ino = load_le32(block, offset);
+			const u64 rec_len = load_le16(block, offset + 4);
+			const u64 entry_name_len = block[offset + 6];
+
+			if (rec_len < 8 ||
+			    (rec_len & 3) != 0 ||
+			    rec_len > mount->super.block_size - offset ||
+			    entry_name_len > rec_len - 8) {
+				bunix_free(block);
+				return -1;
+			}
+			if (entry_ino == old_ino &&
+			    entry_name_len == name_len &&
+			    text_eq_len(name, (const char *)block + offset + 8,
+					entry_name_len)) {
+				store_le32(block, offset, new_ino);
+				block[offset + 7] = (unsigned char)file_type;
+				if (write_mapped_block(mount, directory,
+						       block_index,
+						       block) != 0) {
+					bunix_free(block);
+					return -1;
+				}
+				bunix_free(block);
+				return 0;
+			}
+			offset += rec_len;
+		}
+	}
+	bunix_free(block);
+	return -1;
+}
+
 static int directory_is_empty(const struct ext2_mount *mount,
 			      const struct ext2_inode *directory)
 {
@@ -2434,6 +2497,45 @@ static int inode_has_indirect_blocks(const struct ext2_inode *inode)
 	       inode->block[EXT2_TIND_BLOCK] != 0;
 }
 
+static u64 ext2_file_type_for_inode(const struct ext2_inode *inode)
+{
+	switch (ext2_inode_vfs_type(inode)) {
+	case BUNIX_VFS_TYPE_REGULAR:
+		return EXT2_FT_REG_FILE;
+	case BUNIX_VFS_TYPE_DIRECTORY:
+		return EXT2_FT_DIR;
+	case BUNIX_VFS_TYPE_SYMLINK:
+		return EXT2_FT_SYMLINK;
+	case BUNIX_VFS_TYPE_FIFO:
+		return EXT2_FT_FIFO;
+	case BUNIX_VFS_TYPE_CHARACTER:
+		return EXT2_FT_CHRDEV;
+	default:
+		return 0;
+	}
+}
+
+static long release_unlinked_inode(struct ext2_mount *mount, u64 ino,
+				   struct ext2_inode *inode)
+{
+	const u64 type = ext2_inode_vfs_type(inode);
+
+	if (mount == 0 || inode == 0) {
+		return -1;
+	}
+	if (inode->links_count > 1) {
+		return write_inode_links(mount, ino, inode,
+					 inode->links_count - 1);
+	}
+	if ((type == BUNIX_VFS_TYPE_REGULAR &&
+	     free_direct_blocks_from(mount, ino, inode, 0) != 0) ||
+	    clear_inode(mount, ino) != 0 ||
+	    free_inode(mount, ino) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
 static void reply_unlink(struct bunix_msg *reply, const char *path)
 {
 	char parent_path[EXT2_MAX_PATH];
@@ -2472,19 +2574,129 @@ static void reply_unlink(struct bunix_msg *reply, const char *path)
 		reply->words[0] = (u64)-1;
 		return;
 	}
-	if (inode.links_count > 1) {
-		if (write_inode_links(&root_mount, ino, &inode,
-				      inode.links_count - 1) != 0) {
-			reply->words[0] = (u64)-1;
-			return;
-		}
+	if (release_unlinked_inode(&root_mount, ino, &inode) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+}
+
+static void reply_rename(struct bunix_msg *reply, const char *old_path,
+			 const char *new_path, u64 flags)
+{
+	char old_parent_path[EXT2_MAX_PATH];
+	char new_parent_path[EXT2_MAX_PATH];
+	char old_name[EXT2_NAME_MAX + 1];
+	char new_name[EXT2_NAME_MAX + 1];
+	struct ext2_inode old_parent_inode;
+	struct ext2_inode new_parent_inode;
+	struct ext2_inode source_inode;
+	struct ext2_inode target_inode;
+	u64 old_parent_ino;
+	u64 new_parent_ino;
+	u64 source_ino;
+	u64 target_ino = 0;
+	u64 source_type;
+	u64 target_type;
+	u64 file_type;
+	int target_exists;
+
+	if (!root_mount_ready) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	if ((flags & ~1ull) != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_INVAL;
+		return;
+	}
+	if (old_path == 0 || new_path == 0 ||
+	    text_eq(old_path, "/") || text_eq(new_path, "/")) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	if (text_eq(old_path, new_path)) {
 		reply->words[0] = 0;
 		return;
 	}
-	if ((type == BUNIX_VFS_TYPE_REGULAR &&
-	     free_direct_blocks_from(&root_mount, ino, &inode, 0) != 0) ||
-	    clear_inode(&root_mount, ino) != 0 ||
-	    free_inode(&root_mount, ino) != 0) {
+	if (split_parent_name(old_path, old_parent_path, old_name) != 0 ||
+	    split_parent_name(new_path, new_parent_path, new_name) != 0 ||
+	    lookup_path(&root_mount, old_parent_path, &old_parent_ino,
+			&old_parent_inode) != 0 ||
+	    lookup_path(&root_mount, new_parent_path, &new_parent_ino,
+			&new_parent_inode) != 0 ||
+	    lookup_path(&root_mount, old_path, &source_ino,
+			&source_inode) != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	source_type = ext2_inode_vfs_type(&source_inode);
+	if (source_type == BUNIX_VFS_TYPE_DIRECTORY) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	if ((source_type != BUNIX_VFS_TYPE_REGULAR &&
+	     source_type != BUNIX_VFS_TYPE_SYMLINK) ||
+	    (source_type == BUNIX_VFS_TYPE_REGULAR &&
+	     inode_has_indirect_blocks(&source_inode)) ||
+	    (source_type == BUNIX_VFS_TYPE_SYMLINK &&
+	     source_inode.blocks != 0)) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	file_type = ext2_file_type_for_inode(&source_inode);
+	if (file_type == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	target_exists = lookup_path(&root_mount, new_path, &target_ino,
+				    &target_inode) == 0;
+	if (target_exists && target_ino == source_ino) {
+		reply->words[0] = 0;
+		return;
+	}
+	if (target_exists && (flags & 1) != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_EXIST;
+		return;
+	}
+	if (target_exists) {
+		target_type = ext2_inode_vfs_type(&target_inode);
+		if (target_type == BUNIX_VFS_TYPE_DIRECTORY) {
+			reply->words[0] = BUNIX_VFS_ERR_ISDIR;
+			return;
+		}
+		if ((target_type != BUNIX_VFS_TYPE_REGULAR &&
+		     target_type != BUNIX_VFS_TYPE_SYMLINK) ||
+		    (target_type == BUNIX_VFS_TYPE_REGULAR &&
+		     inode_has_indirect_blocks(&target_inode)) ||
+		    (target_type == BUNIX_VFS_TYPE_SYMLINK &&
+		     target_inode.blocks != 0)) {
+			reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+			return;
+		}
+		if (replace_dirent_inode(&root_mount, &new_parent_inode,
+					 target_ino, new_name, source_ino,
+					 file_type) != 0) {
+			reply->words[0] = (u64)-1;
+			return;
+		}
+	} else if (insert_dirent_existing_space(&root_mount, &new_parent_inode,
+						source_ino, new_name,
+						file_type) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (remove_dirent(&root_mount, &old_parent_inode, source_ino,
+			  old_name) != 0) {
+		if (!target_exists) {
+			(void)remove_dirent(&root_mount, &new_parent_inode,
+					    source_ino, new_name);
+		}
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (target_exists &&
+	    release_unlinked_inode(&root_mount, target_ino,
+				   &target_inode) != 0) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -3114,6 +3326,18 @@ int main(void)
 					reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				} else {
 					reply_link(&reply, path, new_path);
+				}
+				break;
+			}
+			case BUNIX_VFS_RENAME_BUFFER: {
+				char new_path[EXT2_MAX_PATH];
+
+				if (read_two_path_buffer(&message, path,
+							 new_path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply_rename(&reply, path, new_path,
+						     message.words[3] >> 32);
 				}
 				break;
 			}
