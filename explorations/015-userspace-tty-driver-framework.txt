@@ -31,7 +31,7 @@ Tasks:
       timer-safe notification.
 - [x] Add kernel capability objects for hardware resources with attenuation to
       specific port ranges, MMIO ranges, IRQ vectors, and operation masks.
-- [ ] Create an initial userspace driver framework with driver registration,
+- [x] Create an initial userspace driver framework with driver registration,
       resource discovery, interrupt/event delivery, and lifecycle diagnostics.
 - [ ] Move the serial console implementation into a userspace driver using the
       hardware RPC protocol instead of direct kernel console ownership.
@@ -88,3 +88,8 @@ Progress:
   and write authority.  Normal console writes now use that capability-backed
   userspace serial path, with early-console writes kept as fallback and for the
   dmesg ring.
+- Added a small userspace driver helper for service registration, static
+  resource discovery, and lifecycle diagnostics.  Consoled now declares its
+  COM1 resource through that framework, registers through the shared helper,
+  and emits a driver lifecycle message; interrupt/event delivery is represented
+  in the `HWR0` protocol and remains to be wired to real IRQ dispatch.

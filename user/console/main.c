@@ -1,4 +1,4 @@
-#include <bunix/syscall.h>
+#include <bunix/driver.h>
 
 enum {
 	CONSOLE_CHUNK = 256,
@@ -14,17 +14,38 @@ enum {
 };
 
 static char console_buffer[CONSOLE_CHUNK];
+static u64 console_serial_handle;
 static int console_serial_ready;
+
+static const struct bunix_driver_resource console_resources[] = {
+	{
+		.name = "com1",
+		.handle = CONSOLE_HANDLE_COM1,
+		.kind = BUNIX_HW_RESOURCE_PORT,
+		.ops = BUNIX_HW_OP_READ | BUNIX_HW_OP_WRITE,
+		.base = 0x3f8,
+		.len = 8,
+	},
+};
+
+static const struct bunix_driver console_driver = {
+	.name = "console",
+	.service = BUNIX_SERVICE_CONSOLE,
+	.service_handle = BUNIX_HANDLE_CONSOLE,
+	.names_handle = CONSOLE_HANDLE_NAMES,
+	.resources = console_resources,
+	.resource_count = sizeof(console_resources) / sizeof(console_resources[0]),
+};
 
 static int serial_out8(u64 offset, u64 value)
 {
-	return bunix_hw_port_out8(CONSOLE_HANDLE_COM1, offset, value) == 0 ?
+	return bunix_hw_port_out8(console_serial_handle, offset, value) == 0 ?
 	       0 : -1;
 }
 
 static long serial_in8(u64 offset)
 {
-	return bunix_hw_port_in8(CONSOLE_HANDLE_COM1, offset);
+	return bunix_hw_port_in8(console_serial_handle, offset);
 }
 
 static int serial_init(void)
@@ -70,22 +91,6 @@ static int serial_write(const char *text, u64 len)
 	return 0;
 }
 
-static void register_console(void)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_NAMES,
-		.type = BUNIX_NAMES_REGISTER,
-		.sender = 0,
-		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
-		.reply = 0,
-		.cap = BUNIX_HANDLE_CONSOLE,
-		.words = { BUNIX_NAMES_ROOT, BUNIX_SERVICE_CONSOLE, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	(void)bunix_ipc_call(CONSOLE_HANDLE_NAMES, &request, &reply);
-}
-
 static void console_emit(u64 buffer, u64 len, int log)
 {
 	u64 offset = 0;
@@ -110,10 +115,16 @@ int main(void)
 {
 	const char online[] = "console: online\n";
 	struct bunix_msg message;
+	const struct bunix_driver_resource *com1 =
+		bunix_driver_resource_named(&console_driver, "com1");
 
+	console_serial_handle = com1 != 0 ? com1->handle : 0;
 	console_serial_ready = serial_init() == 0;
 	bunix_early_console_log(online, sizeof(online) - 1);
-	register_console();
+	(void)bunix_driver_register(&console_driver);
+	bunix_driver_log_lifecycle(&console_driver,
+				   console_serial_ready ? "driver online" :
+				   "driver fallback");
 	for (;;) {
 		if (bunix_ipc_recv(BUNIX_HANDLE_CONSOLE, &message) != 0 ||
 		    message.protocol != BUNIX_PROTO_CONSOLE) {
