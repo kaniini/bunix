@@ -6,8 +6,7 @@ run_root_mount_soak() {
 	send_script <<'EOF_ROOT_MOUNT_SOAK'
 i=0
 while [ "$i" -lt 8 ]; do
-	target="/mnt/soak-$i"
-	busybox mkdir "$target"
+	target="/mnt"
 	busybox mount -t tmpfs tmpfs "$target" && echo ROOT_MOUNT_SOAK_MOUNT_OK
 	echo "ROOT_MOUNT_SOAK_PAYLOAD_$i" > "$target/soak.txt"
 	busybox cat "$target/soak.txt"
@@ -16,13 +15,12 @@ while [ "$i" -lt 8 ]; do
 	busybox test ! -e "$target/soak.txt" && echo ROOT_MOUNT_SOAK_HIDE_OK
 	i=$((i + 1))
 done
-busybox mkdir /mnt/pinned-mount
-busybox mount -t tmpfs tmpfs /mnt/pinned-mount && echo ROOT_MOUNT_SOAK_BUSY_MOUNT_OK
-echo ROOT_MOUNT_SOAK_PINNED_PAYLOAD > /mnt/pinned-mount/pinned.txt
-busybox sh -c 'cd /mnt/pinned-mount && busybox umount /mnt/pinned-mount || echo ROOT_MOUNT_SOAK_BUSY_OK'
-busybox cat /mnt/pinned-mount/pinned.txt
-busybox umount /mnt/pinned-mount && echo ROOT_MOUNT_SOAK_FINAL_UMOUNT_OK
-busybox test ! -e /mnt/pinned-mount/pinned.txt && echo ROOT_MOUNT_SOAK_FINAL_HIDE_OK
+busybox mount -t tmpfs tmpfs /mnt && echo ROOT_MOUNT_SOAK_BUSY_MOUNT_OK
+echo ROOT_MOUNT_SOAK_PINNED_PAYLOAD > /mnt/pinned.txt
+busybox sh -c 'cd /mnt && busybox umount /mnt || echo ROOT_MOUNT_SOAK_BUSY_OK'
+busybox cat /mnt/pinned.txt
+busybox umount /mnt && echo ROOT_MOUNT_SOAK_FINAL_UMOUNT_OK
+busybox test ! -e /mnt/pinned.txt && echo ROOT_MOUNT_SOAK_FINAL_HIDE_OK
 echo ROOT_MOUNT_SOAK_DONE
 EOF_ROOT_MOUNT_SOAK
 }

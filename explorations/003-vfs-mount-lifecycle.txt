@@ -68,9 +68,15 @@ Plan:
      reproducer passed.
    - Focused pinned-cwd `/mnt` busy-unmount reproducer passed.
 
-4. Convert `root-mount-soak` to same-path reuse
+4. Convert `root-mount-soak` to same-path reuse [DONE]
    Change the root mount soak shard to repeatedly reuse `/mnt` directly, keeping
    the existing pinned-cwd busy denial coverage.
+
+   Result:
+
+   - `root-mount-soak` now mounts and unmounts `/mnt` directly for all repeated
+     cycles.
+   - The pinned-cwd busy denial check also uses `/mnt` directly.
 
 5. Validate and complete
    Run narrow same-path mount coverage, `root-mount-soak`, and then full
