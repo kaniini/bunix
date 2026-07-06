@@ -46,6 +46,8 @@ ROOTFS_MODULE := $(BUILD_DIR)/modules/rootfs.server
 ROOTFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/rootfs/main.c.o
 UNIONFS_MODULE := $(BUILD_DIR)/modules/unionfs.server
 UNIONFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/unionfs/main.c.o
+EXT2_MODULE := $(BUILD_DIR)/modules/ext2.server
+EXT2_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/ext2/main.c.o
 BLOCK_MODULE := $(BUILD_DIR)/modules/block.server
 BLOCK_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/block/main.c.o
 VIRTIO_BUS_MODULE := $(BUILD_DIR)/modules/virtio-bus.server
@@ -231,6 +233,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/sysfs/main.c.o \
 	$(BUILD_DIR)/user/utmpfs/main.c.o \
 	$(BUILD_DIR)/user/unionfs/main.c.o \
+	$(BUILD_DIR)/user/ext2/main.c.o \
 	$(BUILD_DIR)/user/block/main.c.o \
 	$(BUILD_DIR)/user/virtio-bus/main.c.o \
 	$(BUILD_DIR)/user/net/main.c.o \
@@ -339,6 +342,10 @@ $(UTMPFS_MODULE): $(UTMPFS_MODULE_OBJS) user/user.ld Makefile
 $(UNIONFS_MODULE): $(UNIONFS_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(UNIONFS_MODULE_OBJS)
+
+$(EXT2_MODULE): $(EXT2_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(EXT2_MODULE_OBJS)
 
 $(BLOCK_MODULE): $(BLOCK_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)

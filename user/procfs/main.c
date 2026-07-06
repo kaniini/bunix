@@ -926,6 +926,7 @@ static u64 build_filesystems(void)
 	append_str(&len, "nodev\ttmpfs\n");
 	append_str(&len, "nodev\tunionfs\n");
 	append_str(&len, "\trootfs\n");
+	append_str(&len, "\text2\n");
 	return len;
 }
 
@@ -986,6 +987,9 @@ static const char *mount_fstype_name(u64 fstype)
 	}
 	if (fstype == BUNIX_SERVICE_UNIONFS) {
 		return "unionfs";
+	}
+	if (fstype == BUNIX_SERVICE_EXT2) {
+		return "ext2";
 	}
 	return "rootfs";
 }

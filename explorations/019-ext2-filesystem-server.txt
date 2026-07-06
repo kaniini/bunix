@@ -85,13 +85,27 @@ Initial ext2 mount contract:
   and block-device discovery are outside the ext2 parser; the only kernel-facing
   behavior is ordinary userspace IPC and buffer copying.
 
+Implementation notes:
+
+- Added `BUNIX_PROTO_EXT2`, `BUNIX_SERVICE_EXT2`, `BUNIX_VFS_DEV_EXT2`, and a
+  buildable `ext2.server` userspace module.
+- The initial server resolves the block service, reads the ext2 superblock at
+  byte offset 1024 through `BUNIX_BLOCK_READ_BUFFER`, validates ext2 magic,
+  revision, block size, image bounds, group geometry, inode size, and feature
+  masks, then logs either a concise mount rejection diagnostic or accepted
+  geometry.
+- Readonly-safe feature support currently accepts common generated ext2 image
+  bits: `filetype`, `sparse_super`, `large_file`, `ext_attr`, `resize_inode`,
+  and `dir_index`.  Journaling/recovery, compression, meta block groups, and
+  other undecoded features remain rejected.
+
 Tasks:
 
 - [x] Inventory the current VFS translator protocol, block server protocol,
       tmpfs/rootfs/unionfs server patterns, and mount lifecycle.
 - [x] Define the ext2 server mount contract: block device capability, readonly
       versus read-write mode, block size support, feature flags, and root inode.
-- [ ] Implement superblock parsing and validation, including unsupported
+- [x] Implement superblock parsing and validation, including unsupported
       incompat/ro-compat feature diagnostics.
 - [ ] Implement block group descriptor loading, inode table access, block
       bitmap/inode bitmap helpers, and safe bounds checks.
