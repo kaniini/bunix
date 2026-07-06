@@ -26,7 +26,7 @@ Tasks:
       hardware-access paths.
 - [x] Define a generic device-resource model for userspace drivers: MMIO/PIO
       ranges, IRQs, DMA windows, feature bits, queue memory, and reset.
-- [ ] Implement or plan the required VirtIO transport layer, starting with PCI
+- [x] Implement or plan the required VirtIO transport layer, starting with PCI
       on x86_64 and leaving a clean MMIO transport path for ARM.
 - [ ] Implement VirtIO feature negotiation, status transitions, queue setup,
       descriptor rings, avail/used rings, notifications, and interrupt acks.
@@ -106,3 +106,20 @@ Progress:
 - This task defines the userspace contract only.  IRQ binding/delivery, DMA
   allocation/validation, PCI discovery, and VirtIO queue mechanics remain open
   implementation tasks in this exploration.
+- Added a shared VirtIO transport header with PCI vendor/device constants,
+  device status bits, common feature bits, packed virtqueue descriptor/avail/used
+  ring layouts, queue layout descriptors, and transport/device-info records.
+- Transport plan: build a userspace `virtio-bus` server that first discovers
+  modern VirtIO PCI devices on x86_64, maps common/notify/isr/device config
+  resources into `DEV0` descriptors, and hands attenuated resource capabilities
+  to class drivers.  Keep the class-driver side transport-neutral by consuming
+  `struct bunix_virtio_transport` records rather than hard-coding PCI config
+  details.
+- PCI transport plan: add a minimal x86_64 PCI config accessor and scanner,
+  then match vendor `0x1af4` devices, parse modern VirtIO capabilities, expose
+  BAR-backed MMIO/PIO resources, and later add MSI-X or INTx IRQ resources once
+  the generic IRQ broker exists.
+- MMIO transport plan: reuse the same `DEV0` and `bunix_virtio_transport`
+  records with `BUNIX_DEV_TRANSPORT_MMIO`; ARM should discover platform/MMIO
+  VirtIO ranges from firmware/device-tree/ACPI and grant MMIO plus IRQ resources
+  without exposing PCI assumptions to block/net/timer drivers.
