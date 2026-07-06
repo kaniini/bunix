@@ -28,9 +28,9 @@ Tasks:
       ranges, IRQs, DMA windows, feature bits, queue memory, and reset.
 - [x] Implement or plan the required VirtIO transport layer, starting with PCI
       on x86_64 and leaving a clean MMIO transport path for ARM.
-- [ ] Implement VirtIO feature negotiation, status transitions, queue setup,
+- [x] Implement VirtIO feature negotiation, status transitions, queue setup,
       descriptor rings, avail/used rings, notifications, and interrupt acks.
-- [ ] Add a userspace VirtIO bus manager/server that discovers devices and
+- [x] Add a userspace VirtIO bus manager/server that discovers devices and
       grants attenuated device capabilities to matching drivers.
 - [x] Implement a VirtIO block userspace driver with read/write/flush support,
       request queueing, completion handling, and error translation.
@@ -271,3 +271,11 @@ Progress:
   later slice still needs generic IRQ routing/delivery and block-driver
   interrupt-driven completions before the broader interrupt coverage task can
   close.
+- The core VirtIO mechanics and bus-manager tasks are now implemented for the
+  current x86_64 PCI transport: `virtio-bus.server` discovers modern VirtIO PCI
+  devices, grants attenuated BAR subresources, exposes device info/resources,
+  negotiates features, drives status transitions through `DRIVER_OK`, sets up
+  split virtqueues, publishes queue buffer caps, notifies queues, reads device
+  configuration, and acknowledges ISR status.  `virtio-blk.server` exercises
+  descriptor chains, avail/used ring completion, read/write/flush requests, and
+  the VFS-facing block protocol through those `DEV0` RPCs.
