@@ -30,6 +30,14 @@ enum {
 	PROCFS_KIND_PID_MOUNTS = 23,
 	PROCFS_KIND_PID_MOUNTINFO = 24,
 	PROCFS_KIND_PID_CGROUP = 25,
+	PROCFS_KIND_NET = 26,
+	PROCFS_KIND_NET_DEV = 27,
+	PROCFS_KIND_NET_ROUTE = 28,
+	PROCFS_KIND_NET_SOCKSTAT = 29,
+	PROCFS_KIND_NET_UDP = 30,
+	PROCFS_KIND_NET_UDP6 = 31,
+	PROCFS_KIND_NET_TCP = 32,
+	PROCFS_KIND_NET_TCP6 = 33,
 };
 
 static struct bunix_id_table open_files;
@@ -38,6 +46,7 @@ static char *text;
 static u64 text_capacity;
 static int text_failed;
 static u64 proc_handle;
+static u64 net_handle;
 
 struct procfs_mount {
 	struct bunix_tree_node node;
@@ -203,6 +212,15 @@ static u64 get_proc_handle(void)
 	return proc_handle;
 }
 
+static u64 get_net_handle(void)
+{
+	if (net_handle == 0) {
+		net_handle = resolve_service(BUNIX_SERVICE_NET,
+					     BUNIX_RIGHT_SEND);
+	}
+	return net_handle;
+}
+
 static int proc_call(u64 type, u64 arg, struct bunix_msg *reply)
 {
 	const u64 proc = get_proc_handle();
@@ -239,6 +257,48 @@ static int proc_call_buffer(u64 type, u64 arg0, u64 arg1, u64 arg2,
 
 	if (proc == 0 || buffer == 0 ||
 	    bunix_ipc_call(proc, &request, reply) != 0 ||
+	    reply->words[0] != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static int net_call(u64 type, u64 arg, struct bunix_msg *reply)
+{
+	const u64 net = get_net_handle();
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NET,
+		.type = type,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { arg, 0, 0, 0 },
+	};
+
+	if (net == 0 || bunix_ipc_call(net, &request, reply) != 0 ||
+	    reply->words[0] != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static int net_call_buffer(u64 type, u64 arg, u64 buffer,
+			   struct bunix_msg *reply)
+{
+	const u64 net = get_net_handle();
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NET,
+		.type = type,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND,
+		.reply = 0,
+		.cap = buffer,
+		.words = { arg, 0, 0, 0 },
+	};
+
+	if (net == 0 || buffer == 0 ||
+	    bunix_ipc_call(net, &request, reply) != 0 ||
 	    reply->words[0] != 0) {
 		return -1;
 	}
@@ -442,6 +502,30 @@ static u64 file_for_path(const char *path, u64 caller_task)
 	}
 	if (str_eq(path, "/proc/mounts")) {
 		return make_file(PROCFS_KIND_MOUNTS, 0);
+	}
+	if (str_eq(path, "/proc/net")) {
+		return make_file(PROCFS_KIND_NET, 0);
+	}
+	if (str_eq(path, "/proc/net/dev")) {
+		return make_file(PROCFS_KIND_NET_DEV, 0);
+	}
+	if (str_eq(path, "/proc/net/route")) {
+		return make_file(PROCFS_KIND_NET_ROUTE, 0);
+	}
+	if (str_eq(path, "/proc/net/sockstat")) {
+		return make_file(PROCFS_KIND_NET_SOCKSTAT, 0);
+	}
+	if (str_eq(path, "/proc/net/udp")) {
+		return make_file(PROCFS_KIND_NET_UDP, 0);
+	}
+	if (str_eq(path, "/proc/net/udp6")) {
+		return make_file(PROCFS_KIND_NET_UDP6, 0);
+	}
+	if (str_eq(path, "/proc/net/tcp")) {
+		return make_file(PROCFS_KIND_NET_TCP, 0);
+	}
+	if (str_eq(path, "/proc/net/tcp6")) {
+		return make_file(PROCFS_KIND_NET_TCP6, 0);
 	}
 	if (str_eq(path, "/proc/self")) {
 		const u64 pid = proc_path_pid(0, caller_task);
@@ -665,6 +749,21 @@ static void append_u64(u64 *len, u64 value)
 	}
 	while (pos != 0) {
 		append_char(len, tmp[--pos]);
+	}
+}
+
+static void append_hex_digit(u64 *len, u64 value)
+{
+	value &= 0xf;
+	append_char(len, value < 10 ? (char)('0' + value) :
+				     (char)('A' + value - 10));
+}
+
+static void append_hex_fixed(u64 *len, u64 value, u64 digits)
+{
+	while (digits != 0) {
+		digits--;
+		append_hex_digit(len, value >> (digits * 4));
 	}
 }
 
@@ -1126,6 +1225,178 @@ static u64 build_ipc(void)
 	return len;
 }
 
+static u64 build_net_dev(void)
+{
+	u64 len = 0;
+	struct bunix_msg info;
+	struct bunix_msg stats;
+
+	append_str(&len, "Inter-|   Receive                                                |  Transmit\n");
+	append_str(&len, " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n");
+	if (net_call(BUNIX_NET_INTERFACE_INFO, 1, &info) != 0 ||
+	    net_call(BUNIX_NET_INTERFACE_STATS, 1, &stats) != 0) {
+		return len;
+	}
+	append_str(&len, "    lo: ");
+	append_u64(&len, stats.words[1]);
+	append_char(&len, ' ');
+	append_u64(&len, stats.words[1]);
+	append_str(&len, " 0 ");
+	append_u64(&len, stats.words[3]);
+	append_str(&len, " 0 0 0 0 ");
+	append_u64(&len, stats.words[2]);
+	append_char(&len, ' ');
+	append_u64(&len, stats.words[2]);
+	append_str(&len, " 0 ");
+	append_u64(&len, stats.words[3]);
+	append_str(&len, " 0 0 0 0\n");
+	(void)info;
+	return len;
+}
+
+static u64 build_net_route(void)
+{
+	u64 len = 0;
+
+	append_str(&len, "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n");
+	append_str(&len, "lo\t0000007F\t00000000\t0001\t0\t0\t0\t000000FF\t0\t0\t0\n");
+	return len;
+}
+
+static int net_socket_count(u64 *count)
+{
+	struct bunix_msg reply;
+
+	if (count == 0 ||
+	    net_call(BUNIX_NET_OBSERVE_SOCKET_COUNT, 0, &reply) != 0) {
+		return -1;
+	}
+	*count = reply.words[1];
+	return 0;
+}
+
+static int net_socket_at(u64 index, struct bunix_net_socket_info *info)
+{
+	struct bunix_msg reply;
+	long buffer;
+
+	if (info == 0) {
+		return -1;
+	}
+	buffer = bunix_buffer_create(sizeof(*info));
+	if (buffer <= 0) {
+		return -1;
+	}
+	if (net_call_buffer(BUNIX_NET_OBSERVE_SOCKET_AT, index, (u64)buffer,
+			    &reply) != 0 ||
+	    reply.words[1] != sizeof(*info) ||
+	    bunix_buffer_read((u64)buffer, 0, info, sizeof(*info)) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
+static u64 build_net_sockstat(void)
+{
+	u64 len = 0;
+	u64 count = 0;
+	u64 tcp = 0;
+	u64 udp = 0;
+
+	if (net_socket_count(&count) == 0) {
+		for (u64 i = 0; i < count; i++) {
+			struct bunix_net_socket_info info;
+
+			if (net_socket_at(i, &info) != 0) {
+				continue;
+			}
+			if (info.protocol == 6) {
+				tcp++;
+			} else if (info.protocol == 17) {
+				udp++;
+			}
+		}
+	}
+	append_str(&len, "sockets: used ");
+	append_u64(&len, tcp + udp);
+	append_char(&len, '\n');
+	append_str(&len, "TCP: inuse ");
+	append_u64(&len, tcp);
+	append_str(&len, "\nUDP: inuse ");
+	append_u64(&len, udp);
+	append_str(&len, "\nUDPLITE: inuse 0\nRAW: inuse 0\nFRAG: inuse 0 memory 0\n");
+	return len;
+}
+
+static u64 net_tcp_state(u64 state)
+{
+	if (state == 2) {
+		return 0x0a;
+	}
+	if (state == 3) {
+		return 0x01;
+	}
+	if (state == 4) {
+		return 0x07;
+	}
+	return 0x07;
+}
+
+static void append_proc_net_addr(u64 *len, const struct bunix_net_socket_info *info,
+				 int peer, int ipv6)
+{
+	const u64 hi = peer ? info->peer_hi : info->local_hi;
+	const u64 lo = peer ? info->peer_lo : info->local_lo;
+	const u64 port = peer ? info->peer_port : info->local_port;
+
+	if (ipv6) {
+		append_hex_fixed(len, hi, 16);
+		append_hex_fixed(len, lo, 16);
+	} else {
+		append_hex_fixed(len, lo & 0xffffffff, 8);
+	}
+	append_char(len, ':');
+	append_hex_fixed(len, port & 0xffff, 4);
+}
+
+static u64 build_net_socket_table(u64 protocol, u64 family)
+{
+	u64 len = 0;
+	u64 count = 0;
+	const int ipv6 = family == BUNIX_NET_ADDR_FAMILY_IPV6;
+
+	append_str(&len, "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
+	if (net_socket_count(&count) != 0) {
+		return len;
+	}
+	for (u64 i = 0, line = 0; i < count; i++) {
+		struct bunix_net_socket_info info;
+
+		if (net_socket_at(i, &info) != 0 ||
+		    info.protocol != protocol || info.family != family) {
+			continue;
+		}
+		append_char(&len, ' ');
+		append_u64(&len, line);
+		append_str(&len, ": ");
+		append_proc_net_addr(&len, &info, 0, ipv6);
+		append_char(&len, ' ');
+		append_proc_net_addr(&len, &info, 1, ipv6);
+		append_char(&len, ' ');
+		append_hex_fixed(&len, protocol == 6 ?
+				 net_tcp_state(info.state) : 0x07, 2);
+		append_str(&len, " 00000000:");
+		append_hex_fixed(&len, info.rx_len & 0xffffffff, 8);
+		append_str(&len, " 00:00000000 00000000  1000        0 ");
+		append_u64(&len, info.id);
+		append_char(&len, '\n');
+		line++;
+	}
+	return len;
+}
+
 static const char *pid_name(u64 pid)
 {
 	static char name[32];
@@ -1280,6 +1551,27 @@ static u64 build_file_text(u64 file)
 	case PROCFS_KIND_IPC:
 		len = build_ipc();
 		break;
+	case PROCFS_KIND_NET_DEV:
+		len = build_net_dev();
+		break;
+	case PROCFS_KIND_NET_ROUTE:
+		len = build_net_route();
+		break;
+	case PROCFS_KIND_NET_SOCKSTAT:
+		len = build_net_sockstat();
+		break;
+	case PROCFS_KIND_NET_UDP:
+		len = build_net_socket_table(17, BUNIX_NET_ADDR_FAMILY_IPV4);
+		break;
+	case PROCFS_KIND_NET_UDP6:
+		len = build_net_socket_table(17, BUNIX_NET_ADDR_FAMILY_IPV6);
+		break;
+	case PROCFS_KIND_NET_TCP:
+		len = build_net_socket_table(6, BUNIX_NET_ADDR_FAMILY_IPV4);
+		break;
+	case PROCFS_KIND_NET_TCP6:
+		len = build_net_socket_table(6, BUNIX_NET_ADDR_FAMILY_IPV6);
+		break;
 	case PROCFS_KIND_LOADAVG:
 		len = build_loadavg();
 		break;
@@ -1352,6 +1644,7 @@ static int file_is_dir(u64 file)
 	const u64 kind = file_kind(file);
 
 	return kind == PROCFS_KIND_PROC ||
+	       kind == PROCFS_KIND_NET ||
 	       kind == PROCFS_KIND_SELF ||
 	       kind == PROCFS_KIND_PID ||
 	       kind == PROCFS_KIND_PID_FD;
@@ -1395,14 +1688,14 @@ static const char *proc_dir_entry(u64 index, u64 *type)
 	static const char *names[] = {
 		"kthreads", "uptime", "stat", "ipc", "loadavg", "meminfo",
 		"filesystems", "cpuinfo", "cmdline", "devices", "modules",
-		"mounts", "self"
+		"mounts", "net", "self"
 	};
 	static char pid_name_buf[20];
 	struct proc_info info;
 	const u64 static_count = sizeof(names) / sizeof(names[0]);
 
 	if (index < static_count) {
-		*type = index == 12 ? BUNIX_VFS_TYPE_DIRECTORY :
+		*type = index == 12 || index == 13 ? BUNIX_VFS_TYPE_DIRECTORY :
 				     BUNIX_VFS_TYPE_REGULAR;
 		return names[index];
 	}
@@ -1412,6 +1705,19 @@ static const char *proc_dir_entry(u64 index, u64 *type)
 	u64_to_dec(pid_name_buf, sizeof(pid_name_buf), info.pid);
 	*type = BUNIX_VFS_TYPE_DIRECTORY;
 	return pid_name_buf;
+}
+
+static const char *net_dir_entry(u64 index, u64 *type)
+{
+	static const char *names[] = {
+		"dev", "route", "sockstat", "udp", "udp6", "tcp", "tcp6"
+	};
+
+	if (index >= sizeof(names) / sizeof(names[0])) {
+		return 0;
+	}
+	*type = BUNIX_VFS_TYPE_REGULAR;
+	return names[index];
 }
 
 static const char *pid_dir_entry(u64 index, u64 *type)
@@ -1657,6 +1963,8 @@ int main(void)
 			}
 			if (file_kind(file) == PROCFS_KIND_PROC) {
 				name = proc_dir_entry(message.words[1], &type);
+			} else if (file_kind(file) == PROCFS_KIND_NET) {
+				name = net_dir_entry(message.words[1], &type);
 			} else if (file_kind(file) == PROCFS_KIND_PID_FD) {
 				name = fd_dir_entry(message.words[1], &type);
 			} else {

@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <string.h>
@@ -40,6 +41,42 @@ static void expect_socket_type(int fd, int type, const char *label)
 
 	if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &value, &len) != 0 ||
 	    len != sizeof(value) || value != type) {
+		die(label);
+	}
+}
+
+static int contains(const char *haystack, const char *needle)
+{
+	const size_t needle_len = strlen(needle);
+
+	if (needle_len == 0) {
+		return 1;
+	}
+	for (size_t i = 0; haystack[i] != '\0'; i++) {
+		if (strncmp(haystack + i, needle, needle_len) == 0) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void expect_file_contains(const char *path, const char *needle,
+				 const char *label)
+{
+	char buffer[1024];
+	int fd = open(path, O_RDONLY);
+	ssize_t nread;
+
+	if (fd < 0) {
+		die(label);
+	}
+	nread = read(fd, buffer, sizeof(buffer) - 1);
+	close(fd);
+	if (nread <= 0) {
+		die(label);
+	}
+	buffer[nread] = '\0';
+	if (!contains(buffer, needle)) {
 		die(label);
 	}
 }
@@ -315,12 +352,32 @@ static void tcp6_test(void)
 	say("nettest: tcp6 ok\n");
 }
 
+static void proc_net_test(void)
+{
+	expect_file_contains("/proc/net/dev", "lo:",
+			     "nettest: proc net dev failed\n");
+	expect_file_contains("/proc/net/route", "0000007F",
+			     "nettest: proc net route failed\n");
+	expect_file_contains("/proc/net/sockstat", "sockets: used",
+			     "nettest: proc net sockstat failed\n");
+	expect_file_contains("/proc/net/udp", "local_address",
+			     "nettest: proc net udp failed\n");
+	expect_file_contains("/proc/net/udp6", "local_address",
+			     "nettest: proc net udp6 failed\n");
+	expect_file_contains("/proc/net/tcp", "local_address",
+			     "nettest: proc net tcp failed\n");
+	expect_file_contains("/proc/net/tcp6", "local_address",
+			     "nettest: proc net tcp6 failed\n");
+	say("nettest: proc net ok\n");
+}
+
 int main(void)
 {
 	udp_test();
 	udp6_test();
 	tcp_test();
 	tcp6_test();
+	proc_net_test();
 	say("nettest: ok\n");
 	return 0;
 }

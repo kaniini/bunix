@@ -322,6 +322,8 @@ enum {
 	BUNIX_NET_UDP_PEER = 25,
 	BUNIX_NET_TCP_LOCAL = 26,
 	BUNIX_NET_TCP_PEER = 27,
+	BUNIX_NET_OBSERVE_SOCKET_COUNT = 28,
+	BUNIX_NET_OBSERVE_SOCKET_AT = 29,
 	BUNIX_NET_IFACE_FLAG_UP = 1 << 0,
 	BUNIX_NET_IFACE_FLAG_LOOPBACK = 1 << 1,
 	BUNIX_NET_ADDR_FAMILY_IPV4 = 4,
@@ -481,6 +483,21 @@ struct bunix_ipc_stats {
 struct bunix_vm_stats {
 	u64 total_frames;
 	u64 free_frames;
+};
+
+struct bunix_net_socket_info {
+	u64 id;
+	u64 protocol;
+	u64 family;
+	u64 state;
+	u64 local_hi;
+	u64 local_lo;
+	u64 local_port;
+	u64 peer_hi;
+	u64 peer_lo;
+	u64 peer_port;
+	u64 rx_len;
+	u64 tx_len;
 };
 
 static inline void bunix_store_u64_le(unsigned char *buffer, u64 offset,

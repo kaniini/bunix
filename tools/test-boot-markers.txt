@@ -71,6 +71,7 @@ nettest: udp ok
 nettest: udp6 ok
 nettest: tcp ok
 nettest: tcp6 ok
+nettest: proc net ok
 nettest: ok
 linux-server: online
 linux-server: registered

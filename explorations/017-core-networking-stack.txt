@@ -40,7 +40,7 @@ Tasks:
       BusyBox, musl, OpenRC tools, and simple client/server test programs.
 - [x] Implement address and route tables for `127.0.0.0/8`, `::1/128`, and
       future interface routes.
-- [ ] Add observability through procfs or Bunix-native tools for interfaces,
+- [x] Add observability through procfs or Bunix-native tools for interfaces,
       sockets, TCP/UDP state, and packet counters.
 - [ ] Add tests for IPv4 localhost UDP, IPv6 localhost UDP, IPv4 localhost TCP,
       IPv6 localhost TCP, poll/select readiness behavior, connection teardown,
@@ -175,6 +175,13 @@ Progress:
   and `::1/128`.  UDP and TCP bind/connect/sendto validation now resolves
   local destinations through route lookup instead of hard-coded address checks,
   leaving a concrete insertion point for future interface and NIC routes.
+- Added procfs networking observability backed by NET0 read-only RPCs.
+  `/proc/net/dev` exposes loopback interface counters, `/proc/net/route`
+  exposes the initial loopback route, `/proc/net/sockstat` summarizes live
+  socket counts, and `/proc/net/{udp,udp6,tcp,tcp6}` render native NET0 socket
+  state through a shared `bunix_net_socket_info` observation record.  `nettest`
+  now verifies the procfs networking subtree during `make test-boot` and emits
+  `nettest: proc net ok`.
 
 NIC / VirtIO-net Boundary:
 

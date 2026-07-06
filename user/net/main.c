@@ -20,6 +20,8 @@ enum {
 	NET_TCP_POLLHUP = 1 << 2,
 	NET_TCP_SHUT_RD = 1 << 0,
 	NET_TCP_SHUT_WR = 1 << 1,
+	NET_PROTO_UDP = 17,
+	NET_PROTO_TCP = 6,
 };
 
 struct net_packet {
@@ -200,6 +202,98 @@ static void reply_interface_stats(struct bunix_msg *reply,
 	reply->words[1] = loopback.rx_packets;
 	reply->words[2] = loopback.tx_packets;
 	reply->words[3] = loopback.rx_drops + loopback.tx_drops;
+}
+
+static void reply_observe_socket_count(struct bunix_msg *reply)
+{
+	u64 count = 0;
+
+	for (const struct udp_socket *socket = udp_sockets; socket != 0;
+	     socket = socket->next) {
+		count++;
+	}
+	for (const struct tcp_socket *socket = tcp_sockets; socket != 0;
+	     socket = socket->next) {
+		count++;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = count;
+}
+
+static void reply_observe_socket_at(struct bunix_msg *reply,
+				    const struct bunix_msg *message)
+{
+	u64 index = message->words[0];
+
+	for (const struct udp_socket *socket = udp_sockets; socket != 0;
+	     socket = socket->next) {
+		if (index == 0) {
+			struct bunix_net_socket_info info;
+			const struct net_addr *peer =
+				socket->connected ? &socket->peer : 0;
+
+			if (message->cap == 0 ||
+			    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+				reply->words[0] = (u64)-1;
+				return;
+			}
+			info.id = socket->id;
+			info.protocol = NET_PROTO_UDP;
+			info.family = socket->family;
+			info.state = socket->bound;
+			info.local_hi = socket->local.hi;
+			info.local_lo = socket->local.lo;
+			info.local_port = socket->local.port;
+			info.peer_hi = peer == 0 ? 0 : peer->hi;
+			info.peer_lo = peer == 0 ? 0 : peer->lo;
+			info.peer_port = peer == 0 ? 0 : peer->port;
+			info.rx_len = socket->rx_len;
+			info.tx_len = 0;
+			if (bunix_buffer_write(message->cap, 0, &info,
+					       sizeof(info)) != 0) {
+				reply->words[0] = (u64)-1;
+				return;
+			}
+			reply->words[0] = 0;
+			reply->words[1] = sizeof(info);
+			return;
+		}
+		index--;
+	}
+	for (const struct tcp_socket *socket = tcp_sockets; socket != 0;
+	     socket = socket->next) {
+		if (index == 0) {
+			struct bunix_net_socket_info info;
+
+			if (message->cap == 0 ||
+			    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+				reply->words[0] = (u64)-1;
+				return;
+			}
+			info.id = socket->id;
+			info.protocol = NET_PROTO_TCP;
+			info.family = socket->family;
+			info.state = socket->state;
+			info.local_hi = socket->local.hi;
+			info.local_lo = socket->local.lo;
+			info.local_port = socket->local.port;
+			info.peer_hi = socket->peer_addr.hi;
+			info.peer_lo = socket->peer_addr.lo;
+			info.peer_port = socket->peer_addr.port;
+			info.rx_len = socket->rx_len;
+			info.tx_len = 0;
+			if (bunix_buffer_write(message->cap, 0, &info,
+					       sizeof(info)) != 0) {
+				reply->words[0] = (u64)-1;
+				return;
+			}
+			reply->words[0] = 0;
+			reply->words[1] = sizeof(info);
+			return;
+		}
+		index--;
+	}
+	reply->words[0] = (u64)-1;
 }
 
 static void reply_loopback_send(struct bunix_msg *reply,
@@ -1312,6 +1406,12 @@ int main(void)
 			break;
 		case BUNIX_NET_TCP_PEER:
 			reply_tcp_addr(&reply, &message, 1);
+			break;
+		case BUNIX_NET_OBSERVE_SOCKET_COUNT:
+			reply_observe_socket_count(&reply);
+			break;
+		case BUNIX_NET_OBSERVE_SOCKET_AT:
+			reply_observe_socket_at(&reply, &message);
 			break;
 		default:
 			reply.words[0] = (u64)-1;
