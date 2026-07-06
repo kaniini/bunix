@@ -35,7 +35,7 @@ Tasks:
 - [x] Integrate the driver with the network stack interface registry and route
       management.
 - [x] Add QEMU run/test modes with a deterministic VirtIO-net topology.
-- [ ] Add tests for driver attach, link-up, transmit path, receive path,
+- [x] Add tests for driver attach, link-up, transmit path, receive path,
       localhost unaffected by NIC state, and clean shutdown.
 - [ ] Add external-network smoke tests once a deterministic host-side tap/user
       networking setup exists.
@@ -185,6 +185,18 @@ Progress:
   `bootstrap: net route ok`; `virtio-net.server` installs a deterministic
   QEMU-user `10.0.2.0/24` route for its interface and logs
   `virtio-net: route ready`.
+- NET0 packet interfaces now have real transmit queues.  Protocol-stack code
+  can enqueue an Ethernet frame with `BUNIX_NET_PACKET_TX_ENQUEUE`, drivers
+  pull frames with `BUNIX_NET_PACKET_TX_DEQUEUE`, and `TX_COMPLETE` accounts
+  completed sends.  Bootstrap now exercises enqueue, dequeue, completion, and
+  TX stats using the synthetic packet interface.
+- Test coverage now spans the first driver and packet-interface boundary:
+  `test-boot-virtio-net` verifies deterministic device enumeration, reset,
+  feature negotiation, RX/TX queue setup, NET0 attachment, route installation,
+  RX readiness, TX readiness, existing localhost NET0 selftests, and clean
+  harness poweroff.  Bootstrap's synthetic packet-interface selftest exercises
+  RX submission plus TX enqueue/dequeue/complete and counter accounting without
+  depending on host traffic.
 
 Future Work:
 
