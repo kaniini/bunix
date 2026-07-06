@@ -32,6 +32,7 @@ busybox mount && echo PROC_MOUNT_OK
 /bin/auxidtest
 /bin/fcntllocktest
 /bin/sysracetest
+/bin/schedstress
 busybox mkdir -p /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_EXISTING_ROOT_OK
 busybox test -d /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_NESTED_OK
 busybox mkdir /tmp || echo TMP_MKDIR_EXISTING_ROOT_DENY_OK
@@ -52,5 +53,6 @@ check_tmpfs_basic_linux_tests() {
 	wait_for_fixed "$log" "DYN_HELLO_OK" "dynamic musl hello did not complete" 45 220
 	wait_for_fixed "$log" "EXECBIG_OK" "large Linux executable did not complete" 45 220
 	wait_for_fixed "$log" "sysrace ok" "Linux syscall race stress test did not complete" 75 220
+	wait_for_fixed "$log" "schedstress ok" "scheduler stress test did not complete" 75 220
 	require_no_fixed "$log" "top:" "busybox top reported an error" 220
 }

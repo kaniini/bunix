@@ -37,3 +37,4 @@ linux execlong ok
 linux auxid ok
 linux fcntl locks ok
 sysrace ok
+schedstress ok

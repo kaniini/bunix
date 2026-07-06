@@ -152,6 +152,20 @@ Policy tradeoffs:
   fairness.  Future balancing must compare virtual runtime and runnable
   latency across CPUs rather than relying only on queue length.
 
+Stress coverage slice:
+
+- Added `/bin/schedstress` as a static musl Linux-personality test in the
+  synthetic rootfs.  It forks multiple workers, drives repeated short sleeps,
+  waits for every child, and verifies `/proc/sched` switch counters advance.
+- The test is wired into the `tmpfs-basic-linux-tests` shard alongside the
+  existing syscall race coverage.  This proves basic sleep/wakeup/fork/wait
+  churn against the EEVDF accounting path, but it does not yet cover CPU-bound
+  fairness, affinity, SMP stealing, or interactive latency under sustained CPU
+  load.
+- Verification for this slice:
+  - `make build/modules/schedstress.user`
+  - `BUNIX_TEST_SET=tmpfs-basic-linux-tests make test-parallel`
+
 Tasks:
 
 - [x] Inventory the current task/thread/runqueue/preemption/SMP code and
