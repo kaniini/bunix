@@ -1,0 +1,55 @@
+Project plan: harden parallel QEMU shard coverage
+
+Context carried forward:
+
+- `make test` now runs the composed parallel shell shard gate.
+- `make test-boot` preserves the old serial boot-marker gate.
+- `tools/test-parallel.sh` runs workers directly through `tools/test-shell.sh`
+  after the Makefile has built the immutable ESP, avoiding recursive make races
+  in shared build outputs.
+- All currently runnable shell shards request `SMP=2`. `SMP=1` guests exit
+  during early server startup and should not be used as passing shard metadata
+  until the kernel boot path is fixed.
+- `tmpfs-extended` and `root-tmpfs-chown` compose their same-boot tmpfs setup
+  dependency inside the worker.
+- `root-mount-soak` is still listed in `tools/shell-shards.tsv` but skipped by
+  the runner because the harness does not implement it yet.
+
+Milestone: close known gaps in the parallel shard gate
+
+Goal:
+
+- Remove the remaining intentional skip from `make test`.
+- Make shard SMP metadata trustworthy by either fixing one-vCPU boot or
+  explicitly documenting and testing the supported SMP floor.
+- Keep `make test` fast and parallel while preserving debuggable per-shard
+  artifacts.
+
+Plan:
+
+1. Implement `root-mount-soak`
+   Add the missing root mount/umount soak shard to `tools/test-shell.sh` and
+   `tools/shell-tests/`. It should boot cleanly, log in as root, exercise the
+   root-only mount/umount race coverage intended by the manifest, and stop being
+   skipped by `tools/test-parallel.sh`.
+
+2. Investigate one-vCPU boot failure
+   Reproduce the `SMP=1` early-exit behavior with a focused shard and QEMU debug
+   logging. Determine whether the fix belongs in kernel boot/scheduler/SMP
+   initialization or in test metadata. Do not reintroduce `SMP=1` shard metadata
+   until the focused reproducer passes.
+
+3. Add explicit SMP policy coverage
+   Once the one-vCPU behavior is understood, add either a focused UP smoke shard
+   that passes under `SMP=1` or a documented host check/manifest validation rule
+   that rejects unsupported `SMP=1` shard rows.
+
+4. Tighten procfs cmdline coverage
+   Add a dedicated procfs command-line shard or helper that proves argv bytes for
+   a live non-self process without relying on unstable shell `$$` expansion.
+   Keep rootfs/VFS/devfs coverage focused on stable `/proc/self` behavior.
+
+5. Re-run and complete the gate
+   Run narrow tests for each fixed shard, then run full `make test`. When all
+   shards pass without skips and full tests pass, move this exploration to
+   `explorations/completed/`.

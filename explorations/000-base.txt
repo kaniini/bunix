@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 001-testing-efficiency-refactoring.txt
+The current exploration is: 002-parallel-test-hardening.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.
@@ -30,4 +30,3 @@ Give credit to yourself using Co-authored-by lines.
 Make granular commits, only push when explorations are completed.
 
 Use subagents for parallelism wherever efficiency would be increased.
-
