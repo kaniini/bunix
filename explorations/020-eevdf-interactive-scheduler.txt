@@ -80,6 +80,22 @@ Initial EEVDF policy slice:
   enqueued through the same wakeup path and receives the bounded interactive
   credit.
 
+Instrumentation slice:
+
+- The kernel now tracks aggregate and per-CPU scheduler counters for enqueues,
+  switches, wakeups, preemptions, migrations, runtime ticks, runnable wait
+  ticks, maximum runnable wait, wakeup-to-run ticks, maximum wakeup-to-run
+  time, current run-queue load, and minimum virtual runtime.
+- Scheduler accounting covers both ordinary run-queue dispatch and direct IPC
+  handoff, so the QNX-style fast path remains visible instead of disappearing
+  from scheduler observability.
+- A native Bunix `sched_stats` syscall snapshots the kernel counters, and
+  `procfs.server` exposes them as `/proc/sched` for shell tests and future
+  Bunix/Linux-aware tooling.
+- Verification for this slice:
+  - `make`
+  - `BUNIX_TEST_SET=rootfs-vfs-proc-dev make test-parallel`
+
 Tasks:
 
 - [x] Inventory the current task/thread/runqueue/preemption/SMP code and
@@ -96,7 +112,7 @@ Tasks:
       bounded accounting cost.
 - [x] Integrate preemption decisions for wakeups, timer ticks, IPC fast paths,
       blocking, yield, and task exit.
-- [ ] Add instrumentation for runnable latency, wakeup-to-run time, runtime
+- [x] Add instrumentation for runnable latency, wakeup-to-run time, runtime
       share, migrations, preemptions, and per-CPU load.
 - [ ] Add stress tests for CPU-bound fairness, interactive shell latency under
       CPU load, server RPC latency, SMP balancing, affinity, starvation, and

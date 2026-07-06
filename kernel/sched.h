@@ -61,6 +61,35 @@ struct task_hw_resource {
 	u64 len;
 };
 
+enum {
+	SCHED_STATS_CPUS = 8,
+};
+
+struct sched_stats {
+	u64 enqueues;
+	u64 switches;
+	u64 wakeups;
+	u64 preemptions;
+	u64 migrations;
+	u64 runtime_ticks;
+	u64 wait_ticks;
+	u64 max_wait_ticks;
+	u64 wake_to_run_ticks;
+	u64 max_wake_to_run_ticks;
+	u64 cpu_enqueues[SCHED_STATS_CPUS];
+	u64 cpu_switches[SCHED_STATS_CPUS];
+	u64 cpu_wakeups[SCHED_STATS_CPUS];
+	u64 cpu_preemptions[SCHED_STATS_CPUS];
+	u64 cpu_migrations[SCHED_STATS_CPUS];
+	u64 cpu_runtime_ticks[SCHED_STATS_CPUS];
+	u64 cpu_wait_ticks[SCHED_STATS_CPUS];
+	u64 cpu_max_wait_ticks[SCHED_STATS_CPUS];
+	u64 cpu_wake_to_run_ticks[SCHED_STATS_CPUS];
+	u64 cpu_max_wake_to_run_ticks[SCHED_STATS_CPUS];
+	u64 cpu_runq_load[SCHED_STATS_CPUS];
+	u64 cpu_min_vruntime[SCHED_STATS_CPUS];
+};
+
 enum task_vm_region_kind {
 	TASK_VM_REGION_ELF = 1,
 	TASK_VM_REGION_STACK,
@@ -161,6 +190,7 @@ int thread_handoff(struct thread *thread);
 void sched_wake_sleepers(u64 now);
 void sched_enable_preemption(void);
 void sched_tick(void);
+void sched_stats_snapshot(struct sched_stats *stats);
 void thread_exit(void) __attribute__((noreturn));
 
 u32 task_id(const struct task *task);

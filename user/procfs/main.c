@@ -38,6 +38,7 @@ enum {
 	PROCFS_KIND_NET_UDP6 = 31,
 	PROCFS_KIND_NET_TCP = 32,
 	PROCFS_KIND_NET_TCP6 = 33,
+	PROCFS_KIND_SCHED = 34,
 };
 
 static struct bunix_id_table open_files;
@@ -478,6 +479,9 @@ static u64 file_for_path(const char *path, u64 caller_task)
 	}
 	if (str_eq(path, "/proc/ipc")) {
 		return make_file(PROCFS_KIND_IPC, 0);
+	}
+	if (str_eq(path, "/proc/sched")) {
+		return make_file(PROCFS_KIND_SCHED, 0);
 	}
 	if (str_eq(path, "/proc/loadavg")) {
 		return make_file(PROCFS_KIND_LOADAVG, 0);
@@ -1246,6 +1250,94 @@ static u64 build_ipc(void)
 	return len;
 }
 
+static u64 build_sched(void)
+{
+	u64 len = 0;
+	struct bunix_sched_stats stats;
+
+	if (bunix_sched_stats(&stats) != 0) {
+		return 0;
+	}
+
+	append_str(&len, "enqueues ");
+	append_u64(&len, stats.enqueues);
+	append_char(&len, '\n');
+	append_str(&len, "switches ");
+	append_u64(&len, stats.switches);
+	append_char(&len, '\n');
+	append_str(&len, "wakeups ");
+	append_u64(&len, stats.wakeups);
+	append_char(&len, '\n');
+	append_str(&len, "preemptions ");
+	append_u64(&len, stats.preemptions);
+	append_char(&len, '\n');
+	append_str(&len, "migrations ");
+	append_u64(&len, stats.migrations);
+	append_char(&len, '\n');
+	append_str(&len, "runtime_ticks ");
+	append_u64(&len, stats.runtime_ticks);
+	append_char(&len, '\n');
+	append_str(&len, "wait_ticks ");
+	append_u64(&len, stats.wait_ticks);
+	append_char(&len, '\n');
+	append_str(&len, "max_wait_ticks ");
+	append_u64(&len, stats.max_wait_ticks);
+	append_char(&len, '\n');
+	append_str(&len, "wake_to_run_ticks ");
+	append_u64(&len, stats.wake_to_run_ticks);
+	append_char(&len, '\n');
+	append_str(&len, "max_wake_to_run_ticks ");
+	append_u64(&len, stats.max_wake_to_run_ticks);
+	append_char(&len, '\n');
+
+	for (u64 cpu = 0; cpu < BUNIX_SCHED_STATS_CPUS; cpu++) {
+		if (stats.cpu_enqueues[cpu] == 0 &&
+		    stats.cpu_switches[cpu] == 0 &&
+		    stats.cpu_wakeups[cpu] == 0 &&
+		    stats.cpu_preemptions[cpu] == 0 &&
+		    stats.cpu_migrations[cpu] == 0 &&
+		    stats.cpu_runtime_ticks[cpu] == 0 &&
+		    stats.cpu_wait_ticks[cpu] == 0 &&
+		    stats.cpu_max_wait_ticks[cpu] == 0 &&
+		    stats.cpu_wake_to_run_ticks[cpu] == 0 &&
+		    stats.cpu_max_wake_to_run_ticks[cpu] == 0 &&
+		    stats.cpu_runq_load[cpu] == 0 &&
+		    stats.cpu_min_vruntime[cpu] == 0) {
+			continue;
+		}
+
+		append_str(&len, "cpu");
+		append_u64(&len, cpu);
+		append_str(&len, " enqueues ");
+		append_u64(&len, stats.cpu_enqueues[cpu]);
+		append_str(&len, " switches ");
+		append_u64(&len, stats.cpu_switches[cpu]);
+		append_str(&len, " wakeups ");
+		append_u64(&len, stats.cpu_wakeups[cpu]);
+		append_str(&len, " preemptions ");
+		append_u64(&len, stats.cpu_preemptions[cpu]);
+		append_str(&len, " migrations ");
+		append_u64(&len, stats.cpu_migrations[cpu]);
+		append_str(&len, " runtime_ticks ");
+		append_u64(&len, stats.cpu_runtime_ticks[cpu]);
+		append_str(&len, " wait_ticks ");
+		append_u64(&len, stats.cpu_wait_ticks[cpu]);
+		append_str(&len, " max_wait_ticks ");
+		append_u64(&len, stats.cpu_max_wait_ticks[cpu]);
+		append_str(&len, " wake_to_run_ticks ");
+		append_u64(&len, stats.cpu_wake_to_run_ticks[cpu]);
+		append_str(&len, " max_wake_to_run_ticks ");
+		append_u64(&len, stats.cpu_max_wake_to_run_ticks[cpu]);
+		append_str(&len, " runq_load ");
+		append_u64(&len, stats.cpu_runq_load[cpu]);
+		append_str(&len, " min_vruntime ");
+		append_u64(&len, stats.cpu_min_vruntime[cpu]);
+		append_char(&len, '\n');
+	}
+
+	return len;
+}
+
 static u64 build_net_dev(void)
 {
 	u64 len = 0;
@@ -1625,6 +1717,9 @@ static u64 build_file_text(u64 file)
 	case PROCFS_KIND_IPC:
 		len = build_ipc();
 		break;
+	case PROCFS_KIND_SCHED:
+		len = build_sched();
+		break;
 	case PROCFS_KIND_NET_DEV:
 		len = build_net_dev();
 		break;
@@ -1760,7 +1855,7 @@ static void stat_reply(const struct bunix_msg *message, struct bunix_msg *reply,
 static const char *proc_dir_entry(u64 index, u64 *type)
 {
 	static const char *names[] = {
-		"kthreads", "uptime", "stat", "ipc", "loadavg", "meminfo",
+		"kthreads", "uptime", "stat", "ipc", "sched", "loadavg", "meminfo",
 		"filesystems", "cpuinfo", "cmdline", "devices", "modules",
 		"mounts", "net", "self"
 	};
@@ -1769,7 +1864,7 @@ static const char *proc_dir_entry(u64 index, u64 *type)
 	const u64 static_count = sizeof(names) / sizeof(names[0]);
 
 	if (index < static_count) {
-		*type = index == 12 || index == 13 ? BUNIX_VFS_TYPE_DIRECTORY :
+		*type = index == 13 || index == 14 ? BUNIX_VFS_TYPE_DIRECTORY :
 				     BUNIX_VFS_TYPE_REGULAR;
 		return names[index];
 	}

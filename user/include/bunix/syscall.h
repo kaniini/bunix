@@ -55,8 +55,10 @@ enum {
 	BUNIX_SYSCALL_HW_MMIO_WRITE32 = -94,
 	BUNIX_SYSCALL_BUFFER_PHYS = -96,
 	BUNIX_SYSCALL_CMDLINE_HAS = -98,
+	BUNIX_SYSCALL_SCHED_STATS = -100,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
+	BUNIX_SCHED_STATS_CPUS = 8,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
 	BUNIX_RIGHT_SEND = 1 << 0,
 	BUNIX_RIGHT_RECV = 1 << 1,
@@ -498,6 +500,31 @@ struct bunix_ipc_stats {
 	u64 cpu_fallback_nested[BUNIX_IPC_STATS_CPUS];
 	u64 cpu_fallback_scheduler[BUNIX_IPC_STATS_CPUS];
 	u64 cpu_fallback_invalid[BUNIX_IPC_STATS_CPUS];
+};
+
+struct bunix_sched_stats {
+	u64 enqueues;
+	u64 switches;
+	u64 wakeups;
+	u64 preemptions;
+	u64 migrations;
+	u64 runtime_ticks;
+	u64 wait_ticks;
+	u64 max_wait_ticks;
+	u64 wake_to_run_ticks;
+	u64 max_wake_to_run_ticks;
+	u64 cpu_enqueues[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_switches[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_wakeups[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_preemptions[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_migrations[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_runtime_ticks[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_wait_ticks[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_max_wait_ticks[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_wake_to_run_ticks[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_max_wake_to_run_ticks[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_runq_load[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_min_vruntime[BUNIX_SCHED_STATS_CPUS];
 };
 
 struct bunix_vm_stats {
@@ -1022,6 +1049,11 @@ static inline long bunix_console_read(char *buffer, usize len)
 static inline long bunix_ipc_stats(struct bunix_ipc_stats *stats)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_IPC_STATS, (u64)stats);
+}
+
+static inline long bunix_sched_stats(struct bunix_sched_stats *stats)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_SCHED_STATS, (u64)stats);
 }
 
 static inline long bunix_vm_stats(struct bunix_vm_stats *stats)

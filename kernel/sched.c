@@ -78,8 +78,10 @@ struct thread {
 	u64 virtual_deadline;
 	u64 eligible_time;
 	u64 enqueue_seq;
+	u64 enqueue_tick;
 	u64 exec_start_tick;
 	u64 blocked_since_tick;
+	u64 wake_ready_tick;
 	u64 total_runtime_ticks;
 	u64 wakeups;
 	u64 migrations;
@@ -123,6 +125,8 @@ static struct spinlock task_table_lock = SPINLOCK_INIT("task-table");
 static struct spinlock thread_table_lock = SPINLOCK_INIT("thread-table");
 static struct spinlock placement_lock = SPINLOCK_INIT("sched-placement");
 static struct spinlock sleep_lock = SPINLOCK_INIT("sched-sleep");
+static struct spinlock sched_stats_lock = SPINLOCK_INIT("sched-stats");
+static struct sched_stats sched_counters;
 
 static int task_handle_retain(enum task_handle_type type, void *object);
 static void task_handle_release(enum task_handle_type type, void *object);
@@ -266,6 +270,32 @@ static void sched_refresh_deadline(struct thread *thread)
 	thread->virtual_deadline = thread->vruntime + (slice != 0 ? slice : 1);
 }
 
+static void sched_stats_add_cpu(u64 *global, u64 cpu_values[SCHED_STATS_CPUS],
+				u32 cpu_id, u64 value)
+{
+	const u64 flags = spin_lock_irqsave(&sched_stats_lock);
+
+	*global += value;
+	if (cpu_id < SCHED_STATS_CPUS) {
+		cpu_values[cpu_id] += value;
+	}
+	spin_unlock_irqrestore(&sched_stats_lock, flags);
+}
+
+static void sched_stats_max_cpu(u64 *global, u64 cpu_values[SCHED_STATS_CPUS],
+				u32 cpu_id, u64 value)
+{
+	const u64 flags = spin_lock_irqsave(&sched_stats_lock);
+
+	if (value > *global) {
+		*global = value;
+	}
+	if (cpu_id < SCHED_STATS_CPUS && value > cpu_values[cpu_id]) {
+		cpu_values[cpu_id] = value;
+	}
+	spin_unlock_irqrestore(&sched_stats_lock, flags);
+}
+
 static void sched_account_runtime(struct cpu_sched *cpu)
 {
 	struct thread *thread = cpu->current;
@@ -287,11 +317,49 @@ static void sched_account_runtime(struct cpu_sched *cpu)
 	delta = now - thread->exec_start_tick;
 	thread->exec_start_tick = now;
 	thread->total_runtime_ticks += delta;
+	sched_stats_add_cpu(&sched_counters.runtime_ticks,
+			    sched_counters.cpu_runtime_ticks, cpu->id, delta);
 	thread->vruntime += sched_scale_delta(delta, thread->weight);
 	if (thread->vruntime > cpu->runq.min_vruntime) {
 		cpu->runq.min_vruntime = thread->vruntime;
 	}
 	sched_refresh_deadline(thread);
+}
+
+static void sched_note_switch(struct cpu_sched *cpu, struct thread *next)
+{
+	const u64 now = timer_ticks();
+
+	if (next == 0 || next == &cpu->scheduler_thread) {
+		return;
+	}
+
+	sched_stats_add_cpu(&sched_counters.switches,
+			    sched_counters.cpu_switches, cpu->id, 1);
+	if (next->enqueue_tick != 0 && now >= next->enqueue_tick) {
+		const u64 wait = now - next->enqueue_tick;
+
+		sched_stats_add_cpu(&sched_counters.wait_ticks,
+				    sched_counters.cpu_wait_ticks,
+				    cpu->id, wait);
+		sched_stats_max_cpu(&sched_counters.max_wait_ticks,
+				    sched_counters.cpu_max_wait_ticks,
+				    cpu->id, wait);
+	}
+	if (next->wake_ready_tick != 0 && now >= next->wake_ready_tick) {
+		const u64 wake_to_run = now - next->wake_ready_tick;
+
+		sched_stats_add_cpu(&sched_counters.wake_to_run_ticks,
+				    sched_counters.cpu_wake_to_run_ticks,
+				    cpu->id, wake_to_run);
+		sched_stats_max_cpu(&sched_counters.max_wake_to_run_ticks,
+				    sched_counters.cpu_max_wake_to_run_ticks,
+				    cpu->id, wake_to_run);
+	}
+
+	next->enqueue_tick = 0;
+	next->wake_ready_tick = 0;
+	next->exec_start_tick = now;
 }
 
 static void sched_prepare_enqueue_locked(struct cpu_sched *cpu,
@@ -325,9 +393,11 @@ static void sched_prepare_enqueue_locked(struct cpu_sched *cpu,
 			}
 		}
 		thread->wakeups++;
+		thread->wake_ready_tick = now;
 		thread->blocked_since_tick = 0;
 	}
 	thread->enqueue_seq = ++cpu->runq.enqueue_seq;
+	thread->enqueue_tick = now;
 	sched_refresh_deadline(thread);
 }
 
@@ -388,13 +458,23 @@ static void sched_enqueue_on_reason(struct cpu_sched *cpu, struct thread *thread
 	const u64 flags = spin_lock_irqsave(&cpu->runq.lock);
 	const u32 was_idle = cpu->runq.idle;
 	const u32 old_cpu = thread->cpu_id;
+	const enum thread_state old_state = thread->state;
 
 	thread->cpu_id = cpu->id;
 	thread->state = THREAD_READY;
-	if (old_cpu != cpu->id) {
+	if (old_state != THREAD_EMPTY && old_cpu != cpu->id) {
 		thread->migrations++;
+		sched_stats_add_cpu(&sched_counters.migrations,
+				    sched_counters.cpu_migrations,
+				    cpu->id, 1);
 	}
 	sched_prepare_enqueue_locked(cpu, thread, wakeup);
+	sched_stats_add_cpu(&sched_counters.enqueues,
+			    sched_counters.cpu_enqueues, cpu->id, 1);
+	if (wakeup) {
+		sched_stats_add_cpu(&sched_counters.wakeups,
+				    sched_counters.cpu_wakeups, cpu->id, 1);
+	}
 	cpu->runq.idle = 0;
 	runq_push(&cpu->runq, thread);
 	console_printf("sched: enqueue tid=%u cpu=%u runq=%u vruntime=%u deadline=%u\n",
@@ -473,6 +553,18 @@ static void sched_reap_thread(struct thread *thread)
 	thread->sleep_next = 0;
 	thread->task_next = 0;
 	thread->wake_tick = 0;
+	thread->vruntime = 0;
+	thread->virtual_deadline = 0;
+	thread->eligible_time = 0;
+	thread->enqueue_seq = 0;
+	thread->enqueue_tick = 0;
+	thread->exec_start_tick = 0;
+	thread->blocked_since_tick = 0;
+	thread->wake_ready_tick = 0;
+	thread->total_runtime_ticks = 0;
+	thread->wakeups = 0;
+	thread->migrations = 0;
+	thread->preemptions = 0;
 	thread->state = THREAD_EMPTY;
 	spin_unlock_irqrestore(&thread_table_lock, thread_flags);
 
@@ -778,8 +870,10 @@ static struct thread *thread_create_placed(struct task *task, const char *name,
 	thread->virtual_deadline = 0;
 	thread->eligible_time = 0;
 	thread->enqueue_seq = 0;
+	thread->enqueue_tick = 0;
 	thread->exec_start_tick = 0;
 	thread->blocked_since_tick = 0;
+	thread->wake_ready_tick = 0;
 	thread->total_runtime_ticks = 0;
 	thread->wakeups = 0;
 	thread->migrations = 0;
@@ -1504,7 +1598,7 @@ void sched_run(void)
 		}
 
 		next->state = THREAD_RUNNING;
-		next->exec_start_tick = timer_ticks();
+		sched_note_switch(cpu, next);
 		cpu->current = next;
 		console_printf("sched: switch cpu=%u prev=%u next=%u\n",
 			       cpu->id, prev->tid, next->tid);
@@ -1570,6 +1664,33 @@ void sched_enable_preemption(void)
 	console_printf("sched: preemption enabled\n");
 }
 
+void sched_stats_snapshot(struct sched_stats *stats)
+{
+	if (stats == 0) {
+		return;
+	}
+
+	u64 flags = spin_lock_irqsave(&sched_stats_lock);
+	*stats = sched_counters;
+	spin_unlock_irqrestore(&sched_stats_lock, flags);
+
+	for (u32 cpu_id = 0; cpu_id < sched_cpu_count &&
+	     cpu_id < SCHED_STATS_CPUS; cpu_id++) {
+		struct cpu_sched *cpu = &cpus[cpu_id];
+		u64 load;
+
+		flags = spin_lock_irqsave(&cpu->runq.lock);
+		load = cpu->runq.count;
+		if (cpu->current != &cpu->scheduler_thread &&
+		    cpu->current->state == THREAD_RUNNING) {
+			load++;
+		}
+		stats->cpu_runq_load[cpu_id] = load;
+		stats->cpu_min_vruntime[cpu_id] = cpu->runq.min_vruntime;
+		spin_unlock_irqrestore(&cpu->runq.lock, flags);
+	}
+}
+
 void sched_tick(void)
 {
 	struct cpu_sched *cpu = sched_current_cpu();
@@ -1597,6 +1718,8 @@ void sched_tick(void)
 
 	console_printf("sched: preempt tid=%u cpu=%u\n", prev->tid, cpu->id);
 	prev->preemptions++;
+	sched_stats_add_cpu(&sched_counters.preemptions,
+			    sched_counters.cpu_preemptions, cpu->id, 1);
 	sched_reset_quantum(cpu);
 	sched_enqueue_on(cpu, prev);
 	cpu->current = &cpu->scheduler_thread;
@@ -1753,7 +1876,13 @@ int thread_handoff(struct thread *thread)
 	sched_account_runtime(cpu);
 	sched_enqueue_on(cpu, prev);
 	thread->state = THREAD_RUNNING;
-	thread->exec_start_tick = timer_ticks();
+	thread->blocked_since_tick = 0;
+	thread->enqueue_tick = 0;
+	thread->wake_ready_tick = timer_ticks();
+	thread->wakeups++;
+	sched_stats_add_cpu(&sched_counters.wakeups,
+			    sched_counters.cpu_wakeups, cpu->id, 1);
+	sched_note_switch(cpu, thread);
 	cpu->current = thread;
 	sched_reset_quantum(cpu);
 	sched_activate_thread_space(thread);
