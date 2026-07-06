@@ -93,6 +93,8 @@ Progress:
   COM1 resource through that framework, registers through the shared helper,
   and emits a driver lifecycle message; interrupt/event delivery is represented
   in the `HWR0` protocol and remains to be wired to real IRQ dispatch.
+- Added a boot marker for `console: driver online` so the synthetic and Alpine
+  boot checks assert that the userspace console-driver registration path ran.
 
 Portability notes:
 

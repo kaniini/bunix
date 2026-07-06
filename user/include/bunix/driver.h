@@ -93,14 +93,30 @@ static inline int bunix_driver_register(const struct bunix_driver *driver)
 static inline void bunix_driver_log_lifecycle(const struct bunix_driver *driver,
 					      const char *state)
 {
+	char line[128];
+	u64 offset = 0;
+	u64 len;
+
 	if (driver == 0 || driver->name == 0 || state == 0) {
 		return;
 	}
-	(void)bunix_console_log(driver->name,
-				bunix_driver_str_len(driver->name));
-	(void)bunix_console_log(": ", 2);
-	(void)bunix_console_log(state, bunix_driver_str_len(state));
-	(void)bunix_console_log("\n", 1);
+
+	len = bunix_driver_str_len(driver->name);
+	for (u64 i = 0; i < len && offset + 1 < sizeof(line); i++) {
+		line[offset++] = driver->name[i];
+	}
+	if (offset + 2 < sizeof(line)) {
+		line[offset++] = ':';
+		line[offset++] = ' ';
+	}
+	len = bunix_driver_str_len(state);
+	for (u64 i = 0; i < len && offset + 1 < sizeof(line); i++) {
+		line[offset++] = state[i];
+	}
+	if (offset < sizeof(line)) {
+		line[offset++] = '\n';
+	}
+	(void)bunix_console_log(line, offset);
 }
 
 #endif

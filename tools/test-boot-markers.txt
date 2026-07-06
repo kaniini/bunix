@@ -23,6 +23,7 @@ sched: inherit denied task=
 handle=2 requested=0x3 rights=0x5
 kernel: invalid inherited cap handle=2 rights=0x3 for ping
 names: online
+console: driver online
 names: namespace
 names: wait
 names: registered

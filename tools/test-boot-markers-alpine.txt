@@ -1,6 +1,7 @@
 kernel: log level info
 names: init dynamic
 user: gdt/tss/syscall ready
+console: driver online
 time: online
 user: online
 proc: online
