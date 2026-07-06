@@ -1,8 +1,0 @@
-Boot Alpine `/sbin/init` under the Linux personality.
-
-- [ ] Add a boot mode that selects the Alpine rootfs fixture and execs Alpine `/sbin/init`.
-- [ ] Capture OpenRC console and dmesg output through the normal ring-buffer path.
-- [ ] Get OpenRC through sysinit, boot, and default runlevels far enough to reach a login service or shell.
-- [ ] Ensure shutdown and reboot paths work from inside the Alpine userspace.
-- [ ] Add a narrow boot target that exits by guest poweroff after reaching a stable OpenRC milestone.
-- [ ] Document the current OpenRC boot milestone and known gaps.

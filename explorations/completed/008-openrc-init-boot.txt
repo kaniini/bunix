@@ -1,0 +1,30 @@
+Boot Alpine `/sbin/init` under the Linux personality.
+
+Findings:
+
+- `ROOTFS_FLAVOR=alpine` selects `build/modules/alpine-disk0.img` and Alpine
+  boot markers, while the synthetic default keeps using the synthetic rootfs.
+- Bootstrap launches the Linux personality and asks it to exec `/sbin/init`.
+  In the Alpine fixture, `/sbin/init` is BusyBox init and its inittab runs
+  `/sbin/openrc sysinit`, `/sbin/openrc boot`, and `/sbin/openrc default`.
+- `ROOTFS_FLAVOR=alpine make test-boot` reaches OpenRC 0.63.2, mounts
+  `/proc`, creates `/run/openrc`, fixes `/run/lock`, caches service
+  dependencies, reaches the Bunix login prompt, logs in as root, runs BusyBox
+  `id`, `ps`, and `dmesg`, then powers off through `/sbin/poweroff`.
+- The Alpine boot smoke now checks `busybox dmesg` for recent Linux-server
+  log activity, proving the normal dmesg ring path remains readable after
+  OpenRC login.  OpenRC console output is captured in the normal serial
+  console log.
+- The stable Alpine milestone is currently login plus root shell command
+  execution and guest poweroff, not full OpenRC service parity.
+- Known gaps at this milestone: OpenRC still reports missing dependency
+  references for service `dev`, and `readpath` reports `No such file or
+  directory`.  Those do not currently block reaching login, shell command
+  execution, dmesg access, or poweroff.
+
+- [x] Add a boot mode that selects the Alpine rootfs fixture and execs Alpine `/sbin/init`.
+- [x] Capture OpenRC console and dmesg output through the normal ring-buffer path.
+- [x] Get OpenRC through sysinit, boot, and default runlevels far enough to reach a login service or shell.
+- [x] Ensure shutdown and reboot paths work from inside the Alpine userspace.
+- [x] Add a narrow boot target that exits by guest poweroff after reaching a stable OpenRC milestone.
+- [x] Document the current OpenRC boot milestone and known gaps.
