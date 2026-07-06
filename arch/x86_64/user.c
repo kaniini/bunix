@@ -113,6 +113,10 @@ enum {
 	LINUX_SYSCALL_SHUTDOWN = 48,
 	LINUX_SYSCALL_BIND = 49,
 	LINUX_SYSCALL_LISTEN = 50,
+	LINUX_SYSCALL_GETSOCKNAME = 51,
+	LINUX_SYSCALL_GETPEERNAME = 52,
+	LINUX_SYSCALL_SETSOCKOPT = 54,
+	LINUX_SYSCALL_GETSOCKOPT = 55,
 	LINUX_SYSCALL_FCNTL = 72,
 	LINUX_SYSCALL_FLOCK = 73,
 	LINUX_SYSCALL_GETCWD = 79,
@@ -1904,6 +1908,118 @@ static u64 linux_forward_two_u32_out(struct ipc_port *linux,
 	       reply.words[0] : (u64)-LINUX_EFAULT;
 }
 
+static u64 linux_forward_socklen_output(struct ipc_port *linux,
+					struct ipc_port *reply_port,
+					struct ipc_message *request,
+					u32 type, u64 fd, u64 user_out,
+					u64 user_lenp)
+{
+	struct shared_buffer *buffer;
+	struct ipc_message reply;
+	u32 in_len;
+	u32 out_len;
+	u64 copy;
+
+	if (user_out == 0 || user_lenp == 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	if (read_current_user(user_lenp, &in_len, sizeof(in_len)) != 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	if (in_len > LINUX_MAX_SOCKADDR) {
+		in_len = LINUX_MAX_SOCKADDR;
+	}
+	buffer = buffer_create(in_len == 0 ? 1 : in_len);
+	if (buffer == 0) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	request->type = type;
+	request->words[0] = fd;
+	request->words[1] = in_len;
+	request->words[2] = 0;
+	request->words[3] = 0;
+	request->cap_type = IPC_CAP_BUFFER;
+	request->cap_rights = TASK_RIGHT_SEND;
+	request->cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	if ((i64)reply.words[0] < 0) {
+		buffer_release(buffer);
+		return reply.words[0];
+	}
+	out_len = (u32)reply.words[1];
+	if (write_current_user(user_lenp, &out_len, sizeof(out_len)) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_EFAULT;
+	}
+	copy = out_len < in_len ? out_len : in_len;
+	if (copy != 0 &&
+	    linux_copy_buffer_to_user(buffer, 0, user_out, copy) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_EFAULT;
+	}
+	buffer_release(buffer);
+	return reply.words[0];
+}
+
+static u64 linux_forward_getsockopt(struct ipc_port *linux,
+				    struct ipc_port *reply_port,
+				    struct ipc_message *request,
+				    u64 fd, u64 level, u64 optname,
+				    u64 user_out, u64 user_lenp)
+{
+	struct shared_buffer *buffer;
+	struct ipc_message reply;
+	u32 in_len;
+	u32 out_len;
+	u64 copy;
+
+	if (user_out == 0 || user_lenp == 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	if (read_current_user(user_lenp, &in_len, sizeof(in_len)) != 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	if (in_len > LINUX_MAX_SOCKADDR) {
+		in_len = LINUX_MAX_SOCKADDR;
+	}
+	buffer = buffer_create(in_len == 0 ? 1 : in_len);
+	if (buffer == 0) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	request->type = LINUX_SYSCALL_GETSOCKOPT;
+	request->words[0] = fd;
+	request->words[1] = level;
+	request->words[2] = optname;
+	request->words[3] = in_len;
+	request->cap_type = IPC_CAP_BUFFER;
+	request->cap_rights = TASK_RIGHT_SEND;
+	request->cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	if ((i64)reply.words[0] < 0) {
+		buffer_release(buffer);
+		return reply.words[0];
+	}
+	out_len = (u32)reply.words[1];
+	if (write_current_user(user_lenp, &out_len, sizeof(out_len)) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_EFAULT;
+	}
+	copy = out_len < in_len ? out_len : in_len;
+	if (copy != 0 &&
+	    linux_copy_buffer_to_user(buffer, 0, user_out, copy) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_EFAULT;
+	}
+	buffer_release(buffer);
+	return reply.words[0];
+}
+
 static u64 linux_forward_groups_out(struct ipc_port *linux,
 				    struct ipc_port *reply_port,
 				    struct ipc_message *request,
@@ -2937,6 +3053,14 @@ static const char *linux_syscall_name(u64 number)
 		return "socket";
 	case LINUX_SYSCALL_CONNECT:
 		return "connect";
+	case LINUX_SYSCALL_GETSOCKNAME:
+		return "getsockname";
+	case LINUX_SYSCALL_GETPEERNAME:
+		return "getpeername";
+	case LINUX_SYSCALL_SETSOCKOPT:
+		return "setsockopt";
+	case LINUX_SYSCALL_GETSOCKOPT:
+		return "getsockopt";
 	case LINUX_SYSCALL_SENDTO:
 		return "sendto";
 	case LINUX_SYSCALL_RECVFROM:
@@ -4043,6 +4167,30 @@ poll_again:
 						  TASK_RIGHT_DUP,
 						  arg0, arg3, 0);
 	}
+	case LINUX_SYSCALL_GETSOCKNAME:
+	case LINUX_SYSCALL_GETPEERNAME:
+		return linux_forward_socklen_output(linux, reply_port, &request,
+						    (u32)number, arg0,
+						    arg1, arg2);
+	case LINUX_SYSCALL_SETSOCKOPT: {
+		const u64 len = frame->r8 > LINUX_MAX_SOCKADDR ?
+				LINUX_MAX_SOCKADDR : frame->r8;
+
+		if (arg3 == 0 && len != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		request.type = LINUX_SYSCALL_SETSOCKOPT;
+		request.words[0] = arg0;
+		request.words[1] = arg1;
+		request.words[2] = arg2;
+		request.words[3] = len;
+		return linux_forward_input_buffer(linux, reply_port, &request,
+						  arg3, len, TASK_RIGHT_RECV);
+	}
+	case LINUX_SYSCALL_GETSOCKOPT:
+		return linux_forward_getsockopt(linux, reply_port, &request,
+						arg0, arg1, arg2, arg3,
+						frame->r8);
 	case LINUX_SYSCALL_GETRANDOM: {
 		return linux_getrandom_chunked(linux, reply_port, arg0, arg1);
 	}

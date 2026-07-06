@@ -149,6 +149,12 @@ enum {
 	LINUX_AF_INET6 = 10,
 	LINUX_SOCK_STREAM = 1,
 	LINUX_SOCK_DGRAM = 2,
+	LINUX_SOL_SOCKET = 1,
+	LINUX_SO_DEBUG = 1,
+	LINUX_SO_REUSEADDR = 2,
+	LINUX_SO_KEEPALIVE = 9,
+	LINUX_SO_ERROR = 4,
+	LINUX_SO_TYPE = 3,
 	LINUX_SOCK_NONBLOCK = 00004000,
 	LINUX_SOCK_CLOEXEC = 02000000,
 	LINUX_SOCKET_UNIX_STREAM = 1,
@@ -4965,6 +4971,149 @@ static long linux_net_udp_sendto(u64 socket, u64 payload_buffer,
 	return (long)reply.words[1];
 }
 
+static u64 linux_sockaddr_len(u64 family)
+{
+	return family == LINUX_AF_INET6 ? 28 : 16;
+}
+
+static long linux_write_sockaddr(u64 buffer, u64 max_len,
+				 const struct linux_sockaddr *addr)
+{
+	char raw[28];
+	u64 actual;
+	u64 copy;
+
+	if (buffer == 0 || addr == 0) {
+		return -LINUX_EFAULT;
+	}
+	zero_bytes(raw, sizeof(raw));
+	actual = linux_sockaddr_len(addr->family);
+	raw[0] = (unsigned char)(addr->family & 0xff);
+	raw[1] = (unsigned char)((addr->family >> 8) & 0xff);
+	raw[2] = (unsigned char)((addr->port >> 8) & 0xff);
+	raw[3] = (unsigned char)(addr->port & 0xff);
+	if (addr->family == LINUX_AF_INET) {
+		raw[4] = (unsigned char)((addr->lo >> 24) & 0xff);
+		raw[5] = (unsigned char)((addr->lo >> 16) & 0xff);
+		raw[6] = (unsigned char)((addr->lo >> 8) & 0xff);
+		raw[7] = (unsigned char)(addr->lo & 0xff);
+	} else if (addr->family == LINUX_AF_INET6) {
+		u64 hi = addr->hi;
+		u64 lo = addr->lo;
+
+		for (u64 i = 0; i < 8; i++) {
+			raw[15 - i] = (unsigned char)(hi & 0xff);
+			hi >>= 8;
+		}
+		for (u64 i = 0; i < 8; i++) {
+			raw[23 - i] = (unsigned char)(lo & 0xff);
+			lo >>= 8;
+		}
+	} else {
+		return -LINUX_EAFNOSUPPORT;
+	}
+	copy = actual < max_len ? actual : max_len;
+	if (copy != 0 && bunix_buffer_write(buffer, 0, raw, copy) != 0) {
+		return -LINUX_EFAULT;
+	}
+	return (long)actual;
+}
+
+static long linux_socket_addr(struct linux_process *process, u64 fd, u64 max_len,
+			      u64 buffer, int peer, u64 *actual_len)
+{
+	struct linux_sockaddr addr;
+	struct bunix_msg reply;
+	u64 op;
+	long written;
+
+	if (actual_len != 0) {
+		*actual_len = 0;
+	}
+	if (fd >= process->fd_capacity ||
+	    process->fds[fd].kind != LINUX_FD_SOCKET) {
+		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle != LINUX_SOCKET_NET_UDP &&
+	    process->fds[fd].handle != LINUX_SOCKET_NET_TCP) {
+		return -LINUX_EINVAL;
+	}
+	if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP) {
+		op = peer ? BUNIX_NET_UDP_PEER : BUNIX_NET_UDP_LOCAL;
+	} else {
+		op = peer ? BUNIX_NET_TCP_PEER : BUNIX_NET_TCP_LOCAL;
+	}
+	if (linux_net_call(op, 0, 0, process->fds[fd].offset, 0, 0, 0,
+			   &reply) != 0) {
+		return peer ? -LINUX_ENOTCONN : -LINUX_EINVAL;
+	}
+	addr.family = process->fds[fd].size;
+	addr.hi = reply.words[1];
+	addr.lo = reply.words[2];
+	addr.port = reply.words[3];
+	written = linux_write_sockaddr(buffer, max_len, &addr);
+	if (written < 0) {
+		return written;
+	}
+	if (actual_len != 0) {
+		*actual_len = (u64)written;
+	}
+	return 0;
+}
+
+static long linux_setsockopt(struct linux_process *process, u64 fd, u64 level,
+			     u64 optname, u64 opt_len, u64 opt_buffer)
+{
+	(void)level;
+	(void)optname;
+	(void)opt_len;
+	(void)opt_buffer;
+	if (fd >= process->fd_capacity ||
+	    process->fds[fd].kind != LINUX_FD_SOCKET) {
+		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle != LINUX_SOCKET_NET_UDP &&
+	    process->fds[fd].handle != LINUX_SOCKET_NET_TCP &&
+	    process->fds[fd].handle != LINUX_SOCKET_UNIX_STREAM &&
+	    process->fds[fd].handle != LINUX_SOCKET_UTMPD) {
+		return -LINUX_EINVAL;
+	}
+	return 0;
+}
+
+static long linux_getsockopt(struct linux_process *process, u64 fd, u64 level,
+			     u64 optname, u64 max_len, u64 buffer,
+			     u64 *actual_len)
+{
+	int value = 0;
+	u64 copy;
+
+	if (actual_len != 0) {
+		*actual_len = sizeof(value);
+	}
+	if (fd >= process->fd_capacity ||
+	    process->fds[fd].kind != LINUX_FD_SOCKET) {
+		return -LINUX_ENOTSOCK;
+	}
+	if (level == LINUX_SOL_SOCKET && optname == LINUX_SO_TYPE) {
+		value = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
+			LINUX_SOCK_DGRAM : LINUX_SOCK_STREAM;
+	} else if (level == LINUX_SOL_SOCKET &&
+		   (optname == LINUX_SO_ERROR ||
+		    optname == LINUX_SO_REUSEADDR ||
+		    optname == LINUX_SO_KEEPALIVE ||
+		    optname == LINUX_SO_DEBUG)) {
+		value = 0;
+	} else {
+		value = 0;
+	}
+	copy = sizeof(value) < max_len ? sizeof(value) : max_len;
+	if (copy != 0 && bunix_buffer_write(buffer, 0, &value, copy) != 0) {
+		return -LINUX_EFAULT;
+	}
+	return 0;
+}
+
 static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 			 u64 protocol)
 {
@@ -6656,6 +6805,49 @@ int main(void)
 							     message.words[0],
 							     message.words[1],
 							     message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_GETSOCKNAME:
+			reply.words[0] = (u64)linux_socket_addr(process,
+								message.words[0],
+								message.words[1],
+								message.cap, 0,
+								&reply.words[1]);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_GETPEERNAME:
+			reply.words[0] = (u64)linux_socket_addr(process,
+								message.words[0],
+								message.words[1],
+								message.cap, 1,
+								&reply.words[1]);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_SETSOCKOPT:
+			reply.words[0] = (u64)linux_setsockopt(process,
+							       message.words[0],
+							       message.words[1],
+							       message.words[2],
+							       message.words[3],
+							       message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_GETSOCKOPT:
+			reply.words[0] = (u64)linux_getsockopt(process,
+							       message.words[0],
+							       message.words[1],
+							       message.words[2],
+							       message.words[3],
+							       message.cap,
+							       &reply.words[1]);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

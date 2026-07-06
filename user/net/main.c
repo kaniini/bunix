@@ -635,6 +635,23 @@ static void reply_udp_poll(struct bunix_msg *reply,
 			  NET_UDP_POLLOUT;
 }
 
+static void reply_udp_addr(struct bunix_msg *reply,
+			   const struct bunix_msg *message, int peer)
+{
+	struct udp_socket *socket = udp_find(message->words[0]);
+	const struct net_addr *addr;
+
+	if (socket == 0 || (peer && !socket->connected)) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	addr = peer ? &socket->peer : &socket->local;
+	reply->words[0] = 0;
+	reply->words[1] = addr->hi;
+	reply->words[2] = addr->lo;
+	reply->words[3] = addr->port;
+}
+
 static void reply_udp_close(struct bunix_msg *reply,
 			    const struct bunix_msg *message)
 {
@@ -1097,6 +1114,24 @@ static void reply_tcp_poll(struct bunix_msg *reply,
 	reply->words[1] = events;
 }
 
+static void reply_tcp_addr(struct bunix_msg *reply,
+			   const struct bunix_msg *message, int peer)
+{
+	struct tcp_socket *socket = tcp_find(message->words[0]);
+	const struct net_addr *addr;
+
+	if (socket == 0 || socket->state == NET_TCP_STATE_CLOSED ||
+	    (peer && socket->state != NET_TCP_STATE_ESTABLISHED)) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	addr = peer ? &socket->peer_addr : &socket->local;
+	reply->words[0] = 0;
+	reply->words[1] = addr->hi;
+	reply->words[2] = addr->lo;
+	reply->words[3] = addr->port;
+}
+
 static void reply_tcp_close(struct bunix_msg *reply,
 			    const struct bunix_msg *message)
 {
@@ -1180,6 +1215,12 @@ int main(void)
 		case BUNIX_NET_UDP_POLL:
 			reply_udp_poll(&reply, &message);
 			break;
+		case BUNIX_NET_UDP_LOCAL:
+			reply_udp_addr(&reply, &message, 0);
+			break;
+		case BUNIX_NET_UDP_PEER:
+			reply_udp_addr(&reply, &message, 1);
+			break;
 		case BUNIX_NET_UDP_CLOSE:
 			reply_udp_close(&reply, &message);
 			break;
@@ -1212,6 +1253,12 @@ int main(void)
 			break;
 		case BUNIX_NET_TCP_POLL:
 			reply_tcp_poll(&reply, &message);
+			break;
+		case BUNIX_NET_TCP_LOCAL:
+			reply_tcp_addr(&reply, &message, 0);
+			break;
+		case BUNIX_NET_TCP_PEER:
+			reply_tcp_addr(&reply, &message, 1);
 			break;
 		default:
 			reply.words[0] = (u64)-1;

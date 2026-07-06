@@ -16,17 +16,44 @@ static void die(const char *text)
 	_exit(1);
 }
 
+static void expect_inet_port(const char *label, const struct sockaddr_in *addr,
+			     unsigned short port)
+{
+	if (addr->sin_family != AF_INET || ntohs(addr->sin_port) != port) {
+		die(label);
+	}
+}
+
+static void expect_socket_type(int fd, int type, const char *label)
+{
+	int value = 0;
+	socklen_t len = sizeof(value);
+
+	if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &value, &len) != 0 ||
+	    len != sizeof(value) || value != type) {
+		die(label);
+	}
+}
+
 static void udp_test(void)
 {
 	const char payload[] = "udp-sendto";
 	char buffer[32];
 	struct sockaddr_in addr;
+	struct sockaddr_in check;
+	socklen_t check_len;
+	int reuse = 1;
 	int server = socket(AF_INET, SOCK_DGRAM, 0);
 	int client = socket(AF_INET, SOCK_DGRAM, 0);
 	ssize_t nread;
 
 	if (server < 0 || client < 0) {
 		die("nettest: udp socket failed\n");
+	}
+	expect_socket_type(server, SOCK_DGRAM, "nettest: udp getsockopt failed\n");
+	if (setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &reuse,
+		       sizeof(reuse)) != 0) {
+		die("nettest: udp setsockopt failed\n");
 	}
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
@@ -35,6 +62,14 @@ static void udp_test(void)
 	if (bind(server, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
 		die("nettest: udp bind failed\n");
 	}
+	memset(&check, 0, sizeof(check));
+	check_len = sizeof(check);
+	if (getsockname(server, (struct sockaddr *)&check, &check_len) != 0 ||
+	    check_len != sizeof(check)) {
+		die("nettest: udp getsockname failed\n");
+	}
+	expect_inet_port("nettest: udp getsockname port failed\n", &check,
+			 23456);
 	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	if (sendto(client, payload, sizeof(payload), 0,
 		   (struct sockaddr *)&addr, sizeof(addr)) !=
@@ -57,7 +92,10 @@ static void tcp_test(void)
 	const char server_payload[] = "tcp-server";
 	char buffer[32];
 	struct sockaddr_in addr;
+	struct sockaddr_in check;
 	struct pollfd pfd;
+	socklen_t check_len;
+	int reuse = 1;
 	int listener = socket(AF_INET, SOCK_STREAM, 0);
 	int client = socket(AF_INET, SOCK_STREAM, 0);
 	int accepted;
@@ -65,6 +103,12 @@ static void tcp_test(void)
 
 	if (listener < 0 || client < 0) {
 		die("nettest: tcp socket failed\n");
+	}
+	expect_socket_type(listener, SOCK_STREAM,
+			   "nettest: tcp getsockopt failed\n");
+	if (setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse,
+		       sizeof(reuse)) != 0) {
+		die("nettest: tcp setsockopt failed\n");
 	}
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
@@ -74,10 +118,26 @@ static void tcp_test(void)
 	    listen(listener, 4) != 0) {
 		die("nettest: tcp listen failed\n");
 	}
+	memset(&check, 0, sizeof(check));
+	check_len = sizeof(check);
+	if (getsockname(listener, (struct sockaddr *)&check, &check_len) != 0 ||
+	    check_len != sizeof(check)) {
+		die("nettest: tcp getsockname failed\n");
+	}
+	expect_inet_port("nettest: tcp getsockname port failed\n", &check,
+			 23457);
 	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	if (connect(client, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
 		die("nettest: tcp connect failed\n");
 	}
+	memset(&check, 0, sizeof(check));
+	check_len = sizeof(check);
+	if (getpeername(client, (struct sockaddr *)&check, &check_len) != 0 ||
+	    check_len != sizeof(check)) {
+		die("nettest: tcp getpeername client failed\n");
+	}
+	expect_inet_port("nettest: tcp getpeername client port failed\n",
+			 &check, 23457);
 	pfd.fd = listener;
 	pfd.events = POLLIN;
 	pfd.revents = 0;
@@ -87,6 +147,12 @@ static void tcp_test(void)
 	accepted = accept(listener, 0, 0);
 	if (accepted < 0) {
 		die("nettest: tcp accept failed\n");
+	}
+	memset(&check, 0, sizeof(check));
+	check_len = sizeof(check);
+	if (getpeername(accepted, (struct sockaddr *)&check, &check_len) != 0 ||
+	    check_len != sizeof(check) || ntohs(check.sin_port) == 0) {
+		die("nettest: tcp getpeername accepted failed\n");
 	}
 	if (write(client, client_payload, sizeof(client_payload)) !=
 	    (ssize_t)sizeof(client_payload)) {

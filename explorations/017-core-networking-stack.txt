@@ -162,3 +162,9 @@ Progress:
   forwards them to NET0.  Remaining Linux socket work includes sockaddr return
   paths, `getsockname`, `getpeername`, socket options, IPv6 userland coverage,
   and teardown/permission edge cases.
+- Added NET0 socket address query operations and Linux-personality support for
+  `getsockname`, `getpeername`, `setsockopt`, and `getsockopt`.  The x86_64
+  syscall layer now handles `socklen_t *` update/copy semantics, while
+  `linux.server` formats AF_INET/AF_INET6 sockaddrs and keeps socket option
+  policy in the Linux ABI adapter.  `nettest` now verifies SO_TYPE,
+  SO_REUSEADDR, UDP getsockname, TCP getsockname, and TCP peer-name reporting.
