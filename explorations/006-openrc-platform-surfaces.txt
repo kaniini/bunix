@@ -1,6 +1,8 @@
 Implement the kernel/server filesystem and device surfaces OpenRC expects.
 
 - [ ] Inventory OpenRC startup accesses against `/dev`, `/proc`, `/sys`, `/run`, and `/tmp`.
+- [ ] Keep Alpine login wired to Bunix native `/bin/login`, because authentication must RPC to the user server instead of using BusyBox login.
+- [ ] Let Alpine boot without synthetic-rootfs-only `/etc/execs` and `/etc/spawns` bootstrap files.
 - [ ] Add missing devfs nodes needed for early OpenRC and BusyBox tools.
 - [ ] Add the minimal sysfs translator/server surface needed for OpenRC probing.
 - [ ] Fill procfs gaps needed by OpenRC scripts and common applets.
