@@ -64,7 +64,9 @@ and the kernel exports low-level task memory primitives for allocation and range
 cloning.
 The host-side rootfs builder keeps the on-disk format simple but grows its entry
 table dynamically, so larger test images are no longer capped by the builder's
-initial table size.
+initial table size. It also supports importing a staged directory tree,
+preserving regular-file mode bits and symlink targets for package-built rootfs
+fixtures.
 
 Userspace servers now have a small buddy allocator backed by native task
 allocation, and their object registries grow dynamically instead of using fixed
@@ -172,6 +174,23 @@ tmpfs -> block`, which is the path that can later point at a real disk image
 and then at an Alpine root filesystem format. Runtime Linux/VFS path handling
 and the generated rootfs image both follow the Linux 4096-byte `PATH_MAX`
 budget.
+
+An Alpine/OpenRC fixture can be built separately from the default synthetic
+test rootfs:
+
+```sh
+make test-alpine-rootfs
+ROOTFS_FLAVOR=alpine make esp
+```
+
+`tools/build-alpine-rootfs.sh` stages Alpine packages with `apk --root ... --initdb`
+and falls back to `--usermode` for non-root development builds. By default it
+uses `/etc/apk/repositories`, `/etc/apk/cache`, and the package set
+`alpine-baselayout busybox musl openrc`; override those with
+`APK_REPOSITORIES_FILE`, `APK_CACHE_DIR`, or `ALPINE_ROOTFS_PACKAGES`. The build
+overlays Bunix's native `/bin/login` plus the project passwd/shadow/group files,
+because Bunix login must contact the user server. It writes the resolved package
+manifest to `build/alpine-rootfs/manifest.txt`.
 
 `procfs.server` is a separate user-space server that dynamically attaches
 itself to VFS as the `/proc` translator. It currently exposes `/proc/kthreads`,
@@ -445,7 +464,10 @@ while keeping the newest ten and any run with failures; set
 `BUNIX_TEST_KEEP_RUNS=N` or `BUNIX_TEST_PRUNE_DRY_RUN=1` to adjust pruning.
 
 `make test-rootfs-tool` is a host-side regression for the rootfs image builder;
-it creates more than 128 entries to verify the builder's dynamic entry table.
+it creates more than 128 entries to verify the builder's dynamic entry table and
+checks directory-tree import. `make test-alpine-rootfs` builds the Alpine
+fixture image and inspects `/etc/alpine-release`, OpenRC files, `/sbin/init`,
+and the Bunix login overlay.
 
 The static PIE BusyBox path remains available as a compatibility regression:
 

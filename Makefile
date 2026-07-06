@@ -82,7 +82,10 @@ BUSYBOX ?= $(BUSYBOX_DYNAMIC)
 MUSL_LDSO ?= /lib/ld-musl-x86_64.so.1
 PING_MODULE := $(BUILD_DIR)/modules/ping.server
 PING_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/ping/main.c.o
-BLOCK_IMAGE := $(BUILD_DIR)/modules/disk0.img
+SYNTHETIC_BLOCK_IMAGE := $(BUILD_DIR)/modules/disk0.img
+ALPINE_BLOCK_IMAGE := $(BUILD_DIR)/modules/alpine-disk0.img
+ROOTFS_FLAVOR ?= synthetic
+BLOCK_IMAGE := $(if $(filter alpine,$(ROOTFS_FLAVOR)),$(ALPINE_BLOCK_IMAGE),$(SYNTHETIC_BLOCK_IMAGE))
 ROOTFS_TOOL := $(BUILD_DIR)/tools/mkrootfs
 ROOTFS_HELLO := modules/hello.txt
 ROOTFS_SECRET := modules/secret.txt
@@ -207,7 +210,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-kernel run-iso test test-boot test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
+.PHONY: all clean run run-kernel run-iso test test-boot test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool test-alpine-rootfs list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -408,9 +411,12 @@ $(ROOTFS_TOOL): tools/mkrootfs.c
 	mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror $< -o $@
 
-$(BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(FIRST_MODULE) $(ALLOCTEST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(VFORKSTRESS_MODULE) $(EXECOK_MODULE) $(READBIG_MODULE) $(MMAPBIG_MODULE) $(MMAPHUGE_MODULE) $(EXECBIG_MODULE) $(PHDRSTRESS_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(IOVTEST_MODULE) $(FCHMODATTEST_MODULE) $(WAITPGIDTEST_MODULE) $(EXECLONGTEST_MODULE) $(AUXIDTEST_MODULE) $(PATHMAXTEST_MODULE) $(PATHERRTEST_MODULE) $(FCNTLLOCKTEST_MODULE) $(SYSRACETEST_MODULE) $(BUSYBOX) $(MUSL_LDSO)
+$(SYNTHETIC_BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(FIRST_MODULE) $(ALLOCTEST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(VFORKSTRESS_MODULE) $(EXECOK_MODULE) $(READBIG_MODULE) $(MMAPBIG_MODULE) $(MMAPHUGE_MODULE) $(EXECBIG_MODULE) $(PHDRSTRESS_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(IOVTEST_MODULE) $(FCHMODATTEST_MODULE) $(WAITPGIDTEST_MODULE) $(EXECLONGTEST_MODULE) $(AUXIDTEST_MODULE) $(PATHMAXTEST_MODULE) $(PATHERRTEST_MODULE) $(FCNTLLOCKTEST_MODULE) $(SYSRACETEST_MODULE) $(BUSYBOX) $(MUSL_LDSO)
 	mkdir -p $(dir $@)
 	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /rename-lower.txt $(ROOTFS_NESTED) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) $(ROOTFS_LONG_PATH) $(ROOTFS_NESTED) $(ROOTFS_LONG_EXEC_PATH) $(DYN_HELLO_MODULE) $(ROOTFS_LONG_PROC_EXEC_PATH) $(FIRST_MODULE) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /etc/group $(ROOTFS_GROUP) /etc/inittab $(ROOTFS_INITTAB) /etc/execs $(ROOTFS_EXECS) /etc/spawns $(ROOTFS_SPAWNS) /lib/ld-musl-x86_64.so.1 $(MUSL_LDSO) /bin/first $(FIRST_MODULE) /bin/alloctest $(ALLOCTEST_MODULE) /bin/ipcstress $(IPCSTRESS_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/getdentstest $(GETDENTSTEST_MODULE) /bin/vforkstress $(VFORKSTRESS_MODULE) /bin/execok $(EXECOK_MODULE) /bin/readbig $(READBIG_MODULE) /bin/mmapbig $(MMAPBIG_MODULE) /bin/mmaphuge $(MMAPHUGE_MODULE) /bin/execbig $(EXECBIG_MODULE) /bin/phdrstress $(PHDRSTRESS_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/dyn-hello $(DYN_HELLO_MODULE) /bin/fputest $(FPUTEST_MODULE) /bin/iovtest $(IOVTEST_MODULE) /bin/fchmodattest $(FCHMODATTEST_MODULE) /bin/waitpgidtest $(WAITPGIDTEST_MODULE) /bin/execlongtest $(EXECLONGTEST_MODULE) /bin/auxidtest $(AUXIDTEST_MODULE) /bin/pathmaxtest $(PATHMAXTEST_MODULE) /bin/patherrtest $(PATHERRTEST_MODULE) /bin/fcntllocktest $(FCNTLLOCKTEST_MODULE) /bin/sysracetest $(SYSRACETEST_MODULE) /bin/busybox $(BUSYBOX) --dir /home/kaniini --dir /root --dir /tmp --dir /run --dir /mnt --dir /sys --dir /var/tmp --dir /var/run --symlink $(ROOTFS_LONG_SYMLINK) $(ROOTFS_LONG_PATH) --symlink /lib/libc.musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1 $(ROOTFS_BUSYBOX_LINKS)
+
+$(ALPINE_BLOCK_IMAGE): $(ROOTFS_TOOL) $(LOGIN_MODULE) tools/build-alpine-rootfs.sh modules/passwd modules/shadow modules/group
+	ROOTFS_TOOL=$(ROOTFS_TOOL) LOGIN_MODULE=$(LOGIN_MODULE) sh tools/build-alpine-rootfs.sh $@
 
 $(GRUB_CFG): boot/grub.cfg FORCE
 	mkdir -p $(BUILD_DIR)
@@ -548,6 +554,9 @@ test-shell-static:
 
 test-rootfs-tool: $(ROOTFS_TOOL)
 	sh tools/test-rootfs-tool.sh $(ROOTFS_TOOL)
+
+test-alpine-rootfs: $(ALPINE_BLOCK_IMAGE)
+	sh tools/test-alpine-rootfs.sh $(ALPINE_BLOCK_IMAGE)
 
 list-shell-shards:
 	sh tools/list-shell-shards.sh
