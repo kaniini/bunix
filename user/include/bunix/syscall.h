@@ -42,6 +42,10 @@ enum {
 	BUNIX_SYSCALL_HW_PORT_IN8 = -68,
 	BUNIX_SYSCALL_HW_PORT_OUT8 = -70,
 	BUNIX_SYSCALL_IPC_TRY_RECV = -72,
+	BUNIX_SYSCALL_HW_PORT_IN16 = -74,
+	BUNIX_SYSCALL_HW_PORT_OUT16 = -76,
+	BUNIX_SYSCALL_HW_PORT_IN32 = -78,
+	BUNIX_SYSCALL_HW_PORT_OUT32 = -80,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
@@ -849,6 +853,26 @@ static inline long bunix_hw_port_in8(u64 handle, u64 offset)
 static inline long bunix_hw_port_out8(u64 handle, u64 offset, u64 value)
 {
 	return bunix_syscall3(BUNIX_SYSCALL_HW_PORT_OUT8, handle, offset, value);
+}
+
+static inline long bunix_hw_port_in16(u64 handle, u64 offset)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_HW_PORT_IN16, handle, offset);
+}
+
+static inline long bunix_hw_port_out16(u64 handle, u64 offset, u64 value)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_HW_PORT_OUT16, handle, offset, value);
+}
+
+static inline long bunix_hw_port_in32(u64 handle, u64 offset)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_HW_PORT_IN32, handle, offset);
+}
+
+static inline long bunix_hw_port_out32(u64 handle, u64 offset, u64 value)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_HW_PORT_OUT32, handle, offset, value);
 }
 
 #endif

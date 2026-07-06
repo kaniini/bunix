@@ -132,3 +132,7 @@ Progress:
   `DEV0` service.  It boots as a normal server, reports an empty enumeration,
   and returns `NOENT` for device-specific requests until PCI/MMIO discovery is
   implemented.  Boot marker coverage now asserts `virtio-bus: ready devices=0`.
+- Extended capability-checked x86 port I/O from byte-only access to 16-bit and
+  32-bit read/write operations.  This is required groundwork for PCI config
+  access through a narrowly granted `0xcf8/0xcfc` resource instead of broad I/O
+  privilege.
