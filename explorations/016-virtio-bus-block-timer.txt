@@ -131,8 +131,12 @@ Progress:
 - Added an initial userspace `virtio-bus.server` skeleton registered as the
   `DEV0` service.  It boots as a normal server, reports an empty enumeration,
   and returns `NOENT` for device-specific requests until PCI/MMIO discovery is
-  implemented.  Boot marker coverage now asserts `virtio-bus: ready devices=0`.
+  implemented.  Boot marker coverage now asserts `virtio-bus: ready devices=`.
 - Extended capability-checked x86 port I/O from byte-only access to 16-bit and
   32-bit read/write operations.  This is required groundwork for PCI config
   access through a narrowly granted `0xcf8/0xcfc` resource instead of broad I/O
   privilege.
+- Granted `virtio-bus.server` a narrow PCI config-port resource for
+  `0xcf8..0xcff` and added a bus-0 PCI config scanner using the 32-bit port I/O
+  helpers.  The server now dynamically records matching VirtIO PCI functions
+  and reports the discovered count through `DEV0` enumeration.

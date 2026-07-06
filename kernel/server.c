@@ -331,6 +331,12 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 		.base = 0x3f8,
 		.len = 8,
 	};
+	static const struct task_hw_resource pci_config_ports = {
+		.type = TASK_HW_RESOURCE_PORT,
+		.ops = TASK_HW_OP_READ | TASK_HW_OP_WRITE,
+		.base = 0xcf8,
+		.len = 8,
+	};
 
 	if (str_eq(server_name, "names")) {
 		task_grant_port(task, ipc_port_find("console"),
@@ -345,6 +351,15 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 		task_grant_port(task, ipc_port_find("names"),
 				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
 		task_grant_hw_resource(task, &com1_port, TASK_RIGHT_SEND);
+		return;
+	}
+
+	if (str_eq(server_name, "virtio-bus")) {
+		task_grant_port(task, ipc_port_find("console"),
+				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+		task_grant_port(task, ipc_port_find("names"),
+				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+		task_grant_hw_resource(task, &pci_config_ports, TASK_RIGHT_SEND);
 		return;
 	}
 
