@@ -39,7 +39,7 @@ Tasks:
       localhost unaffected by NIC state, and clean shutdown.
 - [ ] Add external-network smoke tests once a deterministic host-side tap/user
       networking setup exists.
-- [ ] Document future work for checksum offload, segmentation offload,
+- [x] Document future work for checksum offload, segmentation offload,
       multiqueue, promiscuous mode, and packet filtering.
 
 Inventory:
@@ -185,3 +185,31 @@ Progress:
   `bootstrap: net route ok`; `virtio-net.server` installs a deterministic
   QEMU-user `10.0.2.0/24` route for its interface and logs
   `virtio-net: route ready`.
+
+Future Work:
+
+- Checksum offload should stay disabled until NET0 has packet metadata that can
+  describe partial checksums without exposing VirtIO-specific headers to the
+  protocol stack.  The future ABI should carry checksum start/offset and an
+  explicit verified/needs-completion state so non-VirtIO drivers and software
+  fallback can share one path.
+- Segmentation offload should be added only after TCP output owns real MSS,
+  PMTU, and retransmission accounting.  Until then, the driver should continue
+  negotiating no GSO/TSO/UFO features and should treat every packet-interface
+  frame as one complete Ethernet frame.
+- Multiqueue support needs a NET0 queue-selection policy, per-queue counters,
+  and CPU-affinity rules.  The first cut should map queue pairs onto scheduler
+  CPUs through an architecture-neutral device/IRQ abstraction rather than
+  hardcoding x86 PCI assumptions in the driver.
+- Promiscuous mode and packet filtering need explicit capabilities.  A future
+  packet-capture/debug server should receive attenuated observe-only authority,
+  while normal protocol delivery should remain owned by NET0.
+- IRQ-driven completions are intentionally deferred to exploration 025.  The
+  current bounded polling loops are adequate for attach tests but should be
+  replaced by IRQ/event delivery before external traffic or performance work.
+- External-network smoke tests require ARP for IPv4, neighbor discovery for
+  IPv6, Ethernet encapsulation/decapsulation in NET0, deterministic host-side
+  traffic generation, and a harness-owned QEMU backend.  QEMU user networking
+  is useful for the first topology, but the real smoke target should probably
+  use an isolated socket or tap backend so tests can inject and observe packets
+  without depending on host network policy.
