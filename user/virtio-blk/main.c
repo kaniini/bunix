@@ -14,7 +14,7 @@ enum {
 };
 
 static unsigned char block_buffer[VIRTIO_BLK_BUFFER_MAX];
-static unsigned char cache_buffer[VIRTIO_BLK_BUFFER_MAX];
+static unsigned char cache_buffer[VIRTIO_BLK_SECTOR_SIZE];
 static unsigned char sector_buffer[VIRTIO_BLK_SECTOR_SIZE];
 
 struct virtio_blk_queue {
@@ -32,8 +32,8 @@ struct virtio_blk_device {
 	u64 capacity_bytes;
 	u64 req_buffer;
 	u64 req_phys;
-	u64 cache_start;
-	u64 cache_len;
+	u64 cache_sector;
+	int cache_valid;
 	struct virtio_blk_queue queue;
 };
 
@@ -428,41 +428,26 @@ static int virtio_blk_read_bytes(struct virtio_blk_device *device, u64 offset,
 static int virtio_blk_read_cached(struct virtio_blk_device *device, u64 offset,
 				  unsigned char *out, u64 len)
 {
-	u64 load_start;
-	u64 load_len;
+	const u64 sector = offset / VIRTIO_BLK_SECTOR_SIZE;
+	const u64 sector_offset = offset % VIRTIO_BLK_SECTOR_SIZE;
 
-	if (len > VIRTIO_BLK_BUFFER_MAX) {
+	if (device == 0 || out == 0 ||
+	    len > VIRTIO_BLK_SECTOR_SIZE ||
+	    sector_offset + len > VIRTIO_BLK_SECTOR_SIZE) {
 		return virtio_blk_read_bytes(device, offset, out, len);
 	}
-	if (device->cache_len != 0 &&
-	    offset >= device->cache_start &&
-	    len <= device->cache_len - (offset - device->cache_start)) {
-		const u64 cache_offset = offset - device->cache_start;
-
-		for (u64 i = 0; i < len; i++) {
-			out[i] = cache_buffer[cache_offset + i];
+	if (!device->cache_valid || device->cache_sector != sector) {
+		if (virtio_blk_read_sector(device, sector, cache_buffer) != 0) {
+			device->cache_valid = 0;
+			return -1;
 		}
-		return 0;
+		device->cache_sector = sector;
+		device->cache_valid = 1;
 	}
-
-	load_start = offset - (offset % VIRTIO_BLK_SECTOR_SIZE);
-	load_len = VIRTIO_BLK_BUFFER_MAX;
-	if (load_start >= device->capacity_bytes) {
-		return -1;
+	for (u64 i = 0; i < len; i++) {
+		out[i] = cache_buffer[sector_offset + i];
 	}
-	if (load_len > device->capacity_bytes - load_start) {
-		load_len = device->capacity_bytes - load_start;
-	}
-	load_len -= load_len % VIRTIO_BLK_SECTOR_SIZE;
-	if (load_len == 0 ||
-	    virtio_blk_read_aligned(device, load_start / VIRTIO_BLK_SECTOR_SIZE,
-				    cache_buffer, load_len) != 0) {
-		device->cache_len = 0;
-		return -1;
-	}
-	device->cache_start = load_start;
-	device->cache_len = load_len;
-	return virtio_blk_read_cached(device, offset, out, len);
+	return 0;
 }
 
 static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
@@ -650,8 +635,8 @@ int main(void)
 	req_phys = req_buffer > 0 ? bunix_buffer_phys((u64)req_buffer) : -1;
 	device.req_buffer = req_buffer > 0 ? (u64)req_buffer : 0;
 	device.req_phys = req_phys > 0 ? (u64)req_phys : 0;
-	device.cache_start = 0;
-	device.cache_len = 0;
+	device.cache_sector = 0;
+	device.cache_valid = 0;
 	if (device.capacity_bytes == 0) {
 		const char capacity_fail[] = "virtio-blk: capacity unavailable\n";
 

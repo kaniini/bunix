@@ -7,6 +7,7 @@ ALPINE_EFI_BOOT_APP := $(ALPINE_ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 VIRTIO_BLK_TEST_ESP_DIR := $(BUILD_DIR)/esp-virtio-blk
 VIRTIO_BLK_TEST_EFI_BOOT_APP := $(VIRTIO_BLK_TEST_ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG := $(BUILD_DIR)/grub-standalone-virtio-blk.cfg
+VIRTIO_BLK_TEST_CMDLINE ?= log=info virtio-blk-test
 EFI_BOOT_IMG := $(BUILD_DIR)/bunixos-efi.iso
 EFI_BOOT_APP := $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 GRUB_CFG := $(BUILD_DIR)/grub.cfg
@@ -238,7 +239,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-virtio run-kernel run-iso test test-boot test-boot-virtio test-boot-virtio-blk test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool test-alpine-rootfs list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
+.PHONY: all clean run run-virtio run-kernel run-iso test test-boot test-boot-virtio test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool test-alpine-rootfs list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -494,7 +495,7 @@ $(GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 
 $(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 	mkdir -p $(BUILD_DIR)
-	sed -e 's|@KERNEL_CMDLINE@|log=info virtio-blk-test|g' \
+	sed -e 's|@KERNEL_CMDLINE@|$(VIRTIO_BLK_TEST_CMDLINE)|g' \
 		-e '/virtio-bus\.server/a module2 /modules/virtio-blk.server virtio-blk' \
 		$< > $@.tmp
 	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
@@ -647,6 +648,10 @@ test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) $(VIRTIO_BLK_TEST_IMAGE) t
 	grep -aF "virtio-blk: read ok" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-blk: write ok" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-blk: flush ok" $(BUILD_DIR)/serial.log >/dev/null
+
+test-boot-virtio-blk-backend:
+	$(MAKE) VIRTIO_BLK_TEST_CMDLINE="log=info virtio-blk-test virtio-blk-block-test" QEMU_TIMEOUT=120s TEST_BOOT_MARKERS=tools/test-boot-markers-virtio-blk-backend.txt test-boot-virtio-blk
+	grep -aF "virtio-blk: block online" $(BUILD_DIR)/serial.log >/dev/null
 
 test-shell: $(EFI_BOOT_APP)
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

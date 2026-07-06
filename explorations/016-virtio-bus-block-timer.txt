@@ -32,9 +32,9 @@ Tasks:
       descriptor rings, avail/used rings, notifications, and interrupt acks.
 - [ ] Add a userspace VirtIO bus manager/server that discovers devices and
       grants attenuated device capabilities to matching drivers.
-- [ ] Implement a VirtIO block userspace driver with read/write/flush support,
+- [x] Implement a VirtIO block userspace driver with read/write/flush support,
       request queueing, completion handling, and error translation.
-- [ ] Connect VirtIO block to the existing block server or replace the current
+- [x] Connect VirtIO block to the existing block server or replace the current
       block backend behind the same VFS-facing protocol.
 - [ ] Define the VirtIO timer requirement precisely.  If standard VirtIO does
       not provide the desired timer device, decide whether the right target is
@@ -233,9 +233,19 @@ Progress:
   behind a separate `virtio-blk-block-test` command-line flag.  The driver can
   read capacity through a bus-mediated `DEV0 READ_CONFIG64` RPC, register as
   `BLK0`, answer `GET_INFO`, `READ`, and `READ_BUFFER`, batch aligned
-  multi-sector reads, and cache a 128 KiB window for rootfs metadata's small
-  inline reads.  This is intentionally not enabled by the normal
-  `test-boot-virtio-blk` target yet: forcing `BLK0` takeover gets rootfs
-  mounted through VirtIO but currently breaks the Linux init exec path, so the
-  next backend-integration slice needs to debug that before replacing the boot
-  module block service by default.
+  multi-sector reads, and cache a single sector for rootfs metadata's small
+  inline reads.  The adapter remains gated so the normal `test-boot-virtio-blk`
+  target continues to cover driver read/write/flush self-tests separately from
+  full backend takeover.
+- Added a dedicated `test-boot-virtio-blk-backend` target that boots with
+  `virtio-blk.server` as the only `BLK0` provider, mounts the rootfs through
+  the VirtIO block adapter, reaches the BusyBox login shell, and powers off.
+  The backend target uses a marker file without the boot-module `block: online`
+  assertion and a longer QEMU wall timeout because rootfs metadata comes from
+  the polling VirtIO path.
+- Fixed the backend init-exec failure by making `unionfs` follow symlinks during
+  open, so `/sbin/init -> /bin/busybox` resolves correctly through the mounted
+  root translator.  Also replaced the 128 KiB inline-read cache in
+  `virtio-blk.server` with a single-sector cache; small metadata and symlink
+  reads remain fast, but the adapter no longer issues large cached DMA reads
+  before the driver has a real contiguous-DMA contract.
