@@ -99,6 +99,11 @@ static int path_has_prefix_child(const char *path, const char *prefix)
 	return path[i] == '/';
 }
 
+static int path_is_at_or_under(const char *path, const char *prefix)
+{
+	return str_eq(path, prefix) || path_has_prefix_child(path, prefix);
+}
+
 static int path_is_root(const char *path)
 {
 	return bunix_tree_get(&roots, path) != 0;
@@ -721,6 +726,68 @@ static void file_unlink(struct tmpfs_file *file)
 	file_release(file);
 }
 
+static int root_has_open_handles(const char *path)
+{
+	for (struct bunix_u64_tree_node *node =
+		     bunix_u64_tree_first_node(&open_files);
+	     node != 0; node = bunix_u64_tree_next_node(node)) {
+		struct tmpfs_open *open = (struct tmpfs_open *)node->value;
+
+		if (open == 0) {
+			continue;
+		}
+		if (open->kind == TMPFS_OPEN_DIR &&
+		    path_is_at_or_under(open->path, path)) {
+			return 1;
+		}
+		if (open->kind == TMPFS_OPEN_FILE && open->file != 0 &&
+		    open->file->path != 0 &&
+		    path_is_at_or_under(open->file->path, path)) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void prune_root_files(const char *path)
+{
+	for (;;) {
+		struct tmpfs_file *found = 0;
+
+		for (struct bunix_tree_node *node = bunix_tree_first_node(&files);
+		     node != 0; node = bunix_tree_next_node(node)) {
+			struct tmpfs_file *file = (struct tmpfs_file *)node->value;
+
+			if (file != 0 && file->path != 0 &&
+			    path_has_prefix_child(file->path, path)) {
+				found = file;
+				break;
+			}
+		}
+		if (found == 0) {
+			return;
+		}
+		file_unlink(found);
+	}
+}
+
+static int recycle_stale_root(const char *path)
+{
+	struct tmpfs_root *root = (struct tmpfs_root *)bunix_tree_get(&roots, path);
+
+	if (root == 0) {
+		return 0;
+	}
+	if (root_has_open_handles(path)) {
+		return -1;
+	}
+	prune_root_files(path);
+	bunix_tree_remove_node(&roots, &root->node);
+	bunix_free(root->path);
+	bunix_free(root);
+	return 0;
+}
+
 static int file_move_to_path(struct tmpfs_file *file, const char *new_path)
 {
 	char *old_path;
@@ -974,7 +1041,10 @@ static long mount_root(u64 vfs, const char *path)
 {
 	struct tmpfs_root *root;
 
-	if (path == 0 || path[0] != '/' || bunix_tree_get(&roots, path) != 0) {
+	if (path == 0 || path[0] != '/') {
+		return -1;
+	}
+	if (recycle_stale_root(path) != 0) {
 		return -1;
 	}
 	root = (struct tmpfs_root *)bunix_calloc(1, sizeof(*root));

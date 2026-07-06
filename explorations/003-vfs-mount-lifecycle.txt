@@ -37,15 +37,36 @@ Plan:
    - This confirms stale mountpoint busy state after a clean unmount, not a
      first-mount authorization or tmpfs creation issue.
 
-2. Trace VFS route pin and mount refcounts
+2. Trace VFS route pin and mount refcounts [DONE]
    Inspect VFS mount, route pin, cwd, open-file, and unmount paths. Add
    temporary or trace-level diagnostics if needed to distinguish stale route
    pins from a genuine live reference.
 
-3. Fix stale mount lifecycle state
+   Result:
+
+   - VFS unmount removed the mount node when explicit route pins were zero, but
+     did not ask tmpfs to forget its internal root entry.
+   - A later tmpfs mount request for the same path failed because
+     `tmpfs.mount_root()` rejected any path still present in the tmpfs `roots`
+     tree.
+   - A separate busy-invariant check showed VFS unmount also ignored open VFS
+     handles under the mountpoint, such as cwd handles.
+
+3. Fix stale mount lifecycle state [DONE]
    Update the VFS and relevant filesystem/server code so a clean unmount fully
    releases route state for the mountpoint while still rejecting unmounts pinned
    by cwd or open handles.
+
+   Result:
+
+   - `tmpfs` now recycles a stale root on same-path mount only when no tmpfs
+     open directory or file handle points at or under that root. Recycling
+     prunes old files so the remounted tmpfs is fresh.
+   - VFS unmount now rejects unmount when an open VFS handle path is at or under
+     the mountpoint, preserving busy denial for cwd/open-file pins.
+   - Focused same-path `/mnt` two-cycle mount/write/read/unmount/hide
+     reproducer passed.
+   - Focused pinned-cwd `/mnt` busy-unmount reproducer passed.
 
 4. Convert `root-mount-soak` to same-path reuse
    Change the root mount soak shard to repeatedly reuse `/mnt` directly, keeping

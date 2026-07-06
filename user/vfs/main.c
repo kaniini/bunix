@@ -1007,6 +1007,16 @@ static u64 unmount_translator(const char *path)
 	if (mount == 0) {
 		return BUNIX_VFS_ERR_NOENT;
 	}
+	for (struct bunix_u64_tree_node *node =
+		     bunix_u64_tree_first_node(&open_files);
+	     node != 0; node = bunix_u64_tree_next_node(node)) {
+		const struct vfs_open *open = (const struct vfs_open *)node->value;
+
+		if (open != 0 && open->path != 0 &&
+		    path_is_at_or_under(open->path, mount->path)) {
+			return BUNIX_VFS_ERR_BUSY;
+		}
+	}
 	if (mount->pins != 0) {
 		return BUNIX_VFS_ERR_BUSY;
 	}
