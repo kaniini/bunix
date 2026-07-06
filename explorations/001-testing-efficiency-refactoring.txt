@@ -360,7 +360,7 @@ Plan:
    - The scheduler still reads cost and timeout from `tools/shell-shards.tsv`,
      keeping policy in shard metadata.
 
-19. Add host sanity checks
+19. Add host sanity checks [DONE]
    Before launching dozens of VMs, check:
 
    - KVM availability.
@@ -368,6 +368,14 @@ Plan:
    - Enough file descriptors for serial pipes/logs.
    - Enough disk space for artifacts.
    - Requested VM count is not obviously incompatible with RAM.
+
+   Result:
+
+   - `tools/test-parallel.sh` checks `/dev/kvm`, OVMF readability, file
+     descriptor limit, artifact disk headroom, and obvious RAM pressure before
+     scheduling workers.
+   - `BUNIX_TEST_SKIP_HOST_CHECKS=1` exists for dry scheduler tests only.
+   - `README.md` documents the sanity checks.
 
 20. Add parallel artifact pruning
    Add a safe helper for old run directories:

@@ -2,6 +2,7 @@
 set -eu
 
 manifest=${BUNIX_SHELL_SHARDS:-tools/shell-shards.tsv}
+ovmf=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE.fd}
 test_set=${BUNIX_TEST_SET:-${BUNIX_SHELL_PART:-all}}
 run_root=${BUNIX_TEST_RUN_ROOT:-build/test-runs}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
@@ -27,6 +28,7 @@ default_jobs() {
 jobs=${BUNIX_TEST_JOBS:-$(default_jobs)}
 retries=${BUNIX_TEST_RETRIES:-0}
 stop_on_fail=${BUNIX_TEST_STOP_ON_FAIL:-0}
+skip_host_checks=${BUNIX_TEST_SKIP_HOST_CHECKS:-0}
 
 case "$jobs" in
 ''|*[!0-9]*)
@@ -55,13 +57,19 @@ case "$stop_on_fail" in
 	;;
 esac
 
+case "$skip_host_checks" in
+1|yes|true|on) skip_host_checks=1 ;;
+0|no|false|off|'') skip_host_checks=0 ;;
+*)
+	echo "BUNIX_TEST_SKIP_HOST_CHECKS must be 0/1, yes/no, true/false, or on/off" >&2
+	exit 2
+	;;
+esac
+
 if [ ! -r "$manifest" ]; then
 	echo "shell shard manifest is not readable: $manifest" >&2
 	exit 2
 fi
-
-mkdir -p "$run_dir"
-echo "test-parallel status=plan run_id=$run_id jobs=$jobs retries=$retries stop_on_fail=$stop_on_fail set=$test_set artifact=$run_dir"
 
 selected_shards() {
 	awk -F '\t' -v set="$test_set" '
@@ -130,6 +138,117 @@ selected_shards() {
 ordered_shards() {
 	selected_shards | sort -t "$(printf '\t')" -k5,5nr -k4,4nr
 }
+
+memory_to_mib() {
+	awk '
+	function mib(value,    number, suffix) {
+		number = value
+		suffix = ""
+		if (value ~ /[KMG]$/) {
+			suffix = substr(value, length(value), 1)
+			number = substr(value, 1, length(value) - 1)
+		}
+		if (suffix == "G")
+			return number * 1024
+		if (suffix == "K")
+			return int((number + 1023) / 1024)
+		return number
+	}
+	{ print mib($1) }
+	'
+}
+
+max_selected_memory_mib() {
+	if [ -n "${BUNIX_VM_MEMORY_OVERRIDE:-}" ]; then
+		printf '%s\n' "$BUNIX_VM_MEMORY_OVERRIDE" | memory_to_mib
+		return
+	fi
+
+	ordered_shards | awk -F '\t' '
+	function mib(value,    number, suffix) {
+		number = value
+		suffix = ""
+		if (value ~ /[KMG]$/) {
+			suffix = substr(value, length(value), 1)
+			number = substr(value, 1, length(value) - 1)
+		}
+		if (suffix == "G")
+			return number * 1024
+		if (suffix == "K")
+			return int((number + 1023) / 1024)
+		return number
+	}
+	{
+		memory = mib($3)
+		if (memory > max)
+			max = memory
+	}
+	END {
+		if (max < 1)
+			max = 128
+		print max
+	}
+	'
+}
+
+host_sanity_checks() {
+	if [ "$skip_host_checks" -eq 1 ]; then
+		echo "test-parallel host-checks=skipped"
+		return
+	fi
+
+	if [ ! -e /dev/kvm ]; then
+		echo "test-parallel host-check=fail reason=/dev/kvm-missing" >&2
+		exit 2
+	fi
+	if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+		echo "test-parallel host-check=fail reason=/dev/kvm-not-readable-writable" >&2
+		exit 2
+	fi
+	if [ ! -r "$ovmf" ]; then
+		echo "test-parallel host-check=fail reason=ovmf-not-readable path=$ovmf" >&2
+		exit 2
+	fi
+
+	fd_limit=$(ulimit -n 2>/dev/null || echo 0)
+	case "$fd_limit" in
+	''|*[!0-9]*) fd_limit=0 ;;
+	esac
+	required_fds=$((jobs * 8 + 32))
+	if [ "$fd_limit" -ne 0 ] && [ "$fd_limit" -lt "$required_fds" ]; then
+		echo "test-parallel host-check=fail reason=fd-limit-too-low limit=$fd_limit required=$required_fds" >&2
+		exit 2
+	fi
+
+	available_kb=$(df -Pk "$run_dir" 2>/dev/null | awk 'NR == 2 { print $4 }')
+	case "$available_kb" in
+	''|*[!0-9]*) available_kb=0 ;;
+	esac
+	required_kb=$((jobs * 65536))
+	if [ "$available_kb" -ne 0 ] && [ "$available_kb" -lt "$required_kb" ]; then
+		echo "test-parallel host-check=fail reason=disk-space-too-low available_kb=$available_kb required_kb=$required_kb" >&2
+		exit 2
+	fi
+
+	if [ -r /proc/meminfo ]; then
+		available_mib=$(awk '/MemAvailable:/ { print int($2 / 1024) }' /proc/meminfo)
+		case "$available_mib" in
+		''|*[!0-9]*) available_mib=0 ;;
+		esac
+		max_memory_mib=$(max_selected_memory_mib)
+		required_mib=$((jobs * max_memory_mib))
+		if [ "$available_mib" -ne 0 ] && [ "$available_mib" -lt "$required_mib" ]; then
+			echo "test-parallel host-check=fail reason=memory-too-low available_mib=$available_mib required_mib=$required_mib" >&2
+			exit 2
+		fi
+	fi
+
+	echo "test-parallel host-checks=ok"
+}
+
+mkdir -p "$run_dir"
+host_sanity_checks
+echo "test-parallel status=plan run_id=$run_id jobs=$jobs retries=$retries stop_on_fail=$stop_on_fail set=$test_set artifact=$run_dir"
 
 worker_parts() {
 	case "$1" in

@@ -433,7 +433,9 @@ raise or lower host concurrency. For debugging, `BUNIX_VM_SMP_OVERRIDE`,
 `BUNIX_VM_MEMORY_OVERRIDE`, and `BUNIX_QEMU_TIMEOUT_OVERRIDE` force worker vCPU
 count, RAM, and QEMU timeout respectively. `BUNIX_TEST_STOP_ON_FAIL=1` stops
 scheduling new shard batches after a failure, and `BUNIX_TEST_RETRIES=N`
-preserves per-attempt logs under each shard directory.
+preserves per-attempt logs under each shard directory. The runner checks KVM,
+OVMF, file descriptors, disk space, and obvious RAM pressure before scheduling;
+`BUNIX_TEST_SKIP_HOST_CHECKS=1` is intended only for dry harness tests.
 
 `make test-rootfs-tool` is a host-side regression for the rootfs image builder;
 it creates more than 128 entries to verify the builder's dynamic entry table.
