@@ -32,7 +32,7 @@ Tasks:
       addresses.
 - [x] Implement loopback interface lifecycle and packet delivery independent of
       physical NICs.
-- [ ] Implement UDP over IPv4 and IPv6, including bind/connect/send/recv,
+- [x] Implement UDP over IPv4 and IPv6, including bind/connect/send/recv,
       wildcard addresses, ephemeral ports, checksums, and poll readiness.
 - [ ] Implement enough TCP for localhost streams: listen, accept, connect,
       read/write, close, half-close, reset/error behavior, and backlog limits.
@@ -135,3 +135,8 @@ Progress:
   through the loopback queue.  Packet delivery is intentionally raw and
   server-local for this slice; UDP/TCP endpoint delivery will consume this path
   in the next slices.
+- Added native UDP endpoint state inside `net.server`: dynamic UDP socket
+  objects, wildcard bind, loopback connect, ephemeral port allocation,
+  localhost IPv4/IPv6 datagram delivery, per-datagram checksums, receive queues,
+  poll readiness, and close cleanup.  Bootstrap now self-tests IPv4 and IPv6
+  UDP delivery through `NET0` and boot markers assert `bootstrap: net udp ok`.

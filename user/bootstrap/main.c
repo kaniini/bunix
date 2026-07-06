@@ -811,6 +811,125 @@ static long net_loopback_selftest(u64 net)
 	return 0;
 }
 
+static long net_udp_selftest(u64 net, u64 family)
+{
+	const char payload[] = "bunix-udp";
+	char out[sizeof(payload)];
+	const u64 lo_hi = 0;
+	const u64 lo_lo = family == BUNIX_NET_ADDR_FAMILY_IPV4 ?
+			  0x7f000001 : 1;
+	u64 server = 0;
+	u64 client = 0;
+	u64 server_port = 0;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NET,
+		.type = BUNIX_NET_UDP_OPEN,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { family, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const long buffer = bunix_buffer_create(sizeof(payload));
+
+	if (net == 0 || buffer <= 0) {
+		return -1;
+	}
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	server = reply.words[1];
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	client = reply.words[1];
+
+	request.type = BUNIX_NET_UDP_BIND;
+	request.words[0] = server;
+	request.words[1] = 0;
+	request.words[2] = 0;
+	request.words[3] = 0;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] == 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	server_port = reply.words[1];
+
+	request.type = BUNIX_NET_UDP_CONNECT;
+	request.words[0] = client;
+	request.words[1] = lo_hi;
+	request.words[2] = lo_lo;
+	request.words[3] = server_port;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] == 0 ||
+	    bunix_buffer_write((u64)buffer, 0, payload, sizeof(payload)) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+
+	request.type = BUNIX_NET_UDP_SEND;
+	request.cap = (u64)buffer;
+	request.cap_rights = BUNIX_RIGHT_RECV;
+	request.words[0] = client;
+	request.words[1] = sizeof(payload);
+	request.words[2] = 0;
+	request.words[3] = 0;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] != sizeof(payload)) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+
+	request.type = BUNIX_NET_UDP_POLL;
+	request.cap = 0;
+	request.cap_rights = 0;
+	request.words[0] = server;
+	request.words[1] = 0;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || (reply.words[1] & 1) == 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+
+	request.type = BUNIX_NET_UDP_RECV;
+	request.cap = (u64)buffer;
+	request.cap_rights = BUNIX_RIGHT_SEND;
+	request.words[0] = server;
+	request.words[1] = sizeof(out);
+	request.words[2] = 0;
+	request.words[3] = 0;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] != sizeof(payload) ||
+	    reply.words[2] == 0 ||
+	    reply.words[3] == 0 ||
+	    bunix_buffer_read((u64)buffer, 0, out, sizeof(out)) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	for (u64 i = 0; i < sizeof(payload); i++) {
+		if (out[i] != payload[i]) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+	}
+
+	request.type = BUNIX_NET_UDP_CLOSE;
+	request.cap = 0;
+	request.cap_rights = 0;
+	request.words[0] = client;
+	(void)bunix_ipc_call(net, &request, &reply);
+	request.words[0] = server;
+	(void)bunix_ipc_call(net, &request, &reply);
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
 int main(void)
 {
 	const char launching[] = "bootstrap: launching servers\n";
@@ -820,6 +939,7 @@ int main(void)
 	const char fs_ready[] = "bootstrap: fs ready\n";
 	const char virtio_blk_test[] = "bootstrap: virtio-blk test\n";
 	const char net_loopback_ok[] = "bootstrap: net loopback ok\n";
+	const char net_udp_ok[] = "bootstrap: net udp ok\n";
 	char file[17];
 	u64 console;
 	u64 vm;
@@ -887,10 +1007,13 @@ int main(void)
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	net = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_NET,
 					BUNIX_RIGHT_SEND);
-	if (net == 0 || net_loopback_selftest(net) != 0) {
+	if (net == 0 || net_loopback_selftest(net) != 0 ||
+	    net_udp_selftest(net, BUNIX_NET_ADDR_FAMILY_IPV4) != 0 ||
+	    net_udp_selftest(net, BUNIX_NET_ADDR_FAMILY_IPV6) != 0) {
 		return 1;
 	}
 	bunix_console_log(net_loopback_ok, sizeof(net_loopback_ok) - 1);
+	bunix_console_log(net_udp_ok, sizeof(net_udp_ok) - 1);
 	if (bunix_cmdline_has("virtio-blk-block-test") <= 0) {
 		bunix_launch_module_with_caps("block", fs_caps,
 					      sizeof(fs_caps) /
