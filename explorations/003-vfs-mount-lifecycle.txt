@@ -20,10 +20,22 @@ Goal:
 
 Plan:
 
-1. Reproduce same-path mountpoint busy state
+1. Reproduce same-path mountpoint busy state [DONE]
    Add or run a focused root shell reproducer that mounts tmpfs on `/mnt`,
    writes and verifies a file, unmounts, checks hidden state, then repeats the
    same sequence on `/mnt` and captures the exact failing operation.
+
+   Result:
+
+   - Ran a focused root `test-command` reproducer.
+   - Artifact: `build/failures/20260706T015254Z-8468/20260706T015435Z-8468`.
+   - First cycle succeeded:
+     `mount -t tmpfs tmpfs /mnt`, write/read `/mnt/repro.txt`, `umount /mnt`,
+     and hidden-state check.
+   - Second cycle failed at `mount -t tmpfs tmpfs /mnt` with
+     `Resource busy`.
+   - This confirms stale mountpoint busy state after a clean unmount, not a
+     first-mount authorization or tmpfs creation issue.
 
 2. Trace VFS route pin and mount refcounts
    Inspect VFS mount, route pin, cwd, open-file, and unmount paths. Add
