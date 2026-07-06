@@ -1019,6 +1019,35 @@ static void reply_read_config64(struct bunix_msg *reply, u64 device_index,
 	reply->words[3] = 8;
 }
 
+static void reply_ack_interrupt(struct bunix_msg *reply, u64 device_index)
+{
+	struct virtio_bus_device *device;
+	struct bunix_device_resource *isr;
+	long status;
+
+	if (device_index >= device_count) {
+		reply_no_device(reply);
+		return;
+	}
+	device = &devices[device_index];
+	isr = resource_find_flag(device,
+				 BUNIX_DEV_RESOURCE_FLAG_VIRTIO_ISR_CFG,
+				 0);
+	if (isr == 0 || isr->handle == 0 || isr->len == 0) {
+		reply_no_device(reply);
+		return;
+	}
+	status = bunix_hw_mmio_read8(isr->handle, 0);
+	if (status < 0) {
+		reply_no_device(reply);
+		return;
+	}
+	reply->words[0] = BUNIX_DEV_OK;
+	reply->words[1] = (u64)(unsigned int)status;
+	reply->words[2] = device_index;
+	reply->words[3] = 0;
+}
+
 static void reply_bind_driver(struct bunix_msg *reply, u64 device_index)
 {
 	struct virtio_bus_device *device;
@@ -1120,8 +1149,10 @@ int main(void)
 			reply_bind_driver(&reply, message.words[0]);
 			break;
 		case BUNIX_DEV_RESET:
-		case BUNIX_DEV_ACK_INTERRUPT:
 			reply_no_device(&reply);
+			break;
+		case BUNIX_DEV_ACK_INTERRUPT:
+			reply_ack_interrupt(&reply, message.words[0]);
 			break;
 		default:
 			reply.words[0] = BUNIX_DEV_ERR_UNSUPPORTED;

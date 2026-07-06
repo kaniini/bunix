@@ -265,3 +265,9 @@ Progress:
   buffer contract once the contiguous-DMA/bounce-buffer story is implemented.
   The ARM timer path should be a platform timer server, not a VirtIO class
   driver.
+- Implemented the bus-side `DEV0 ACK_INTERRUPT` operation for modern VirtIO PCI
+  devices by reading the ISR config byte through the attenuated ISR MMIO
+  resource.  This provides the acknowledgement half of interrupt support; a
+  later slice still needs generic IRQ routing/delivery and block-driver
+  interrupt-driven completions before the broader interrupt coverage task can
+  close.
