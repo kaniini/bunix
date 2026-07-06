@@ -72,6 +72,8 @@ linux-server: registered
 linux-server: openat
 virtio-bus: ready devices=
 virtio-blk: block online
+net: loopback lo ipv4=127.0.0.1 ipv6=::1
+bootstrap: net loopback ok
 rootfs: online
 vfs: online
 procfs: online

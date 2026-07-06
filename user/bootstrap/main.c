@@ -753,6 +753,64 @@ static long spawn_linux_init(u64 linux, const char *path)
 	return 0;
 }
 
+static long net_loopback_selftest(u64 net)
+{
+	const char payload[] = "bunix-loopback";
+	char out[sizeof(payload)];
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NET,
+		.type = BUNIX_NET_LOOPBACK_SEND,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = 0,
+		.words = {
+			1,
+			BUNIX_NET_ADDR_FAMILY_IPV4,
+			sizeof(payload),
+			0,
+		},
+	};
+	struct bunix_msg reply;
+	const long buffer = bunix_buffer_create(sizeof(payload));
+
+	if (net == 0 || buffer <= 0) {
+		return -1;
+	}
+	if (bunix_buffer_write((u64)buffer, 0, payload, sizeof(payload)) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.cap = (u64)buffer;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] != sizeof(payload)) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+
+	request.type = BUNIX_NET_LOOPBACK_RECV;
+	request.cap_rights = BUNIX_RIGHT_SEND;
+	request.words[0] = 1;
+	request.words[1] = sizeof(out);
+	request.words[2] = 0;
+	request.words[3] = 0;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    reply.words[1] != BUNIX_NET_ADDR_FAMILY_IPV4 ||
+	    reply.words[2] != sizeof(payload) ||
+	    bunix_buffer_read((u64)buffer, 0, out, sizeof(out)) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	for (u64 i = 0; i < sizeof(payload); i++) {
+		if (out[i] != payload[i]) {
+			return -1;
+		}
+	}
+	return 0;
+}
+
 int main(void)
 {
 	const char launching[] = "bootstrap: launching servers\n";
@@ -761,12 +819,14 @@ int main(void)
 	const char fs_namespace_ready[] = "bootstrap: fs namespace\n";
 	const char fs_ready[] = "bootstrap: fs ready\n";
 	const char virtio_blk_test[] = "bootstrap: virtio-blk test\n";
+	const char net_loopback_ok[] = "bootstrap: net loopback ok\n";
 	char file[17];
 	u64 console;
 	u64 vm;
 	u64 time = 0;
 	u64 proc = 0;
 	u64 linux = 0;
+	u64 net = 0;
 	u64 vfs = 0;
 	u64 vfs_launch = 0;
 	u64 fs_namespace = 0;
@@ -823,6 +883,14 @@ int main(void)
 				      BUNIX_RIGHT_SEND) == 0) {
 		return 1;
 	}
+	bunix_launch_module_with_caps("net", fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	net = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_NET,
+					BUNIX_RIGHT_SEND);
+	if (net == 0 || net_loopback_selftest(net) != 0) {
+		return 1;
+	}
+	bunix_console_log(net_loopback_ok, sizeof(net_loopback_ok) - 1);
 	if (bunix_cmdline_has("virtio-blk-block-test") <= 0) {
 		bunix_launch_module_with_caps("block", fs_caps,
 					      sizeof(fs_caps) /

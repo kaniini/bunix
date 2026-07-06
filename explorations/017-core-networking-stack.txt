@@ -30,7 +30,7 @@ Tasks:
 - [x] Define capability objects for sockets, interfaces, routes, packet queues,
       and privileged operations such as binding low ports or configuring
       addresses.
-- [ ] Implement loopback interface lifecycle and packet delivery independent of
+- [x] Implement loopback interface lifecycle and packet delivery independent of
       physical NICs.
 - [ ] Implement UDP over IPv4 and IPv6, including bind/connect/send/recv,
       wildcard addresses, ephemeral ports, checksums, and poll readiness.
@@ -120,3 +120,18 @@ Capability model:
   configure addresses/routes.  This keeps Linux uid checks as policy in the
   Linux/user servers while `net.server` enforces that the caller actually holds
   the needed authority.
+
+Progress:
+
+- Added a first userspace `net.server`, registered as the `NET0` service.  It
+  owns the built-in loopback interface, brings `lo` up with `127.0.0.1` and
+  `::1`, exposes interface count/info/stats RPCs, implements a raw in-memory
+  loopback packet send/receive queue, and is included in the normal EFI, ISO,
+  and VirtIO block test boot payloads.
+- Boot marker coverage now asserts `net: loopback lo ipv4=127.0.0.1 ipv6=::1`,
+  and `bootstrap: net loopback ok`, proving that the core networking server
+  starts before Linux init, that localhost interface lifecycle no longer
+  depends on a future physical NIC, and that a raw IPv4 packet can be copied
+  through the loopback queue.  Packet delivery is intentionally raw and
+  server-local for this slice; UDP/TCP endpoint delivery will consume this path
+  in the next slices.
