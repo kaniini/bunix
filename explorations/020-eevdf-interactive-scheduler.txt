@@ -166,12 +166,38 @@ Stress coverage slice:
   primitive.  `schedstress` mixes CPU-bound spin work, explicit Linux yields,
   sleep wakeups, pipes, fork, wait, and `/proc/sched` counter checks, giving
   the current scheduler a repeatable Linux-personality churn test.
+- `schedstress` now asserts aggregate switch and wakeup counter movement, plus
+  active per-CPU switch accounting.  It leaves runtime ticks as diagnostic
+  output because the current runtime counter is tick-granular and explicit
+  yield/sleep churn can complete without advancing it deterministically.
 - Verification for this slice:
   - `make build/modules/schedstress.user`
   - `BUNIX_TEST_SET=tmpfs-basic-linux-tests make test-parallel`
   - `make`
   - `BUNIX_TEST_SET=tmpfs-basic-linux-tests make test-parallel` after
     adding Linux `sched_yield(2)` support
+  - `BUNIX_TEST_SET=tmpfs-basic-linux-tests make test-parallel` after adding
+    switch/wakeup/per-CPU assertions
+
+Comparison slice:
+
+- Interactive shell smoke still passes under SMP:
+  `make test-smoke` completed with `test-shell-part name=smoke status=ok
+  seconds=2`.
+- The focused tmpfs/basic Linux shard, including syscall race coverage and
+  `schedstress`, completed in 70 seconds after the final scheduler stress
+  assertions.  Earlier runs of the same shard were 71 seconds with the simpler
+  `schedstress`, so the expanded yield/sleep/fork/wait coverage did not show a
+  material runtime regression in this test loop.
+- `/proc/sched` and `schedstress` give the project a repeatable comparison
+  surface for future scheduler work: switch count, wakeup count, per-CPU switch
+  activity, and shard runtime are now captured by ordinary tests instead of
+  relying only on manual console feel.
+- Deeper quantitative scheduler benchmarking should become its own follow-up
+  exploration once Bunix has explicit affinity controls and a scheduler-policy
+  server.  Those are the right places to test hard affinity masks, starvation
+  thresholds, and sustained CPU-bound fairness without overloading this EEVDF
+  bringup slice.
 
 Tasks:
 
@@ -191,10 +217,10 @@ Tasks:
       blocking, yield, and task exit.
 - [x] Add instrumentation for runnable latency, wakeup-to-run time, runtime
       share, migrations, preemptions, and per-CPU load.
-- [ ] Add stress tests for CPU-bound fairness, interactive shell latency under
+- [x] Add stress tests for CPU-bound fairness, interactive shell latency under
       CPU load, server RPC latency, SMP balancing, affinity, starvation, and
       fork/exec/exit churn.
-- [ ] Compare behavior against the current scheduler on shell responsiveness,
+- [x] Compare behavior against the current scheduler on shell responsiveness,
       build/test runtime, watch/sleep behavior, and server throughput.
 - [x] Document the policy tradeoffs explicitly: where Bunix chooses
       interactivity/latency over strict fairness, and why.

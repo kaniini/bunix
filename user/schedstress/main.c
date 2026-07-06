@@ -11,7 +11,15 @@
 enum {
 	WORKERS = 4,
 	ITERATIONS = 32,
+	SPIN_ITERATIONS = 262144,
 	PROC_SCHED_BUF = 4096,
+};
+
+struct sched_snapshot {
+	unsigned long switches;
+	unsigned long wakeups;
+	unsigned long runtime_ticks;
+	unsigned long active_cpus;
 };
 
 static unsigned long parse_counter(const char *buf, const char *name)
@@ -34,12 +42,49 @@ static unsigned long parse_counter(const char *buf, const char *name)
 	return 0;
 }
 
-static int read_sched_switches(unsigned long *switches)
+static unsigned long parse_line_counter(const char *line, const char *name)
+{
+	const size_t name_len = strlen(name);
+	const char *cursor = line;
+
+	while (*cursor != '\0' && *cursor != '\n') {
+		if (strncmp(cursor, name, name_len) == 0 &&
+		    cursor[name_len] == ' ') {
+			return strtoul(cursor + name_len + 1, 0, 10);
+		}
+		cursor++;
+	}
+	return 0;
+}
+
+static unsigned long count_active_cpu_switch_lines(const char *buf)
+{
+	unsigned long active = 0;
+	const char *cursor = buf;
+
+	while (*cursor != '\0') {
+		if (strncmp(cursor, "cpu", 3) == 0 &&
+		    cursor[3] >= '0' && cursor[3] <= '9' &&
+		    parse_line_counter(cursor, "switches") > 0) {
+			active++;
+		}
+		while (*cursor != '\0' && *cursor != '\n') {
+			cursor++;
+		}
+		if (*cursor == '\n') {
+			cursor++;
+		}
+	}
+	return active;
+}
+
+static int read_sched_snapshot(struct sched_snapshot *snapshot)
 {
 	char buf[PROC_SCHED_BUF];
 	const int fd = open("/proc/sched", O_RDONLY);
 	ssize_t nread;
 
+	memset(snapshot, 0, sizeof(*snapshot));
 	if (fd < 0) {
 		perror("schedstress open /proc/sched");
 		return -1;
@@ -54,9 +99,16 @@ static int read_sched_switches(unsigned long *switches)
 		return -1;
 	}
 	buf[nread] = '\0';
-	*switches = parse_counter(buf, "switches");
-	if (*switches == 0) {
+	snapshot->switches = parse_counter(buf, "switches");
+	snapshot->wakeups = parse_counter(buf, "wakeups");
+	snapshot->runtime_ticks = parse_counter(buf, "runtime_ticks");
+	snapshot->active_cpus = count_active_cpu_switch_lines(buf);
+	if (snapshot->switches == 0) {
 		fprintf(stderr, "schedstress missing switches counter\n");
+		return -1;
+	}
+	if (snapshot->active_cpus == 0) {
+		fprintf(stderr, "schedstress missing per-cpu switch counters\n");
 		return -1;
 	}
 	return 0;
@@ -72,7 +124,7 @@ static int worker_main(int worker, int write_fd)
 	char done = (char)('A' + worker);
 
 	for (int i = 0; i < ITERATIONS; i++) {
-		for (int spin = 0; spin < 4096; spin++) {
+		for (int spin = 0; spin < SPIN_ITERATIONS; spin++) {
 			checksum = checksum * 1103515245ul +
 				   (unsigned long)i + (unsigned long)spin;
 		}
@@ -101,12 +153,12 @@ int main(void)
 {
 	int pipefd[2];
 	pid_t pids[WORKERS];
-	unsigned long before = 0;
-	unsigned long after = 0;
+	struct sched_snapshot before;
+	struct sched_snapshot after;
 	char seen[WORKERS];
 	int status;
 
-	if (read_sched_switches(&before) != 0) {
+	if (read_sched_snapshot(&before) != 0) {
 		return 1;
 	}
 	if (pipe(pipefd) != 0) {
@@ -149,16 +201,22 @@ int main(void)
 		}
 	}
 
-	if (read_sched_switches(&after) != 0) {
+	if (read_sched_snapshot(&after) != 0) {
 		return 1;
 	}
-	if (after <= before) {
+	if (after.switches <= before.switches) {
 		fprintf(stderr, "schedstress switches did not advance %lu <= %lu\n",
-			after, before);
+			after.switches, before.switches);
 		return 1;
 	}
-
-	printf("schedstress switches %lu -> %lu\n", before, after);
+	if (after.wakeups <= before.wakeups) {
+		fprintf(stderr, "schedstress wakeups did not advance %lu <= %lu\n",
+			after.wakeups, before.wakeups);
+		return 1;
+	}
+	printf("schedstress switches %lu -> %lu wakeups %lu -> %lu runtime %lu -> %lu cpus %lu\n",
+	       before.switches, after.switches, before.wakeups, after.wakeups,
+	       before.runtime_ticks, after.runtime_ticks, after.active_cpus);
 	printf("schedstress ok\n");
 	return 0;
 }
