@@ -49,16 +49,33 @@ Plan:
      unique mountpoints so the parallel gate can close, but this is a VFS/mount
      lifecycle bug that needs a future exploration.
 
-2. Investigate one-vCPU boot failure
+2. Investigate one-vCPU boot failure [DONE]
    Reproduce the `SMP=1` early-exit behavior with a focused shard and QEMU debug
    logging. Determine whether the fix belongs in kernel boot/scheduler/SMP
    initialization or in test metadata. Do not reintroduce `SMP=1` shard metadata
    until the focused reproducer passes.
 
-3. Add explicit SMP policy coverage
+   Result:
+
+   - Reproduced the early `SMP=1` reset with the smoke shard.
+   - Found that `arch_smp_init()` skipped `lapic_init()` when `cpu_count < 2`.
+     That skipped BSP CPU-local setup, leaving `%gs:8` unset for the first
+     native syscall stack lookup from a userspace server.
+   - Changed `start_aps()` to initialize the BSP LAPIC/CPU-local path before
+     returning when there are no APs.
+   - Added a one-vCPU boot marker file because the existing smoke marker file
+     intentionally asserts two-vCPU AP startup.
+
+3. Add explicit SMP policy coverage [DONE]
    Once the one-vCPU behavior is understood, add either a focused UP smoke shard
    that passes under `SMP=1` or a documented host check/manifest validation rule
    that rejects unsupported `SMP=1` shard rows.
+
+   Result:
+
+   - Added a `smoke-up` manifest row with `smp=1`.
+   - Mapped `smoke-up` to the existing smoke script body in the parallel
+     worker, using the new UP boot marker set.
 
 4. Tighten procfs cmdline coverage
    Add a dedicated procfs command-line shard or helper that proves argv bytes for

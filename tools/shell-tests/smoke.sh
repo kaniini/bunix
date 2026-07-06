@@ -9,7 +9,12 @@ EOF_SMOKE
 }
 
 check_smoke() {
-	check_fixed_markers_file "$log" "$script_dir/test-boot-markers.txt" \
+	marker_file=$script_dir/test-boot-markers.txt
+	if [ "${SMP:-2}" = 1 ]; then
+		marker_file=$script_dir/test-boot-markers-up.txt
+	fi
+
+	check_fixed_markers_file "$log" "$marker_file" \
 		"smoke boot marker missing" 45 160
 	wait_for_each_fixed "$log" "smoke regression missing" 45 180 \
 		SMOKE_VFS_OK SMOKE_PROCFS_OK "sysrace ok"

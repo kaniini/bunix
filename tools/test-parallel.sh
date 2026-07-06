@@ -252,6 +252,9 @@ echo "test-parallel status=plan run_id=$run_id jobs=$jobs retries=$retries stop_
 
 worker_parts() {
 	case "$1" in
+	smoke-up)
+		echo "smoke"
+		;;
 	tmpfs-extended)
 		echo "tmpfs-basic-linux-tests,tmpfs-extended"
 		;;

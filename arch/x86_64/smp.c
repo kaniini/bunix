@@ -362,7 +362,7 @@ static int start_ap(u32 cpu_index)
 
 static void start_aps(void)
 {
-	if (cpu_count < 2 || lapic_init() != 0) {
+	if (lapic_init() != 0 || cpu_count < 2) {
 		return;
 	}
 
