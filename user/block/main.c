@@ -129,6 +129,10 @@ int main(void)
 			}
 			break;
 		}
+		case BUNIX_BLOCK_WRITE_BUFFER:
+		case BUNIX_BLOCK_FLUSH:
+			reply.words[0] = (u64)-1;
+			break;
 		default:
 			reply.words[0] = (u64)-1;
 			break;

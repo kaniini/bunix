@@ -33,6 +33,7 @@ struct virtio_blk_device {
 	u64 req_buffer;
 	u64 req_phys;
 	u64 cache_sector;
+	int supports_flush;
 	int cache_valid;
 	struct virtio_blk_queue queue;
 };
@@ -475,6 +476,110 @@ static int virtio_blk_read_cached(struct virtio_blk_device *device, u64 offset,
 	return 0;
 }
 
+static int virtio_blk_write_aligned(struct virtio_blk_device *device,
+				    u64 sector, const unsigned char *data,
+				    u64 len)
+{
+	if (len == 0) {
+		return 0;
+	}
+	if (device == 0 || data == 0 ||
+	    (len % VIRTIO_BLK_SECTOR_SIZE) != 0 ||
+	    len > VIRTIO_BLK_BUFFER_MAX ||
+	    bunix_buffer_write(device->req_buffer, VIRTIO_BLK_REQ_DATA_OFFSET,
+			       data, len) != 0 ||
+	    virtio_blk_submit(device->device_service, device->device_index,
+			      &device->queue, device->req_buffer,
+			      device->req_phys, BUNIX_VIRTIO_BLK_T_OUT,
+			      sector, 1, len, 0) != 0) {
+		return -1;
+	}
+	device->cache_valid = 0;
+	return 0;
+}
+
+static int virtio_blk_write_sector(struct virtio_blk_device *device, u64 sector,
+				   const unsigned char *data)
+{
+	return virtio_blk_write_aligned(device, sector, data,
+					VIRTIO_BLK_SECTOR_SIZE);
+}
+
+static int virtio_blk_write_bytes(struct virtio_blk_device *device, u64 offset,
+				  const unsigned char *data, u64 len)
+{
+	u64 done = 0;
+
+	if (device == 0 || data == 0 ||
+	    offset > device->capacity_bytes ||
+	    len > device->capacity_bytes - offset) {
+		return -1;
+	}
+	if ((offset % VIRTIO_BLK_SECTOR_SIZE) != 0) {
+		const u64 sector = offset / VIRTIO_BLK_SECTOR_SIZE;
+		const u64 sector_offset = offset % VIRTIO_BLK_SECTOR_SIZE;
+		u64 chunk = VIRTIO_BLK_SECTOR_SIZE - sector_offset;
+
+		if (chunk > len) {
+			chunk = len;
+		}
+		if (virtio_blk_read_sector(device, sector, sector_buffer) != 0) {
+			return -1;
+		}
+		for (u64 i = 0; i < chunk; i++) {
+			sector_buffer[sector_offset + i] = data[i];
+		}
+		if (virtio_blk_write_sector(device, sector, sector_buffer) != 0) {
+			return -1;
+		}
+		done += chunk;
+	}
+
+	while (len - done >= VIRTIO_BLK_SECTOR_SIZE) {
+		const u64 absolute = offset + done;
+		u64 chunk = len - done;
+
+		if (chunk > VIRTIO_BLK_BUFFER_MAX) {
+			chunk = VIRTIO_BLK_BUFFER_MAX;
+		}
+		chunk -= chunk % VIRTIO_BLK_SECTOR_SIZE;
+		if (virtio_blk_write_aligned(device,
+					     absolute / VIRTIO_BLK_SECTOR_SIZE,
+					     data + done, chunk) != 0) {
+			return -1;
+		}
+		done += chunk;
+	}
+
+	if (done < len) {
+		const u64 absolute = offset + done;
+		const u64 sector = absolute / VIRTIO_BLK_SECTOR_SIZE;
+		const u64 chunk = len - done;
+
+		if (virtio_blk_read_sector(device, sector, sector_buffer) != 0) {
+			return -1;
+		}
+		for (u64 i = 0; i < chunk; i++) {
+			sector_buffer[i] = data[done + i];
+		}
+		if (virtio_blk_write_sector(device, sector, sector_buffer) != 0) {
+			return -1;
+		}
+	}
+	return 0;
+}
+
+static int virtio_blk_flush(struct virtio_blk_device *device)
+{
+	if (device == 0 || device->supports_flush == 0) {
+		return -1;
+	}
+	return virtio_blk_submit(device->device_service, device->device_index,
+				 &device->queue, device->req_buffer,
+				 device->req_phys, BUNIX_VIRTIO_BLK_T_FLUSH,
+				 0, 0, 0, 0);
+}
+
 static void pack_bytes(u64 *words, const unsigned char *data, u64 len)
 {
 	words[0] = 0;
@@ -575,6 +680,37 @@ static void serve_block_protocol(struct virtio_blk_device *device)
 			}
 			break;
 		}
+		case BUNIX_BLOCK_WRITE_BUFFER: {
+			const u64 offset = message.words[0];
+			const u64 buffer_offset = message.words[2];
+			u64 len = message.words[1];
+
+			if (message.cap == 0 ||
+			    (message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+			    offset > device->capacity_bytes ||
+			    len > device->capacity_bytes - offset) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
+			if (len > sizeof(block_buffer)) {
+				len = sizeof(block_buffer);
+			}
+			reply.words[0] = 0;
+			reply.words[1] = len;
+			if (len != 0 &&
+			    (bunix_buffer_read(message.cap, buffer_offset,
+					       block_buffer, len) != 0 ||
+			     virtio_blk_write_bytes(device, offset, block_buffer,
+						    len) != 0)) {
+				reply.words[0] = (u64)-1;
+				reply.words[1] = 0;
+			}
+			break;
+		}
+		case BUNIX_BLOCK_FLUSH:
+			reply.words[0] = virtio_blk_flush(device) == 0 ? 0 :
+					 (u64)-1;
+			break;
 		default:
 			reply.words[0] = (u64)-1;
 			break;
@@ -668,6 +804,8 @@ int main(void)
 	device.req_buffer = req_buffer > 0 ? (u64)req_buffer : 0;
 	device.req_phys = req_phys > 0 ? (u64)req_phys : 0;
 	device.cache_sector = 0;
+	device.supports_flush =
+		(features & (1ull << BUNIX_VIRTIO_BLK_F_FLUSH)) != 0;
 	device.cache_valid = 0;
 	if (device.capacity_bytes == 0) {
 		const char capacity_fail[] = "virtio-blk: capacity unavailable\n";
