@@ -727,6 +727,7 @@ test-boot-virtio-net: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/check-markers.sh too
 	grep -aF "virtio-net: queues ready" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: attached iface=" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: rx ready" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "virtio-net: tx ready" $(BUILD_DIR)/serial.log >/dev/null
 
 test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) $(VIRTIO_BLK_TEST_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
 	ESP_DIR=$(VIRTIO_BLK_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

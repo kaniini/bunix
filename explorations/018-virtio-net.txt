@@ -171,3 +171,9 @@ Progress:
   devices by clearing device status, dropping queue buffers, and clearing
   negotiated feature state.  `virtio-net.server` resets its device before
   negotiation, and the dedicated boot test checks `virtio-net: reset`.
+- Added driver-side TX plumbing in `virtio-net.server`: it polls NET0 with
+  `BUNIX_NET_PACKET_TX_DEQUEUE`, formats dequeued frames with a zeroed
+  VirtIO-net header, submits them to TX queue 1, polls the TX used ring, and
+  reports completions back through `BUNIX_NET_PACKET_TX_COMPLETE`.  NET0 does
+  not yet provide route-backed Ethernet egress packets, so the dedicated boot
+  test currently covers TX idle readiness with `virtio-net: tx ready`.
