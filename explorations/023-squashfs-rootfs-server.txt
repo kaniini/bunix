@@ -1,0 +1,88 @@
+Implement a SquashFS filesystem server, migrate the boot root filesystem to it,
+and retire the legacy rootfs server once the migration is complete.
+
+Problem:
+
+- Bunix currently carries a custom boot-module rootfs path that was useful for
+  early bringup, but it is not a realistic filesystem format and keeps too much
+  bespoke root filesystem behavior alive.
+- Alpine/OpenRC and future package-manager workflows are better served by a
+  standard readonly image format with mature host tooling, compression support,
+  directories, symlinks, permissions, timestamps, and stable inode metadata.
+- SquashFS is a good fit for an initial readonly system root: compact,
+  deterministic, widely supported by Linux tooling, and simpler operationally
+  than making the early root image format grow into a real filesystem.
+
+Constraints:
+
+- Implement SquashFS as a userspace filesystem server mounted through VFS.
+  Do not move SquashFS parsing or root filesystem policy into the kernel.
+- The server should consume a block-device capability, not assume a GRUB module
+  or a specific storage backend.  It must work first with the current block
+  server and later with VirtIO block without changing the VFS-facing contract.
+- Keep the first SquashFS server readonly.  SquashFS write support is a host
+  image-generation concern, not a runtime filesystem mutation target.
+- Preserve OCAP direction: mounting a SquashFS image requires an explicit block
+  capability, and the mounted translator should only expose VFS operations
+  authorized by that mount.
+- Migrate root selection cleanly.  During transition, both the old rootfs
+  server and the SquashFS server may coexist, but the old rootfs server should
+  be deleted once tests prove the SquashFS-backed root covers the boot,
+  BusyBox, login, OpenRC, and shell use cases.
+- Host-side image generation may use standard tools such as `mksquashfs`, but
+  runtime code must remain compatible with the project licensing constraints.
+
+Tasks:
+
+- [ ] Inventory the current rootfs, block, VFS, unionfs, tmpfs, devfs, procfs,
+      sysfs, and Alpine image bringup paths.  Identify every place that assumes
+      the custom rootfs image format or the `rootfs.server` service.
+- [ ] Define the SquashFS server/VFS mount contract: block capability handoff,
+      mount options, readonly behavior, root inode identity, stat fields,
+      path lookup semantics, symlink handling, and error translation.
+- [ ] Define supported SquashFS format scope for the first slice: filesystem
+      magic/version, block size limits, inode table, directory table, fragment
+      table, id table, export table handling, and compression algorithms.
+- [ ] Choose the initial compression support policy.  Prefer a small first
+      target such as uncompressed SquashFS or gzip if a permissively licensed
+      decompressor is already available or can be imported cleanly.
+- [ ] Add host-side build tooling to generate a deterministic SquashFS root
+      image from the existing synthetic root contents and Alpine root contents.
+      Keep the old image generation path available until migration is complete.
+- [ ] Implement SquashFS superblock parsing and validation with explicit
+      diagnostics for unsupported versions, compression algorithms, block sizes,
+      feature flags, table offsets, and corrupted sizes.
+- [ ] Implement metadata table block reading, decompression dispatch, caching,
+      and safe bounds checks for all on-disk offsets and lengths.
+- [ ] Implement inode decoding for directories, regular files, symlinks, and
+      device nodes needed by `/dev` handoff and Alpine userspace.
+- [ ] Implement directory lookup and readdir, including long names, duplicate
+      name rejection where appropriate, stable inode numbers, and deterministic
+      ordering from the image.
+- [ ] Implement regular file reads across direct data blocks and fragments,
+      including sparse/empty files and reads crossing block boundaries.
+- [ ] Implement symlink reads and ensure VFS, not individual Linux syscall
+      paths, performs symlink resolution consistently.
+- [ ] Implement stat/statx metadata mapping for SquashFS inode mode, uid/gid,
+      size, link count, timestamps, block counts, device numbers, and inode
+      numbers.
+- [ ] Connect the SquashFS server to the current boot flow as an optional root
+      filesystem backend behind the existing VFS-facing root mount behavior.
+- [ ] Add `ROOTFS_FLAVOR=squashfs` or equivalent run/test modes that boot the
+      synthetic root from a SquashFS image through the block server.
+- [ ] Add tests for SquashFS mount, lookup, readdir, file read, symlink read,
+      long paths, permissions metadata, stat fields, BusyBox applet symlinks,
+      dynamic linker file access, and clean poweroff.
+- [ ] Add Alpine SquashFS image generation and boot tests that verify BusyBox,
+      login, OpenRC script execution, `/sbin/init -> /bin/busybox`, and shell
+      bringup from the SquashFS-backed root.
+- [ ] Migrate the default synthetic root boot path to SquashFS once tests cover
+      the old rootfs server behavior.
+- [ ] Migrate the Alpine root boot path to SquashFS once OpenRC and interactive
+      shell tests are covered.
+- [ ] Delete the old custom rootfs image format, rootfs server, rootfs-specific
+      build rules, rootfs protocol assumptions, and obsolete tests after the
+      SquashFS-backed boot path is the default and full tests pass.
+- [ ] Document the new root filesystem architecture, image-generation flow,
+      supported SquashFS feature subset, unsupported feature diagnostics, and
+      how VirtIO block will become the preferred backing device.
