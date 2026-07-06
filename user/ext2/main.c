@@ -9,6 +9,19 @@ enum {
 	EXT2_INODE_MIN_SIZE = 128,
 	EXT2_ROOT_INO = 2,
 	EXT2_BLOCK_READ_MAX = 128 * 1024,
+	EXT2_NAME_MAX = 255,
+	EXT2_NDIR_BLOCKS = 12,
+	EXT2_S_IFMT = 0170000,
+	EXT2_S_IFIFO = 0010000,
+	EXT2_S_IFCHR = 0020000,
+	EXT2_S_IFDIR = 0040000,
+	EXT2_S_IFREG = 0100000,
+	EXT2_S_IFLNK = 0120000,
+	EXT2_FT_UNKNOWN = 0,
+	EXT2_FT_REG_FILE = 1,
+	EXT2_FT_DIR = 2,
+	EXT2_FT_CHRDEV = 3,
+	EXT2_FT_FIFO = 5,
 	EXT2_MAGIC = 0xef53,
 	EXT2_GOOD_OLD_REV = 0,
 	EXT2_DYNAMIC_REV = 1,
@@ -60,6 +73,15 @@ struct ext2_inode {
 	u64 links_count;
 	u64 blocks;
 	u64 block[15];
+};
+
+struct ext2_dirent {
+	u64 ino;
+	u64 rec_len;
+	u64 name_len;
+	u64 file_type;
+	u64 offset;
+	char name[EXT2_NAME_MAX + 1];
 };
 
 struct ext2_mount {
@@ -178,6 +200,21 @@ static u64 load_le32(const unsigned char *buffer, u64 offset)
 	       ((u64)buffer[offset + 1] << 8) |
 	       ((u64)buffer[offset + 2] << 16) |
 	       ((u64)buffer[offset + 3] << 24);
+}
+
+static int text_eq_len(const char *text, const char *name, u64 name_len)
+{
+	u64 i;
+
+	if (text == 0 || name == 0) {
+		return 0;
+	}
+	for (i = 0; i < name_len; i++) {
+		if (text[i] == 0 || text[i] != name[i]) {
+			return 0;
+		}
+	}
+	return text[i] == 0;
 }
 
 static u64 div_round_up(u64 value, u64 divisor)
@@ -558,11 +595,168 @@ static long inode_is_allocated(const struct ext2_mount *mount, u64 ino,
 				 inode_index, allocated);
 }
 
+static u64 ext2_inode_vfs_type(const struct ext2_inode *inode)
+{
+	if (inode == 0) {
+		return 0;
+	}
+	switch (inode->mode & EXT2_S_IFMT) {
+	case EXT2_S_IFREG:
+		return BUNIX_VFS_TYPE_REGULAR;
+	case EXT2_S_IFDIR:
+		return BUNIX_VFS_TYPE_DIRECTORY;
+	case EXT2_S_IFLNK:
+		return BUNIX_VFS_TYPE_SYMLINK;
+	case EXT2_S_IFIFO:
+		return BUNIX_VFS_TYPE_FIFO;
+	case EXT2_S_IFCHR:
+		return BUNIX_VFS_TYPE_CHARACTER;
+	default:
+		return 0;
+	}
+}
+
+static u64 ext2_dirent_vfs_type(u64 file_type)
+{
+	switch (file_type) {
+	case EXT2_FT_REG_FILE:
+		return BUNIX_VFS_TYPE_REGULAR;
+	case EXT2_FT_DIR:
+		return BUNIX_VFS_TYPE_DIRECTORY;
+	case EXT2_FT_CHRDEV:
+		return BUNIX_VFS_TYPE_CHARACTER;
+	case EXT2_FT_FIFO:
+		return BUNIX_VFS_TYPE_FIFO;
+	default:
+		return 0;
+	}
+}
+
+static long read_direct_block(const struct ext2_mount *mount,
+			      const struct ext2_inode *inode, u64 logical,
+			      unsigned char *out)
+{
+	u64 offset;
+	u64 block;
+
+	if (mount == 0 || inode == 0 || out == 0 ||
+	    logical >= EXT2_NDIR_BLOCKS) {
+		return -1;
+	}
+	block = inode->block[logical];
+	if (block == 0) {
+		for (u64 i = 0; i < mount->super.block_size; i++) {
+			out[i] = 0;
+		}
+		return 0;
+	}
+	if (!block_range_valid(mount, block, 1)) {
+		return -1;
+	}
+	offset = block_to_offset(mount, block);
+	if (offset == (u64)-1 ||
+	    offset > mount->image_size ||
+	    mount->super.block_size > mount->image_size - offset ||
+	    block_read_bytes(mount->block, offset, out,
+			     mount->super.block_size) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static long read_dirent_at(const struct ext2_mount *mount,
+			   const struct ext2_inode *directory, u64 offset,
+			   struct ext2_dirent *entry)
+{
+	unsigned char *block;
+	u64 block_index;
+	u64 block_offset;
+
+	if (mount == 0 || directory == 0 || entry == 0 ||
+	    ext2_inode_vfs_type(directory) != BUNIX_VFS_TYPE_DIRECTORY ||
+	    offset >= directory->size ||
+	    offset >= EXT2_NDIR_BLOCKS * mount->super.block_size) {
+		return -1;
+	}
+	block_index = offset / mount->super.block_size;
+	block_offset = offset % mount->super.block_size;
+	if (mount->super.block_size - block_offset < 8) {
+		return -1;
+	}
+	block = (unsigned char *)bunix_calloc(1, mount->super.block_size);
+	if (block == 0 ||
+	    read_direct_block(mount, directory, block_index, block) != 0) {
+		bunix_free(block);
+		return -1;
+	}
+	entry->ino = load_le32(block, block_offset);
+	entry->rec_len = load_le16(block, block_offset + 4);
+	entry->name_len = block[block_offset + 6];
+	entry->file_type = block[block_offset + 7];
+	entry->offset = offset;
+	if (entry->rec_len < 8 ||
+	    (entry->rec_len & 3) != 0 ||
+	    entry->rec_len > mount->super.block_size - block_offset ||
+	    entry->name_len > EXT2_NAME_MAX ||
+	    entry->name_len > entry->rec_len - 8) {
+		bunix_free(block);
+		return -1;
+	}
+	for (u64 i = 0; i < entry->name_len; i++) {
+		entry->name[i] = (char)block[block_offset + 8 + i];
+	}
+	entry->name[entry->name_len] = 0;
+	bunix_free(block);
+	return 0;
+}
+
+static long next_dirent(const struct ext2_mount *mount,
+			const struct ext2_inode *directory, u64 *cookie,
+			struct ext2_dirent *entry, int skip_dots)
+{
+	u64 offset;
+
+	if (cookie == 0) {
+		return -1;
+	}
+	offset = *cookie;
+	while (offset < directory->size &&
+	       offset < EXT2_NDIR_BLOCKS * mount->super.block_size) {
+		if (read_dirent_at(mount, directory, offset, entry) != 0) {
+			return -1;
+		}
+		offset += entry->rec_len;
+		*cookie = offset;
+		if (entry->ino != 0 &&
+		    (!skip_dots ||
+		     (!text_eq_len(".", entry->name, entry->name_len) &&
+		      !text_eq_len("..", entry->name, entry->name_len)))) {
+			return 0;
+		}
+	}
+	return BUNIX_VFS_ERR_NOENT;
+}
+
+static long lookup_dirent(const struct ext2_mount *mount,
+			  const struct ext2_inode *directory,
+			  const char *name, struct ext2_dirent *entry)
+{
+	u64 cookie = 0;
+
+	while (next_dirent(mount, directory, &cookie, entry, 0) == 0) {
+		if (text_eq_len(name, entry->name, entry->name_len)) {
+			return 0;
+		}
+	}
+	return BUNIX_VFS_ERR_NOENT;
+}
+
 static long load_initial_mount(u64 block)
 {
 	unsigned char raw[EXT2_SUPER_SIZE];
 	struct ext2_mount mount;
 	struct ext2_inode root_inode;
+	struct ext2_dirent self;
 	u64 root_allocated = 0;
 
 	mount.block = block;
@@ -575,7 +769,10 @@ static long load_initial_mount(u64 block)
 	    inode_is_allocated(&mount, EXT2_ROOT_INO, &root_allocated) != 0 ||
 	    read_inode(&mount, EXT2_ROOT_INO, &root_inode) != 0 ||
 	    root_allocated == 0 ||
-	    root_inode.mode == 0) {
+	    ext2_inode_vfs_type(&root_inode) != BUNIX_VFS_TYPE_DIRECTORY ||
+	    lookup_dirent(&mount, &root_inode, ".", &self) != 0 ||
+	    self.ino != EXT2_ROOT_INO ||
+	    ext2_dirent_vfs_type(self.file_type) != BUNIX_VFS_TYPE_DIRECTORY) {
 		bunix_free(mount.groups);
 		return -1;
 	}

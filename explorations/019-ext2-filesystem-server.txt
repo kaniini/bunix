@@ -103,6 +103,11 @@ Implementation notes:
   and byte-offset overflow.  The server has bounded inode reads and a generic
   bitmap-bit helper, currently used to verify that root inode 2 is allocated
   before accepting the mount state.
+- Directory-entry parsing now has checked direct-block iteration, name-length
+  and record-length validation, ext2-to-VFS type mapping, and root `"."`
+  lookup validation.  The remaining directory task work is wiring those helpers
+  into persistent mount state and the VFS `OPEN_BUFFER`/`READDIR_BUFFER`
+  translator operations.
 
 Tasks:
 
