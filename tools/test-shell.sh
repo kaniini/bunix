@@ -143,6 +143,8 @@ current_prompt_count() {
 begin_shard() {
 	name=$1
 
+	BUNIX_CURRENT_SHARD=$name
+	export BUNIX_CURRENT_SHARD
 	mkdir -p "$tmp/shard-times"
 	date +%s > "$tmp/shard-times/$name"
 }
@@ -154,6 +156,7 @@ finish_shard() {
 	seconds=$((now - start))
 
 	echo "test-shell-part name=$name status=ok seconds=$seconds"
+	unset BUNIX_CURRENT_SHARD
 }
 
 part_selected() {

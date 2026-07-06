@@ -37,6 +37,13 @@ fail_with_log() {
 	tail_lines=${3:-160}
 	out=
 
+	if [ -n "${BUNIX_CURRENT_SHARD:-}" ]; then
+		label="shard=$BUNIX_CURRENT_SHARD $label"
+	fi
+	if [ -n "${BUNIX_CURRENT_MARKER_FILE:-}" ]; then
+		label="marker_file=$BUNIX_CURRENT_MARKER_FILE $label"
+	fi
+
 	if [ -n "${BUNIX_COLLECT_FAILURES:-}" ]; then
 		out=$(save_failure_artifacts "$label" "$log" "${BUNIX_QEMU_LOG:-}" "$tail_lines")
 	fi
@@ -196,8 +203,13 @@ check_fixed_markers_file() {
 	label=$3
 	limit=${4:-1}
 	tail_lines=${5:-160}
+	old_marker_file=${BUNIX_CURRENT_MARKER_FILE:-}
 
+	BUNIX_CURRENT_MARKER_FILE=$markers
+	export BUNIX_CURRENT_MARKER_FILE
 	check_fixed_markers "$log" "$label" "$limit" "$tail_lines" < "$markers"
+	BUNIX_CURRENT_MARKER_FILE=$old_marker_file
+	export BUNIX_CURRENT_MARKER_FILE
 }
 
 check_exact_markers_file() {
@@ -206,8 +218,13 @@ check_exact_markers_file() {
 	label=$3
 	limit=${4:-1}
 	tail_lines=${5:-160}
+	old_marker_file=${BUNIX_CURRENT_MARKER_FILE:-}
 
+	BUNIX_CURRENT_MARKER_FILE=$markers
+	export BUNIX_CURRENT_MARKER_FILE
 	check_exact_markers "$log" "$label" "$limit" "$tail_lines" < "$markers"
+	BUNIX_CURRENT_MARKER_FILE=$old_marker_file
+	export BUNIX_CURRENT_MARKER_FILE
 }
 
 wait_for_each_fixed() {

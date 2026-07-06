@@ -148,10 +148,19 @@ Plan:
    - `tools/test-shell.sh` prints `test-shell-part name=<shard> status=ok
      seconds=<n>` after each selected shard completes its checks.
 
-7. Add marker diagnostics per shard
+7. Add marker diagnostics per shard [DONE]
    Marker failures should report the shard name, marker source file, missing
    marker, and artifact path immediately. This should apply to fixed markers,
    exact markers, regex markers, and ad hoc wait helpers.
+
+   Result:
+
+   - `tools/test-shell.sh` exports `BUNIX_CURRENT_SHARD` while each shard is
+     active.
+   - `tools/test-lib.sh` prefixes collected failures with the active shard and,
+     for marker-file checks, the marker file path.
+   - The existing failure path still prints the preserved artifact directory
+     immediately.
 
 8. Add artifact metadata for shards
    Failure bundles should include the selected shard list, current shard name,
