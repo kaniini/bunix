@@ -167,3 +167,7 @@ Progress:
   completions.  The dedicated boot test checks `virtio-net: rx ready`.  Real
   external receive testing still needs deterministic host traffic and the
   network stack still needs Ethernet/ARP/ND route integration.
+- `virtio-bus.server` now implements `BUNIX_DEV_RESET` for discovered VirtIO
+  devices by clearing device status, dropping queue buffers, and clearing
+  negotiated feature state.  `virtio-net.server` resets its device before
+  negotiation, and the dedicated boot test checks `virtio-net: reset`.

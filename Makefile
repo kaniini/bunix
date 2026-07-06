@@ -722,6 +722,7 @@ test-boot-virtio-net: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/check-markers.sh too
 	grep -aF "virtio-bus: features index=0" $(BUILD_DIR)/serial.log >/dev/null
 	! grep -aF "virtio-bus: features index=0 device=0 " $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-bus: ready devices=1" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "virtio-net: reset" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: negotiated" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: queues ready" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: attached iface=" $(BUILD_DIR)/serial.log >/dev/null

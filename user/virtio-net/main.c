@@ -542,6 +542,11 @@ static int init_device(struct virtio_net_device *device)
 		return -1;
 	}
 	device->device_index = (u64)index;
+	if (device_call(device->device_service, BUNIX_DEV_RESET,
+			device->device_index, 0, 0, &reply) != 0) {
+		return -1;
+	}
+	log_text("virtio-net: reset\n", text_len("virtio-net: reset\n"));
 	if (device_call(device->device_service, BUNIX_DEV_NEGOTIATE_FEATURES,
 			device->device_index, required, optional, &reply) != 0) {
 		return -1;

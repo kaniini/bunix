@@ -1072,6 +1072,41 @@ static void reply_bind_driver(struct bunix_msg *reply, u64 device_index)
 	reply->words[3] = 0;
 }
 
+static void reply_reset(struct bunix_msg *reply, u64 device_index)
+{
+	struct virtio_bus_device *device;
+
+	if (device_index >= device_count) {
+		reply_no_device(reply);
+		return;
+	}
+	device = &devices[device_index];
+	if (virtio_common_set_status(device, 0) != 0) {
+		reply_no_device(reply);
+		return;
+	}
+	for (u64 i = 0; i < VIRTIO_BUS_MAX_QUEUES; i++) {
+		if (device->queues[i].buffer_handle != 0) {
+			bunix_handle_close(device->queues[i].buffer_handle);
+		}
+		device->queues[i].buffer_handle = 0;
+		device->queues[i].notify_off = 0;
+		device->queues[i].layout.queue_size = 0;
+		device->queues[i].layout.desc_offset = 0;
+		device->queues[i].layout.avail_offset = 0;
+		device->queues[i].layout.used_offset = 0;
+		device->queues[i].layout.total_len = 0;
+		device->queues[i].layout.alignment = 0;
+	}
+	device->info.features.required_features = 0;
+	device->info.features.driver_features = 0;
+	device->info.features.negotiated_features = 0;
+	reply->words[0] = BUNIX_DEV_OK;
+	reply->words[1] = device_index;
+	reply->words[2] = 0;
+	reply->words[3] = 0;
+}
+
 static void reply_no_device(struct bunix_msg *reply)
 {
 	reply->words[0] = BUNIX_DEV_ERR_NOENT;
@@ -1149,7 +1184,7 @@ int main(void)
 			reply_bind_driver(&reply, message.words[0]);
 			break;
 		case BUNIX_DEV_RESET:
-			reply_no_device(&reply);
+			reply_reset(&reply, message.words[0]);
 			break;
 		case BUNIX_DEV_ACK_INTERRUPT:
 			reply_ack_interrupt(&reply, message.words[0]);
