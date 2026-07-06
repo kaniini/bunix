@@ -127,6 +127,10 @@ selected_shards() {
 	' "$manifest"
 }
 
+ordered_shards() {
+	selected_shards | sort -t "$(printf '\t')" -k5,5nr -k4,4nr
+}
+
 worker_parts() {
 	case "$1" in
 	root-tmpfs-chown)
@@ -272,7 +276,7 @@ while IFS='	' read -r name smp memory timeout_seconds cost clean_boot; do
 		count=0
 	fi
 done <<EOF_SHARDS
-$(selected_shards)
+$(ordered_shards)
 EOF_SHARDS
 
 if [ "$count" -gt 0 ]; then

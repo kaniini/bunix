@@ -349,9 +349,16 @@ Plan:
    - `BUNIX_TEST_RETRIES=N` retries failed workers up to `N` times and
      preserves every attempt under `attempt-<n>/`.
 
-18. Schedule using shard cost metadata
+18. Schedule using shard cost metadata [DONE]
    Use each shard's declared cost and timeout to launch long shards first and
    pack short shards around them, which matters once the suite has many shards.
+
+   Result:
+
+   - `tools/test-parallel.sh` sorts selected shards by descending cost and then
+     descending timeout before scheduling.
+   - The scheduler still reads cost and timeout from `tools/shell-shards.tsv`,
+     keeping policy in shard metadata.
 
 19. Add host sanity checks
    Before launching dozens of VMs, check:
