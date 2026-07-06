@@ -1331,6 +1331,44 @@ static void reply_path_stat(const struct bunix_msg *message,
 	reply_stat_inode(message, reply, ino, &inode);
 }
 
+static void reply_path_chmod(struct bunix_msg *reply, const char *path,
+			     u64 mode)
+{
+	struct ext2_inode inode;
+	u64 ino;
+
+	if (!root_mount_ready ||
+	    lookup_path(&root_mount, path, &ino, &inode) != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	if (ext2_inode_vfs_type(&inode) == 0 ||
+	    write_inode_mode(&root_mount, ino, &inode, mode) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+}
+
+static void reply_path_chown(struct bunix_msg *reply, const char *path,
+			     u64 uid, u64 gid)
+{
+	struct ext2_inode inode;
+	u64 ino;
+
+	if (!root_mount_ready ||
+	    lookup_path(&root_mount, path, &ino, &inode) != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	if (ext2_inode_vfs_type(&inode) == 0 ||
+	    write_inode_owner(&root_mount, ino, &inode, uid, gid) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+}
+
 static long read_inode_bytes(const struct ext2_inode *inode, u64 offset,
 			     unsigned char *out, u64 len)
 {
@@ -1756,6 +1794,23 @@ int main(void)
 					reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				} else {
 					reply_path_stat(&message, &reply, path);
+				}
+				break;
+			case BUNIX_VFS_CHMOD_BUFFER:
+				if (read_resolved_path(&message, path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply_path_chmod(&reply, path,
+							 message.words[3] >> 32);
+				}
+				break;
+			case BUNIX_VFS_CHOWN_BUFFER:
+				if (read_resolved_path(&message, path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply_path_chown(&reply, path,
+							 message.words[2],
+							 message.words[3] >> 32);
 				}
 				break;
 			case BUNIX_VFS_READLINK_BUFFER:

@@ -780,7 +780,8 @@ static int forward_mount_buffer_path(struct vfs_mount *mount,
 			       (out_cap != 0 ? BUNIX_RIGHT_SEND : 0);
 	forwarded.words[0] = cwd_len;
 	forwarded.words[1] = path_len;
-	forwarded.words[2] = 0;
+	forwarded.words[2] = message->type == BUNIX_VFS_CHOWN_BUFFER ?
+			     message->words[2] : 0;
 	if (forwarded.type == BUNIX_VFS_READLINK_BUFFER) {
 		forwarded.words[3] = (message->words[3] & 0xffffffff) |
 				     (out_cap << 32);
