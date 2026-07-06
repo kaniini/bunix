@@ -85,11 +85,13 @@ Plan:
    - `tools/shell-tests/root-login-union.sh` owns root login, root identity and
      environment checks, root secret access, and root-only unionfs lower-parent
      copy-up/busy-mount coverage.
+   - `tools/shell-tests/root-tmpfs-chown.sh` owns root chown of the user-created
+     tmpfs file, verifies the updated owner, exits root, and waits for login.
 
    Needs:
 
    - Extract the root-phase batches:
-     `root-tmpfs-chown`, `long-login`, and `root-mount-soak`.
+     `long-login` and `root-mount-soak`.
    - Move broad marker files into shard-owned marker files as the batches are
      split.
 

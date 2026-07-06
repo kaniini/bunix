@@ -23,6 +23,7 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$script_dir/shell-tests/large-io-mount.sh"
 . "$script_dir/shell-tests/interactive-tty.sh"
 . "$script_dir/shell-tests/root-login-union.sh"
+. "$script_dir/shell-tests/root-tmpfs-chown.sh"
 BUNIX_COLLECT_FAILURES=1
 BUNIX_FAILURE_DIR=$failure_dir
 BUNIX_QEMU_LOG=$qemu_log
@@ -185,15 +186,7 @@ run_interactive_tty
 
 run_root_login_union
 check_root_login_union
-send_script <<'EOF_ROOT_CHOWN'
-busybox chown 0:0 /tmp/bunix-write.txt
-busybox stat -c "%u:%g" /tmp/bunix-write.txt
-exit
-EOF_ROOT_CHOWN
-wait_for_exact_line "$log" "0:0" "tmpfs chown did not update owner" 45 180
-
-login_prompts_before_long=$(current_prompt_count "login: ")
-wait_for_prompt_count_gt "login: " "$login_prompts_before_long" "login prompt did not return after root shell exit" 45 180
+run_root_tmpfs_chown
 
 long_root_prompts_before=$(current_prompt_count "~ # ")
 login_user administrator_with_long_name password_longer_than_sixteen "~ # " "$long_root_prompts_before"
