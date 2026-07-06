@@ -645,6 +645,7 @@ test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) $(VIRTIO_BLK_TEST_IMAGE) t
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_BLK_TEST_ARGS)" sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
 	grep -aF "bootstrap: virtio-blk test" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "virtio-blk: feature fail ok" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-blk: read ok" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-blk: write ok" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-blk: flush ok" $(BUILD_DIR)/serial.log >/dev/null

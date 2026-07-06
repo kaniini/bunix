@@ -279,3 +279,8 @@ Progress:
   configuration, and acknowledges ISR status.  `virtio-blk.server` exercises
   descriptor chains, avail/used ring completion, read/write/flush requests, and
   the VFS-facing block protocol through those `DEV0` RPCs.
+- Added a negative feature-negotiation probe to `virtio-blk.server`: before the
+  real `VERSION_1` negotiation, the driver reads the device feature set,
+  chooses a missing feature bit, requires it, and expects the bus to reject the
+  negotiation.  The dedicated VirtIO block boot target now asserts
+  `virtio-blk: feature fail ok` before read/write/flush coverage.

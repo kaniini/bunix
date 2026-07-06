@@ -137,6 +137,31 @@ static u64 virtio_blk_capacity_bytes(u64 device_service, u64 device_index)
 	return sectors * VIRTIO_BLK_SECTOR_SIZE;
 }
 
+static int virtio_blk_feature_failure_probe(u64 device_service,
+					    u64 device_index)
+{
+	struct bunix_msg reply;
+	u64 missing = 0;
+
+	if (device_call(device_service, BUNIX_DEV_READ_FEATURES,
+			device_index, 0, 0, &reply) != 0) {
+		return -1;
+	}
+	for (u64 bit = 0; bit < 64; bit++) {
+		const u64 feature = 1ull << bit;
+
+		if ((reply.words[1] & feature) == 0) {
+			missing = feature;
+			break;
+		}
+	}
+	if (missing == 0) {
+		return -1;
+	}
+	return device_call(device_service, BUNIX_DEV_NEGOTIATE_FEATURES,
+			   device_index, missing, 0, &reply) == 0 ? -1 : 0;
+}
+
 static int queue_write(u64 handle, u64 offset, const void *src, u64 len)
 {
 	return bunix_buffer_write(handle, offset, src, len) == 0 ? 0 : -1;
@@ -568,6 +593,7 @@ int main(void)
 {
 	const char online[] = "virtio-blk: online\n";
 	const char no_device[] = "virtio-blk: no device\n";
+	const char feature_fail_ok[] = "virtio-blk: feature fail ok\n";
 	const char negotiated[] = "virtio-blk: negotiated\n";
 	const char queue_ready[] = "virtio-blk: queue ready\n";
 	const char read_ok[] = "virtio-blk: read ok\n";
@@ -594,6 +620,12 @@ int main(void)
 		bunix_console_log(no_device, sizeof(no_device) - 1);
 		return 0;
 	}
+	if (virtio_blk_feature_failure_probe(device_service,
+					     (u64)device_index) != 0) {
+		bunix_console_log(no_device, sizeof(no_device) - 1);
+		return 1;
+	}
+	bunix_console_log(feature_fail_ok, sizeof(feature_fail_ok) - 1);
 	if (device_call(device_service, BUNIX_DEV_NEGOTIATE_FEATURES,
 			(u64)device_index, features,
 			optional_features, &reply) != 0) {
