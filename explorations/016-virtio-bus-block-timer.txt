@@ -178,3 +178,10 @@ Progress:
 - `test-boot-virtio` now asserts modern VirtIO enumeration and rejects a zero
   feature-read marker, giving coverage for PCI capability parsing, 64-bit BAR
   grants, and common-config MMIO reads during boot.
+- Fixed IPC capability transport so hardware-resource caps are a distinct
+  internal IPC cap type instead of being collapsed into task caps.  This makes
+  `DEV0 GET_RESOURCE` hardware handles deliverable to drivers and preserves
+  owned BAR resource lifetimes while messages are queued.  Added a
+  `buffer_phys` native syscall for shared-buffer handles so upcoming VirtIO
+  queue setup can program descriptor/driver/device ring physical addresses from
+  a capability-held queue memory buffer.

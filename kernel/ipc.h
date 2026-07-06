@@ -10,6 +10,7 @@ enum {
 
 struct ipc_port;
 struct shared_buffer;
+struct task_hw_resource;
 struct thread;
 
 enum ipc_cap_type {
@@ -17,6 +18,7 @@ enum ipc_cap_type {
 	IPC_CAP_PORT,
 	IPC_CAP_BUFFER,
 	IPC_CAP_TASK,
+	IPC_CAP_HW_RESOURCE,
 };
 
 struct ipc_message {

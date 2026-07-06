@@ -73,6 +73,7 @@ enum {
 	SYSCALL_HW_MMIO_WRITE16 = -90,
 	SYSCALL_HW_MMIO_READ32 = -92,
 	SYSCALL_HW_MMIO_WRITE32 = -94,
+	SYSCALL_BUFFER_PHYS = -96,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -379,12 +380,19 @@ static int user_message_to_ipc(const struct user_ipc_message *user_message,
 
 		message->cap_type = type == TASK_CAP_PORT ? IPC_CAP_PORT :
 			(type == TASK_CAP_BUFFER ? IPC_CAP_BUFFER :
-			 IPC_CAP_TASK);
+			 type == TASK_CAP_TASK ? IPC_CAP_TASK :
+			 IPC_CAP_HW_RESOURCE);
 		message->cap_object = object;
 		if (message->cap_type == IPC_CAP_PORT) {
 			ipc_port_retain((struct ipc_port *)message->cap_object);
 		} else if (message->cap_type == IPC_CAP_BUFFER) {
 			buffer_retain((struct shared_buffer *)message->cap_object);
+		} else if (message->cap_type == IPC_CAP_HW_RESOURCE) {
+			if (task_hw_resource_retain(
+				    (const struct task_hw_resource *)
+					    message->cap_object) != 0) {
+				return -1;
+			}
 		} else if (task_retain((struct task *)message->cap_object) != 0) {
 			return -1;
 		}
@@ -422,6 +430,13 @@ static void ipc_message_to_user(const struct ipc_message *message,
 			task_grant_task(task_current(),
 					(struct task *)message->cap_object,
 					message->cap_rights);
+	} else if (message->cap_type == IPC_CAP_HW_RESOURCE) {
+		user_message->cap =
+			task_grant_hw_resource(
+				task_current(),
+				(const struct task_hw_resource *)
+					message->cap_object,
+				message->cap_rights);
 	}
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
 		user_message->words[i] = message->words[i];
@@ -4947,6 +4962,18 @@ static u64 native_sys_buffer_write(const struct native_syscall_args *sys_args)
 	return result;
 }
 
+static u64 native_sys_buffer_phys(const struct native_syscall_args *args)
+{
+	struct shared_buffer *buffer =
+		task_buffer_from_handle(task_current(), args->arg0,
+					TASK_RIGHT_SEND);
+
+	if (buffer == 0) {
+		return (u64)-1;
+	}
+	return buffer_phys(buffer);
+}
+
 static u64 native_sys_port_create(const struct native_syscall_args *args)
 {
 	char name[LINUX_EXEC_MAX_PATH];
@@ -5569,6 +5596,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_BUFFER_CREATE, "buffer_create", native_sys_buffer_create },
 	{ SYSCALL_BUFFER_READ, "buffer_read", native_sys_buffer_read },
 	{ SYSCALL_BUFFER_WRITE, "buffer_write", native_sys_buffer_write },
+	{ SYSCALL_BUFFER_PHYS, "buffer_phys", native_sys_buffer_phys },
 	{ SYSCALL_TASK_WRITE, "task_write", native_sys_task_write },
 	{ SYSCALL_TASK_START_AT, "task_start_at", native_sys_task_start_at },
 	{ SYSCALL_TASK_ID, "task_id", native_sys_task_id },

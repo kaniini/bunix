@@ -53,6 +53,7 @@ enum {
 	BUNIX_SYSCALL_HW_MMIO_WRITE16 = -90,
 	BUNIX_SYSCALL_HW_MMIO_READ32 = -92,
 	BUNIX_SYSCALL_HW_MMIO_WRITE32 = -94,
+	BUNIX_SYSCALL_BUFFER_PHYS = -96,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
@@ -698,6 +699,11 @@ static inline long bunix_buffer_write(u64 handle, u64 offset, const void *src,
 	const u64 args[] = { handle, offset, (u64)src, len };
 
 	return bunix_syscall3(BUNIX_SYSCALL_BUFFER_WRITE, (u64)args, 0, 0);
+}
+
+static inline long bunix_buffer_phys(u64 handle)
+{
+	return bunix_syscall1(BUNIX_SYSCALL_BUFFER_PHYS, handle);
 }
 
 static inline long bunix_vfs_stat_write(u64 buffer, u64 offset, u64 size,

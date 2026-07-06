@@ -858,6 +858,26 @@ u64 task_grant_hw_resource(struct task *task,
 	return 0;
 }
 
+int task_hw_resource_retain(const struct task_hw_resource *resource)
+{
+	if (resource == 0) {
+		return -1;
+	}
+	if ((resource->flags & TASK_HW_RESOURCE_OWNED) != 0) {
+		__sync_fetch_and_add((u32 *)&resource->ref_count, 1);
+	}
+	return 0;
+}
+
+void task_hw_resource_release(const struct task_hw_resource *resource)
+{
+	if (resource != 0 &&
+	    (resource->flags & TASK_HW_RESOURCE_OWNED) != 0 &&
+	    __sync_sub_and_fetch((u32 *)&resource->ref_count, 1) == 0) {
+		slab_free((void *)resource);
+	}
+}
+
 int task_clone_handles(struct task *dst, struct task *src)
 {
 	if (dst == 0 || src == 0) {
@@ -1143,15 +1163,8 @@ static int task_handle_retain(enum task_handle_type type, void *object)
 		return 0;
 	}
 	if (type == TASK_HANDLE_HW_RESOURCE) {
-		struct task_hw_resource *resource =
-			(struct task_hw_resource *)object;
-		if (resource == 0) {
-			return -1;
-		}
-		if ((resource->flags & TASK_HW_RESOURCE_OWNED) != 0) {
-			__sync_fetch_and_add(&resource->ref_count, 1);
-		}
-		return 0;
+		return task_hw_resource_retain(
+			(const struct task_hw_resource *)object);
 	}
 	return -1;
 }
@@ -1165,13 +1178,8 @@ static void task_handle_release(enum task_handle_type type, void *object)
 	} else if (type == TASK_HANDLE_TASK) {
 		task_release((struct task *)object);
 	} else if (type == TASK_HANDLE_HW_RESOURCE) {
-		struct task_hw_resource *resource =
-			(struct task_hw_resource *)object;
-		if (resource != 0 &&
-		    (resource->flags & TASK_HW_RESOURCE_OWNED) != 0 &&
-		    __sync_sub_and_fetch(&resource->ref_count, 1) == 0) {
-			slab_free(resource);
-		}
+		task_hw_resource_release(
+			(const struct task_hw_resource *)object);
 	}
 }
 

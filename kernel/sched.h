@@ -128,6 +128,8 @@ u64 task_grant_task(struct task *owner, struct task *target, u32 rights);
 u64 task_grant_hw_resource(struct task *task,
 			   const struct task_hw_resource *resource,
 			   u32 rights);
+int task_hw_resource_retain(const struct task_hw_resource *resource);
+void task_hw_resource_release(const struct task_hw_resource *resource);
 int task_clone_handles(struct task *dst, struct task *src);
 struct task *task_from_handle(struct task *owner, u64 handle, u32 rights);
 int task_can_inherit_handle(struct task *src, u64 handle, u32 rights);

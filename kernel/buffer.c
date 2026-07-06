@@ -125,6 +125,11 @@ u64 buffer_size(const struct shared_buffer *buffer)
 	return buffer != 0 ? buffer->size : 0;
 }
 
+u64 buffer_phys(const struct shared_buffer *buffer)
+{
+	return buffer != 0 ? (u64)buffer->data : 0;
+}
+
 int buffer_read(struct shared_buffer *buffer, u64 offset, void *dst, u64 len)
 {
 	if (buffer == 0 || buffer->data == 0 || dst == 0 ||

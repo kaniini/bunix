@@ -105,6 +105,9 @@ static void ipc_message_retain(struct ipc_message *message)
 		buffer_retain((struct shared_buffer *)message->cap_object);
 	} else if (message->cap_type == IPC_CAP_TASK) {
 		(void)task_retain((struct task *)message->cap_object);
+	} else if (message->cap_type == IPC_CAP_HW_RESOURCE) {
+		(void)task_hw_resource_retain(
+			(const struct task_hw_resource *)message->cap_object);
 	}
 }
 
@@ -116,6 +119,10 @@ void ipc_message_release(struct ipc_message *message)
 		buffer_release((struct shared_buffer *)message->cap_object);
 	} else if (message != 0 && message->cap_type == IPC_CAP_TASK) {
 		task_release((struct task *)message->cap_object);
+	} else if (message != 0 &&
+		   message->cap_type == IPC_CAP_HW_RESOURCE) {
+		task_hw_resource_release(
+			(const struct task_hw_resource *)message->cap_object);
 	}
 	if (message != 0) {
 		ipc_port_release(message->reply_port);
