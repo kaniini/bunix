@@ -32,19 +32,19 @@ Additional finding:
 - [x] Replace full executable/interpreter image buffering with segment-oriented
       loading so later dynamic execs do not depend on large contiguous kernel
       slab allocations.
-- [ ] Preserve `AT_EXECFN`, argv, envp, auxv, credentials, process identity,
+- [x] Preserve `AT_EXECFN`, argv, envp, auxv, credentials, process identity,
       and Bunix task/Linux PID mappings across the refactor.
 - [x] Add regression tests covering ELF exec, dynamic PT_INTERP exec,
       shebang exec with interpreter arguments, recursive shebang limits, and
       invalid script diagnostics.
-- [ ] Keep the resulting design portable enough for the future ARM port.
+- [x] Keep the resulting design portable enough for the future ARM port.
 
 Progress:
 
-- Current arch Linux `execve()` still owns argv/env collection, full-file ELF
-  reads, ELF/PT_INTERP parsing, stack/auxv construction, address-space
-  replacement, final RIP/RSP activation, Linux process registration, cmdline
-  publication, and vfork completion.
+- Initial inventory found arch Linux `execve()` owning argv/env collection,
+  full-file ELF reads, ELF/PT_INTERP parsing, stack/auxv construction,
+  address-space replacement, final RIP/RSP activation, Linux process
+  registration, cmdline publication, and vfork completion.
 - `user/proc/main.c` already has a segment-oriented ELF loader for spawned
   processes, so the remaining refactor should converge syscall `execve()` on
   that model instead of growing another loader.
@@ -69,21 +69,24 @@ Progress:
   mapper, address-space clearing, and stack builder were removed.  Proc now
   allocates a replacement stack and preserves Linux UID/GID auxv credentials
   passed by the syscall path.
+- The arch path now only collects user pointers/strings, asks Linux-server for
+  Linux shebang policy, calls proc for task image replacement, and installs the
+  final architecture frame RIP/RSP.  ELF/PT_INTERP policy is centralized in
+  proc and can grow an architecture descriptor for ARM without putting another
+  ELF loader in `arch/*/user.c`.
 
 Validation so far:
 
 - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part`
 - `BUNIX_SHELL_PART=tmpfs-basic-linux-tests make test-shell-part`
+- `BUNIX_SHELL_PART=smoke make test-shell-part`
 - `BUNIX_TEST_SET=openrc make test-parallel`
-- `BUNIX_SHELL_PART=smoke make test-shell-part`
-- `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part`
-- `BUNIX_SHELL_PART=tmpfs-basic-linux-tests make test-shell-part`
-- `BUNIX_SHELL_PART=smoke make test-shell-part`
+- `BUNIX_SHELL_PART=rootfs-vfs-proc-dev make test-shell-part`
+- `make test`
 
-Known remaining failure:
+Debugging note:
 
-- `BUNIX_TEST_SET=openrc make test-parallel` now passes
-  `alpine-openrc-smoke`, but `alpine-openrc-full` stalls after the root shell
-  starts `busybox ps | busybox grep "/bin/sh"`.  Synthetic `busybox ps` and
-  pipe/grep coverage pass, so this needs targeted OpenRC/procfs/process-lifecycle
-  debugging before the exploration can be completed.
+- A transient `alpine-openrc-full` failure was traced to a diagnostic
+  `KERNEL_CMDLINE=log=debug` ESP payload invalidating `log=info` boot markers.
+  After forcing the Alpine ESP back to `log=info`, the combined OpenRC set
+  passed.
