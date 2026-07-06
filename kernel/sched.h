@@ -23,6 +23,7 @@ enum task_cap_type {
 	TASK_CAP_NONE = 0,
 	TASK_CAP_PORT,
 	TASK_CAP_BUFFER,
+	TASK_CAP_TASK,
 };
 
 enum task_handle_rights {
@@ -102,6 +103,8 @@ u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
 				u32 rights);
 int task_export_cap(struct task *task, u64 handle, u32 rights,
 		    enum task_cap_type *type, void **object);
+int task_retain(struct task *task);
+void task_release(struct task *task);
 struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
 				       u32 rights);
 struct shared_buffer *task_buffer_from_handle(struct task *task, u64 handle,

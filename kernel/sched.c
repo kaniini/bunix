@@ -109,7 +109,6 @@ static struct spinlock sleep_lock = SPINLOCK_INIT("sched-sleep");
 
 static int task_handle_retain(enum task_handle_type type, void *object);
 static void task_handle_release(enum task_handle_type type, void *object);
-static void task_release(struct task *task);
 static char *task_name_copy(const char *name);
 
 static void mem_copy(void *dst, const void *src, u64 len)
@@ -931,7 +930,8 @@ int task_export_cap(struct task *task, u64 handle, u32 rights,
 	const struct task_handle task_handle = task->handles[handle - 1];
 
 	if ((task_handle.type != TASK_HANDLE_PORT &&
-	     task_handle.type != TASK_HANDLE_BUFFER) ||
+	     task_handle.type != TASK_HANDLE_BUFFER &&
+	     task_handle.type != TASK_HANDLE_TASK) ||
 	    (task_handle.rights & rights) != rights) {
 		spin_unlock_irqrestore(&task->lock, flags);
 		console_printf("sched: cap denied task=%u handle=%u need=0x%x rights=0x%x\n",
@@ -941,8 +941,9 @@ int task_export_cap(struct task *task, u64 handle, u32 rights,
 	}
 
 	*object = task_handle.object;
-	*type = task_handle.type == TASK_HANDLE_PORT ?
-		TASK_CAP_PORT : TASK_CAP_BUFFER;
+	*type = task_handle.type == TASK_HANDLE_PORT ? TASK_CAP_PORT :
+		(task_handle.type == TASK_HANDLE_BUFFER ? TASK_CAP_BUFFER :
+		 TASK_CAP_TASK);
 	spin_unlock_irqrestore(&task->lock, flags);
 	return 0;
 }
@@ -1129,7 +1130,23 @@ static void task_teardown(struct task *task)
 	slab_free((void *)name);
 }
 
-static void task_release(struct task *task)
+int task_retain(struct task *task)
+{
+	if (task == 0 || task == &kernel_task) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	if (task->dead) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		return -1;
+	}
+	task->ref_count++;
+	spin_unlock_irqrestore(&task->lock, flags);
+	return 0;
+}
+
+void task_release(struct task *task)
 {
 	if (task == 0 || task == &kernel_task) {
 		return;

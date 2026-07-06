@@ -454,13 +454,16 @@ static int user_message_to_ipc(const struct user_ipc_message *user_message,
 			return -1;
 		}
 
-		message->cap_type = type == TASK_CAP_PORT ?
-			IPC_CAP_PORT : IPC_CAP_BUFFER;
+		message->cap_type = type == TASK_CAP_PORT ? IPC_CAP_PORT :
+			(type == TASK_CAP_BUFFER ? IPC_CAP_BUFFER :
+			 IPC_CAP_TASK);
 		message->cap_object = object;
 		if (message->cap_type == IPC_CAP_PORT) {
 			ipc_port_retain((struct ipc_port *)message->cap_object);
-		} else {
+		} else if (message->cap_type == IPC_CAP_BUFFER) {
 			buffer_retain((struct shared_buffer *)message->cap_object);
+		} else if (task_retain((struct task *)message->cap_object) != 0) {
+			return -1;
 		}
 	}
 
@@ -491,6 +494,11 @@ static void ipc_message_to_user(const struct ipc_message *message,
 			task_grant_buffer(task_current(),
 					  (struct shared_buffer *)message->cap_object,
 					  message->cap_rights);
+	} else if (message->cap_type == IPC_CAP_TASK) {
+		user_message->cap =
+			task_grant_task(task_current(),
+					(struct task *)message->cap_object,
+					message->cap_rights);
 	}
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
 		user_message->words[i] = message->words[i];

@@ -53,9 +53,13 @@ Progress:
   server parses shebang policy and rewrites argv/load path; arch consumes the
   rewritten vector for the existing loader.  This is intentionally a first
   protocol boundary, not the final proc/VM exec protocol.
+- Added task handles as IPC capabilities.  This is required for the next
+  protocol step, where the syscall path can hand proc/Linux-server authority
+  over the existing task being replaced instead of requiring a fresh spawn.
 
 Validation so far:
 
 - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part`
 - `BUNIX_SHELL_PART=tmpfs-basic-linux-tests make test-shell-part`
 - `BUNIX_TEST_SET=openrc make test-parallel`
+- `BUNIX_SHELL_PART=smoke make test-shell-part`

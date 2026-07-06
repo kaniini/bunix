@@ -16,6 +16,7 @@ enum ipc_cap_type {
 	IPC_CAP_NONE = 0,
 	IPC_CAP_PORT,
 	IPC_CAP_BUFFER,
+	IPC_CAP_TASK,
 };
 
 struct ipc_message {

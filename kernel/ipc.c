@@ -103,6 +103,8 @@ static void ipc_message_retain(struct ipc_message *message)
 		ipc_port_retain((struct ipc_port *)message->cap_object);
 	} else if (message->cap_type == IPC_CAP_BUFFER) {
 		buffer_retain((struct shared_buffer *)message->cap_object);
+	} else if (message->cap_type == IPC_CAP_TASK) {
+		(void)task_retain((struct task *)message->cap_object);
 	}
 }
 
@@ -112,6 +114,8 @@ void ipc_message_release(struct ipc_message *message)
 		ipc_port_release((struct ipc_port *)message->cap_object);
 	} else if (message != 0 && message->cap_type == IPC_CAP_BUFFER) {
 		buffer_release((struct shared_buffer *)message->cap_object);
+	} else if (message != 0 && message->cap_type == IPC_CAP_TASK) {
+		task_release((struct task *)message->cap_object);
 	}
 	if (message != 0) {
 		ipc_port_release(message->reply_port);
