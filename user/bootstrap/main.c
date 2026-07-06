@@ -930,6 +930,235 @@ static long net_udp_selftest(u64 net, u64 family)
 	return 0;
 }
 
+static long net_tcp_call(u64 net, struct bunix_msg *request,
+			 struct bunix_msg *reply)
+{
+	return bunix_ipc_call(net, request, reply) == 0 &&
+	       reply->words[0] == 0 ? 0 : -1;
+}
+
+static long net_tcp_selftest(u64 net, u64 family)
+{
+	const char client_payload[] = "bunix-tcp-client";
+	const char server_payload[] = "bunix-tcp-server";
+	char out[sizeof(client_payload) > sizeof(server_payload) ?
+		 sizeof(client_payload) : sizeof(server_payload)];
+	const u64 lo_hi = 0;
+	const u64 lo_lo = family == BUNIX_NET_ADDR_FAMILY_IPV4 ?
+			  0x7f000001 : 1;
+	u64 listener = 0;
+	u64 client = 0;
+	u64 accepted = 0;
+	u64 listener_port = 0;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NET,
+		.type = BUNIX_NET_TCP_OPEN,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { family, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const long buffer = bunix_buffer_create(sizeof(out));
+
+	if (net == 0 || buffer <= 0) {
+		return -1;
+	}
+	if (net_tcp_call(net, &request, &reply) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	listener = reply.words[1];
+	if (net_tcp_call(net, &request, &reply) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	client = reply.words[1];
+
+	request.type = BUNIX_NET_TCP_BIND;
+	request.words[0] = listener;
+	request.words[1] = 0;
+	request.words[2] = 0;
+	request.words[3] = 0;
+	if (net_tcp_call(net, &request, &reply) != 0 || reply.words[1] == 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	listener_port = reply.words[1];
+
+	request.type = BUNIX_NET_TCP_LISTEN;
+	request.words[0] = listener;
+	request.words[1] = 4;
+	request.words[2] = 0;
+	request.words[3] = 0;
+	if (net_tcp_call(net, &request, &reply) != 0 || reply.words[1] == 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+
+	request.type = BUNIX_NET_TCP_CONNECT;
+	request.words[0] = client;
+	request.words[1] = lo_hi;
+	request.words[2] = lo_lo;
+	request.words[3] = listener_port;
+	if (net_tcp_call(net, &request, &reply) != 0 || reply.words[1] == 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+
+	request.type = BUNIX_NET_TCP_POLL;
+	request.words[0] = listener;
+	if (net_tcp_call(net, &request, &reply) != 0 ||
+	    (reply.words[1] & 1) == 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+
+	request.type = BUNIX_NET_TCP_ACCEPT;
+	request.words[0] = listener;
+	if (net_tcp_call(net, &request, &reply) != 0 || reply.words[1] == 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	accepted = reply.words[1];
+
+	if (bunix_buffer_write((u64)buffer, 0, client_payload,
+			       sizeof(client_payload)) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_NET_TCP_WRITE;
+	request.cap = (u64)buffer;
+	request.cap_rights = BUNIX_RIGHT_RECV;
+	request.words[0] = client;
+	request.words[1] = sizeof(client_payload);
+	request.words[2] = 0;
+	request.words[3] = 0;
+	if (net_tcp_call(net, &request, &reply) != 0 ||
+	    reply.words[1] != sizeof(client_payload)) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+
+	request.type = BUNIX_NET_TCP_POLL;
+	request.cap = 0;
+	request.cap_rights = 0;
+	request.words[0] = accepted;
+	if (net_tcp_call(net, &request, &reply) != 0 ||
+	    (reply.words[1] & 1) == 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_NET_TCP_READ;
+	request.cap = (u64)buffer;
+	request.cap_rights = BUNIX_RIGHT_SEND;
+	request.words[0] = accepted;
+	request.words[1] = sizeof(out);
+	if (net_tcp_call(net, &request, &reply) != 0 ||
+	    reply.words[1] != sizeof(client_payload) ||
+	    bunix_buffer_read((u64)buffer, 0, out,
+			      sizeof(client_payload)) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	for (u64 i = 0; i < sizeof(client_payload); i++) {
+		if (out[i] != client_payload[i]) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+	}
+
+	if (bunix_buffer_write((u64)buffer, 0, server_payload,
+			       sizeof(server_payload)) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_NET_TCP_WRITE;
+	request.cap = (u64)buffer;
+	request.cap_rights = BUNIX_RIGHT_RECV;
+	request.words[0] = accepted;
+	request.words[1] = sizeof(server_payload);
+	if (net_tcp_call(net, &request, &reply) != 0 ||
+	    reply.words[1] != sizeof(server_payload)) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_NET_TCP_READ;
+	request.cap_rights = BUNIX_RIGHT_SEND;
+	request.words[0] = client;
+	request.words[1] = sizeof(out);
+	if (net_tcp_call(net, &request, &reply) != 0 ||
+	    reply.words[1] != sizeof(server_payload) ||
+	    bunix_buffer_read((u64)buffer, 0, out,
+			      sizeof(server_payload)) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	for (u64 i = 0; i < sizeof(server_payload); i++) {
+		if (out[i] != server_payload[i]) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+	}
+
+	request.type = BUNIX_NET_TCP_SHUTDOWN;
+	request.cap = 0;
+	request.cap_rights = 0;
+	request.words[0] = client;
+	request.words[1] = 2;
+	if (net_tcp_call(net, &request, &reply) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_NET_TCP_READ;
+	request.cap = (u64)buffer;
+	request.cap_rights = BUNIX_RIGHT_SEND;
+	request.words[0] = accepted;
+	request.words[1] = sizeof(out);
+	if (net_tcp_call(net, &request, &reply) != 0 ||
+	    reply.words[1] != 0 || reply.words[2] == 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+
+	request.type = BUNIX_NET_TCP_CLOSE;
+	request.cap = 0;
+	request.cap_rights = 0;
+	request.words[0] = client;
+	(void)bunix_ipc_call(net, &request, &reply);
+	request.words[0] = accepted;
+	(void)bunix_ipc_call(net, &request, &reply);
+	request.words[0] = listener;
+	(void)bunix_ipc_call(net, &request, &reply);
+
+	request.type = BUNIX_NET_TCP_OPEN;
+	request.words[0] = family;
+	request.words[1] = 0;
+	request.words[2] = 0;
+	request.words[3] = 0;
+	if (net_tcp_call(net, &request, &reply) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	client = reply.words[1];
+	request.type = BUNIX_NET_TCP_CONNECT;
+	request.words[0] = client;
+	request.words[1] = lo_hi;
+	request.words[2] = lo_lo;
+	request.words[3] = listener_port;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] == 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_NET_TCP_CLOSE;
+	request.words[0] = client;
+	(void)bunix_ipc_call(net, &request, &reply);
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
 int main(void)
 {
 	const char launching[] = "bootstrap: launching servers\n";
@@ -940,6 +1169,7 @@ int main(void)
 	const char virtio_blk_test[] = "bootstrap: virtio-blk test\n";
 	const char net_loopback_ok[] = "bootstrap: net loopback ok\n";
 	const char net_udp_ok[] = "bootstrap: net udp ok\n";
+	const char net_tcp_ok[] = "bootstrap: net tcp ok\n";
 	char file[17];
 	u64 console;
 	u64 vm;
@@ -1009,11 +1239,14 @@ int main(void)
 					BUNIX_RIGHT_SEND);
 	if (net == 0 || net_loopback_selftest(net) != 0 ||
 	    net_udp_selftest(net, BUNIX_NET_ADDR_FAMILY_IPV4) != 0 ||
-	    net_udp_selftest(net, BUNIX_NET_ADDR_FAMILY_IPV6) != 0) {
+	    net_udp_selftest(net, BUNIX_NET_ADDR_FAMILY_IPV6) != 0 ||
+	    net_tcp_selftest(net, BUNIX_NET_ADDR_FAMILY_IPV4) != 0 ||
+	    net_tcp_selftest(net, BUNIX_NET_ADDR_FAMILY_IPV6) != 0) {
 		return 1;
 	}
 	bunix_console_log(net_loopback_ok, sizeof(net_loopback_ok) - 1);
 	bunix_console_log(net_udp_ok, sizeof(net_udp_ok) - 1);
+	bunix_console_log(net_tcp_ok, sizeof(net_tcp_ok) - 1);
 	if (bunix_cmdline_has("virtio-blk-block-test") <= 0) {
 		bunix_launch_module_with_caps("block", fs_caps,
 					      sizeof(fs_caps) /

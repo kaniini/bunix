@@ -9,6 +9,17 @@ enum {
 	NET_UDP_PORT_EPHEMERAL_LAST = 65535,
 	NET_UDP_POLLIN = 1 << 0,
 	NET_UDP_POLLOUT = 1 << 1,
+	NET_TCP_PORT_EPHEMERAL_FIRST = 49152,
+	NET_TCP_PORT_EPHEMERAL_LAST = 65535,
+	NET_TCP_STATE_OPEN = 1,
+	NET_TCP_STATE_LISTEN = 2,
+	NET_TCP_STATE_ESTABLISHED = 3,
+	NET_TCP_STATE_CLOSED = 4,
+	NET_TCP_POLLIN = 1 << 0,
+	NET_TCP_POLLOUT = 1 << 1,
+	NET_TCP_POLLHUP = 1 << 2,
+	NET_TCP_SHUT_RD = 1 << 0,
+	NET_TCP_SHUT_WR = 1 << 1,
 };
 
 struct net_packet {
@@ -59,6 +70,39 @@ struct udp_socket {
 	struct udp_datagram *rx_tail;
 };
 
+struct tcp_segment {
+	struct tcp_segment *next;
+	u64 offset;
+	u64 len;
+	unsigned char data[];
+};
+
+struct tcp_pending {
+	struct tcp_pending *next;
+	u64 socket_id;
+};
+
+struct tcp_socket {
+	struct tcp_socket *next;
+	u64 id;
+	u64 family;
+	u64 state;
+	struct net_addr local;
+	struct net_addr peer_addr;
+	u64 peer_socket;
+	u64 backlog;
+	u64 pending_count;
+	u64 read_closed;
+	u64 write_closed;
+	u64 peer_write_closed;
+	u64 reset;
+	u64 rx_len;
+	struct tcp_segment *rx_head;
+	struct tcp_segment *rx_tail;
+	struct tcp_pending *pending_head;
+	struct tcp_pending *pending_tail;
+};
+
 static struct net_interface loopback = {
 	.id = NET_IFACE_LO,
 	.flags = BUNIX_NET_IFACE_FLAG_UP | BUNIX_NET_IFACE_FLAG_LOOPBACK,
@@ -76,6 +120,9 @@ static struct net_packet *loopback_rx_tail;
 static struct udp_socket *udp_sockets;
 static u64 next_udp_socket_id = 1;
 static u64 next_ephemeral_port = NET_UDP_PORT_EPHEMERAL_FIRST;
+static struct tcp_socket *tcp_sockets;
+static u64 next_tcp_socket_id = 1;
+static u64 next_tcp_ephemeral_port = NET_TCP_PORT_EPHEMERAL_FIRST;
 
 static long register_service(u64 service, u64 handle)
 {
@@ -546,6 +593,464 @@ static void reply_udp_close(struct bunix_msg *reply,
 	reply->words[0] = (u64)-1;
 }
 
+static struct tcp_socket *tcp_find(u64 id)
+{
+	for (struct tcp_socket *socket = tcp_sockets; socket != 0;
+	     socket = socket->next) {
+		if (socket->id == id) {
+			return socket;
+		}
+	}
+	return 0;
+}
+
+static int tcp_port_in_use(u64 family, u64 port)
+{
+	for (struct tcp_socket *socket = tcp_sockets; socket != 0;
+	     socket = socket->next) {
+		if (socket->state != NET_TCP_STATE_CLOSED &&
+		    socket->family == family &&
+		    socket->local.port == port) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static u64 tcp_alloc_ephemeral(u64 family)
+{
+	for (u64 attempt = NET_TCP_PORT_EPHEMERAL_FIRST;
+	     attempt <= NET_TCP_PORT_EPHEMERAL_LAST; attempt++) {
+		const u64 port = next_tcp_ephemeral_port++;
+
+		if (next_tcp_ephemeral_port > NET_TCP_PORT_EPHEMERAL_LAST) {
+			next_tcp_ephemeral_port = NET_TCP_PORT_EPHEMERAL_FIRST;
+		}
+		if (!tcp_port_in_use(family, port)) {
+			return port;
+		}
+	}
+	return 0;
+}
+
+static struct tcp_socket *tcp_alloc_socket(u64 family)
+{
+	struct tcp_socket *socket;
+
+	if (family != BUNIX_NET_ADDR_FAMILY_IPV4 &&
+	    family != BUNIX_NET_ADDR_FAMILY_IPV6) {
+		return 0;
+	}
+	socket = (struct tcp_socket *)bunix_alloc(sizeof(*socket));
+	if (socket == 0) {
+		return 0;
+	}
+	socket->next = tcp_sockets;
+	socket->id = next_tcp_socket_id++;
+	socket->family = family;
+	socket->state = NET_TCP_STATE_OPEN;
+	socket->local.family = family;
+	socket->local.hi = 0;
+	socket->local.lo = 0;
+	socket->local.port = 0;
+	socket->peer_addr.family = family;
+	socket->peer_addr.hi = 0;
+	socket->peer_addr.lo = 0;
+	socket->peer_addr.port = 0;
+	socket->peer_socket = 0;
+	socket->backlog = 0;
+	socket->pending_count = 0;
+	socket->read_closed = 0;
+	socket->write_closed = 0;
+	socket->peer_write_closed = 0;
+	socket->reset = 0;
+	socket->rx_len = 0;
+	socket->rx_head = 0;
+	socket->rx_tail = 0;
+	socket->pending_head = 0;
+	socket->pending_tail = 0;
+	tcp_sockets = socket;
+	return socket;
+}
+
+static void reply_tcp_open(struct bunix_msg *reply,
+			   const struct bunix_msg *message)
+{
+	struct tcp_socket *socket = tcp_alloc_socket(message->words[0]);
+
+	if (socket == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = socket->id;
+}
+
+static long tcp_bind_socket(struct tcp_socket *socket, u64 hi, u64 lo,
+			    u64 port)
+{
+	if (socket == 0 ||
+	    socket->state == NET_TCP_STATE_CLOSED ||
+	    (!net_addr_is_wildcard(socket->family, hi, lo) &&
+	     !net_addr_is_loopback(socket->family, hi, lo))) {
+		return -1;
+	}
+	if (port == 0) {
+		port = tcp_alloc_ephemeral(socket->family);
+	}
+	if (port == 0 || port > 65535 ||
+	    tcp_port_in_use(socket->family, port)) {
+		return -1;
+	}
+	socket->local.hi = hi;
+	socket->local.lo = lo;
+	socket->local.port = port;
+	return 0;
+}
+
+static void reply_tcp_bind(struct bunix_msg *reply,
+			   const struct bunix_msg *message)
+{
+	struct tcp_socket *socket = tcp_find(message->words[0]);
+
+	if (tcp_bind_socket(socket, message->words[1], message->words[2],
+			    message->words[3]) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = socket->local.port;
+}
+
+static void reply_tcp_listen(struct bunix_msg *reply,
+			     const struct bunix_msg *message)
+{
+	struct tcp_socket *socket = tcp_find(message->words[0]);
+	u64 backlog = message->words[1];
+
+	if (socket == 0 || socket->state != NET_TCP_STATE_OPEN ||
+	    socket->local.port == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (backlog == 0) {
+		backlog = 1;
+	}
+	if (backlog > 128) {
+		backlog = 128;
+	}
+	socket->state = NET_TCP_STATE_LISTEN;
+	socket->backlog = backlog;
+	reply->words[0] = 0;
+	reply->words[1] = backlog;
+}
+
+static struct tcp_socket *tcp_find_listener(u64 family, u64 hi, u64 lo,
+					    u64 port)
+{
+	for (struct tcp_socket *socket = tcp_sockets; socket != 0;
+	     socket = socket->next) {
+		if (socket->state == NET_TCP_STATE_LISTEN &&
+		    socket->family == family &&
+		    socket->local.port == port &&
+		    (net_addr_is_wildcard(socket->family, socket->local.hi,
+					  socket->local.lo) ||
+		     (socket->local.hi == hi && socket->local.lo == lo))) {
+			return socket;
+		}
+	}
+	return 0;
+}
+
+static int tcp_pending_push(struct tcp_socket *listener, u64 socket_id)
+{
+	struct tcp_pending *pending;
+
+	if (listener->pending_count >= listener->backlog) {
+		return -1;
+	}
+	pending = (struct tcp_pending *)bunix_alloc(sizeof(*pending));
+	if (pending == 0) {
+		return -1;
+	}
+	pending->next = 0;
+	pending->socket_id = socket_id;
+	if (listener->pending_tail != 0) {
+		listener->pending_tail->next = pending;
+	} else {
+		listener->pending_head = pending;
+	}
+	listener->pending_tail = pending;
+	listener->pending_count++;
+	return 0;
+}
+
+static void reply_tcp_connect(struct bunix_msg *reply,
+			      const struct bunix_msg *message)
+{
+	struct tcp_socket *client = tcp_find(message->words[0]);
+	struct tcp_socket *listener;
+	struct tcp_socket *server;
+
+	if (client == 0 || client->state != NET_TCP_STATE_OPEN ||
+	    !net_addr_is_loopback(client->family, message->words[1],
+				  message->words[2]) ||
+	    message->words[3] == 0 || message->words[3] > 65535) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	listener = tcp_find_listener(client->family, message->words[1],
+				     message->words[2], message->words[3]);
+	if (listener == 0) {
+		client->reset = 1;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (client->local.port == 0 &&
+	    tcp_bind_socket(client, 0, 0, 0) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	server = tcp_alloc_socket(client->family);
+	if (server == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	server->state = NET_TCP_STATE_ESTABLISHED;
+	server->local = listener->local;
+	server->peer_addr = client->local;
+	server->peer_socket = client->id;
+	client->state = NET_TCP_STATE_ESTABLISHED;
+	client->peer_addr.hi = message->words[1];
+	client->peer_addr.lo = message->words[2];
+	client->peer_addr.port = message->words[3];
+	client->peer_socket = server->id;
+	if (tcp_pending_push(listener, server->id) != 0) {
+		server->state = NET_TCP_STATE_CLOSED;
+		client->state = NET_TCP_STATE_OPEN;
+		client->peer_socket = 0;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = client->local.port;
+}
+
+static void reply_tcp_accept(struct bunix_msg *reply,
+			     const struct bunix_msg *message)
+{
+	struct tcp_socket *listener = tcp_find(message->words[0]);
+	struct tcp_pending *pending;
+
+	if (listener == 0 || listener->state != NET_TCP_STATE_LISTEN ||
+	    listener->pending_head == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	pending = listener->pending_head;
+	listener->pending_head = pending->next;
+	if (listener->pending_head == 0) {
+		listener->pending_tail = 0;
+	}
+	listener->pending_count--;
+	reply->words[0] = 0;
+	reply->words[1] = pending->socket_id;
+	bunix_free(pending);
+}
+
+static void tcp_segment_free_all(struct tcp_socket *socket)
+{
+	struct tcp_segment *segment = socket->rx_head;
+
+	while (segment != 0) {
+		struct tcp_segment *next = segment->next;
+
+		bunix_free(segment);
+		segment = next;
+	}
+	socket->rx_head = 0;
+	socket->rx_tail = 0;
+	socket->rx_len = 0;
+}
+
+static void tcp_pending_free_all(struct tcp_socket *socket)
+{
+	struct tcp_pending *pending = socket->pending_head;
+
+	while (pending != 0) {
+		struct tcp_pending *next = pending->next;
+
+		bunix_free(pending);
+		pending = next;
+	}
+	socket->pending_head = 0;
+	socket->pending_tail = 0;
+	socket->pending_count = 0;
+}
+
+static void reply_tcp_write(struct bunix_msg *reply,
+			    const struct bunix_msg *message)
+{
+	struct tcp_socket *socket = tcp_find(message->words[0]);
+	struct tcp_socket *peer;
+	struct tcp_segment *segment;
+	const u64 len = message->words[1];
+
+	if (socket == 0 || socket->state != NET_TCP_STATE_ESTABLISHED ||
+	    socket->write_closed || socket->reset || len > NET_PACKET_MAX ||
+	    message->cap == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	peer = tcp_find(socket->peer_socket);
+	if (peer == 0 || peer->state == NET_TCP_STATE_CLOSED ||
+	    peer->read_closed) {
+		socket->reset = 1;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	segment = (struct tcp_segment *)bunix_alloc(sizeof(*segment) +
+						    (len == 0 ? 1 : len));
+	if (segment == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	segment->next = 0;
+	segment->offset = 0;
+	segment->len = len;
+	if (len != 0 &&
+	    bunix_buffer_read(message->cap, 0, segment->data, len) != 0) {
+		bunix_free(segment);
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (peer->rx_tail != 0) {
+		peer->rx_tail->next = segment;
+	} else {
+		peer->rx_head = segment;
+	}
+	peer->rx_tail = segment;
+	peer->rx_len += len;
+	reply->words[0] = 0;
+	reply->words[1] = len;
+}
+
+static void reply_tcp_read(struct bunix_msg *reply,
+			   const struct bunix_msg *message)
+{
+	struct tcp_socket *socket = tcp_find(message->words[0]);
+	const u64 max_len = message->words[1];
+	u64 done = 0;
+
+	if (socket == 0 || socket->state != NET_TCP_STATE_ESTABLISHED ||
+	    socket->reset || max_len == 0 || message->cap == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	while (done < max_len && socket->rx_head != 0) {
+		struct tcp_segment *segment = socket->rx_head;
+		u64 chunk = segment->len - segment->offset;
+
+		if (chunk > max_len - done) {
+			chunk = max_len - done;
+		}
+		if (bunix_buffer_write(message->cap, done,
+				       segment->data + segment->offset,
+				       chunk) != 0) {
+			reply->words[0] = (u64)-1;
+			return;
+		}
+		done += chunk;
+		segment->offset += chunk;
+		socket->rx_len -= chunk;
+		if (segment->offset == segment->len) {
+			socket->rx_head = segment->next;
+			if (socket->rx_head == 0) {
+				socket->rx_tail = 0;
+			}
+			bunix_free(segment);
+		}
+	}
+	reply->words[0] = 0;
+	reply->words[1] = done;
+	reply->words[2] = done == 0 && socket->peer_write_closed;
+}
+
+static void tcp_mark_peer_write_closed(struct tcp_socket *socket)
+{
+	struct tcp_socket *peer = tcp_find(socket->peer_socket);
+
+	if (peer != 0) {
+		peer->peer_write_closed = 1;
+	}
+}
+
+static void reply_tcp_shutdown(struct bunix_msg *reply,
+			       const struct bunix_msg *message)
+{
+	struct tcp_socket *socket = tcp_find(message->words[0]);
+	const u64 how = message->words[1];
+
+	if (socket == 0 || socket->state != NET_TCP_STATE_ESTABLISHED) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if ((how & NET_TCP_SHUT_RD) != 0) {
+		socket->read_closed = 1;
+		tcp_segment_free_all(socket);
+	}
+	if ((how & NET_TCP_SHUT_WR) != 0) {
+		socket->write_closed = 1;
+		tcp_mark_peer_write_closed(socket);
+	}
+	reply->words[0] = 0;
+}
+
+static void reply_tcp_poll(struct bunix_msg *reply,
+			   const struct bunix_msg *message)
+{
+	struct tcp_socket *socket = tcp_find(message->words[0]);
+	u64 events = 0;
+
+	if (socket == 0 || socket->state == NET_TCP_STATE_CLOSED) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (socket->state == NET_TCP_STATE_LISTEN) {
+		if (socket->pending_head != 0) {
+			events |= NET_TCP_POLLIN;
+		}
+	} else if (socket->state == NET_TCP_STATE_ESTABLISHED) {
+		if (socket->rx_head != 0 || socket->peer_write_closed) {
+			events |= NET_TCP_POLLIN;
+		}
+		if (!socket->write_closed && !socket->reset) {
+			events |= NET_TCP_POLLOUT;
+		}
+		if (socket->peer_write_closed || socket->reset) {
+			events |= NET_TCP_POLLHUP;
+		}
+	}
+	reply->words[0] = 0;
+	reply->words[1] = events;
+}
+
+static void reply_tcp_close(struct bunix_msg *reply,
+			    const struct bunix_msg *message)
+{
+	struct tcp_socket *socket = tcp_find(message->words[0]);
+
+	if (socket == 0 || socket->state == NET_TCP_STATE_CLOSED) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	tcp_mark_peer_write_closed(socket);
+	tcp_segment_free_all(socket);
+	tcp_pending_free_all(socket);
+	socket->state = NET_TCP_STATE_CLOSED;
+	reply->words[0] = 0;
+}
+
 int main(void)
 {
 	const char online[] = "net: online\n";
@@ -612,6 +1117,36 @@ int main(void)
 			break;
 		case BUNIX_NET_UDP_CLOSE:
 			reply_udp_close(&reply, &message);
+			break;
+		case BUNIX_NET_TCP_OPEN:
+			reply_tcp_open(&reply, &message);
+			break;
+		case BUNIX_NET_TCP_BIND:
+			reply_tcp_bind(&reply, &message);
+			break;
+		case BUNIX_NET_TCP_LISTEN:
+			reply_tcp_listen(&reply, &message);
+			break;
+		case BUNIX_NET_TCP_CONNECT:
+			reply_tcp_connect(&reply, &message);
+			break;
+		case BUNIX_NET_TCP_ACCEPT:
+			reply_tcp_accept(&reply, &message);
+			break;
+		case BUNIX_NET_TCP_WRITE:
+			reply_tcp_write(&reply, &message);
+			break;
+		case BUNIX_NET_TCP_READ:
+			reply_tcp_read(&reply, &message);
+			break;
+		case BUNIX_NET_TCP_SHUTDOWN:
+			reply_tcp_shutdown(&reply, &message);
+			break;
+		case BUNIX_NET_TCP_CLOSE:
+			reply_tcp_close(&reply, &message);
+			break;
+		case BUNIX_NET_TCP_POLL:
+			reply_tcp_poll(&reply, &message);
 			break;
 		default:
 			reply.words[0] = (u64)-1;

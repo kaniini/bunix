@@ -34,7 +34,7 @@ Tasks:
       physical NICs.
 - [x] Implement UDP over IPv4 and IPv6, including bind/connect/send/recv,
       wildcard addresses, ephemeral ports, checksums, and poll readiness.
-- [ ] Implement enough TCP for localhost streams: listen, accept, connect,
+- [x] Implement enough TCP for localhost streams: listen, accept, connect,
       read/write, close, half-close, reset/error behavior, and backlog limits.
 - [ ] Add Linux syscall compatibility for the socket operations needed by
       BusyBox, musl, OpenRC tools, and simple client/server test programs.
@@ -140,3 +140,9 @@ Progress:
   localhost IPv4/IPv6 datagram delivery, per-datagram checksums, receive queues,
   poll readiness, and close cleanup.  Bootstrap now self-tests IPv4 and IPv6
   UDP delivery through `NET0` and boot markers assert `bootstrap: net udp ok`.
+- Added native TCP localhost stream state inside `net.server`: dynamic stream
+  sockets, wildcard bind, listen backlog, connect, accept queues, paired
+  streams, ordered read/write queues, poll readiness, half-close EOF, close
+  cleanup, and refused-connect reset/error behavior.  Bootstrap now self-tests
+  IPv4 and IPv6 TCP streams in both directions and boot markers assert
+  `bootstrap: net tcp ok`.
