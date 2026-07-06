@@ -98,6 +98,11 @@ Implementation notes:
   bits: `filetype`, `sparse_super`, `large_file`, `ext_attr`, `resize_inode`,
   and `dir_index`.  Journaling/recovery, compression, meta block groups, and
   other undecoded features remain rejected.
+- Block group descriptors are loaded from the ext2 descriptor table with bounds
+  checks for descriptor-table size, bitmap block numbers, inode-table ranges,
+  and byte-offset overflow.  The server has bounded inode reads and a generic
+  bitmap-bit helper, currently used to verify that root inode 2 is allocated
+  before accepting the mount state.
 
 Tasks:
 
@@ -107,7 +112,7 @@ Tasks:
       versus read-write mode, block size support, feature flags, and root inode.
 - [x] Implement superblock parsing and validation, including unsupported
       incompat/ro-compat feature diagnostics.
-- [ ] Implement block group descriptor loading, inode table access, block
+- [x] Implement block group descriptor loading, inode table access, block
       bitmap/inode bitmap helpers, and safe bounds checks.
 - [ ] Implement directory lookup and readdir for ext2 directory entries.
 - [ ] Implement file read for direct, singly indirect, doubly indirect, and

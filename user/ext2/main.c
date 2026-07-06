@@ -1,9 +1,14 @@
+#include <bunix/alloc.h>
 #include <bunix/libbunix.h>
 
 enum {
 	EXT2_HANDLE_NAMES = 3,
 	EXT2_SUPER_OFFSET = 1024,
 	EXT2_SUPER_SIZE = 1024,
+	EXT2_GROUP_DESC_SIZE = 32,
+	EXT2_INODE_MIN_SIZE = 128,
+	EXT2_ROOT_INO = 2,
+	EXT2_BLOCK_READ_MAX = 128 * 1024,
 	EXT2_MAGIC = 0xef53,
 	EXT2_GOOD_OLD_REV = 0,
 	EXT2_DYNAMIC_REV = 1,
@@ -39,6 +44,29 @@ struct ext2_super {
 	u64 feature_ro_compat;
 	u64 block_size;
 	u64 groups_count;
+};
+
+struct ext2_group {
+	u64 block_bitmap;
+	u64 inode_bitmap;
+	u64 inode_table;
+};
+
+struct ext2_inode {
+	u64 mode;
+	u64 uid;
+	u64 size;
+	u64 gid;
+	u64 links_count;
+	u64 blocks;
+	u64 block[15];
+};
+
+struct ext2_mount {
+	u64 block;
+	u64 image_size;
+	struct ext2_super super;
+	struct ext2_group *groups;
 };
 
 static u64 text_len(const char *text)
@@ -218,7 +246,7 @@ static long block_get_size(u64 block, u64 *size)
 	return 0;
 }
 
-static long block_read_bytes(u64 block, u64 offset, unsigned char *out, u64 len)
+static long block_read_once(u64 block, u64 offset, unsigned char *out, u64 len)
 {
 	const long buffer = bunix_buffer_create(len == 0 ? 1 : len);
 	struct bunix_msg request = {
@@ -244,6 +272,27 @@ static long block_read_bytes(u64 block, u64 offset, unsigned char *out, u64 len)
 		return -1;
 	}
 	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
+static long block_read_bytes(u64 block, u64 offset, unsigned char *out, u64 len)
+{
+	u64 done = 0;
+
+	if (out == 0) {
+		return -1;
+	}
+	while (done < len) {
+		u64 chunk = len - done;
+
+		if (chunk > EXT2_BLOCK_READ_MAX) {
+			chunk = EXT2_BLOCK_READ_MAX;
+		}
+		if (block_read_once(block, offset + done, out + done, chunk) != 0) {
+			return -1;
+		}
+		done += chunk;
+	}
 	return 0;
 }
 
@@ -347,18 +396,191 @@ static long parse_super(const unsigned char *raw, u64 image_size,
 	return 0;
 }
 
-static long load_initial_super(u64 block)
+static u64 block_to_offset(const struct ext2_mount *mount, u64 block)
 {
-	unsigned char raw[EXT2_SUPER_SIZE];
-	struct ext2_super super;
-	u64 image_size = 0;
+	if (mount == 0 || block > ((u64)-1) / mount->super.block_size) {
+		return (u64)-1;
+	}
+	return block * mount->super.block_size;
+}
 
-	if (block_get_size(block, &image_size) != 0 ||
-	    block_read_bytes(block, EXT2_SUPER_OFFSET, raw, sizeof(raw)) != 0 ||
-	    parse_super(raw, image_size, &super) != 0) {
+static int block_range_valid(const struct ext2_mount *mount, u64 first,
+			     u64 count)
+{
+	if (mount == 0 || count == 0 ||
+	    first >= mount->super.blocks_count ||
+	    count > mount->super.blocks_count - first) {
+		return 0;
+	}
+	if (block_to_offset(mount, first) == (u64)-1) {
+		return 0;
+	}
+	return 1;
+}
+
+static long load_group_descriptors(struct ext2_mount *mount)
+{
+	const u64 table_block = mount->super.block_size == 1024 ? 2 : 1;
+	const u64 table_offset = table_block * mount->super.block_size;
+	const u64 inode_table_blocks =
+		div_round_up(mount->super.inodes_per_group *
+				     mount->super.inode_size,
+			     mount->super.block_size);
+	u64 table_size;
+	unsigned char *raw;
+
+	if (mount->super.groups_count > ((u64)-1) / EXT2_GROUP_DESC_SIZE) {
+		log_mount_error("group table size overflow",
+				mount->super.groups_count);
 		return -1;
 	}
-	log_super(&super);
+	table_size = mount->super.groups_count * EXT2_GROUP_DESC_SIZE;
+	if (table_size > mount->image_size ||
+	    table_offset > mount->image_size - table_size) {
+		log_mount_error("group table outside image", table_size);
+		return -1;
+	}
+	raw = (unsigned char *)bunix_calloc(1, table_size);
+	mount->groups = (struct ext2_group *)
+		bunix_calloc(mount->super.groups_count, sizeof(mount->groups[0]));
+	if (raw == 0 || mount->groups == 0 ||
+	    block_read_bytes(mount->block, table_offset, raw, table_size) != 0) {
+		bunix_free(raw);
+		bunix_free(mount->groups);
+		mount->groups = 0;
+		log_mount_error("group table read failed", table_offset);
+		return -1;
+	}
+	for (u64 i = 0; i < mount->super.groups_count; i++) {
+		const u64 offset = i * EXT2_GROUP_DESC_SIZE;
+		struct ext2_group *group = &mount->groups[i];
+
+		group->block_bitmap = load_le32(raw, offset);
+		group->inode_bitmap = load_le32(raw, offset + 4);
+		group->inode_table = load_le32(raw, offset + 8);
+		if (!block_range_valid(mount, group->block_bitmap, 1) ||
+		    !block_range_valid(mount, group->inode_bitmap, 1) ||
+		    !block_range_valid(mount, group->inode_table,
+				       inode_table_blocks)) {
+			bunix_free(raw);
+			bunix_free(mount->groups);
+			mount->groups = 0;
+			log_mount_error("bad group descriptor", i);
+			return -1;
+		}
+	}
+	bunix_free(raw);
+	return 0;
+}
+
+static long read_inode(const struct ext2_mount *mount, u64 ino,
+		       struct ext2_inode *inode)
+{
+	unsigned char raw[EXT2_INODE_MIN_SIZE];
+	u64 group_index;
+	u64 inode_index;
+	const struct ext2_group *group;
+	u64 offset;
+
+	if (mount == 0 || inode == 0 ||
+	    ino == 0 ||
+	    ino > mount->super.inodes_count ||
+	    (ino - 1) / mount->super.inodes_per_group >=
+		    mount->super.groups_count) {
+		return -1;
+	}
+	group_index = (ino - 1) / mount->super.inodes_per_group;
+	inode_index = (ino - 1) % mount->super.inodes_per_group;
+	group = &mount->groups[group_index];
+	offset = block_to_offset(mount, group->inode_table);
+	if (offset == (u64)-1 ||
+	    inode_index > ((u64)-1) / mount->super.inode_size ||
+	    offset > (u64)-1 - inode_index * mount->super.inode_size) {
+		return -1;
+	}
+	offset += inode_index * mount->super.inode_size;
+	if (offset > mount->image_size ||
+	    sizeof(raw) > mount->image_size - offset ||
+	    block_read_bytes(mount->block, offset, raw, sizeof(raw)) != 0) {
+		return -1;
+	}
+	inode->mode = load_le16(raw, 0);
+	inode->uid = load_le16(raw, 2);
+	inode->size = load_le32(raw, 4);
+	inode->gid = load_le16(raw, 24);
+	inode->links_count = load_le16(raw, 26);
+	inode->blocks = load_le32(raw, 28);
+	for (u64 i = 0; i < 15; i++) {
+		inode->block[i] = load_le32(raw, 40 + i * 4);
+	}
+	return 0;
+}
+
+static long bitmap_bit_is_set(const struct ext2_mount *mount, u64 bitmap_block,
+			      u64 bit, u64 *set)
+{
+	unsigned char value = 0;
+	u64 offset;
+
+	if (mount == 0 || set == 0 ||
+	    bit >= mount->super.block_size * 8 ||
+	    !block_range_valid(mount, bitmap_block, 1)) {
+		return -1;
+	}
+	offset = block_to_offset(mount, bitmap_block);
+	if (offset == (u64)-1 ||
+	    offset > mount->image_size ||
+	    bit / 8 >= mount->image_size - offset ||
+	    block_read_bytes(mount->block, offset + bit / 8, &value, 1) != 0) {
+		return -1;
+	}
+	*set = (value & (1u << (bit % 8))) != 0;
+	return 0;
+}
+
+static long inode_is_allocated(const struct ext2_mount *mount, u64 ino,
+			       u64 *allocated)
+{
+	u64 group_index;
+	u64 inode_index;
+
+	if (mount == 0 || allocated == 0 ||
+	    ino == 0 ||
+	    ino > mount->super.inodes_count ||
+	    (ino - 1) / mount->super.inodes_per_group >=
+		    mount->super.groups_count) {
+		return -1;
+	}
+	group_index = (ino - 1) / mount->super.inodes_per_group;
+	inode_index = (ino - 1) % mount->super.inodes_per_group;
+	return bitmap_bit_is_set(mount,
+				 mount->groups[group_index].inode_bitmap,
+				 inode_index, allocated);
+}
+
+static long load_initial_mount(u64 block)
+{
+	unsigned char raw[EXT2_SUPER_SIZE];
+	struct ext2_mount mount;
+	struct ext2_inode root_inode;
+	u64 root_allocated = 0;
+
+	mount.block = block;
+	mount.image_size = 0;
+	mount.groups = 0;
+	if (block_get_size(block, &mount.image_size) != 0 ||
+	    block_read_bytes(block, EXT2_SUPER_OFFSET, raw, sizeof(raw)) != 0 ||
+	    parse_super(raw, mount.image_size, &mount.super) != 0 ||
+	    load_group_descriptors(&mount) != 0 ||
+	    inode_is_allocated(&mount, EXT2_ROOT_INO, &root_allocated) != 0 ||
+	    read_inode(&mount, EXT2_ROOT_INO, &root_inode) != 0 ||
+	    root_allocated == 0 ||
+	    root_inode.mode == 0) {
+		bunix_free(mount.groups);
+		return -1;
+	}
+	log_super(&mount.super);
+	bunix_free(mount.groups);
 	return 0;
 }
 
@@ -373,7 +595,7 @@ int main(void)
 	if (block == 0) {
 		log_text("ext2: block service unavailable\n");
 	} else {
-		(void)load_initial_super(block);
+		(void)load_initial_mount(block);
 	}
 	if (register_service(BUNIX_SERVICE_EXT2, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
