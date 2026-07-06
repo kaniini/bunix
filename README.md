@@ -31,7 +31,8 @@ hello from rootfs
 
 Useful test targets:
 
-- `make test` boots to the normal marker set and checks early/server startup.
+- `make test` runs the normal parallel gate; `make test-boot` preserves the
+  old serial boot-marker startup check.
 - `make test-shell` runs the full scripted BusyBox login and filesystem smoke
   test.
 - `make test-smoke-parallel` runs the fast smoke shard through the parallel
@@ -395,13 +396,16 @@ The build uses the host `gcc` in freestanding 64-bit mode. No libc is linked.
 make test
 ```
 
-`make test` boots through OVMF/GRUB with KVM, captures serial output in
+`make test-boot` boots through OVMF/GRUB with KVM, captures serial output in
 `build/serial.log`, and checks the boot-to-login path: GRUB passed Multiboot2
 modules, the kernel started VM, names, time, user, linux, proc, procfs, block,
 VFS, and ping, bootstrap received its boot capabilities, services
 registered/resolved through the user-space names server, VFS re-exported the
 filesystem namespace, `/sbin/init` launched, procfs attached, OCAP launch
 denial worked, and the login prompt appeared.
+
+`make test` runs the composed parallel shell shard gate. Use `make test-boot`
+for the old serial boot-marker reference path.
 
 For the interactive BusyBox shell regression:
 

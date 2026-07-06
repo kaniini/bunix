@@ -202,7 +202,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-kernel run-iso test test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
+.PHONY: all clean run run-kernel run-iso test test-boot test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -496,7 +496,9 @@ run-iso: $(EFI_BOOT_IMG)
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-cdrom $(EFI_BOOT_IMG) -serial stdio -display none -no-reboot
 
-test: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot-markers.txt
+test: test-parallel
+
+test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot-markers.txt
 	mkdir -p $(BUILD_DIR)
 	truncate -s 0 $(BUILD_DIR)/serial.log
 	timeout 60s $(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \

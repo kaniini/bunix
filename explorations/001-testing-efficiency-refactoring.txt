@@ -392,9 +392,15 @@ Plan:
    - `BUNIX_TEST_PRUNE_DRY_RUN=1` reports pruning decisions without deleting
      directories.
 
-21. Improve 'make test' parallelism
+21. Improve 'make test' parallelism [DONE]
    Build on the earlier sharding changes by collapsing make test
    into pure shards + running them in parallel.
+
+   Result:
+
+   - `make test` now aliases the composed parallel gate.
+   - The old serial boot-marker check remains available as `make test-boot`.
+   - `README.md` documents the new split.
 
 Plan maintenance:
 
