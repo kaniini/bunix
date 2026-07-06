@@ -107,6 +107,7 @@ VIRTIO_BLOCK_IMAGE ?= $(BLOCK_IMAGE)
 VIRTIO_BLK_TEST_IMAGE := $(BUILD_DIR)/virtio-blk-test.img
 QEMU_VIRTIO_BLK_ARGS := -drive if=none,id=bunix-virtio0,format=raw,readonly=on,file=$(VIRTIO_BLOCK_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
 QEMU_VIRTIO_BLK_TEST_ARGS := -drive if=none,id=bunix-virtio0,format=raw,file=$(VIRTIO_BLK_TEST_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
+QEMU_VIRTIO_NET_ARGS := -netdev user,id=bunix-net0,restrict=on -device virtio-net-pci,disable-legacy=on,netdev=bunix-net0,mac=52:54:00:18:00:01,bus=pcie.0,addr=0x7
 TEST_BOOT_MARKERS := $(if $(filter alpine,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine.txt,tools/test-boot-markers.txt)
 ROOTFS_FLAVOR_STAMP := $(BUILD_DIR)/rootfs-flavor.stamp
 PARALLEL_TEST_SET := $(if $(BUNIX_TEST_SET),$(BUNIX_TEST_SET),all)
@@ -243,7 +244,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-virtio run-kernel run-iso test test-boot test-boot-virtio test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool test-alpine-rootfs list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
+.PHONY: all clean run run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-virtio test-boot-virtio-net test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool test-alpine-rootfs list-shell-shards audit-linux-syscalls iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -624,6 +625,14 @@ run-virtio: $(EFI_BOOT_APP)
 		$(QEMU_VIRTIO_BLK_ARGS) \
 		-serial stdio -display none -no-reboot
 
+run-virtio-net: $(EFI_BOOT_APP)
+	$(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
+		-smp $(SMP) \
+		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
+		-drive format=raw,file=fat:rw:$(ESP_DIR) \
+		$(QEMU_VIRTIO_NET_ARGS) \
+		-serial stdio -display none -no-reboot
+
 run-kernel: $(EFI_BOOT_APP)
 	$(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
 		-smp $(SMP) \
@@ -650,6 +659,16 @@ test-boot-virtio: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_BLK_ARGS)" sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
 	grep -aF "virtio-bus: device index=0" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "virtio-bus: features index=0" $(BUILD_DIR)/serial.log >/dev/null
+	! grep -aF "virtio-bus: features index=0 device=0 " $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "virtio-bus: ready devices=1" $(BUILD_DIR)/serial.log >/dev/null
+
+test-boot-virtio-net: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
+	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log \
+		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_ARGS)" sh tools/test-boot.sh
+	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
+	grep -aF "virtio-bus: device index=0 vendor=6900 device=4161" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-bus: features index=0" $(BUILD_DIR)/serial.log >/dev/null
 	! grep -aF "virtio-bus: features index=0 device=0 " $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-bus: ready devices=1" $(BUILD_DIR)/serial.log >/dev/null

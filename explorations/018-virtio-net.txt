@@ -34,7 +34,7 @@ Tasks:
 - [ ] Add support for MAC address discovery/configuration and basic link state.
 - [ ] Integrate the driver with the network stack interface registry and route
       management.
-- [ ] Add QEMU run/test modes with a deterministic VirtIO-net topology.
+- [x] Add QEMU run/test modes with a deterministic VirtIO-net topology.
 - [ ] Add tests for driver attach, link-up, transmit path, receive path,
       localhost unaffected by NIC state, and clean shutdown.
 - [ ] Add external-network smoke tests once a deterministic host-side tap/user
@@ -141,3 +141,9 @@ Progress:
 - Bootstrap now self-tests the packet-interface registry by attaching a
   synthetic NIC, setting link state, submitting one RX frame, checking interface
   count/stats, and emitting `bootstrap: net packet iface ok`.
+- Added deterministic QEMU VirtIO-net topology support through
+  `QEMU_VIRTIO_NET_ARGS`, `run-virtio-net`, and `test-boot-virtio-net`.  The
+  narrow boot test uses modern-only `virtio-net-pci` at fixed PCI slot `0x7`
+  with MAC `52:54:00:18:00:01`, boots the normal server set, and verifies that
+  `virtio-bus.server` enumerates one device with modern VirtIO-net PCI device
+  ID `0x1041`.
