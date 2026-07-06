@@ -82,12 +82,14 @@ Plan:
    - `tools/shell-tests/interactive-tty.sh` owns denied secret reads,
      backspace editing, foreground Ctrl-C, BusyBox watch, user shell cwd/pwd,
      and return-to-login behavior.
+   - `tools/shell-tests/root-login-union.sh` owns root login, root identity and
+     environment checks, root secret access, and root-only unionfs lower-parent
+     copy-up/busy-mount coverage.
 
    Needs:
 
    - Extract the root-phase batches:
-     `root-login-union`, `root-tmpfs-chown`, `long-login`, and
-     `root-mount-soak`.
+     `root-tmpfs-chown`, `long-login`, and `root-mount-soak`.
    - Move broad marker files into shard-owned marker files as the batches are
      split.
 
