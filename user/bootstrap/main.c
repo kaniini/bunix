@@ -592,6 +592,38 @@ static long vfs_create_path_buffer(u64 vfs, const char *path, u64 mode)
 	return 0;
 }
 
+static long vfs_mkdir_path_buffer(u64 vfs, const char *path, u64 mode)
+{
+	const char cwd[] = "/";
+	const u64 cwd_len = sizeof(cwd);
+	const u64 path_len = path != 0 ? str_len(path) + 1 : 0;
+	const long buffer = path_len != 0 ?
+			    bunix_buffer_create(cwd_len + path_len) : -1;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_MKDIR_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { cwd_len, path_len, 0, mode << 32 },
+	};
+	struct bunix_msg reply;
+
+	if (vfs == 0 || path == 0 || buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, cwd, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, cwd_len, path, path_len) != 0 ||
+	    bunix_ipc_call(vfs, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
 static long vfs_unlink_path_buffer(u64 vfs, const char *path)
 {
 	const char cwd[] = "/";
@@ -602,6 +634,38 @@ static long vfs_unlink_path_buffer(u64 vfs, const char *path)
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
 		.type = BUNIX_VFS_UNLINK_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { cwd_len, path_len, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (vfs == 0 || path == 0 || buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, cwd, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, cwd_len, path, path_len) != 0 ||
+	    bunix_ipc_call(vfs, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
+static long vfs_rmdir_path_buffer(u64 vfs, const char *path)
+{
+	const char cwd[] = "/";
+	const u64 cwd_len = sizeof(cwd);
+	const u64 path_len = path != 0 ? str_len(path) + 1 : 0;
+	const long buffer = path_len != 0 ?
+			    bunix_buffer_create(cwd_len + path_len) : -1;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_RMDIR_BUFFER,
 		.sender = 0,
 		.cap_rights = BUNIX_RIGHT_RECV,
 		.reply = 0,
@@ -897,6 +961,9 @@ static long ext2_readonly_selftest(u64 vfs)
 	u64 hello_uid = 0;
 	u64 hello_gid = 0;
 	u64 hello_blocks = 0;
+	u64 dir_type = 0;
+	u64 dir_mode = 0;
+	u64 dir_nlink = 0;
 	u64 created_ino = 0;
 	u64 linked_ino = 0;
 
@@ -1037,6 +1104,30 @@ static long ext2_readonly_selftest(u64 vfs)
 	    vfs_stat_path(vfs, "/mnt/ext2/created-hard.txt", 0, 0, 0, 0,
 			  0, 0, 0, 0) == 0 ||
 	    vfs_readdir_has(vfs, "/mnt/ext2", "created-hard.txt") == 0) {
+		return -1;
+	}
+	if (vfs_mkdir_path_buffer(vfs, "/mnt/ext2/newdir", 0750) != 0 ||
+	    vfs_stat_path(vfs, "/mnt/ext2/newdir", 0, 0, &dir_nlink,
+			  &dir_type, &dir_mode, 0, 0, 0) != 0 ||
+	    dir_type != BUNIX_VFS_TYPE_DIRECTORY ||
+	    dir_mode != 0750 ||
+	    dir_nlink < 2 ||
+	    vfs_readdir_has(vfs, "/mnt/ext2", "newdir") != 0) {
+		return -1;
+	}
+	if (vfs_create_path_buffer(vfs, "/mnt/ext2/newdir/nested.txt",
+				   0644) != 0 ||
+	    vfs_write_text(vfs, "/mnt/ext2/newdir/nested.txt", 0,
+			   "nested ok\n", 10) != 0 ||
+	    vfs_read_text(vfs, "/mnt/ext2/newdir/nested.txt", text,
+			  sizeof(text)) != 0 ||
+	    !str_eq(text, "nested ok\n") ||
+	    vfs_rmdir_path_buffer(vfs, "/mnt/ext2/newdir") == 0 ||
+	    vfs_unlink_path_buffer(vfs, "/mnt/ext2/newdir/nested.txt") != 0 ||
+	    vfs_rmdir_path_buffer(vfs, "/mnt/ext2/newdir") != 0 ||
+	    vfs_stat_path(vfs, "/mnt/ext2/newdir", 0, 0, 0, 0,
+			  0, 0, 0, 0) == 0 ||
+	    vfs_readdir_has(vfs, "/mnt/ext2", "newdir") == 0) {
 		return -1;
 	}
 	return 0;

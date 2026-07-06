@@ -182,6 +182,11 @@ Implementation notes:
   inode block field.  The server writes the inline target bytes into the inode,
   inserts a symlink directory entry, and supports unlinking these zero-block
   symlinks.  Long symlinks that need data blocks remain a follow-up slice.
+- `MKDIR_BUFFER` and `RMDIR_BUFFER` now support the initial direct-block
+  directory subset.  New directories allocate one data block, write `.` and
+  `..`, update parent link counts and group used-directory counts, accept
+  nested file creation through reusable directory-entry space, reject non-empty
+  removal, and free the directory block plus inode on successful removal.
 
 Tasks:
 
