@@ -1,0 +1,2 @@
+Build a series of explorations to build the remaining components necessary in order to
+achieve an Alpine base image booting with OpenRC.
