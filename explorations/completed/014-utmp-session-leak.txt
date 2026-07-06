@@ -1,0 +1,81 @@
+Debug and fix stale login session accounting.
+
+Problem:
+
+- After logging out and logging back in from the same console, `uptime(1)`
+  reports `2 users` instead of the expected `1`.
+- The likely leak is a stale utmp entry or login/session record that is not
+  removed when the shell exits and the console returns to the login prompt.
+
+Constraints:
+
+- Linux-visible login accounting should reflect active Linux login sessions,
+  not historical shells or Bunix task lifetime artifacts.
+- Bunix task IDs and Linux PIDs may differ, so cleanup should key off the
+  explicit session/login record rather than assuming PID equality.
+- Logging out and back in on the same console should replace or cleanly close
+  the previous session before creating the next one.
+
+Tasks:
+
+- [x] Reproduce with a narrow shell test: login, run `uptime`, exit, login
+      again on the same console, run `uptime`, and assert it reports `1 users`.
+- [x] Identify whether BusyBox `uptime` is counting users from utmpfs,
+      `/var/run/utmp`, Linux server session state, or another source.
+- [x] Trace login, shell exec, shell exit, login respawn, and utmp/session
+      updates across the login program, Linux server, proc server, and utmpfs.
+- [x] Define ownership of login session lifecycle: which component creates,
+      refreshes, and removes records for a console login.
+- [x] Fix stale record cleanup when the shell exits normally, exits by signal,
+      or is replaced by a respawned login on the same TTY.
+- [x] Add a regression shard for repeated same-console login/logout cycles.
+- [x] Verify `uptime(1)` reports one active user after relogin and zero users
+      after final logout if no shell is active.
+
+Findings:
+
+- BusyBox `uptime` reads Linux utmp data through `/run/utmp` or
+  `/var/run/utmp`, both served by `utmpfs`.
+- `utmpfs` builds records from the user server's active login sessions via
+  `BUNIX_USER_SESSION_COUNT` and `BUNIX_USER_SESSION_AT`; stale user-server
+  sessions therefore become stale `uptime` users.
+- The login program created a user session before `execve("/bin/sh")`, but the
+  successful exec path did not leave a return path that could call
+  `BUNIX_USER_SESSION_END`.
+- Session lifecycle ownership is now explicit for the current slice:
+  login authenticates and creates a user-server session, while utmpfs exposes
+  the user server's active session table.  Login attaches the created session
+  to the current Linux process before execing the shell; the Linux server keeps
+  that process as the session owner and ends the user-server session when the
+  owner exits.  Forked children inherit the session id for terminal/session
+  checks, but not ownership, so short-lived commands cannot close the login
+  record underneath the shell.
+- The user server still removes any pre-existing same-TTY session before
+  creating a replacement.  That gives a defensive cleanup path for a respawned
+  login if a previous owner died before the Linux server could close the
+  session.
+- Full validation also uncovered an interactive pipeline hang.  The Linux
+  `setpgid(child, child)` path incorrectly rejected creating a new process
+  group when the target process already existed but had not yet become group
+  leader.  Allowing the target to become its own group leader fixes BusyBox
+  shell pipelines such as `busybox ps | busybox grep "/bin/sh"`.
+- Session accounting is now decoupled from the Linux server's foreground pgrp
+  emulation.  The attached session id is used for ownership and same-session
+  checks, while TTY foreground state remains local to the Linux server until a
+  fuller TTY/session model is built.
+
+Validation:
+
+- `BUNIX_SHELL_PART=relogin-session KERNEL_CMDLINE='log=info' make test-shell-part`
+  passes.  The shard logs in as `kaniini`, checks `uptime` reports `1 users`,
+  logs out to the same console, repeats the login/logout cycle twice more, and
+  asserts each relogin still reports exactly `1 users`.
+- `BUNIX_SHELL_PART=login-smoke KERNEL_CMDLINE='log=info' make test-shell-part`
+  passes.
+- `make BUNIX_TEST_SET=alpine-openrc-full test` passes after rebuilding the
+  Alpine rootfs with the updated login/user modules.
+- `BUNIX_CMD='/bin/cat /proc/self/cmdline | busybox grep -a /bin/cat'
+  KERNEL_CMDLINE='log=info' make test-command` passes.
+- `BUNIX_CMD='busybox cat /proc/self/cgroup | busybox grep "0::/"'
+  KERNEL_CMDLINE='log=info' make test-command` passes.
+- Full `make test` passes with run id `20260706T140843Z-27459`.

@@ -216,6 +216,7 @@ struct linux_process {
 	u64 signal_ignored;
 	u64 umask;
 	u64 session_id;
+	u64 session_owner;
 	u64 cwd_handle;
 	char *cwd;
 	struct linux_fd *fds;
@@ -248,6 +249,7 @@ static u64 tty_reader_pid;
 static u64 tty_reader_reply;
 static u64 tty_reader_buffer;
 static u64 tty_reader_len;
+static u64 tty_cpr_state;
 static struct bunix_map file_refs;
 static u64 next_pid = 1;
 static u64 foreground_pgid = 1;
@@ -264,6 +266,8 @@ static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
 static void tty_cancel_reader(struct linux_process *process);
+static int tty_read_queue_push(char c);
+static void tty_wake_reader(void);
 static u64 string_len(const char *text);
 static long linux_check_name_max(const char *path);
 static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
@@ -426,6 +430,39 @@ static long linux_user_session_set_foreground(u64 session_id, u64 foreground)
 		return -LINUX_ESRCH;
 	}
 	return 0;
+}
+
+static long linux_user_session_end(u64 session_id)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_SESSION_END,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { session_id, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = linux_user_service();
+
+	if (session_id == 0 || user == 0) {
+		return 0;
+	}
+	return bunix_ipc_call(user, &request, &reply) == 0 &&
+		       reply.words[0] == 0 ?
+	       0 : -LINUX_ESRCH;
+}
+
+static long linux_attach_session(struct linux_process *process, u64 session_id)
+{
+	if (process == 0 || session_id == 0 ||
+	    linux_user_session_get(session_id, 0, 0, 0, 0) != 0) {
+		return -LINUX_ESRCH;
+	}
+	process->session_id = session_id;
+	process->session_owner = 1;
+	return linux_user_session_set_foreground(session_id, process->pgid);
 }
 
 static void linux_process_init_links(struct linux_process *process)
@@ -2016,6 +2053,10 @@ static void linux_process_exit_status(struct linux_process *process, u64 status,
 	linux_reparent_children(process);
 	process->exited = 1;
 	process->exit_status = status;
+	if (process->session_owner && process->session_id != 0) {
+		(void)linux_user_session_end(process->session_id);
+		process->session_owner = 0;
+	}
 	notify_proc_exit(process->pid, process->exit_status, kill_task);
 	linux_wake_parent(process);
 }
@@ -2130,15 +2171,6 @@ static long linux_rt_sigtimedwait(struct linux_process *process, u64 set,
 
 static u64 linux_foreground_pgid(const struct linux_process *process)
 {
-	u64 foreground = 0;
-
-	if (process != 0 &&
-	    process->session_id != 0 &&
-	    linux_user_session_get(process->session_id, 0, 0, 0,
-				   &foreground) == 0 &&
-	    foreground != 0) {
-		return foreground;
-	}
 	if (process != 0) {
 		return process->pgid;
 	}
@@ -2147,14 +2179,12 @@ static u64 linux_foreground_pgid(const struct linux_process *process)
 
 static long linux_set_foreground_pgid(struct linux_process *process, u64 pgid)
 {
+	(void)process;
+
 	if (pgid == 0) {
 		return -LINUX_EINVAL;
 	}
 	foreground_pgid = pgid;
-	if (process != 0 && process->session_id != 0) {
-		return linux_user_session_set_foreground(process->session_id,
-							 pgid);
-	}
 	return 0;
 }
 
@@ -2441,6 +2471,7 @@ static long linux_setpgid(struct linux_process *process, u64 pid, u64 pgid)
 	}
 	leader = linux_process_find_pid(pgid);
 	if (leader != 0 &&
+	    leader != target &&
 	    (leader->pgid != pgid || !linux_same_session(target, leader))) {
 		return -LINUX_EPERM;
 	}
@@ -2499,6 +2530,31 @@ static unsigned int tty_iflag(void)
 static void tty_echo(const char *text, u64 len)
 {
 	(void)bunix_console_write(text, len);
+}
+
+static void tty_queue_cursor_position_report(void)
+{
+	static const char report[] = "\033[1;1R";
+
+	for (u64 i = 0; i < sizeof(report) - 1; i++) {
+		(void)tty_read_queue_push(report[i]);
+	}
+	tty_wake_reader();
+}
+
+static void tty_output_event(char c)
+{
+	static const char query[] = "\033[6n";
+
+	if (c == query[tty_cpr_state]) {
+		tty_cpr_state++;
+		if (tty_cpr_state == sizeof(query) - 1) {
+			tty_cpr_state = 0;
+			tty_queue_cursor_position_report();
+		}
+		return;
+	}
+	tty_cpr_state = c == query[0] ? 1 : 0;
 }
 
 static int tty_read_queue_push(char c)
@@ -5072,6 +5128,9 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 		if (bunix_buffer_read(buffer, done, write_buffer, chunk) != 0) {
 			return done != 0 ? (long)done : -(long)LINUX_EFAULT;
 		}
+		for (u64 i = 0; i < chunk; i++) {
+			tty_output_event(write_buffer[i]);
+		}
 		bunix_console_write((const char *)write_buffer, chunk);
 		done += chunk;
 	}
@@ -5455,6 +5514,7 @@ static void linux_process_reset(struct linux_process *process)
 	process->signal_ignored = 0;
 	process->umask = 0;
 	process->session_id = 0;
+	process->session_owner = 0;
 	(void)linux_close_vfs_handle(process->cwd_handle);
 	process->cwd_handle = 0;
 	bunix_free(process->cwd);
@@ -5707,6 +5767,10 @@ int main(void)
 		case BUNIX_LINUX_GETSID:
 			reply.words[0] = (u64)linux_getsid(process,
 							   message.words[0]);
+			break;
+		case BUNIX_LINUX_ATTACH_SESSION:
+			reply.words[0] = (u64)linux_attach_session(process,
+								   message.words[0]);
 			break;
 		case BUNIX_LINUX_SETPGID:
 			reply.words[0] = (u64)linux_setpgid(process,

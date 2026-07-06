@@ -2,6 +2,7 @@
 smoke	user	2	128M	90	1	no	Fast boot-marker, login, minimal VFS/procfs, and sysrace smoke target.
 smoke-up	user	1	128M	90	1	no	One-vCPU boot-marker, login, minimal VFS/procfs, and sysrace smoke target.
 login-smoke	user	2	128M	120	1	no	Login environment, uptime/uname/id/groups, /usr/bin/env, access checks, stty, basic sleep, signal, and kill probes.
+relogin-session	user	2	128M	120	1	no	Same-console logout and relogin session accounting; uptime must report one active user after relogin.
 exec-argv-pipe	user	2	128M	120	1	no	Pipes, argv/env expansion, large argv/env, and initial procfs read through the login shell.
 procfs-cmdline	user	2	128M	120	1	no	Live non-self procfs cmdline/status coverage without shell $$ assumptions.
 rootfs-vfs-proc-dev	user	2	128M	150	2	no	Rootfs stat/list/readlink, long paths, cwd/dotdot/slash resolution, procfs files, and devfs zero/urandom checks.

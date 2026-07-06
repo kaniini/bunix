@@ -22,6 +22,7 @@ shell_parts=${BUNIX_SHELL_PART:-all}
 . "$script_dir/test-lib.sh"
 . "$script_dir/shell-tests/smoke.sh"
 . "$script_dir/shell-tests/login-smoke.sh"
+. "$script_dir/shell-tests/relogin-session.sh"
 . "$script_dir/shell-tests/exec-argv-pipe.sh"
 . "$script_dir/shell-tests/procfs-cmdline.sh"
 . "$script_dir/shell-tests/rootfs-vfs-proc-dev.sh"
@@ -226,7 +227,7 @@ require_supported_parts() {
 	for part do
 		case "$part" in
 		all|vfs|procfs|devfs|tmpfs|path|statfs|large-io|mount|\
-		smoke|login-smoke|exec-argv-pipe|procfs-cmdline|rootfs-vfs-proc-dev|\
+		smoke|login-smoke|relogin-session|exec-argv-pipe|procfs-cmdline|rootfs-vfs-proc-dev|\
 		tmpfs-basic-linux-tests|path-limits-statfs|union-root-user|\
 		tmpfs-extended|large-io-mount|interactive-tty|root-login-union|\
 		root-tmpfs-chown|long-login|root-mount-soak)
@@ -316,6 +317,12 @@ if part_selected login-smoke; then
 	run_login_smoke
 fi
 
+if part_selected relogin-session; then
+	begin_shard relogin-session
+	run_relogin_session
+	user_shell_active=0
+fi
+
 if part_selected exec-argv-pipe; then
 	begin_shard exec-argv-pipe
 	run_exec_argv_pipe
@@ -359,6 +366,11 @@ fi
 if part_selected login-smoke; then
 	check_login_smoke
 	finish_shard login-smoke
+fi
+
+if part_selected relogin-session; then
+	check_relogin_session
+	finish_shard relogin-session
 fi
 
 if part_selected rootfs-vfs-proc-dev; then

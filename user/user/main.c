@@ -1128,6 +1128,28 @@ static struct user_session *session_find(u64 session_id)
 	return (struct user_session *)bunix_id_get(&sessions, session_id);
 }
 
+static long session_end(u64 session_id);
+
+static long session_end_tty(u64 tty)
+{
+	long result = -1;
+
+	if (tty == 0) {
+		tty = USER_TTY_CONSOLE;
+	}
+	for (u64 i = 0; i < sessions.capacity; i++) {
+		struct user_session *existing =
+			(struct user_session *)sessions.slots[i].value;
+
+		if (existing != 0 && existing->tty == tty) {
+			if (session_end(existing->id) == 0) {
+				result = 0;
+			}
+		}
+	}
+	return result;
+}
+
 static long session_begin(u64 uid, u64 gid, u64 tty, struct bunix_msg *reply)
 {
 	struct user_session *session;
@@ -1139,6 +1161,7 @@ static long session_begin(u64 uid, u64 gid, u64 tty, struct bunix_msg *reply)
 	if (tty == 0) {
 		tty = USER_TTY_CONSOLE;
 	}
+	(void)session_end_tty(tty);
 
 	session = (struct user_session *)bunix_calloc(1, sizeof(*session));
 	if (session == 0) {

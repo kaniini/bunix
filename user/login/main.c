@@ -426,6 +426,28 @@ static long session_end(u64 user, u64 session_id)
 	return 0;
 }
 
+static long attach_session(u64 linux, u64 session_id)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_LINUX,
+		.type = BUNIX_LINUX_ATTACH_SESSION,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { session_id, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (linux == 0 || session_id == 0 ||
+	    bunix_ipc_call(linux, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+
+	return 0;
+}
+
 int main(int argc, char **argv, char **envp)
 {
 	struct startup_aux aux;
@@ -436,6 +458,7 @@ int main(int argc, char **argv, char **envp)
 	u64 group_count = 0;
 	unsigned int groups[LOGIN_MAX_GROUPS];
 	u64 user;
+	u64 linux;
 	u64 session_id;
 	long nread;
 	char saved_termios[60];
@@ -446,6 +469,8 @@ int main(int argc, char **argv, char **envp)
 	load_auxv(envp, &aux);
 	user = resolve_service(aux.names_handle, BUNIX_SERVICE_USER,
 			       BUNIX_RIGHT_SEND);
+	linux = resolve_service(aux.names_handle, BUNIX_SERVICE_LINUX,
+				BUNIX_RIGHT_SEND);
 	for (;;) {
 		write_text("login: ");
 		nread = read_text(name, sizeof(name));
@@ -474,6 +499,9 @@ int main(int argc, char **argv, char **envp)
 			write_text("login: groups failed\n");
 		} else if (session_begin(user, uid, gid, &session_id) != 0) {
 			write_text("login: session failed\n");
+		} else if (attach_session(linux, session_id) != 0) {
+			write_text("login: session attach failed\n");
+			(void)session_end(user, session_id);
 		} else if (apply_login(uid, gid, group_count, groups) != 0) {
 			write_text("login: apply failed\n");
 			(void)session_end(user, session_id);
