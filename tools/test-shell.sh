@@ -8,6 +8,7 @@ timeout_cmd=${TIMEOUT:-timeout}
 qemu_timeout=${QEMU_TIMEOUT:-180s}
 qemu_memory=${QEMU_MEMORY:-128M}
 qemu_extra_args=${QEMU_EXTRA_ARGS:-}
+guest_poweroff=${BUNIX_GUEST_POWEROFF:-1}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-shell-test.$run_id}
 log=$tmp/serial.log
@@ -270,6 +271,25 @@ EOF_AUTO_EXIT_ROOT
 	root_shell_active=0
 }
 
+wait_for_guest_poweroff() {
+	if [ "$guest_poweroff" != 1 ]; then
+		return
+	fi
+
+	login_root_if_needed
+	send_script <<'EOF_GUEST_POWEROFF'
+/sbin/poweroff
+EOF_GUEST_POWEROFF
+
+	if wait "$qemu_pid"; then
+		qemu_pid=
+		return
+	fi
+	qemu_status=$?
+	qemu_pid=
+	fail_with_qemu_log "qemu exited with status $qemu_status" 220
+}
+
 start_qemu
 wait_for_qemu_fixed "login: " "login prompt did not appear" 80 80
 require_supported_parts
@@ -419,3 +439,4 @@ if part_selected long-login; then
 	finish_shard long-login
 fi
 echo "shell regression ok"
+wait_for_guest_poweroff

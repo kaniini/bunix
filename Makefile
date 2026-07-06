@@ -503,15 +503,9 @@ run-iso: $(EFI_BOOT_IMG)
 
 test: test-parallel
 
-test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot-markers.txt
-	mkdir -p $(BUILD_DIR)
-	truncate -s 0 $(BUILD_DIR)/serial.log
-	timeout 60s $(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
-		-smp $(SMP) \
-		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
-		-drive format=raw,file=fat:rw:$(ESP_DIR) \
-		-serial file:$(BUILD_DIR)/serial.log -display none -no-reboot; \
-		status=$$?; test $$status -eq 0 -o $$status -eq 124
+test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
+	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log tools/test-boot-markers.txt
 
 test-shell: $(EFI_BOOT_APP)

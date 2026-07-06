@@ -7,13 +7,13 @@ Poweroff and deterministic test exit:
 - [x] Make the Linux server implement `reboot(..., LINUX_REBOOT_CMD_POWER_OFF)`.
 - [x] Add BusyBox `poweroff`, `halt`, and `reboot` symlinks to the rootfs image.
 - [x] Add a focused poweroff test path that waits for QEMU to exit through the guest.
-- [ ] Migrate shell/command tests to request guest poweroff after success.
-- [ ] Migrate boot tests away from timeout-as-success.
+- [x] Migrate shell/command tests to request guest poweroff after success.
+- [x] Migrate boot tests away from timeout-as-success.
 
-OpenRC/Alpine boot preparation:
+OpenRC/Alpine boot preparation plan:
 
-- [ ] Build the minimal Alpine rootfs image as a test fixture.
-- [ ] Add the remaining device nodes and procfs/sysfs/devfs surfaces OpenRC expects.
-- [ ] Fill in Linux compatibility gaps discovered by OpenRC startup.
-- [ ] Boot `/sbin/init` from the Alpine image and capture service startup logs.
-- [ ] Add sharded regression coverage for the OpenRC boot path.
+- [ ] Write follow-up explorations for building a minimal Alpine rootfs fixture.
+- [ ] Write follow-up explorations for remaining devfs/procfs/sysfs surfaces OpenRC expects.
+- [ ] Write follow-up explorations for Linux compatibility gaps discovered by OpenRC startup.
+- [ ] Write follow-up explorations for booting `/sbin/init` from Alpine and capturing service logs.
+- [ ] Write follow-up explorations for sharded OpenRC boot regression coverage.

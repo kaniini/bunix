@@ -31,6 +31,7 @@ expect_qemu_exit=${BUNIX_EXPECT_QEMU_EXIT:-0}
 user=${BUNIX_USER:-kaniini}
 password=${BUNIX_PASSWORD:-bunix}
 prompt=${BUNIX_PROMPT:-~ $ }
+guest_poweroff=${BUNIX_GUEST_POWEROFF:-1}
 
 qemu_pid=
 cat_pid=
@@ -95,6 +96,54 @@ wait_for_qemu_fixed() {
 	done
 }
 
+current_prompt_count() {
+	prompt_text=$1
+
+	grep -F -c "$prompt_text" "$log" 2>/dev/null || true
+}
+
+wait_for_prompt_count_gt() {
+	prompt_text=$1
+	before=$2
+	label=$3
+	limit=${4:-45}
+	tail_lines=${5:-180}
+	i=0
+
+	while [ "$(current_prompt_count "$prompt_text")" -le "$before" ]; do
+		i=$((i + 1))
+		if ! kill -0 "$qemu_pid" 2>/dev/null; then
+			fail_command "qemu exited while waiting for: $prompt_text" "$tail_lines"
+		fi
+		if [ "$i" -gt "$limit" ]; then
+			fail_command "$label" "$tail_lines"
+		fi
+		sleep 1
+	done
+}
+
+wait_for_guest_poweroff() {
+	if [ "$user" = root ]; then
+		:
+	else
+		wait_for_prompt_count_gt "login: " "$login_prompts_before_exit" \
+			"login prompt did not return before guest poweroff" 45 180
+		root_prompts_before=$(current_prompt_count "~ # ")
+		printf '%s\n%s\n' root root >&3
+		wait_for_prompt_count_gt "~ # " "$root_prompts_before" \
+			"root shell prompt did not appear for guest poweroff" 45 180
+		printf '/sbin/poweroff\n' >&3
+	fi
+
+	if wait "$qemu_pid"; then
+		qemu_pid=
+		return 0
+	fi
+	qemu_status=$?
+	qemu_pid=
+	fail_command "qemu exited with status $qemu_status" 220
+}
+
 start_qemu() {
 	mkdir -p "$tmp"
 	mkfifo "$pipe.in" "$pipe.out"
@@ -126,6 +175,7 @@ sleep 3
 exec 3>"$pipe.in"
 printf '%s\n%s\n' "$user" "$password" >&3
 wait_for_fixed "$log" "$prompt" "shell prompt did not appear for $user" 150 120
+login_prompts_before_exit=$(current_prompt_count "login: ")
 
 if [ -n "$command_file" ]; then
 	if [ ! -r "$command_file" ]; then
@@ -147,17 +197,31 @@ if [ "$expect_qemu_exit" = 1 ]; then
 	fail_command "qemu exited with status $qemu_status" 220
 fi
 
+if [ "$guest_poweroff" = 1 ] && [ "$user" = root ]; then
+send_script <<EOF_COMMAND_DONE_ROOT
+status=\$?
+echo __BUNIX_COMMAND_STATUS__=\$status
+test "\$status" = 0 && echo $marker
+test "\$status" = 0 && /sbin/poweroff
+exit
+EOF_COMMAND_DONE_ROOT
+else
 send_script <<EOF_COMMAND_DONE
 status=\$?
 echo __BUNIX_COMMAND_STATUS__=\$status
 test "\$status" = 0 && echo $marker
 exit
 EOF_COMMAND_DONE
+fi
 
 wait_for_fixed "$log" "__BUNIX_COMMAND_STATUS__=" "command did not report status" 90 220
 if ! grep -aF "__BUNIX_COMMAND_STATUS__=0" "$log" >/dev/null 2>&1; then
 	fail_command "command failed" 220
 fi
 wait_for_fixed "$log" "$marker" "command marker missing" 15 220
+
+if [ "$guest_poweroff" = 1 ]; then
+	wait_for_guest_poweroff
+fi
 
 echo "command regression ok"
