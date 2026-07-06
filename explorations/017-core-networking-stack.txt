@@ -45,7 +45,7 @@ Tasks:
 - [ ] Add tests for IPv4 localhost UDP, IPv6 localhost UDP, IPv4 localhost TCP,
       IPv6 localhost TCP, poll/select readiness behavior, connection teardown,
       and permission checks.
-- [ ] Document the boundary where real NIC drivers, including VirtIO-net, plug
+- [x] Document the boundary where real NIC drivers, including VirtIO-net, plug
       into the stack.
 
 Inventory:
@@ -175,3 +175,29 @@ Progress:
   and `::1/128`.  UDP and TCP bind/connect/sendto validation now resolves
   local destinations through route lookup instead of hard-coded address checks,
   leaving a concrete insertion point for future interface and NIC routes.
+
+NIC / VirtIO-net Boundary:
+
+- `net.server` owns protocol semantics: socket objects, UDP/TCP state,
+  interface records, address assignment, route tables, packet counters, and
+  readiness notifications.  Linux processes never talk directly to NIC
+  drivers; `linux.server` adapts Linux syscalls to NET0 socket operations.
+- NIC drivers are packet-interface providers.  A future VirtIO-net userspace
+  driver should bind to the VirtIO bus/device framework, negotiate device
+  features, own RX/TX virtqueues and DMA buffers, and register a packet
+  interface capability with `net.server`.
+- The driver-facing protocol should exchange packet buffers, MTU/MAC/link
+  state, checksum/offload metadata, and RX/TX completion events.  It must not
+  expose Linux socket syscalls, Linux PIDs, TCP/UDP control blocks, or route
+  management policy to the driver.
+- `net.server` should grant drivers only constrained interface/packet-queue
+  capabilities.  Address configuration, route installation, and privileged port
+  policy remain separate management capabilities mediated by bootstrap or a
+  later network-management server.
+- Loopback remains internal to `net.server` and must keep working when no NIC
+  exists, when VirtIO-net is down, or when external-link tests are disabled.
+  The VirtIO-net exploration should therefore attach an additional interface
+  and route entries without replacing `lo`.
+- Interrupts and completion delivery belong to the generic userspace driver
+  event model from the VirtIO/IRQ explorations.  The network stack should see
+  packet-interface readiness events, not PCI/MSI details.
