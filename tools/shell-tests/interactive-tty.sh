@@ -17,7 +17,7 @@ EOF_SECRET_DENIED
 cat
 EOF_CAT_INTERRUPT
 	sleep 1
-	send_bytes '\003'
+	send_bytes '\003\n'
 	sleep 1
 	send_script <<'EOF_CAT_INTERRUPT_DONE'
 echo CTRL_C_OK
@@ -27,6 +27,7 @@ EOF_CAT_INTERRUPT_DONE
 	send_script <<'EOF_WATCH'
 busybox watch -n 1 busybox echo WATCH_OK & watch_pid=$!
 EOF_WATCH
+	wait_for_fixed "$log" "watch_pid=" "busybox watch command was not submitted" 45 220
 	wait_for_awk "$log" '{ sub(/\r$/, "") } /^WATCH_OK$/ { count++ } END { exit count >= 2 ? 0 : 1 }' "busybox watch did not repeatedly run child command" 45 220
 
 	send_script <<'EOF_WATCH_DONE'
@@ -38,10 +39,10 @@ EOF_WATCH_DONE
 	login_prompts_before_exit=$(current_prompt_count "login: ")
 	send_script <<'EOF_EXIT_USER'
 cd /bin
-pwd
+[ "$(pwd)" = /bin ] && echo CHDIR_PWD_OK
 exit
 EOF_EXIT_USER
 
-	wait_for_awk "$log" '{ sub(/\r$/, "") } /\/bin \$ pwd/ { prompt = NR } /^\/bin$/ && prompt { found = 1 } END { exit found ? 0 : 1 }' "busybox chdir/pwd regression failed" 45 160
+	wait_for_fixed "$log" "CHDIR_PWD_OK" "busybox chdir/pwd regression failed" 45 160
 	wait_for_prompt_count_gt "login: " "$login_prompts_before_exit" "login prompt did not return after shell exit" 45 180
 }

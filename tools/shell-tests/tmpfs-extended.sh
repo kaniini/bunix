@@ -2,6 +2,7 @@
 
 run_tmpfs_extended() {
 	send_script <<'EOF_TMPFS_BASELINE'
+echo TMP_WRITE_OK > /tmp/bunix-write.txt
 busybox stat -c "%u:%g %a" /tmp/bunix-write.txt
 busybox mkdir /tmp/bunix-dir && echo TMP_MKDIR_OK
 busybox test -d /tmp/bunix-dir && echo TMP_MKDIR_STAT_OK

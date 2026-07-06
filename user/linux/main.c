@@ -2135,6 +2135,43 @@ static long tty_termios_set(u64 buffer)
 	return 0;
 }
 
+static void tty_interrupt_foreground(void)
+{
+	struct linux_process *reader =
+		tty_reader_pid != 0 ? linux_process_find_pid(tty_reader_pid) : 0;
+
+	if (reader != 0) {
+		(void)linux_signal_process(reader, LINUX_SIGINT);
+		return;
+	}
+
+	for (u64 i = 0;; i++) {
+		struct linux_process *process =
+			(struct linux_process *)bunix_map_at(&process_by_pid,
+							     i);
+
+		if (process == 0) {
+			break;
+		}
+		if (process->exited || process->waiter == 0) {
+			continue;
+		}
+		for (struct linux_process *child = process->first_child;
+		     child != 0; child = child->next_sibling) {
+			if (!child->exited &&
+			    linux_child_matches(process, child,
+						(long)process->wait_pid)) {
+				(void)linux_signal_process(child, LINUX_SIGINT);
+				return;
+			}
+		}
+	}
+
+	if (foreground_pgid != 0) {
+		(void)linux_signal_pgrp(0, foreground_pgid, LINUX_SIGINT);
+	}
+}
+
 static void tty_input_event(char c)
 {
 	const unsigned int lflag = tty_lflag();
@@ -2150,7 +2187,7 @@ static void tty_input_event(char c)
 			tty_echo("^C\n", 3);
 		}
 		tty_line_len = 0;
-		(void)linux_signal_pgrp(0, foreground_pgid, LINUX_SIGINT);
+		tty_interrupt_foreground();
 		return;
 	}
 

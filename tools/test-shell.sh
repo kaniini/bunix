@@ -9,6 +9,7 @@ qemu_timeout=${QEMU_TIMEOUT:-180s}
 qemu_memory=${QEMU_MEMORY:-128M}
 qemu_extra_args=${QEMU_EXTRA_ARGS:-}
 guest_poweroff=${BUNIX_GUEST_POWEROFF:-1}
+send_line_delay=${BUNIX_SEND_LINE_DELAY:-0.35}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-shell-test.$run_id}
 log=$tmp/serial.log
@@ -69,7 +70,10 @@ fail_with_qemu_log() {
 }
 
 send_script() {
-	cat >&3
+	while IFS= read -r line || [ -n "$line" ]; do
+		printf '%s\n' "$line" >&3
+		sleep "$send_line_delay"
+	done
 }
 
 send_bytes() {

@@ -22,11 +22,22 @@ trap "" INT
 busybox kill -INT $$
 echo SIGINT_IGNORE_OK
 trap - INT
-busybox sleep 1 && echo BUSYBOX_SLEEP_OK
-sleep 1 && echo DIRECT_SLEEP_OK
-busybox sleep 5
+busybox sleep 1 && printf 'BUSYBOX_SLEEP_%s\n' OK
+sleep 1 && printf 'DIRECT_SLEEP_%s\n' OK
 EOF_LOGIN_SMOKE
-	send_bytes '\003echo SLEEP_CTRL_C_OK\n'
+	wait_for_exact_line "$log" "BUSYBOX_SLEEP_OK" "busybox sleep did not complete" 45 160
+	wait_for_exact_line "$log" "DIRECT_SLEEP_OK" "/bin/sleep did not complete" 45 160
+	send_script <<'EOF_LOGIN_SMOKE_SLEEP'
+busybox sleep 5
+EOF_LOGIN_SMOKE_SLEEP
+	wait_for_fixed "$log" "busybox sleep 5" "foreground sleep command was not submitted" 45 180
+	prompts_before_sleep_interrupt=$(current_prompt_count "/ $ ")
+	sleep 1
+	send_bytes '\003'
+	wait_for_prompt_count_gt "/ $ " "$prompts_before_sleep_interrupt" "foreground Ctrl-C did not return to shell" 45 180
+	send_script <<'EOF_LOGIN_SMOKE_INTERRUPT'
+echo SLEEP_CTRL_C_OK
+EOF_LOGIN_SMOKE_INTERRUPT
 }
 
 check_login_smoke() {
@@ -46,8 +57,6 @@ check_login_smoke() {
 		ACCESS_X_OK ACCESS_R_OK ACCESS_DENY_OK
 	wait_for_fixed "$log" "erase = ^?" "busybox stty did not report tty erase character" 45 160
 
-	wait_for_fixed "$log" "BUSYBOX_SLEEP_OK" "busybox sleep did not complete" 45 160
-	wait_for_fixed "$log" "DIRECT_SLEEP_OK" "/bin/sleep did not complete" 45 160
 	wait_for_fixed "$log" "SLEEP_CTRL_C_OK" "foreground Ctrl-C did not interrupt busybox sleep" 45 180
 	wait_for_fixed "$log" "KILL_ZERO_OK" "busybox kill -0 did not report current shell" 45 160
 	wait_for_fixed "$log" "KILL_PGRP_OK" "busybox kill -0 process group probe failed" 45 160

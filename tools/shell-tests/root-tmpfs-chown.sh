@@ -3,6 +3,7 @@
 run_root_tmpfs_chown() {
 	login_prompts_before_root_exit=$(current_prompt_count "login: ")
 	send_script <<'EOF_ROOT_CHOWN'
+echo ROOT_CHOWN_PAYLOAD > /tmp/bunix-write.txt
 busybox chown 0:0 /tmp/bunix-write.txt
 busybox stat -c "%u:%g" /tmp/bunix-write.txt
 exit

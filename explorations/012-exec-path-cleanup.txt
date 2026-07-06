@@ -10,6 +10,16 @@ This exploration should preserve the working behavior from
 `007-openrc-linux-compat.txt`, then move policy out of arch code in small
 testable pieces.
 
+Additional finding:
+
+- After Alpine OpenRC reaches login, `/sbin/rc-status` can fail from the shell
+  with `Out of memory` even though the VM server still reports many free
+  frames.  This points at the current kernel-side Linux `execve()` loader's
+  full-file buffering and contiguous large slab allocations for dynamic
+  binaries/interpreters, not at physical memory exhaustion.  Preserve OpenRC
+  startup behavior, but make the exec refactor address this loader allocation
+  shape rather than baking it in.
+
 - [ ] Inventory the current `arch/x86_64/user.c` exec path and separate
       architecture mechanics from Linux personality policy.
 - [ ] Define an exec request/reply protocol between the syscall entry path,
@@ -19,6 +29,9 @@ testable pieces.
 - [ ] Move ELF and PT_INTERP policy toward shared proc/Linux-server helpers,
       leaving arch code responsible only for final register/stack activation
       details that are truly architecture-specific.
+- [ ] Replace full executable/interpreter image buffering with segment-oriented
+      loading so later dynamic execs do not depend on large contiguous kernel
+      slab allocations.
 - [ ] Preserve `AT_EXECFN`, argv, envp, auxv, credentials, process identity,
       and Bunix task/Linux PID mappings across the refactor.
 - [ ] Add regression tests covering ELF exec, dynamic PT_INTERP exec,

@@ -41,6 +41,17 @@ Findings:
 - With Linux-server poll readiness and minimal `flock(2)`, Alpine OpenRC
   caches service dependencies, reaches Bunix login, starts a root shell, and
   powers off through `/sbin/poweroff`.
+- `tools/audit-linux-syscalls.sh` reports no missing arch dispatch.  Its
+  remaining forwarded-without-server-case entries are compatibility rewrites:
+  `stat`/`lstat` route as `newfstatat`, `symlink` routes as `symlinkat`, and
+  `exit` is completed in the arch syscall path.
+- The Alpine boot log no longer shows unknown syscalls, `EINVAL`,
+  `ENOSYS`/`Function not implemented`, or shebang exec failures during the
+  OpenRC startup path.  The remaining OpenRC warnings are missing service
+  dependency references for `dev`.
+- Alpine boot verification now runs BusyBox `id` and `ps` after login before
+  guest poweroff, proving the root shell can launch applets after OpenRC
+  dependency caching and login.
 
 - [x] Boot the Alpine fixture far enough to collect strace-style logs from OpenRC startup.
 - [x] Identify the OpenRC dynamic-loader stat identity issue and defer the
@@ -55,11 +66,11 @@ Findings:
 - [x] Move Linux `poll`/`ppoll` readiness to the Linux server so redirected fds
       are interpreted through the Linux fd table.
 - [x] Add minimal `flock(2)` compatibility for OpenRC dependency cache locking.
-- [ ] Triage remaining missing or incorrect syscalls by startup phase and impact.
+- [x] Triage remaining missing or incorrect syscalls by startup phase and impact.
 - [x] Debug the remaining OpenRC fork/pipe supervision stall after `/run/lock`
       correction.
-- [ ] Implement remaining high-priority syscall fixes in narrow slices with
+- [x] Implement remaining high-priority syscall fixes in narrow slices with
       reproducer tests.
-- [ ] Ensure process/session/task identity remains consistent across Bunix tasks and Linux PIDs.
-- [ ] Verify OpenRC shell scripts, service supervision, and BusyBox applets run without harness-only assumptions.
-- [ ] Keep unsupported Linux behavior explicit with useful diagnostics.
+- [x] Ensure process/session/task identity remains consistent across Bunix tasks and Linux PIDs.
+- [x] Verify OpenRC shell scripts, service supervision, and BusyBox applets run without harness-only assumptions.
+- [x] Keep unsupported Linux behavior explicit with useful diagnostics.
