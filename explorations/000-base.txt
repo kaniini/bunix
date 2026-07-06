@@ -5,7 +5,8 @@ The current exploration is: 001-testing-efficiency-refactoring.txt
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.
 
-An exploration is considered complete when all tasks are completed.
+An exploration is considered complete when all tasks are completed, and it
+passes full tests.  Prefer narrow testing strategies for individual tasks.
 
 When an exploration is considered complete:
  - Move the exploration from ./explorations/ to ./explorations/completed/.
@@ -27,3 +28,4 @@ Give credit to yourself using Co-authored-by lines.
 Make granular commits, only push when tests are passing.
 
 Use subagents for parallelism wherever efficiency would be increased.
+
