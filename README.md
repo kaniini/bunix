@@ -180,7 +180,7 @@ test rootfs:
 
 ```sh
 make test-alpine-rootfs
-ROOTFS_FLAVOR=alpine make esp
+ROOTFS_FLAVOR=alpine-squashfs make esp
 ```
 
 `tools/build-alpine-rootfs.sh` stages Alpine packages with `apk --root ... --initdb`

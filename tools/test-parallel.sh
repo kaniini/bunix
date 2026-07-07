@@ -321,7 +321,7 @@ run_worker() {
 		if [ "$harness" = boot ]; then
 			worker_esp=$ESP_DIR
 			case "$rootfs" in
-			alpine) worker_esp=${ALPINE_ESP_DIR:-build/esp-alpine} ;;
+			alpine|alpine-squashfs) worker_esp=${ALPINE_ESP_DIR:-build/esp-alpine} ;;
 			synthetic) worker_esp=${ESP_DIR:-build/esp} ;;
 			*)
 				echo "unknown rootfs flavor for shard $name: $rootfs" > "$attempt_dir/stderr.log"

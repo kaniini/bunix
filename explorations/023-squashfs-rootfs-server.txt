@@ -270,7 +270,7 @@ Tasks:
       bringup from the SquashFS-backed root.
 - [x] Migrate the default synthetic root boot path to SquashFS once tests cover
       the old rootfs server behavior.
-- [ ] Migrate the Alpine root boot path to SquashFS once OpenRC and interactive
+- [x] Migrate the Alpine root boot path to SquashFS once OpenRC and interactive
       shell tests are covered.
 - [ ] Delete the old custom rootfs image format, rootfs server, rootfs-specific
       build rules, rootfs protocol assumptions, and obsolete tests after the

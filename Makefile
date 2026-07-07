@@ -294,7 +294,7 @@ esp: $(EFI_BOOT_APP)
 
 ifneq ($(ESP_DIR),$(ALPINE_ESP_DIR))
 $(ALPINE_EFI_BOOT_APP): FORCE
-	$(MAKE) ROOTFS_FLAVOR=alpine ESP_DIR=$(ALPINE_ESP_DIR) esp
+	$(MAKE) ROOTFS_FLAVOR=alpine-squashfs ESP_DIR=$(ALPINE_ESP_DIR) esp
 endif
 
 $(BUILD_DIR)/user/%.c.o: user/%.c
