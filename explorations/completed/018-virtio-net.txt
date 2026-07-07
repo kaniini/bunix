@@ -226,7 +226,7 @@ Future Work:
   use an isolated socket or tap backend so tests can inject and observe packets
   without depending on host network policy.
 - External-network smoke tests are split into
-  `026-virtio-net-external-smoke.txt` because the prerequisite host-side
+  `025-virtio-net-external-smoke.txt` because the prerequisite host-side
   topology and Ethernet/ARP/ND protocol work do not exist yet.  Exploration 018
   stops at deterministic device attach, queue readiness, NET0 packet-interface
   routing state, and synthetic packet-path coverage.

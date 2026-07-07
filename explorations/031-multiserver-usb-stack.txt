@@ -16,8 +16,8 @@ Problem:
 
 Scheduling:
 
-- Run this after `029-pci-pcie-server.txt` and before
-  `031-riscv64-initial-port.txt`.
+- Run this after `030-pci-pcie-server.txt` and before
+  `032-riscv64-initial-port.txt`.
 - The first implementation may target deterministic x86_64 QEMU hardware, but
   the protocol split must be transport-neutral enough for device-tree described
   host controllers on riscv64 and future ARM work.

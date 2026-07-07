@@ -1,0 +1,111 @@
+Make networking actually work from the Alpine-style userspace environment.
+
+Problem:
+
+- Bunix has a core NET0 server, loopback plumbing, VirtIO-net device bringup,
+  and initial route state, but the system does not yet behave like a normal
+  userspace networked system.
+- Alpine/OpenRC expects persistent network configuration under
+  `/etc/network/interfaces`, a networking service that configures interfaces
+  during boot, and ordinary tools such as `ping` to work without Bunix-specific
+  manual setup.
+- The next useful milestone is end-to-end connectivity from the booted system:
+  loopback IPv4, loopback IPv6, DHCP-provisioned external IPv4, and repeatable
+  smoke tests against known external addresses.
+
+Constraints:
+
+- Keep networking policy in userspace.  Kernel participation should be limited
+  to existing interrupt, scheduling, and privileged hardware-operation
+  primitives.
+- Preserve the server split: NET0 owns protocol state, routes, interfaces,
+  socket behavior, and packet queues; VirtIO-net owns the NIC device; Linux
+  compatibility translates Linux syscalls and ioctls into server RPCs.
+- Use `/etc/network/interfaces` as the first network configuration source.
+  Do not hide network setup in bootstrap-only hardcoded defaults except for
+  minimum bringup needed to start the networking service.
+- Use DHCP for external IPv4 configuration.  Static QEMU-user defaults are
+  acceptable only as a fallback or test fixture when DHCP is explicitly absent.
+- Keep IPv6 loopback working independently of external IPv6 support.  External
+  IPv6 may be planned separately unless it is needed to satisfy the smoke tests.
+- Tests must be deterministic enough for `make test-boot` and networking
+  shards: every test must end in poweroff, avoid depending on the ambient host
+  network unless the shard explicitly opts into it, and record enough logs to
+  diagnose packet, route, or DHCP failures.
+
+Inventory:
+
+- `017-core-networking-stack.txt` completed localhost, IPv4/IPv6 route basics,
+  socket compatibility, and `/proc/net` observability.
+- `018-virtio-net.txt` completed the initial VirtIO-net driver attachment,
+  packet-interface registration, TX/RX queues, and a deterministic QEMU-user
+  route stub.
+- `025-virtio-net-external-smoke.txt` now follows this exploration and should
+  harden ARP/ND, packet egress, and host-side external-network smoke testing.
+- `026-hot-route-tables.txt` follows the external smoke work and should replace
+  route scans with dynamically growing IPv4/IPv6 HOT route tables.
+
+Target behavior:
+
+- The root filesystem contains a normal `/etc/network/interfaces` suitable for
+  Bunix's current Alpine bringup.  Initial target contents should configure:
+  - `lo` as loopback with `127.0.0.1/8` and `::1/128`.
+  - The first VirtIO-net interface for DHCP IPv4 when present.
+- A networking service starts during the normal boot path, parses
+  `/etc/network/interfaces`, configures loopback, starts DHCP for the external
+  interface, installs address and default-route state through NET0 RPCs, and
+  exposes clear status/logging.
+- BusyBox or Alpine `ping` succeeds for:
+  - `127.0.0.1`
+  - `::1`
+  - `4.2.2.1`
+  - `8.8.8.8`
+- Failure modes produce bounded diagnostics that distinguish service startup,
+  config parsing, DHCP lease acquisition, route installation, ARP resolution,
+  packet transmit, packet receive, ICMP, and Linux syscall/personality issues.
+
+Design notes:
+
+- DHCP can start with an MVP DHCPv4 client in a Bunix networking helper program
+  or server, but it should configure NET0 through explicit RPCs rather than
+  mutating NET0 internals.
+- The networking service should be able to run from OpenRC, but the Bunix test
+  harness may invoke a narrow bringup command first if that shortens debugging.
+- `ping` should exercise the Linux socket path where practical.  Native Bunix
+  observability tools may be added for debugging, but the acceptance target is
+  ordinary userspace commands.
+- If QEMU user networking does not provide enough deterministic behavior for
+  DHCP and ICMP, define a dedicated tap/namespace or socket-backed test shard
+  and keep it separate from default fast boot tests until stable.
+
+Tasks:
+
+- [ ] Inventory current NET0, VirtIO-net, Linux socket/ioctl, procfs
+      networking, OpenRC service, BusyBox ping, and rootfs network config
+      behavior.  Identify exactly where manual or hardcoded setup remains.
+- [ ] Define the NET0 configuration RPCs needed by a userspace networking
+      service: interface up/down, address add/delete, route add/delete,
+      neighbor/ARP state observation, DHCP lease install, and status reporting.
+- [ ] Add `/etc/network/interfaces` to the synthetic and Alpine root images
+      with loopback plus DHCP configuration for the first VirtIO-net interface.
+- [ ] Implement or wire a networking service that reads
+      `/etc/network/interfaces`, configures loopback, starts DHCP for the
+      external interface, and reports status through logs and procfs.
+- [ ] Implement DHCPv4 client support sufficient for QEMU-user or the selected
+      deterministic external-network test backend.
+- [ ] Ensure NET0 installs DHCP-provided IPv4 address, netmask, gateway, DNS
+      metadata if present, and default route through capability-checked RPCs.
+- [ ] Make BusyBox or Alpine `ping 127.0.0.1` succeed through the Linux socket
+      compatibility path.
+- [ ] Make BusyBox or Alpine `ping ::1` succeed through the Linux socket
+      compatibility path.
+- [ ] Make BusyBox or Alpine `ping 4.2.2.1` succeed through VirtIO-net,
+      DHCP-provided route state, ARP, ICMP, and receive handling.
+- [ ] Make BusyBox or Alpine `ping 8.8.8.8` succeed through the same external
+      networking path.
+- [ ] Add deterministic boot/shell test shards for networking service startup,
+      DHCP acquisition, loopback pings, external pings, `/proc/net` state, and
+      clean poweroff.
+- [ ] Document supported network configuration syntax, DHCP limitations,
+      QEMU/test backend assumptions, and follow-up work for DNS, IPv6 external
+      networking, firewalling, packet capture, and production route policy.

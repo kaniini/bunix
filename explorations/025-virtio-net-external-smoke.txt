@@ -14,7 +14,7 @@ Dependencies:
 - Requires the VirtIO-net driver and packet-interface route state from
   `018-virtio-net.txt`.
 - Requires IRQ-driven or otherwise reliable completion delivery from
-  `025-virtio-irq-driven-completions.txt`, or a conscious decision that bounded
+  `028-virtio-irq-driven-completions.txt`, or a conscious decision that bounded
   polling is still acceptable for the first smoke target.
 
 Constraints:

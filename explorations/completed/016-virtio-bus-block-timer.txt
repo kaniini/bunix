@@ -290,6 +290,6 @@ Progress:
   negotiation failure plus read/write/flush requests, and
   `test-boot-virtio-blk-backend` for mounting the root filesystem through the
   VirtIO block backend and powering off cleanly.  Interrupt-driven completions
-  are intentionally split into `025-virtio-irq-driven-completions.txt` because
+  are intentionally split into `028-virtio-irq-driven-completions.txt` because
   Bunix can acknowledge the VirtIO ISR byte but does not yet route hardware IRQ
   events to userspace drivers.

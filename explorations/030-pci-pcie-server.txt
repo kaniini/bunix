@@ -17,8 +17,8 @@ Problem:
 
 Scheduling:
 
-- Run this before `030-multiserver-usb-stack.txt` and
-  `031-riscv64-initial-port.txt`.
+- Run this before `031-multiserver-usb-stack.txt` and
+  `032-riscv64-initial-port.txt`.
 - Keep x86_64 VirtIO block/network tests passing throughout the refactor.
 - The riscv64 port can then implement only the platform discovery/transport
   pieces it actually needs, without untangling PCI assumptions from VirtIO.

@@ -126,7 +126,7 @@ SquashFS server/VFS mount contract:
     readonly error mapping: create, write, truncate, unlink, chmod, chown,
     mkdir, rmdir, mknod, symlink, rename, and link.
   - Open handles should follow the existing translator shape for the first
-    implementation, while noting that `039-vfs-global-open-handle-authority.txt`
+    implementation, while noting that `040-vfs-global-open-handle-authority.txt`
     will later replace ambient integer handle authority.
 - Path and lookup semantics:
   - VFS remains responsible for global path normalization and symlink

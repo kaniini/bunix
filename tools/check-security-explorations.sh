@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-parent=${1:-explorations/022-security-vulnerability-audit.txt}
+parent=${1:-explorations/completed/022-security-vulnerability-audit.txt}
 shift || true
 
 if [ "$#" -eq 0 ]; then
@@ -12,10 +12,10 @@ status=0
 
 for file in "$@"; do
 	case "$file" in
-	explorations/034-*|explorations/035-*|explorations/036-*|\
-	explorations/037-*|explorations/038-*|explorations/039-*|\
-	explorations/040-*|explorations/041-*|explorations/042-*|\
-	explorations/043-*)
+	explorations/035-*|explorations/036-*|explorations/037-*|\
+	explorations/038-*|explorations/039-*|explorations/040-*|\
+	explorations/041-*|explorations/042-*|explorations/043-*|\
+	explorations/044-*)
 		;;
 	*)
 		continue
