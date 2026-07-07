@@ -223,6 +223,8 @@ enum {
 	LINUX_F_SETLK = 6,
 	LINUX_F_SETLKW = 7,
 	LINUX_F_DUPFD_CLOEXEC = 1030,
+	LINUX_CLOSE_RANGE_UNSHARE = 1 << 1,
+	LINUX_CLOSE_RANGE_CLOEXEC = 1 << 2,
 	LINUX_UTMP_RECORD_SIZE = 400,
 	LINUX_REBOOT_MAGIC1 = 0xfee1dead,
 	LINUX_REBOOT_MAGIC2 = 672274793,
@@ -2230,9 +2232,7 @@ static long linux_rt_sigtimedwait(struct linux_process *process, u64 set,
 
 static u64 linux_foreground_pgid(const struct linux_process *process)
 {
-	if (process != 0) {
-		return process->pgid;
-	}
+	(void)process;
 	return foreground_pgid;
 }
 
@@ -6700,6 +6700,37 @@ static long linux_close(struct linux_process *process, u64 fd)
 	return 0;
 }
 
+static long linux_close_range(struct linux_process *process, u64 first,
+			      u64 last, u64 flags)
+{
+	const u64 supported = LINUX_CLOSE_RANGE_UNSHARE |
+			      LINUX_CLOSE_RANGE_CLOEXEC;
+	u64 end;
+
+	if ((flags & ~supported) != 0 || first > last) {
+		return -LINUX_EINVAL;
+	}
+	if (first >= process->fd_capacity) {
+		return 0;
+	}
+	end = last;
+	if (end >= process->fd_capacity) {
+		end = process->fd_capacity - 1;
+	}
+
+	for (u64 fd = first; fd <= end; fd++) {
+		if (process->fds[fd].kind == 0) {
+			continue;
+		}
+		if ((flags & LINUX_CLOSE_RANGE_CLOEXEC) != 0) {
+			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
+			continue;
+		}
+		(void)linux_close(process, fd);
+	}
+	return 0;
+}
+
 static void linux_fd_ref_add(const struct linux_fd *fd)
 {
 	if (fd->kind == LINUX_FD_FILE || fd->kind == LINUX_FD_DIR) {
@@ -7509,6 +7540,12 @@ int main(void)
 							  message.words[0],
 							  message.words[1],
 							  message.words[2]);
+			break;
+		case BUNIX_LINUX_CLOSE_RANGE:
+			reply.words[0] = (u64)linux_close_range(process,
+								message.words[0],
+								message.words[1],
+								message.words[2]);
 			break;
 		case BUNIX_LINUX_FLOCK:
 			reply.words[0] = message.words[0] < process->fd_capacity &&

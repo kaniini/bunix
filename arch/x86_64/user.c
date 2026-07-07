@@ -191,6 +191,7 @@ enum {
 	LINUX_SYSCALL_UTIMENSAT = 280,
 	LINUX_SYSCALL_DUP3 = 292,
 	LINUX_SYSCALL_PIPE2 = 293,
+	LINUX_SYSCALL_CLOSE_RANGE = 436,
 	LINUX_SYSCALL_OPENAT = 257,
 	LINUX_SYSCALL_MKDIRAT = 258,
 	LINUX_SYSCALL_MKNODAT = 259,
@@ -1039,6 +1040,7 @@ static int linux_syscall_forwards_scalar(u64 number)
 	case LINUX_SYSCALL_DUP2:
 	case LINUX_SYSCALL_DUP3:
 	case LINUX_SYSCALL_FCNTL:
+	case LINUX_SYSCALL_CLOSE_RANGE:
 	case LINUX_SYSCALL_FLOCK:
 	case LINUX_SYSCALL_GETUID:
 	case LINUX_SYSCALL_GETGID:
@@ -3589,6 +3591,8 @@ static const char *linux_syscall_name(u64 number)
 		return "dup3";
 	case LINUX_SYSCALL_PIPE2:
 		return "pipe2";
+	case LINUX_SYSCALL_CLOSE_RANGE:
+		return "close_range";
 	case LINUX_SYSCALL_OPENAT:
 		return "openat";
 	case LINUX_SYSCALL_MKDIRAT:

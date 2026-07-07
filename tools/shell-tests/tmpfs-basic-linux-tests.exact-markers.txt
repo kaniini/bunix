@@ -35,6 +35,6 @@ linux fchmodat checks ok
 linux waitpgid checks ok
 linux execlong ok
 linux auxid ok
-linux fcntl locks ok
+linux fcntl and close_range ok
 sysrace ok
 schedstress ok

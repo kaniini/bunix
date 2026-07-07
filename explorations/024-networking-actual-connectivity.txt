@@ -305,11 +305,15 @@ Implementation progress:
   `/sbin/ifup eth0`, verifies that `udhcpc` obtains the QEMU-user lease, checks
   `/proc/net/config` for `eth0`, `default_ipv4 1`, and drained RX/TX queues,
   and powers off through the command harness.
-- Direct `/etc/init.d/networking restart` still returns nonzero even though
-  NET0 is configured.  The current evidence points at OpenRC wrapper/runtime
-  behavior (`readpath` noise and service return handling), so the OpenRC
-  service acceptance task remains open until the service itself returns success
-  and proves startup from the normal boot runlevel.
+- Direct `/etc/init.d/networking restart` and normal OpenRC boot still need
+  service-wrapper acceptance even though direct `ifup eth0` configures NET0.
+  The first `readpath`/`realpath` error was a VFS compatibility issue, but the
+  current blocker is now narrower: `openrc-run` uses a SIGCHLD/self-pipe style
+  wait after service children exit, and Bunix tracks ignored/masked signals
+  without yet building userspace signal frames or running installed handlers.
+  Until Linux-compatible signal delivery can run that handler, the wrapper can
+  wait on an empty pipe whose writer remains open, leaving OpenRC service state
+  stuck despite the shell service body having succeeded.
 - Fixed the false `readpath`/`realpath` noise by preserving VFS
   `EINVAL` for `readlinkat` on non-symlink path components instead of
   collapsing every readlink failure to `ENOENT`.  SquashFS, tmpfs, and procfs
@@ -320,10 +324,12 @@ Implementation progress:
   then blocks after `fsck` reports success.  A sysinit-only diagnostic boot
   showed `/sbin/openrc-run /etc/init.d/fsck start` prints the service success
   path but remains waitable forever, leaving `/run/openrc/starting/fsck` and
-  the exclusive service lock in place.  The next slice should focus on the
-  Linux process/terminal/pipe behavior used by the OpenRC C wrapper after its
-  shell service body exits; DHCP and ifupdown-ng still work when invoked
-  directly.
+  the exclusive service lock in place.  Tracing showed the wrapper creates a
+  close-on-exec pipe, installs a SIGCHLD handler, child processes close their
+  inherited pipe ends and exit, and the parent polls the empty pipe.  The
+  remaining OpenRC boot blocker is initial Linux userspace signal-handler
+  delivery, not physical link state, QEMU DHCP delivery, or direct
+  ifupdown-ng/udhcpc operation.
 
 Tasks:
 
@@ -342,8 +348,9 @@ Tasks:
       starts after the Bunix services it needs, reads `/etc/network/interfaces`
       through ifupdown-ng, configures loopback, starts DHCP for the external
       interface, and reports status through logs and procfs.  Current blocker:
-      `openrc-run` can remain blocked after a successful service script body,
-      leaving `/run/openrc/starting/<service>` present.
+      `openrc-run` can remain blocked after a successful service script body
+      because Linux userspace SIGCHLD handlers are not delivered yet, leaving
+      `/run/openrc/starting/<service>` present.
 - [x] Wire BusyBox/Alpine `udhcpc` as the DHCPv4 client for QEMU-user or the
       selected deterministic external-network test backend.  Do not write a
       new Bunix DHCP client; implement only the NET0, Linux socket, script, and
