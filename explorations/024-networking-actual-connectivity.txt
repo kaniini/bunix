@@ -26,7 +26,9 @@ Constraints:
   minimum bringup needed to start the networking service.
 - Use BusyBox/Alpine `udhcpc` for external IPv4 DHCP configuration.  Static
   QEMU-user defaults are acceptable only as a fallback or test fixture when
-  DHCP is explicitly absent.
+  DHCP is explicitly absent.  Do not implement a Bunix DHCP client in this
+  exploration; missing work should be socket/ioctl/script/VFS/NET0 plumbing
+  needed to let `udhcpc` run normally.
 - Keep IPv6 loopback working independently of external IPv6 support.  External
   IPv6 may be planned separately unless it is needed to satisfy the smoke tests.
 - Tests must be deterministic enough for `make test-boot` and networking
