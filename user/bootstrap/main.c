@@ -2733,6 +2733,128 @@ static long net_packet_interface_selftest(u64 net)
 			return -1;
 		}
 	}
+	{
+		unsigned char payload[4];
+		u64 udp_socket;
+
+		request.type = BUNIX_NET_UDP_OPEN;
+		request.cap = 0;
+		request.cap_rights = 0;
+		request.words[0] = BUNIX_NET_ADDR_FAMILY_IPV4;
+		request.words[1] = 0;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		udp_socket = reply.words[1];
+		request.type = BUNIX_NET_UDP_BIND;
+		request.cap = 0;
+		request.cap_rights = 0;
+		request.words[0] = udp_socket;
+		request.words[1] = 0;
+		request.words[2] = 0x0a120001ull;
+		request.words[3] = 0x4321;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0 || reply.words[1] != 0x4321) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		packet.info.iface = iface_id;
+		packet.info.len = 46;
+		packet.info.flags = 0;
+		packet.info.reserved = 0;
+		for (u64 i = 0; i < sizeof(packet.frame); i++) {
+			packet.frame[i] = 0;
+		}
+		packet.frame[0] = 0x02;
+		packet.frame[4] = 0x18;
+		packet.frame[5] = 0x01;
+		packet.frame[6] = 0x02;
+		packet.frame[10] = 0x18;
+		packet.frame[11] = 0x05;
+		packet.frame[12] = 0x08;
+		packet.frame[13] = 0x00;
+		packet.frame[14] = 0x45;
+		packet.frame[16] = 0x00;
+		packet.frame[17] = 0x20;
+		packet.frame[22] = 64;
+		packet.frame[23] = 17;
+		packet.frame[26] = 0x0a;
+		packet.frame[27] = 0x12;
+		packet.frame[29] = 0x05;
+		packet.frame[30] = 0x0a;
+		packet.frame[31] = 0x12;
+		packet.frame[33] = 0x01;
+		packet.frame[34] = 0x56;
+		packet.frame[35] = 0x78;
+		packet.frame[36] = 0x43;
+		packet.frame[37] = 0x21;
+		packet.frame[38] = 0x00;
+		packet.frame[39] = 0x0c;
+		packet.frame[42] = 'r';
+		packet.frame[43] = 'x';
+		packet.frame[44] = 'u';
+		packet.frame[45] = 'd';
+		if (bunix_buffer_write((u64)buffer, 0, &packet,
+				       sizeof(packet)) != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_PACKET_RX_SUBMIT;
+		request.cap = (u64)buffer;
+		request.cap_rights = BUNIX_RIGHT_RECV;
+		request.words[0] = iface_id;
+		request.words[1] = packet.info.len;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0 || reply.words[2] != packet.info.len) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_UDP_POLL;
+		request.cap = 0;
+		request.cap_rights = 0;
+		request.words[0] = udp_socket;
+		request.words[1] = 0;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0 || (reply.words[1] & 1) == 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_UDP_RECV;
+		request.cap = (u64)buffer;
+		request.cap_rights = BUNIX_RIGHT_SEND;
+		request.words[0] = udp_socket;
+		request.words[1] = sizeof(payload);
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0 || reply.words[1] != sizeof(payload) ||
+		    reply.words[2] != 0x5678 ||
+		    bunix_buffer_read((u64)buffer, 0, payload,
+				      sizeof(payload)) != 0 ||
+		    payload[0] != 'r' || payload[1] != 'x' ||
+		    payload[2] != 'u' || payload[3] != 'd') {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_UDP_CLOSE;
+		request.cap = 0;
+		request.cap_rights = 0;
+		request.words[0] = udp_socket;
+		request.words[1] = 0;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+	}
 	packet.info.iface = iface_id;
 	packet.info.len = sizeof(packet.frame);
 	packet.info.flags = 0;
@@ -2780,7 +2902,7 @@ static long net_packet_interface_selftest(u64 net)
 	request.type = BUNIX_NET_INTERFACE_STATS;
 	request.words[0] = iface_id;
 	if (bunix_ipc_call(net, &request, &reply) != 0 ||
-	    reply.words[0] != 0 || reply.words[1] != 4 ||
+	    reply.words[0] != 0 || reply.words[1] != 5 ||
 	    reply.words[2] != 1) {
 		bunix_handle_close((u64)buffer);
 		return -1;
