@@ -127,7 +127,7 @@ enum {
 	LINUX_STATFS_BLOCKS = 32768,
 	LINUX_STATFS_FREE_BLOCKS = 16384,
 	LINUX_INITIAL_FDS = 16,
-	LINUX_PIPE_CAPACITY = 4096,
+	LINUX_PIPE_CAPACITY = 65536,
 	LINUX_PROC_SPAWN_LINUX = 2,
 	LINUX_S_IFCHR = 0020000,
 	LINUX_S_IFBLK = 0060000,
@@ -287,6 +287,9 @@ struct linux_pipe {
 	u64 reader_reply;
 	u64 reader_buffer;
 	u64 reader_len;
+	u64 writer_reply;
+	u64 writer_buffer;
+	u64 writer_len;
 	char data[LINUX_PIPE_CAPACITY];
 };
 
@@ -1601,6 +1604,10 @@ static void linux_pipe_ref_add(const struct linux_fd *fd)
 	}
 }
 
+static long linux_pipe_write_available(struct linux_pipe *pipe, u64 len,
+				       u64 buffer);
+static void linux_pipe_wake_writer(struct linux_pipe *pipe);
+
 static void linux_pipe_ref_drop(const struct linux_fd *fd)
 {
 	struct linux_pipe *pipe = linux_pipe_find(fd->handle);
@@ -1616,6 +1623,9 @@ static void linux_pipe_ref_drop(const struct linux_fd *fd)
 	if (pipe->read_refs == 0 && pipe->write_refs == 0) {
 		if (pipe->reader_buffer != 0) {
 			bunix_handle_close(pipe->reader_buffer);
+		}
+		if (pipe->writer_buffer != 0) {
+			bunix_handle_close(pipe->writer_buffer);
 		}
 		(void)bunix_id_remove(&pipe_ids, pipe->id);
 		pipe->id = 0;
@@ -1656,6 +1666,9 @@ static long linux_pipe_create(struct linux_process *process, u64 flags,
 	pipe->reader_reply = 0;
 	pipe->reader_buffer = 0;
 	pipe->reader_len = 0;
+	pipe->writer_reply = 0;
+	pipe->writer_buffer = 0;
+	pipe->writer_len = 0;
 
 	left = alloc_fd(process, LINUX_FD_PIPE_READ, pipe->id, 0);
 	if (left < 0) {
@@ -1704,7 +1717,39 @@ static long linux_pipe_read_available(struct linux_pipe *pipe, u64 len,
 	if (bunix_buffer_write(buffer, 0, write_buffer, nread) != 0) {
 		return -LINUX_EFAULT;
 	}
+	linux_pipe_wake_writer(pipe);
 	return (long)nread;
+}
+
+static long linux_pipe_write_available(struct linux_pipe *pipe, u64 len,
+				       u64 buffer)
+{
+	u64 copy_len;
+	u64 space;
+	u64 nwritten;
+
+	if (pipe == 0 || buffer == 0) {
+		return -LINUX_EBADF;
+	}
+	if (pipe->read_refs == 0) {
+		return -LINUX_EPIPE;
+	}
+	space = LINUX_PIPE_CAPACITY - pipe->len;
+	if (space == 0) {
+		return -LINUX_EAGAIN;
+	}
+	copy_len = len < sizeof(write_buffer) ? len : sizeof(write_buffer);
+	nwritten = copy_len < space ? copy_len : space;
+	if (nwritten != 0 &&
+	    bunix_buffer_read(buffer, 0, write_buffer, nwritten) != 0) {
+		return -LINUX_EFAULT;
+	}
+	for (u64 i = 0; i < nwritten; i++) {
+		pipe->data[(pipe->start + pipe->len + i) %
+			   LINUX_PIPE_CAPACITY] = write_buffer[i];
+	}
+	pipe->len += nwritten;
+	return (long)nwritten;
 }
 
 static void linux_pipe_wake_reader(struct linux_pipe *pipe)
@@ -1738,6 +1783,40 @@ static void linux_pipe_wake_reader(struct linux_pipe *pipe)
 	if (buffer != 0) {
 		bunix_handle_close(buffer);
 	}
+}
+
+static void linux_pipe_wake_writer(struct linux_pipe *pipe)
+{
+	struct bunix_msg reply = {
+		.protocol = BUNIX_PROTO_LINUX,
+		.type = BUNIX_LINUX_WRITE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	u64 reply_handle;
+	u64 buffer;
+	long nwritten;
+
+	if (pipe == 0 || pipe->writer_reply == 0 ||
+	    (pipe->read_refs != 0 && pipe->len == LINUX_PIPE_CAPACITY)) {
+		return;
+	}
+
+	reply_handle = pipe->writer_reply;
+	buffer = pipe->writer_buffer;
+	pipe->writer_reply = 0;
+	pipe->writer_buffer = 0;
+	nwritten = linux_pipe_write_available(pipe, pipe->writer_len, buffer);
+	pipe->writer_len = 0;
+	reply.words[0] = (u64)nwritten;
+	(void)bunix_ipc_send(reply_handle, &reply);
+	if (buffer != 0) {
+		bunix_handle_close(buffer);
+	}
+	linux_pipe_wake_reader(pipe);
 }
 
 static void linux_file_ref_add(u64 handle)
@@ -6613,7 +6692,7 @@ static long linux_mmap_read(struct linux_process *process, u64 fd, u64 offset,
 }
 
 static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
-			       u64 buffer)
+			       u64 buffer, u64 reply_handle, int *blocked)
 {
 	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
@@ -6624,9 +6703,7 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 
 	if (process->fds[fd].kind == LINUX_FD_PIPE_WRITE) {
 		struct linux_pipe *pipe = linux_pipe_find(process->fds[fd].handle);
-		u64 copy_len;
-		u64 space;
-		u64 nwritten;
+		long nwritten;
 
 		if (pipe == 0) {
 			return -LINUX_EBADF;
@@ -6634,23 +6711,25 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 		if (pipe->read_refs == 0) {
 			return -LINUX_EPIPE;
 		}
-		space = LINUX_PIPE_CAPACITY - pipe->len;
-		if (space == 0) {
-			return -LINUX_EAGAIN;
+		nwritten = linux_pipe_write_available(pipe, len, buffer);
+		if (nwritten == (long)-LINUX_EAGAIN &&
+		    (process->fds[fd].status_flags & LINUX_O_NONBLOCK) == 0) {
+			if (reply_handle == 0 || pipe->writer_reply != 0) {
+				return -LINUX_EAGAIN;
+			}
+			pipe->writer_reply = reply_handle;
+			pipe->writer_buffer = buffer;
+			pipe->writer_len = len;
+			if (blocked != 0) {
+				*blocked = 1;
+			}
+			return 0;
 		}
-		copy_len = len < sizeof(write_buffer) ? len : sizeof(write_buffer);
-		nwritten = copy_len < space ? copy_len : space;
-		if (nwritten != 0 &&
-		    bunix_buffer_read(buffer, 0, write_buffer, nwritten) != 0) {
-			return -LINUX_EFAULT;
+		if (nwritten < 0) {
+			return nwritten;
 		}
-		for (u64 i = 0; i < nwritten; i++) {
-			pipe->data[(pipe->start + pipe->len + i) %
-				   LINUX_PIPE_CAPACITY] = write_buffer[i];
-		}
-		pipe->len += nwritten;
 		linux_pipe_wake_reader(pipe);
-		return (long)nwritten;
+		return nwritten;
 	}
 	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
 	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
@@ -6751,7 +6830,7 @@ static long linux_sendfile(struct linux_process *process, u64 out_fd,
 	if (nread <= 0) {
 		return nread;
 	}
-	return linux_write_buffer(process, out_fd, (u64)nread, buffer);
+	return linux_write_buffer(process, out_fd, (u64)nread, buffer, 0, 0);
 }
 
 static long linux_lseek(struct linux_process *process, u64 fd, u64 offset,
@@ -6803,6 +6882,7 @@ static long linux_close(struct linux_process *process, u64 fd)
 
 		linux_pipe_ref_drop(&process->fds[fd]);
 		linux_pipe_wake_reader(linux_pipe_find(pipe_id));
+		linux_pipe_wake_writer(linux_pipe_find(pipe_id));
 	}
 	if (linux_fd_is_refcounted_net_socket(&process->fds[fd]) &&
 	    linux_net_socket_ref_drop(&process->fds[fd]) == 0) {
@@ -8020,13 +8100,18 @@ int main(void)
 			case BUNIX_LINUX_WRITE: {
 				const u64 fd = message.words[0];
 				const u64 len = message.words[1];
+				int blocked = 0;
 
 			reply.words[0] = (u64)linux_write_buffer(process, fd, len,
-								 message.cap);
+								 message.cap,
+								 message.reply,
+								 &blocked);
 			if (reply.words[0] == (u64)-LINUX_EBADF) {
 				bunix_console_log(bad_fd, sizeof(bad_fd) - 1);
 			}
-			if (message.cap != 0) {
+			if (blocked) {
+				should_reply = 0;
+			} else if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 				}
 				break;

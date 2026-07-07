@@ -1,0 +1,39 @@
+Fix repeated piped reads of per-process procfs files.
+
+Problem:
+
+- Repeated commands such as
+  `busybox cat /proc/self/stat | busybox cat >/dev/null` and
+  `busybox ps | busybox cat >/dev/null` can hang after several iterations.
+- Plain repeated reads such as `busybox cat /proc/self/stat >/dev/null` pass,
+  and repeated piped reads of non-process procfs files such as
+  `/proc/kthreads` pass.
+- The current Alpine boot smoke avoids the flaky pipeline shape by writing
+  `busybox ps` output to `/tmp/alpine.ps` before grepping it.  That is a test
+  harness workaround, not the system fix.
+
+Constraints:
+
+- Do not paper over this in procfs by returning early EOF while writers are
+  still live.
+- Preserve Linux pipe semantics: blocking pipe writes must block when full,
+  reads must return EOF only when all write references are closed, and
+  close-on-exec/dup/close behavior must match Linux closely enough for BusyBox
+  ash pipelines.
+- Keep `/proc/self` resolution tied to the task that opened the file, not to
+  whichever server later services the read.
+
+Tasks:
+
+- [ ] Add a deterministic regression shard or C regression program covering at
+      least twenty iterations of piped `/proc/self/stat`, `/proc/self/cmdline`,
+      and `busybox ps` reads with clean guest poweroff.
+- [ ] Audit Linux pipe descriptor lifetime across `pipe2`, `fork`/`vfork`,
+      `dup2`/`dup3`, `fcntl(F_DUPFD*)`, `close`, `close_range`, `execve`, and
+      process exit.
+- [ ] Audit procfs `/proc/self` open/read/stat behavior and make sure open file
+      handles hold stable process identity and close reliably through VFS.
+- [ ] Fix the underlying hang without weakening EOF semantics.
+- [ ] Remove the Alpine boot-smoke workaround if the direct pipeline is stable
+      enough to use again.
+- [ ] Run the new focused regression plus `make test`.

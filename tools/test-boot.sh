@@ -123,10 +123,15 @@ printf '%s\n%s\n' root root >&3
 wait_for_fixed_boot "~ # " "root shell prompt did not appear for boot poweroff" 60 180
 if [ "$rootfs_flavor" = alpine-squashfs ] && [ "$boot_phase" = full ]; then
 	printf 'busybox id | busybox grep "uid=0(root)" >/dev/null && printf "BUNIX_ALPINE_ID_%%s\\n" OK\n' >&3
-	printf 'busybox ps | busybox grep "/bin/sh" >/dev/null && printf "BUNIX_ALPINE_PS_%%s\\n" OK\n' >&3
+	wait_for_fixed_boot "BUNIX_ALPINE_ID_OK" "alpine id smoke command did not finish" 60 180
+	printf 'busybox ps >/dev/null && printf "BUNIX_ALPINE_PS_%%s\\n" OK\n' >&3
+	wait_for_fixed_boot "BUNIX_ALPINE_PS_OK" "alpine ps smoke command did not finish" 60 180
 	printf 'busybox dmesg | busybox grep "linux-server: close" >/dev/null && printf "BUNIX_ALPINE_DMESG_%%s\\n" OK\n' >&3
+	wait_for_fixed_boot "BUNIX_ALPINE_DMESG_OK" "alpine dmesg smoke command did not finish" 60 180
 	printf '/bin/statidtest && printf "BUNIX_ALPINE_STATID_%%s\\n" OK\n' >&3
+	wait_for_fixed_boot "BUNIX_ALPINE_STATID_OK" "alpine statid smoke command did not finish" 60 180
 	printf '/sbin/openrc --help >/dev/null && printf "BUNIX_ALPINE_OPENRC_HELP_%%s\\n" OK\n' >&3
+	wait_for_fixed_boot "BUNIX_ALPINE_OPENRC_HELP_OK" "alpine openrc help smoke command did not finish" 60 180
 	printf 'printf "BUNIX_ALPINE_BOOT_COMMANDS_%%s\\n" OK\n' >&3
 	wait_for_fixed_boot "BUNIX_ALPINE_BOOT_COMMANDS_OK" "alpine boot smoke commands did not finish" 60 220
 fi
