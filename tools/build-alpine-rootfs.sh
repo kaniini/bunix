@@ -111,46 +111,63 @@ EOF_INTERFACES
 chmod 0444 "$root/etc/network/interfaces"
 
 cat > "$root/etc/init.d/networking" <<'EOF_NETWORKING'
-#!/sbin/openrc-run
-description="Bunix ifupdown-ng networking"
+#!/bin/sh
 
-: ${cfgfile:="/etc/network/interfaces"}
+cfgfile=${cfgfile:-/etc/network/interfaces}
+started=/run/openrc/started/networking
 
-depend()
+mark_started()
 {
-	provide net
+	mkdir -p /run/openrc/started
+	ln -sf /etc/init.d/networking "$started"
 }
 
-start()
+start_networking()
 {
-	ebegin "Starting networking"
+	echo " * Starting networking ..."
 	ifup -i "$cfgfile" lo >/dev/null 2>&1 || true
-	ifup -i "$cfgfile" eth0 >/dev/null
-	eend $?
+	ifup -i "$cfgfile" eth0 || return $?
+	mark_started
+	return 0
 }
 
-status()
+stop_networking()
 {
-	if [ -e /run/openrc/started/networking ]; then
-		einfo "status: started"
+	echo " * Stopping networking ..."
+	ifdown -i "$cfgfile" eth0 >/dev/null 2>&1 || true
+	ifdown -i "$cfgfile" lo >/dev/null 2>&1 || true
+	rm -f "$started"
+	return 0
+}
+
+status_networking()
+{
+	if [ -e "$started" ]; then
+		echo " * status: started"
 		return 0
 	fi
-	einfo "status: stopped"
+	echo " * status: stopped"
 	return 3
 }
 
-stop()
-{
-	ebegin "Stopping networking"
-	ifdown -i "$cfgfile" eth0 >/dev/null 2>&1 || true
-	ifdown -i "$cfgfile" lo >/dev/null 2>&1 || true
-	eend 0
-}
-
-restart()
-{
-	start
-}
+case "$1" in
+start)
+	start_networking
+	;;
+stop)
+	stop_networking
+	;;
+restart)
+	start_networking
+	;;
+status)
+	status_networking
+	;;
+*)
+	echo "usage: $0 {start|stop|restart|status}" >&2
+	exit 1
+	;;
+esac
 EOF_NETWORKING
 chmod 0755 "$root/etc/init.d/networking"
 

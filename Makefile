@@ -920,7 +920,7 @@ test-boot-virtio-net-networking-run: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/test-
 	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		QEMU_TIMEOUT=180s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
 		BUNIX_MARKER=BUNIX_NETWORKING_OK \
-		BUNIX_CMD='C=/proc/net/config; test -e /run/openrc/started/networking; cat $$C; grep -F "iface eth0" $$C; grep -F "default_ipv4 1" $$C; grep -F "rxq 0 txq 0" $$C; ping -c1 -W4 10.0.2.2; ping -c1 -W4 4.2.2.1; ping -c1 -W4 8.8.8.8' \
+		BUNIX_CMD='C=/proc/net/config; rc-service networking status; rc-service networking restart; test -e /run/openrc/started/networking; cat $$C; grep -F "iface eth0" $$C; grep -F "default_ipv4 1" $$C; grep -F "rxq 0 txq 0" $$C; ping -c1 -W4 10.0.2.2; ping -c1 -W4 4.2.2.1; ping -c1 -W4 8.8.8.8' \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" sh tools/test-command.sh
 
 test-boot-virtio-net-socket-peer: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/virtio-net-peer.py tools/test-lib.sh tools/test-command.sh

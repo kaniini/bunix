@@ -42,6 +42,11 @@ save_failure_artifacts() {
 		cp "$serial_log" "$out/serial.log" 2>/dev/null || true
 		tail -n "$tail_lines" "$serial_log" > "$out/serial-tail.log" 2>/dev/null || true
 		grep -a 'linux-strace' "$serial_log" | tail -n "${BUNIX_STRACE_LINES:-200}" > "$out/linux-strace.log" 2>/dev/null || true
+		awk '
+			/__BUNIX_FAILURE_PROBES_BEGIN__/ { capture = 1 }
+			capture { print }
+			/__BUNIX_FAILURE_PROBES_END__/ { capture = 0 }
+		' "$serial_log" > "$out/guest-probes.log" 2>/dev/null || true
 	fi
 	if [ -n "$qemu_log" ]; then
 		cp "$qemu_log" "$out/qemu.log" 2>/dev/null || true

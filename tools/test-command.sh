@@ -74,9 +74,35 @@ cleanup() {
 	fi
 }
 
+collect_guest_failure_probes() {
+	if [ "${BUNIX_FAILURE_GUEST_PROBES:-1}" != 1 ]; then
+		return
+	fi
+	if ! kill -0 "$qemu_pid" 2>/dev/null; then
+		return
+	fi
+	{
+		printf 'echo __BUNIX_FAILURE_PROBES_BEGIN__\n'
+		printf 'echo "--- /proc/net/config ---"\n'
+		printf 'cat /proc/net/config 2>&1\n'
+		printf 'echo "--- /proc/net/dev ---"\n'
+		printf 'cat /proc/net/dev 2>&1\n'
+		printf 'echo "--- /proc/net/arp ---"\n'
+		printf 'cat /proc/net/arp 2>&1\n'
+		printf 'echo "--- networking status ---"\n'
+		printf '/etc/init.d/networking status 2>&1\n'
+		printf 'echo "--- dmesg tail ---"\n'
+		printf 'dmesg 2>&1 | tail -n 80\n'
+		printf 'echo __BUNIX_FAILURE_PROBES_END__\n'
+	} >&3 2>/dev/null || return
+	sleep "${BUNIX_FAILURE_GUEST_PROBE_DELAY:-3}"
+}
+
 fail_command() {
 	label=$1
 	tail_lines=${2:-160}
+
+	collect_guest_failure_probes
 	out=$(save_failure_artifacts "$label" "$log" "$qemu_log" "$tail_lines")
 
 	echo "$label" >&2

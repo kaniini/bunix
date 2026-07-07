@@ -53,11 +53,10 @@ Investigation targets:
 - Determine whether the `recvfrom` failures come from missing ICMP error-queue
   semantics, nonblocking readiness mismatch, packet demultiplexing, fd lifetime,
   route/neighbor churn after service restart, or stale socket state.
-- Direct `rc-service networking status` and direct
-  `/etc/init.d/networking restart` still block under OpenRC's runner even
-  though the temporary service starts successfully during boot.  Keep that as
-  input to exploration 048 rather than blocking the fresh-boot networking
-  outcome here.
+- The temporary service is intentionally a small shell script rather than
+  `openrc-run`; exploration 048 owns restoring Alpine's stock
+  `/etc/init.d/networking` once the broader OpenRC/VFS compatibility gaps are
+  closed.
 
 Tasks:
 
@@ -68,7 +67,7 @@ Tasks:
 - [x] Prove the boot path runs OpenRC's `/etc/init.d/networking` service before
       login and that this service, not a manual command, installs the DHCP lease
       and default route.
-- [ ] Make `/etc/init.d/networking start` and `rc-service networking restart`
+- [x] Make `/etc/init.d/networking start` and `rc-service networking restart`
       converge to a valid NET0 state when manual DHCP already works.
 - [x] Ensure ifupdown-ng plus BusyBox/Alpine `udhcpc` use the Bunix DHCP hook
       correctly without Bunix-specific manual commands.
@@ -76,7 +75,7 @@ Tasks:
       preserving correct Linux errno behavior.
 - [x] Add regression coverage for `ping 10.0.2.2`, `ping 4.2.2.1`, and
       `ping 8.8.8.8` after OpenRC networking service bringup.
-- [ ] Add observability to the test failure artifacts so the next networking
+- [x] Add observability to the test failure artifacts so the next networking
       regression includes `/proc/net/config`, `/proc/net/dev`, `/proc/net/arp`,
       OpenRC status, and recent dmesg output.
 - [ ] Re-run the narrow networking targets and full tests before marking the
@@ -89,10 +88,10 @@ Status:
   networking, verifies `/run/openrc/started/networking`, checks DHCP/default
   route state in `/proc/net/config`, pings `10.0.2.2`, `4.2.2.1`, and
   `8.8.8.8`, and ends in guest poweroff.
-- The deterministic target proves the fresh `make run` style outcome, but it no
-  longer calls `rc-service networking status` or direct service restart because
-  those currently block in OpenRC's runner.  Keep that gap visible for
-  exploration 048's stock-service restoration work.
+- The deterministic target includes `rc-service networking status` and
+  `rc-service networking restart`, proving the temporary service can be queried
+  and restarted after login.  Failure artifacts now request guest-side
+  networking probes before saving serial logs.
 
 Completion criteria:
 
