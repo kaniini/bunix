@@ -1,0 +1,67 @@
+Restore the stock Alpine OpenRC networking service.
+
+Problem:
+
+- Exploration 026 allows progress by generating a Bunix-specific
+  `/etc/init.d/networking` service in the Alpine rootfs.
+- That is acceptable as a temporary bootstrap path, but the intended Alpine
+  environment should run the real Alpine/ifupdown-ng networking service.
+- The stock service currently pulls in OpenRC dependencies such as
+  `localmount` and helper programs like `mkmntdirs`, `mountinfo`, and
+  `fstabinfo` that expose gaps in Bunix's VFS, mount-table, and Linux
+  compatibility behavior.
+
+Intended outcome:
+
+- The generated Alpine rootfs keeps Alpine's stock `/etc/init.d/networking`.
+- `make run` boots through BusyBox init, runs `openrc sysinit`, `openrc boot`,
+  and `openrc default`, then BusyBox init manages the `ttyS0` login respawn.
+- The stock OpenRC `networking` service starts `eth0` through ifupdown-ng and
+  `udhcpc`, installs the DHCP lease and default route, and does not require a
+  Bunix-specific replacement service.
+
+Constraints:
+
+- BusyBox init, not OpenRC, manages login respawn processes.
+- Do not reintroduce a blocking `bunix-login` OpenRC service.
+- Do not bypass OpenRC networking with bootstrap DHCP or test-only hooks.
+- Keep policy in userspace: Alpine OpenRC, ifupdown-ng, and BusyBox/Alpine
+  `udhcpc` drive network configuration.
+- Any Bunix-specific compatibility should be in general VFS, mount, procfs,
+  sysfs, or Linux syscall behavior, not a forked networking script.
+
+Investigation targets:
+
+- Identify the exact helper or syscall path that causes stock OpenRC boot to
+  stop after `fsck` and before the normal login respawn.
+- Audit stock `localmount`, `mkmntdirs`, `mountinfo`, `fstabinfo`, and
+  `/proc/self/mountinfo` expectations against Bunix VFS/procfs behavior.
+- Verify whether `/etc/fstab` entries, mount table reporting, `statfs`,
+  `getmntent`, `openat`, `fstat`, `readlink`, or directory mutation semantics
+  are still incomplete for OpenRC.
+
+Tasks:
+
+- [ ] Add a deterministic OpenRC boot test that preserves Alpine's stock
+      `/etc/init.d/networking` and fails at the current blocking point with
+      useful failure artifacts.
+- [ ] Replace temporary generated OpenRC service hacks with general VFS,
+      procfs, sysfs, mount-table, or Linux compatibility fixes.
+- [ ] Make stock `localmount` complete successfully on the Bunix Alpine image.
+- [ ] Make stock Alpine `/etc/init.d/networking start` and boot runlevel
+      startup complete successfully.
+- [ ] Prove BusyBox init reaches `ttyS0::respawn:/bin/login` only after the
+      OpenRC sysinit, boot, and default phases return.
+- [ ] Verify `rc-service networking status`, `/run/openrc/started/networking`,
+      `/proc/net/config`, and external IPv4 pings after login.
+- [ ] Remove the generated Bunix-specific networking service from
+      `tools/build-alpine-rootfs.sh` once stock Alpine networking works.
+- [ ] Re-run narrow OpenRC networking tests and the relevant Alpine boot tests.
+
+Completion criteria:
+
+- A fresh `make run` Alpine environment uses Alpine's stock
+  `/etc/init.d/networking`.
+- Networking is up after login without manual intervention.
+- BusyBox init owns login respawn after OpenRC returns.
+- The temporary Bunix networking-service replacement is gone.
