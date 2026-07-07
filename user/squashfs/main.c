@@ -1,3 +1,4 @@
+#include <bunix/alloc.h>
 #include <bunix/libbunix.h>
 
 enum {
@@ -6,6 +7,10 @@ enum {
 	SQUASHFS_SUPER_SIZE = 96,
 	SQUASHFS_MAJOR = 4,
 	SQUASHFS_MAX_BLOCK_SIZE = 128 * 1024,
+	SQUASHFS_METADATA_MAX = 8192,
+	SQUASHFS_METADATA_HEADER = 2,
+	SQUASHFS_METADATA_UNCOMPRESSED = 0x8000,
+	SQUASHFS_METADATA_SIZE_MASK = 0x7fff,
 	SQUASHFS_INVALID_TABLE = (u64)-1,
 	SQUASHFS_COMPRESSOR_MIN = 1,
 	SQUASHFS_COMPRESSOR_MAX = 6,
@@ -31,7 +36,15 @@ struct squashfs_super {
 	u64 lookup_table_start;
 };
 
+struct squashfs_metadata_cache {
+	struct squashfs_metadata_cache *next;
+	u64 disk_offset;
+	u64 size;
+	unsigned char data[SQUASHFS_METADATA_MAX];
+};
+
 static struct squashfs_super root_super;
+static struct squashfs_metadata_cache *metadata_cache;
 static u64 block_service;
 static u64 image_size;
 
@@ -250,6 +263,130 @@ static long validate_table_start(const char *name, u64 start,
 	return 0;
 }
 
+static struct squashfs_metadata_cache *metadata_cache_find(u64 disk_offset)
+{
+	struct squashfs_metadata_cache *entry = metadata_cache;
+
+	while (entry != 0) {
+		if (entry->disk_offset == disk_offset) {
+			return entry;
+		}
+		entry = entry->next;
+	}
+	return 0;
+}
+
+static long metadata_read_block(u64 disk_offset,
+				struct squashfs_metadata_cache **out)
+{
+	unsigned char header_raw[SQUASHFS_METADATA_HEADER];
+	struct squashfs_metadata_cache *entry;
+	u64 header;
+	u64 stored_size;
+	u64 data_offset;
+
+	if (out == 0 ||
+	    disk_offset > root_super.bytes_used ||
+	    SQUASHFS_METADATA_HEADER > root_super.bytes_used - disk_offset) {
+		log_mount_error("metadata block out of range", disk_offset);
+		return -1;
+	}
+	entry = metadata_cache_find(disk_offset);
+	if (entry != 0) {
+		*out = entry;
+		return 0;
+	}
+	if (block_read_bytes(block_service, disk_offset, header_raw,
+			     sizeof(header_raw)) != 0) {
+		log_mount_error("metadata header read failed", disk_offset);
+		return -1;
+	}
+	header = load_le16(header_raw, 0);
+	stored_size = header & SQUASHFS_METADATA_SIZE_MASK;
+	data_offset = disk_offset + SQUASHFS_METADATA_HEADER;
+	if (stored_size == 0 || stored_size > SQUASHFS_METADATA_MAX ||
+	    data_offset > root_super.bytes_used ||
+	    stored_size > root_super.bytes_used - data_offset) {
+		log_mount_error("bad metadata block size", stored_size);
+		return -1;
+	}
+	if ((header & SQUASHFS_METADATA_UNCOMPRESSED) == 0) {
+		log_mount_error("compressed metadata unsupported", disk_offset);
+		return -1;
+	}
+	entry = (struct squashfs_metadata_cache *)
+		bunix_calloc(1, sizeof(*entry));
+	if (entry == 0) {
+		log_text("squashfs: mount rejected: metadata cache alloc failed\n");
+		return -1;
+	}
+	if (block_read_bytes(block_service, data_offset, entry->data,
+			     stored_size) != 0) {
+		bunix_free(entry);
+		log_mount_error("metadata block read failed", disk_offset);
+		return -1;
+	}
+	entry->disk_offset = disk_offset;
+	entry->size = stored_size;
+	entry->next = metadata_cache;
+	metadata_cache = entry;
+	*out = entry;
+	return 0;
+}
+
+static long metadata_read_exact(u64 table_start, u64 table_offset,
+				unsigned char *out, u64 len)
+{
+	u64 disk_offset = table_start;
+	u64 skip = table_offset;
+	u64 done = 0;
+
+	if (out == 0) {
+		return -1;
+	}
+	while (skip != 0 || done < len) {
+		struct squashfs_metadata_cache *entry;
+		u64 copy_offset;
+		u64 copy_len;
+
+		if (metadata_read_block(disk_offset, &entry) != 0) {
+			return -1;
+		}
+		if (skip >= entry->size) {
+			skip -= entry->size;
+			disk_offset += SQUASHFS_METADATA_HEADER + entry->size;
+			continue;
+		}
+		copy_offset = skip;
+		copy_len = entry->size - copy_offset;
+		skip = 0;
+		if (copy_len > len - done) {
+			copy_len = len - done;
+		}
+		for (u64 i = 0; i < copy_len; i++) {
+			out[done + i] = entry->data[copy_offset + i];
+		}
+		done += copy_len;
+		disk_offset += SQUASHFS_METADATA_HEADER + entry->size;
+	}
+	return 0;
+}
+
+static long validate_initial_metadata_blocks(void)
+{
+	unsigned char sample[16];
+
+	if (metadata_read_exact(root_super.inode_table_start, 0, sample,
+				sizeof(sample)) != 0) {
+		return -1;
+	}
+	if (metadata_read_exact(root_super.directory_table_start, 0, sample,
+				sizeof(sample)) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
 static long parse_super(const unsigned char *raw, u64 size,
 			struct squashfs_super *super)
 {
@@ -360,6 +497,9 @@ static long squashfs_mount(void)
 		return -1;
 	}
 	if (parse_super(raw, image_size, &root_super) != 0) {
+		return -1;
+	}
+	if (validate_initial_metadata_blocks() != 0) {
 		return -1;
 	}
 	log_super(&root_super);

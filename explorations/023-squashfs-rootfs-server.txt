@@ -242,7 +242,7 @@ Tasks:
 - [x] Implement SquashFS superblock parsing and validation with explicit
       diagnostics for unsupported versions, compression algorithms, block sizes,
       feature flags, table offsets, and corrupted sizes.
-- [ ] Implement metadata table block reading, decompression dispatch, caching,
+- [x] Implement metadata table block reading, decompression dispatch, caching,
       and safe bounds checks for all on-disk offsets and lengths.
 - [ ] Implement inode decoding for directories, regular files, symlinks, and
       device nodes needed by `/dev` handoff and Alpine userspace.
