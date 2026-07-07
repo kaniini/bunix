@@ -111,6 +111,7 @@ SYSRACETEST_MODULE := $(BUILD_DIR)/modules/sysracetest.user
 SCHEDSTRESS_MODULE := $(BUILD_DIR)/modules/schedstress.user
 UPTIMETEST_MODULE := $(BUILD_DIR)/modules/uptimetest.user
 NETTEST_MODULE := $(BUILD_DIR)/modules/nettest.user
+NETDHCP_MODULE := $(BUILD_DIR)/modules/bunix-udhcpc-script.user
 DYN_HELLO_MODULE := $(BUILD_DIR)/modules/dyn-hello.user
 BUSYBOX_DYNAMIC ?= /bin/busybox
 BUSYBOX_STATIC ?= /usr/bin/busybox.static
@@ -271,7 +272,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -404,6 +405,10 @@ $(LOGIN_MODULE): $(LOGIN_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(LOGIN_MODULE_OBJS)
 
+$(NETDHCP_MODULE): $(USER_CRT0_OBJ) $(BUILD_DIR)/user/netdhcp/main.c.o user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(USER_CRT0_OBJ) $(BUILD_DIR)/user/netdhcp/main.c.o
+
 $(LXTEST_MODULE): $(LXTEST_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(LXTEST_MODULE_OBJS)
@@ -517,11 +522,11 @@ $(NETCFG_MODULE): $(NETCFG_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(NETCFG_MODULE_OBJS)
 
-$(SYNTHETIC_SQUASHFS_IMAGE): tools/build-synthetic-squashfs-rootfs.sh $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(ROOTFS_SHEBANGTEST) $(ROOTFS_SHEBANGLOOP_A) $(ROOTFS_SHEBANGLOOP_B) $(ROOTFS_SHEBANGBAD) $(FIRST_MODULE) $(ALLOCTEST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(VFORKSTRESS_MODULE) $(EXECOK_MODULE) $(READBIG_MODULE) $(MMAPBIG_MODULE) $(MMAPHUGE_MODULE) $(EXECBIG_MODULE) $(PHDRSTRESS_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(IOVTEST_MODULE) $(FCHMODATTEST_MODULE) $(WAITPGIDTEST_MODULE) $(EXECLONGTEST_MODULE) $(AUXIDTEST_MODULE) $(PATHMAXTEST_MODULE) $(PATHERRTEST_MODULE) $(STATIDTEST_MODULE) $(FCNTLLOCKTEST_MODULE) $(SYSRACETEST_MODULE) $(SCHEDSTRESS_MODULE) $(UPTIMETEST_MODULE) $(NETTEST_MODULE) $(BUSYBOX) $(MUSL_LDSO)
+$(SYNTHETIC_SQUASHFS_IMAGE): tools/build-synthetic-squashfs-rootfs.sh $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(ROOTFS_SHEBANGTEST) $(ROOTFS_SHEBANGLOOP_A) $(ROOTFS_SHEBANGLOOP_B) $(ROOTFS_SHEBANGBAD) $(FIRST_MODULE) $(ALLOCTEST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(VFORKSTRESS_MODULE) $(EXECOK_MODULE) $(READBIG_MODULE) $(MMAPBIG_MODULE) $(MMAPHUGE_MODULE) $(EXECBIG_MODULE) $(PHDRSTRESS_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(IOVTEST_MODULE) $(FCHMODATTEST_MODULE) $(WAITPGIDTEST_MODULE) $(EXECLONGTEST_MODULE) $(AUXIDTEST_MODULE) $(PATHMAXTEST_MODULE) $(PATHERRTEST_MODULE) $(STATIDTEST_MODULE) $(FCNTLLOCKTEST_MODULE) $(SYSRACETEST_MODULE) $(SCHEDSTRESS_MODULE) $(UPTIMETEST_MODULE) $(NETTEST_MODULE) $(NETDHCP_MODULE) $(BUSYBOX) $(MUSL_LDSO)
 	BUSYBOX=$(BUSYBOX) MUSL_LDSO=$(MUSL_LDSO) MODULE_DIR=$(BUILD_DIR)/modules sh tools/build-synthetic-squashfs-rootfs.sh $@
 
-$(ALPINE_SQUASHFS_IMAGE): $(LOGIN_MODULE) $(STATIDTEST_MODULE) tools/build-alpine-rootfs.sh modules/passwd modules/shadow modules/group
-	ROOTFS_IMAGE_FORMAT=squashfs LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) sh tools/build-alpine-rootfs.sh $@
+$(ALPINE_SQUASHFS_IMAGE): $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh modules/passwd modules/shadow modules/group
+	ROOTFS_IMAGE_FORMAT=squashfs LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/build-alpine-rootfs.sh $@
 
 $(ROOTFS_FLAVOR_STAMP): FORCE
 	mkdir -p $(dir $@)
@@ -860,6 +865,7 @@ test-boot-virtio: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools
 
 test-boot-virtio-net: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-squashfs.txt
 	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		QEMU_TIMEOUT=$(QEMU_TIMEOUT) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_ARGS)" sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
@@ -874,6 +880,13 @@ test-boot-virtio-net: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/check-markers.sh too
 	grep -aF "virtio-net: rx ready" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: tx ready" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "netcfg: dhcp fallback lease installed" $(BUILD_DIR)/serial.log >/dev/null
+
+test-boot-virtio-net-dhcp: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/test-lib.sh tools/test-command.sh
+	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		QEMU_TIMEOUT=90s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
+		BUNIX_MARKER=BUNIX_DHCP_OK \
+		BUNIX_CMD='udhcpc -n -q -i eth0 -t 1 -T 1; cat /proc/net/config; busybox grep -F "iface eth0" /proc/net/config; busybox grep -F "rxq 0 txq 0" /proc/net/config' \
+		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_ARGS)" sh tools/test-command.sh
 
 test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) $(VIRTIO_BLK_TEST_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-squashfs.txt
 	ESP_DIR=$(VIRTIO_BLK_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

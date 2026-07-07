@@ -90,6 +90,7 @@ for name in first alloctest ipcstress login lxtest getdentstest vforkstress \
 	schedstress uptimetest nettest; do
 	install_file "/bin/$name" "$module_dir/$name.user" 0555
 done
+install_file /sbin/bunix-udhcpc-script "$module_dir/bunix-udhcpc-script.user" 0555
 install_file /bin/busybox "$busybox" 0555
 
 for dir in dev home/kaniini root tmp run mnt sys var/tmp var/run; do
@@ -99,6 +100,7 @@ done
 install_symlink /usr/share/bunix/long-target-link "$long_root/hello.txt"
 install_symlink /lib/libc.musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
 install_symlink /sbin/init /bin/busybox
+install_symlink /usr/share/udhcpc/default.script /sbin/bunix-udhcpc-script
 for path in /bin/sh /usr/bin/env /bin/dmesg /bin/cat /bin/stat /bin/uptime \
 	/bin/sleep /bin/ls /bin/mount /bin/umount /bin/free /bin/df /bin/ps \
 	/bin/top /bin/id /bin/kill /bin/echo /bin/env /bin/stty /bin/pwd \

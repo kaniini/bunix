@@ -275,6 +275,24 @@ Implementation progress:
   RX/TX queues (`rxq 0`, `txq 0`).  The remaining DHCP work is integration:
   ifupdown-ng/OpenRC script execution, lease installation through Bunix hooks,
   and deterministic test-shard poweroff.
+- Added a native Bunix `bunix-udhcpc-script` hook and install it as
+  `/usr/share/udhcpc/default.script` in both synthetic and Alpine rootfs
+  images.  BusyBox/Alpine `udhcpc` now runs its normal script path; on
+  `bound` or `renew`, the hook reads lease environment variables, maps
+  `ethN` to the matching NET0 packet interface, and installs the IPv4 lease
+  through `BUNIX_NET_DHCP4_LEASE_INSTALL`.
+- Alpine rootfs generation now includes `ifupdown-ng`, exposing the packaged
+  `/sbin/ifup`, `/sbin/ifdown`, and `/etc/init.d/networking` service.  The
+  builder links `networking` into the OpenRC boot runlevel.  A plain Alpine
+  boot still passes; the Alpine+VirtIO boot shard currently reaches login but
+  stalls in the existing `busybox ps` smoke command, so OpenRC networking
+  service acceptance remains pending until that shard can prove service
+  execution directly.
+- Added `make test-boot-virtio-net-dhcp`, a deterministic QEMU-user DHCP
+  command shard.  It boots the VirtIO-net image, logs in as root, runs
+  `udhcpc -n -q -i eth0 -t 1 -T 1` through the default script, checks
+  `/proc/net/config` for `eth0` and drained queues, prints a status marker,
+  and powers off through the command harness.
 
 Tasks:
 
@@ -286,18 +304,18 @@ Tasks:
       neighbor/ARP state observation, DHCP lease install, and status reporting.
 - [x] Add `/etc/network/interfaces` to the synthetic and Alpine root images
       with loopback plus DHCP configuration for the first VirtIO-net interface.
-- [ ] Install or expose ifupdown-ng in the Alpine-style rootfs and ensure its
+- [x] Install or expose ifupdown-ng in the Alpine-style rootfs and ensure its
       `/sbin/ifup` and `/sbin/ifdown` are the tools used for normal interface
       bringup.
 - [ ] Wire OpenRC `/etc/init.d/networking` into the normal boot path so it
       starts after the Bunix services it needs, reads `/etc/network/interfaces`
       through ifupdown-ng, configures loopback, starts DHCP for the external
       interface, and reports status through logs and procfs.
-- [ ] Wire BusyBox/Alpine `udhcpc` as the DHCPv4 client for QEMU-user or the
+- [x] Wire BusyBox/Alpine `udhcpc` as the DHCPv4 client for QEMU-user or the
       selected deterministic external-network test backend.  Do not write a
       new Bunix DHCP client; implement only the NET0, Linux socket, script, and
       configuration hooks `udhcpc` and ifupdown-ng need.
-- [ ] Ensure NET0 installs DHCP-provided IPv4 address, netmask, gateway, DNS
+- [x] Ensure NET0 installs DHCP-provided IPv4 address, netmask, gateway, DNS
       metadata if present, and default route through capability-checked RPCs.
 - [x] Make BusyBox or Alpine `ping 127.0.0.1` succeed through the Linux socket
       compatibility path.
@@ -310,8 +328,9 @@ Tasks:
 - [ ] Add deterministic boot/shell test shards for ifupdown-ng,
       `/etc/init.d/networking` startup, DHCP acquisition, loopback pings,
       external pings, `/proc/net` state, and clean poweroff.  Loopback ping
-      coverage is now present in the `network-loopback-ping` shard;
-      DHCP/external shards remain.
+      coverage is now present in the `network-loopback-ping` shard; DHCP
+      acquisition coverage is present in `test-boot-virtio-net-dhcp`;
+      ifupdown-ng/OpenRC startup and external shards remain.
 - [ ] Document supported network configuration syntax, DHCP limitations,
       QEMU/test backend assumptions, and follow-up work for DNS, IPv6 external
       networking, firewalling, packet capture, and production route policy.

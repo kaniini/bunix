@@ -11,10 +11,11 @@ apk_log=$artifact_dir/apk.log
 apk_plain_log=$artifact_dir/apk.plain.log
 apk_cache=${APK_CACHE_DIR:-$artifact_dir/apk-cache}
 repositories=${APK_REPOSITORIES_FILE:-/etc/apk/repositories}
-apk_packages=${ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc}
+apk_packages=${ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc ifupdown-ng}
 rootfs_format=${ROOTFS_IMAGE_FORMAT:-squashfs}
 login=${LOGIN_MODULE:-build/modules/login.user}
 statidtest=${STATIDTEST_MODULE:-build/modules/statidtest.user}
+netdhcp=${NETDHCP_MODULE:-build/modules/bunix-udhcpc-script.user}
 
 merge_account_file() {
 	base=$1
@@ -71,6 +72,10 @@ cp "$login" "$root/bin/login"
 chmod 0555 "$root/bin/login"
 cp "$statidtest" "$root/bin/statidtest"
 chmod 0555 "$root/bin/statidtest"
+mkdir -p "$root/usr/share/udhcpc" "$root/sbin"
+cp "$netdhcp" "$root/sbin/bunix-udhcpc-script"
+chmod 0555 "$root/sbin/bunix-udhcpc-script"
+ln -sf /sbin/bunix-udhcpc-script "$root/usr/share/udhcpc/default.script"
 
 merge_account_file "$root/etc/passwd" modules/passwd
 merge_account_file "$root/etc/shadow" modules/shadow
@@ -113,6 +118,7 @@ command_background="no"
 EOF_LOGIN_SERVICE
 chmod 0755 "$root/etc/init.d/bunix-login"
 ln -sf /etc/init.d/bunix-login "$root/etc/runlevels/default/bunix-login"
+ln -sf /etc/init.d/networking "$root/etc/runlevels/boot/networking"
 
 find "$root/var/cache/apk" -type f -delete 2>/dev/null || true
 
