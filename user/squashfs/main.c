@@ -14,7 +14,10 @@ enum {
 	SQUASHFS_METADATA_HEADER = 2,
 	SQUASHFS_METADATA_UNCOMPRESSED = 0x8000,
 	SQUASHFS_METADATA_SIZE_MASK = 0x7fff,
+	SQUASHFS_BLOCK_UNCOMPRESSED = 0x01000000,
+	SQUASHFS_BLOCK_SIZE_MASK = 0x00ffffff,
 	SQUASHFS_INVALID_TABLE = (u64)-1,
+	SQUASHFS_INVALID_FRAGMENT = 0xffffffffUL,
 	SQUASHFS_COMPRESSOR_MIN = 1,
 	SQUASHFS_COMPRESSOR_MAX = 6,
 	SQUASHFS_INODE_BASIC_DIR = 1,
@@ -76,6 +79,8 @@ struct squashfs_inode {
 	u64 inline_offset;
 	u64 inline_size;
 	u64 header_size;
+	u64 blocks_count;
+	u64 *block_sizes;
 };
 
 struct squashfs_node {
@@ -378,9 +383,41 @@ static long block_read_bytes(u64 block, u64 offset, unsigned char *out, u64 len)
 	return 0;
 }
 
+static long block_read_to_buffer(u64 offset, u64 buffer, u64 buffer_offset,
+				 u64 len)
+{
+	u64 done = 0;
+
+	while (done < len) {
+		struct bunix_msg request = {
+			.protocol = BUNIX_PROTO_BLOCK,
+			.type = BUNIX_BLOCK_READ_BUFFER,
+			.cap_rights = BUNIX_RIGHT_SEND,
+			.cap = buffer,
+			.words = { offset + done, len - done,
+				   buffer_offset + done, 0 },
+		};
+		struct bunix_msg reply;
+
+		if (bunix_ipc_call(block_service, &request, &reply) != 0 ||
+		    reply.words[0] != 0 ||
+		    reply.words[1] == 0 ||
+		    reply.words[1] > len - done) {
+			return -1;
+		}
+		done += reply.words[1];
+	}
+	return 0;
+}
+
 static int is_power_of_two(u64 value)
 {
 	return value != 0 && (value & (value - 1)) == 0;
+}
+
+static u64 div_round_up(u64 value, u64 divisor)
+{
+	return divisor == 0 ? 0 : (value + divisor - 1) / divisor;
 }
 
 static long validate_table_start(const char *name, u64 start,
@@ -709,6 +746,8 @@ static long decode_inode_at(u64 inode_ref, struct squashfs_inode *inode)
 	inode->inline_offset = table_offset;
 	inode->inline_size = 0;
 	inode->header_size = 16;
+	inode->blocks_count = 0;
+	inode->block_sizes = 0;
 
 	if (inode->uid_index >= root_super.ids ||
 	    inode->gid_index >= root_super.ids) {
@@ -783,6 +822,41 @@ static long decode_inode_at(u64 inode_ref, struct squashfs_inode *inode)
 	if (inode->nlink == 0) {
 		log_mount_error("inode has zero links", inode_ref);
 		return -1;
+	}
+	if (squashfs_is_regular_type(inode->type)) {
+		if (inode->fragment != SQUASHFS_INVALID_FRAGMENT) {
+			log_mount_error("file fragments unsupported", inode_ref);
+			return -1;
+		}
+		inode->blocks_count = div_round_up(inode->size,
+						   root_super.block_size);
+		if (inode->blocks_count != 0) {
+			u64 bytes;
+			unsigned char *raw_sizes;
+
+			if (inode->blocks_count > ((u64)-1) / 4) {
+				log_mount_error("file block count overflow",
+						inode_ref);
+				return -1;
+			}
+			bytes = inode->blocks_count * 4;
+			raw_sizes = (unsigned char *)bunix_alloc(bytes);
+			inode->block_sizes = (u64 *)bunix_calloc(
+				inode->blocks_count, sizeof(inode->block_sizes[0]));
+			if (raw_sizes == 0 || inode->block_sizes == 0 ||
+			    metadata_read_exact(root_super.inode_table_start +
+						block_offset,
+						table_offset + fixed_size,
+						raw_sizes, bytes) != 0) {
+				log_mount_error("file block list read failed",
+						inode_ref);
+				return -1;
+			}
+			for (u64 i = 0; i < inode->blocks_count; i++) {
+				inode->block_sizes[i] = load_le32(raw_sizes, i * 4);
+			}
+			bunix_free(raw_sizes);
+		}
 	}
 	if ((inode->type == SQUASHFS_INODE_BASIC_SYMLINK ||
 	     inode->type == SQUASHFS_INODE_EXT_SYMLINK) &&
@@ -1050,6 +1124,130 @@ static void reply_readdir_buffer(struct squashfs_open *open,
 	reply->words[3] = written;
 }
 
+static long zero_buffer_range(u64 buffer, u64 offset, u64 len)
+{
+	unsigned char zeros[128];
+	u64 done = 0;
+
+	for (u64 i = 0; i < sizeof(zeros); i++) {
+		zeros[i] = 0;
+	}
+	while (done < len) {
+		u64 chunk = len - done;
+
+		if (chunk > sizeof(zeros)) {
+			chunk = sizeof(zeros);
+		}
+		if (bunix_buffer_write(buffer, offset + done, zeros, chunk) != 0) {
+			return -1;
+		}
+		done += chunk;
+	}
+	return 0;
+}
+
+static u64 file_data_disk_offset(const struct squashfs_inode *inode,
+				 u64 block_index)
+{
+	u64 offset = inode->block_start;
+
+	for (u64 i = 0; i < block_index; i++) {
+		offset += inode->block_sizes[i] & SQUASHFS_BLOCK_SIZE_MASK;
+	}
+	return offset;
+}
+
+static void reply_read_file_buffer(struct squashfs_open *open,
+				   const struct bunix_msg *message,
+				   struct bunix_msg *reply)
+{
+	const struct squashfs_inode *inode;
+	u64 file_offset = message->words[1];
+	u64 len = message->words[2];
+	u64 done = 0;
+
+	if (open == 0 || open->kind != SQUASHFS_OPEN_NODE ||
+	    open->fs_node == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	inode = &open->fs_node->inode;
+	if (!squashfs_is_regular_type(inode->type)) {
+		reply->words[0] = squashfs_is_directory_type(inode->type) ?
+				  BUNIX_VFS_ERR_ISDIR : BUNIX_VFS_ERR_INVAL;
+		return;
+	}
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (file_offset >= inode->size) {
+		reply->words[0] = 0;
+		reply->words[1] = 0;
+		return;
+	}
+	if (len > inode->size - file_offset) {
+		len = inode->size - file_offset;
+	}
+	while (done < len) {
+		const u64 logical_offset = file_offset + done;
+		const u64 block_index = logical_offset / root_super.block_size;
+		const u64 block_offset = logical_offset % root_super.block_size;
+		u64 logical_block_size = root_super.block_size;
+		u64 chunk;
+		u64 stored;
+
+		if (block_index >= inode->blocks_count ||
+		    inode->block_sizes == 0) {
+			reply->words[0] = (u64)-1;
+			reply->words[1] = done;
+			return;
+		}
+		if (block_index + 1 == inode->blocks_count) {
+			const u64 tail = inode->size -
+					 block_index * root_super.block_size;
+
+			if (tail < logical_block_size) {
+				logical_block_size = tail;
+			}
+		}
+		chunk = logical_block_size - block_offset;
+		if (chunk > len - done) {
+			chunk = len - done;
+		}
+		stored = inode->block_sizes[block_index];
+		if (stored == 0) {
+			if (zero_buffer_range(message->cap, done,
+					      chunk) != 0) {
+				reply->words[0] = (u64)-1;
+				reply->words[1] = done;
+				return;
+			}
+		} else {
+			const u64 stored_size = stored & SQUASHFS_BLOCK_SIZE_MASK;
+
+			if ((stored & SQUASHFS_BLOCK_UNCOMPRESSED) == 0 ||
+			    stored_size < logical_block_size) {
+				reply->words[0] = (u64)-1;
+				reply->words[1] = done;
+				return;
+			}
+			if (block_read_to_buffer(file_data_disk_offset(inode,
+								       block_index) +
+						 block_offset, message->cap,
+						 done, chunk) != 0) {
+				reply->words[0] = (u64)-1;
+				reply->words[1] = done;
+				return;
+			}
+		}
+		done += chunk;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = done;
+}
+
 static void forward_open_handle(struct bunix_msg *message,
 				struct bunix_msg *reply)
 {
@@ -1064,6 +1262,8 @@ static void forward_open_handle(struct bunix_msg *message,
 		reply->words[0] = 0;
 	} else if (message->type == BUNIX_VFS_READDIR_BUFFER) {
 		reply_readdir_buffer(open, message, reply);
+	} else if (message->type == BUNIX_VFS_READ_FILE_BUFFER) {
+		reply_read_file_buffer(open, message, reply);
 	} else {
 		reply->words[0] = BUNIX_VFS_ERR_INVAL;
 	}
@@ -1231,6 +1431,7 @@ int main(void)
 				}
 				break;
 			case BUNIX_VFS_READDIR_BUFFER:
+			case BUNIX_VFS_READ_FILE_BUFFER:
 			case BUNIX_VFS_CLOSE:
 				forward_open_handle(&message, &reply);
 				break;

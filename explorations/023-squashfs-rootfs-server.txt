@@ -249,8 +249,10 @@ Tasks:
 - [x] Implement directory lookup and readdir, including long names, duplicate
       name rejection where appropriate, stable inode numbers, and deterministic
       ordering from the image.
-- [ ] Implement regular file reads across direct data blocks and fragments,
-      including sparse/empty files and reads crossing block boundaries.
+- [x] Implement regular file reads across direct data blocks, including
+      sparse/empty files and reads crossing block boundaries.  Keep
+      fragment-backed reads rejected until fragment support is intentionally
+      added.
 - [ ] Implement symlink reads and ensure VFS, not individual Linux syscall
       paths, performs symlink resolution consistently.
 - [ ] Implement stat/statx metadata mapping for SquashFS inode mode, uid/gid,
