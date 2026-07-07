@@ -44,7 +44,7 @@ Tasks:
       into Ethernet, ARP/ND, IPv4, IPv6, UDP, and TCP paths.
 - [x] Add host-side traffic generator support for deterministic RX and TX
       frames.
-- [ ] Add smoke tests for ARP, IPv4 UDP egress/ingress, IPv4 TCP connect or
+- [x] Add smoke tests for ARP, IPv4 UDP egress/ingress, IPv4 TCP connect or
       accept, route fallback behavior, `/proc/net/dev` counters, and clean
       guest poweroff.
 - [ ] Add equivalent IPv6 smoke tests once neighbor discovery is present.
@@ -167,6 +167,11 @@ Host-peer harness progress:
 - `QEMU_VIRTIO_NET_SOCKET_ARGS` and `QEMU_VIRTIO_NET_SOCKET_MCAST` provide the
   Makefile-side QEMU socket-netdev preset that future deterministic smoke tests
   can pair with the peer sidecar.
+- `make test-boot-virtio-net-socket-peer` now boots the guest with a QEMU
+  socket multicast VirtIO-net backend, runs the peer as a sidecar, verifies
+  guest NET0 config and default IPv4 route state, pings the peer at `10.0.2.2`,
+  checks nonzero `eth0` RX/TX counters through `/proc/net/dev`, and powers off
+  the guest cleanly.
 
 IPv6 external-traffic deferral:
 
