@@ -110,6 +110,7 @@ static struct bunix_tree nodes_by_path;
 static struct bunix_u64_tree open_files;
 static struct squashfs_node *root_node;
 static struct squashfs_node *all_nodes;
+static u64 *id_values;
 static u64 node_count;
 static u64 next_open_id = 1;
 static u64 block_service;
@@ -712,6 +713,53 @@ static long validate_initial_metadata_blocks(void)
 	return 0;
 }
 
+static long read_id_table(void)
+{
+	const u64 id_bytes = root_super.ids * 4;
+	const u64 table_blocks = div_round_up(id_bytes, SQUASHFS_METADATA_MAX);
+	unsigned char pointers_raw[64];
+	unsigned char *ids_raw;
+
+	if (root_super.ids == 0 ||
+	    root_super.ids > 1024 ||
+	    table_blocks == 0 ||
+	    table_blocks * 8 > sizeof(pointers_raw)) {
+		log_mount_error("unsupported id table size", root_super.ids);
+		return -1;
+	}
+	if (block_read_bytes(block_service, root_super.id_table_start,
+			     pointers_raw, table_blocks * 8) != 0) {
+		log_mount_error("id table pointer read failed",
+				root_super.id_table_start);
+		return -1;
+	}
+	ids_raw = (unsigned char *)bunix_alloc(id_bytes);
+	id_values = (u64 *)bunix_calloc(root_super.ids, sizeof(id_values[0]));
+	if (ids_raw == 0 || id_values == 0) {
+		log_text("squashfs: mount rejected: id table alloc failed\n");
+		return -1;
+	}
+	for (u64 block = 0; block < table_blocks; block++) {
+		const u64 pointer = load_le64(pointers_raw, block * 8);
+		const u64 out_offset = block * SQUASHFS_METADATA_MAX;
+		u64 chunk = id_bytes - out_offset;
+
+		if (chunk > SQUASHFS_METADATA_MAX) {
+			chunk = SQUASHFS_METADATA_MAX;
+		}
+		if (metadata_read_exact(pointer, 0, ids_raw + out_offset,
+					chunk) != 0) {
+			log_mount_error("id metadata read failed", pointer);
+			return -1;
+		}
+	}
+	for (u64 i = 0; i < root_super.ids; i++) {
+		id_values[i] = load_le32(ids_raw, i * 4);
+	}
+	bunix_free(ids_raw);
+	return 0;
+}
+
 static long decode_inode_at(u64 inode_ref, struct squashfs_inode *inode)
 {
 	unsigned char raw[64];
@@ -1125,6 +1173,77 @@ static void reply_readlink(const struct bunix_msg *message,
 	reply->words[3] = written;
 }
 
+static u64 stat_buffer_offset(const struct bunix_msg *message)
+{
+	if (message->type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
+		return message->words[0] + message->words[1];
+	}
+	return message->words[1];
+}
+
+static u64 node_rdev(const struct squashfs_node *node)
+{
+	if (node == 0 ||
+	    (node->inode.type != SQUASHFS_INODE_BASIC_CHARDEV &&
+	     node->inode.type != SQUASHFS_INODE_EXT_CHARDEV &&
+	     node->inode.type != SQUASHFS_INODE_BASIC_BLOCKDEV &&
+	     node->inode.type != SQUASHFS_INODE_EXT_BLOCKDEV)) {
+		return 0;
+	}
+	return node->inode.rdev;
+}
+
+static void reply_stat_node(const struct bunix_msg *message,
+			    struct bunix_msg *reply,
+			    const struct squashfs_node *node)
+{
+	u64 uid;
+	u64 gid;
+	u64 mode_type;
+	u64 owner;
+	u64 blocks;
+
+	if (node == 0 ||
+	    node->inode.uid_index >= root_super.ids ||
+	    node->inode.gid_index >= root_super.ids ||
+	    id_values == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	uid = id_values[node->inode.uid_index];
+	gid = id_values[node->inode.gid_index];
+	mode_type = (node->inode.mode & 07777) |
+		    (squashfs_vfs_type(node->inode.type) << 32);
+	owner = uid | (gid << 32);
+	blocks = (node->inode.size + 511) / 512;
+	reply->words[0] = 0;
+	reply->words[1] = node->inode.size;
+	reply->words[2] = mode_type;
+	reply->words[3] = owner;
+	if (message->cap != 0 &&
+	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0) {
+		(void)bunix_vfs_stat_write_times(
+			message->cap, stat_buffer_offset(message),
+			node->inode.size, mode_type, owner,
+			BUNIX_VFS_DEV_SQUASHFS, node->inode.ino,
+			node->inode.nlink, node_rdev(node),
+			root_super.block_size, blocks, node->inode.mtime,
+			node->inode.mtime, node->inode.mtime);
+	}
+}
+
+static void reply_path_stat(const struct bunix_msg *message,
+			    struct bunix_msg *reply, const char *path)
+{
+	struct squashfs_node *node = find_node(path);
+
+	if (node == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	reply_stat_node(message, reply, node);
+}
+
 static void reply_readdir_buffer(struct squashfs_open *open,
 				 const struct bunix_msg *message,
 				 struct bunix_msg *reply)
@@ -1305,6 +1424,8 @@ static void forward_open_handle(struct bunix_msg *message,
 	if (message->type == BUNIX_VFS_CLOSE) {
 		forget_open(open);
 		reply->words[0] = 0;
+	} else if (message->type == BUNIX_VFS_STAT_META) {
+		reply_stat_node(message, reply, open->fs_node);
 	} else if (message->type == BUNIX_VFS_READDIR_BUFFER) {
 		reply_readdir_buffer(open, message, reply);
 	} else if (message->type == BUNIX_VFS_READ_FILE_BUFFER) {
@@ -1429,6 +1550,9 @@ static long squashfs_mount(void)
 	if (validate_initial_metadata_blocks() != 0) {
 		return -1;
 	}
+	if (read_id_table() != 0) {
+		return -1;
+	}
 	if (validate_root_inode() != 0) {
 		return -1;
 	}
@@ -1482,6 +1606,14 @@ int main(void)
 					reply_readlink(&message, &reply, path);
 				}
 				break;
+			case BUNIX_VFS_STAT_PATH_META_BUFFER:
+				if (read_resolved_path(&message, path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply_path_stat(&message, &reply, path);
+				}
+				break;
+			case BUNIX_VFS_STAT_META:
 			case BUNIX_VFS_READDIR_BUFFER:
 			case BUNIX_VFS_READ_FILE_BUFFER:
 			case BUNIX_VFS_CLOSE:

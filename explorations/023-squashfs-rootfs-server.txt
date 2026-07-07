@@ -255,7 +255,7 @@ Tasks:
       added.
 - [x] Implement symlink reads and ensure VFS, not individual Linux syscall
       paths, performs symlink resolution consistently.
-- [ ] Implement stat/statx metadata mapping for SquashFS inode mode, uid/gid,
+- [x] Implement stat/statx metadata mapping for SquashFS inode mode, uid/gid,
       size, link count, timestamps, block counts, device numbers, and inode
       numbers.
 - [ ] Connect the SquashFS server to the current boot flow as an optional root
