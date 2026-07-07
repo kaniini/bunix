@@ -153,6 +153,75 @@ SquashFS server/VFS mount contract:
   - Unsupported/corrupt image discovered after mount should fail the request
     with `BUNIX_VFS_ERR_INVAL` and log a bounded diagnostic.
 
+Initial SquashFS format scope:
+
+- Superblock:
+  - Accept SquashFS magic `0x73717368` and major version 4 only.
+  - Treat images as little-endian.  Big-endian images, older format revisions,
+    and filesystem sizes larger than the block device are unsupported.
+  - Validate `bytes_used`, `block_size`, `block_log`, inode count, fragment
+    count, ID count, and all table start offsets before reading any table.
+  - Initial block-size limit is 128 KiB to match the current block server
+    buffered-read cap and `mksquashfs` default.  Larger block sizes should fail
+    with an explicit unsupported-block-size diagnostic until the reader/cache
+    is generalized.
+- Tables:
+  - Required: inode table, directory table, and ID table.
+  - Optional/unsupported for first boot slice: export table and xattr table.
+    Generate images without export/xattr requirements and reject images that
+    require xattr interpretation.
+  - Fragment table support can start as "no fragments allowed" by generating
+    images with `-no-fragments`; the parser should still validate fragment
+    table offsets/counts and reject nonzero fragment use until fragment reads
+    are implemented.
+  - Metadata table blocks must be bounds-checked by on-disk start and stored
+    size, and cached by table block address once decoded.
+- Compression:
+  - Runtime supports only blocks stored uncompressed in the first slice.
+  - Mount validation rejects any metadata, directory, inode, data, or fragment
+    block that is marked compressed.  The superblock compression field may
+    still reflect the host tool's selected compressor, so actual per-block
+    compressed/uncompressed flags are the authority for whether a decompressor
+    is needed.
+- Inodes and file types:
+  - Required inode types for synthetic root: basic directory, basic regular
+    file, and basic symlink.
+  - Required inode types for Alpine/OpenRC root: directory, regular file,
+    symlink, and character/block device metadata if present in the staged tree.
+    FIFOs/sockets can be rejected until tests require them.
+  - Extended inode variants should be decoded where the field layout is needed
+    for size/link/timestamp correctness; otherwise reject with an explicit
+    unsupported-inode diagnostic rather than silently mis-statting.
+- Directory semantics:
+  - Support directory lookup by exact byte name and readdir from the directory
+    table.
+  - Reject corrupt names that exceed Bunix `PATH_MAX`, names containing `/`, or
+    entries whose decoded inode references are outside validated metadata
+    ranges.
+  - Preserve image order for readdir so tests can rely on deterministic output
+    from deterministic image generation.
+- Regular files and symlinks:
+  - Support regular reads from uncompressed data blocks and empty/sparse files.
+    Reads crossing block boundaries must be handled before this server becomes
+    a root candidate.
+  - Fragment-backed tail reads are deferred if images are generated with
+    `-no-fragments`; otherwise they are required before enabling general
+    package-built SquashFS images.
+  - Symlink payloads are returned exactly as stored for VFS-level resolution.
+
+Compression policy:
+
+- First runtime target: no decompressor in Bunix.
+- Host generation uses `mksquashfs -no-compression -no-fragments -no-exports
+  -no-xattrs -b 128K -repro-time 0` or the closest supported equivalent.
+- Compressed SquashFS images are explicitly unsupported until a permissively
+  licensed decompressor is imported and isolated behind a small decompression
+  dispatch interface.
+- Gzip is the preferred first compressed extension if needed, because the
+  format is ubiquitous and small permissive inflate implementations exist, but
+  compressed support is not on the critical path for the first bootable
+  SquashFS root.
+
 Tasks:
 
 - [x] Inventory the current rootfs, block, VFS, unionfs, tmpfs, devfs, procfs,
@@ -161,10 +230,10 @@ Tasks:
 - [x] Define the SquashFS server/VFS mount contract: block capability handoff,
       mount options, readonly behavior, root inode identity, stat fields,
       path lookup semantics, symlink handling, and error translation.
-- [ ] Define supported SquashFS format scope for the first slice: filesystem
+- [x] Define supported SquashFS format scope for the first slice: filesystem
       magic/version, block size limits, inode table, directory table, fragment
       table, id table, export table handling, and compression algorithms.
-- [ ] Choose the initial compression support policy.  Prefer a small first
+- [x] Choose the initial compression support policy.  Prefer a small first
       target such as uncompressed SquashFS or gzip if a permissively licensed
       decompressor is already available or can be imported cleanly.
 - [ ] Add host-side build tooling to generate a deterministic SquashFS root
