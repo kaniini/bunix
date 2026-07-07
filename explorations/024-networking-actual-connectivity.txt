@@ -24,8 +24,9 @@ Constraints:
 - Use `/etc/network/interfaces` as the first network configuration source.
   Do not hide network setup in bootstrap-only hardcoded defaults except for
   minimum bringup needed to start the networking service.
-- Use DHCP for external IPv4 configuration.  Static QEMU-user defaults are
-  acceptable only as a fallback or test fixture when DHCP is explicitly absent.
+- Use BusyBox/Alpine `udhcpc` for external IPv4 DHCP configuration.  Static
+  QEMU-user defaults are acceptable only as a fallback or test fixture when
+  DHCP is explicitly absent.
 - Keep IPv6 loopback working independently of external IPv6 support.  External
   IPv6 may be planned separately unless it is needed to satisfy the smoke tests.
 - Tests must be deterministic enough for `make test-boot` and networking
@@ -66,9 +67,11 @@ Target behavior:
 
 Design notes:
 
-- DHCP can start with an MVP DHCPv4 client in a Bunix networking helper program
-  or server, but it should configure NET0 through explicit RPCs rather than
-  mutating NET0 internals.
+- DHCP should be driven by BusyBox/Alpine `udhcpc`, not by a new Bunix DHCP
+  client.  The Bunix networking service and Linux compatibility layer should
+  provide the socket, script, route, address, and resolver plumbing needed for
+  `udhcpc` to configure NET0 through explicit RPCs rather than mutating NET0
+  internals.
 - The networking service should be able to run from OpenRC, but the Bunix test
   harness may invoke a narrow bringup command first if that shortens debugging.
 - `ping` should exercise the Linux socket path where practical.  Native Bunix
@@ -194,8 +197,10 @@ Tasks:
 - [ ] Implement or wire a networking service that reads
       `/etc/network/interfaces`, configures loopback, starts DHCP for the
       external interface, and reports status through logs and procfs.
-- [ ] Implement DHCPv4 client support sufficient for QEMU-user or the selected
-      deterministic external-network test backend.
+- [ ] Wire BusyBox/Alpine `udhcpc` as the DHCPv4 client for QEMU-user or the
+      selected deterministic external-network test backend.  Do not write a
+      new Bunix DHCP client; implement only the NET0, Linux socket, script, and
+      configuration hooks `udhcpc` needs.
 - [ ] Ensure NET0 installs DHCP-provided IPv4 address, netmask, gateway, DNS
       metadata if present, and default route through capability-checked RPCs.
 - [ ] Make BusyBox or Alpine `ping 127.0.0.1` succeed through the Linux socket
