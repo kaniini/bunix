@@ -78,10 +78,26 @@ Current implementation gaps:
   to VirtIO-net, but it uses a broadcast destination when no neighbor record is
   present.  That is sufficient for the current QEMU-user smoke test, not a
   complete Ethernet/ARP implementation.
-- Neighbor RPCs are present in the protocol, but ARP/ND cache management and
-  `/proc/net/arp` observability are not implemented yet.
+- Neighbor RPCs and `/proc/net/arp` observability now exist for IPv4, but ARP
+  request/reply processing, cache aging, and IPv6 ND are not implemented yet.
 - External UDP/TCP route lookup still does not feed packet-interface egress or
   ingress; localhost UDP/TCP remains covered by the core networking tests.
 - The first deterministic host-side packet generator is still unimplemented.
   The next slice should choose between tap+namespace and socket-backed frames
   based on what gives the fastest repeatable RX/TX probes under `make test`.
+
+Neighbor/ARP progress:
+
+- NET0 now has working neighbor table RPCs for IPv4:
+  `BUNIX_NET_NEIGHBOR_COUNT`, `BUNIX_NET_NEIGHBOR_AT`,
+  `BUNIX_NET_NEIGHBOR_ADD`, and `BUNIX_NET_NEIGHBOR_DELETE`.
+- `/proc/net/arp` is exposed by procfs from NET0 neighbor records, using a
+  Linux-style ARP table format.  `nettest` verifies the file exists, and the
+  bootstrap NET self-test verifies neighbor add/enumerate/delete behavior.
+- Incoming IPv4 Ethernet frames continue to opportunistically learn source
+  IPv4/MAC pairs into the neighbor table.  External IPv4 ICMP uses a learned
+  neighbor for the next hop when one exists, and keeps the current broadcast
+  fallback for the phase-1 QEMU-user smoke path.
+- Full ARP is not complete yet: NET0 still needs to generate ARP requests,
+  consume ARP replies, answer requests for local IPv4 addresses, age/cache
+  entries, and block or queue packet egress while resolution is pending.

@@ -40,6 +40,7 @@ enum {
 	PROCFS_KIND_NET_TCP6 = 33,
 	PROCFS_KIND_SCHED = 34,
 	PROCFS_KIND_NET_CONFIG = 35,
+	PROCFS_KIND_NET_ARP = 36,
 };
 
 static struct bunix_id_table open_files;
@@ -535,6 +536,9 @@ static u64 file_for_path(const char *path, u64 caller_task)
 	if (str_eq(path, "/proc/net/config")) {
 		return make_file(PROCFS_KIND_NET_CONFIG, 0);
 	}
+	if (str_eq(path, "/proc/net/arp")) {
+		return make_file(PROCFS_KIND_NET_ARP, 0);
+	}
 	if (str_eq(path, "/proc/self")) {
 		const u64 pid = proc_path_pid(0, caller_task);
 
@@ -779,6 +783,27 @@ static void append_ipv4_route_hex(u64 *len, u64 value)
 {
 	for (u64 i = 0; i < 4; i++) {
 		append_hex_fixed(len, (value >> (i * 8)) & 0xff, 2);
+	}
+}
+
+static void append_ipv4_dotted(u64 *len, u64 value)
+{
+	append_u64(len, (value >> 24) & 0xff);
+	append_char(len, '.');
+	append_u64(len, (value >> 16) & 0xff);
+	append_char(len, '.');
+	append_u64(len, (value >> 8) & 0xff);
+	append_char(len, '.');
+	append_u64(len, value & 0xff);
+}
+
+static void append_mac48(u64 *len, u64 mac)
+{
+	for (u64 i = 0; i < 6; i++) {
+		if (i != 0) {
+			append_char(len, ':');
+		}
+		append_hex_fixed(len, (mac >> ((5 - i) * 8)) & 0xff, 2);
 	}
 }
 
@@ -1463,6 +1488,48 @@ static u64 build_net_route(void)
 	return len;
 }
 
+static u64 build_net_arp(void)
+{
+	u64 len = 0;
+	struct bunix_msg count;
+	long buffer;
+
+	append_str(&len, "IP address       HW type     Flags       HW address            Mask     Device\n");
+	if (net_call(BUNIX_NET_NEIGHBOR_COUNT, 0, &count) != 0) {
+		return len;
+	}
+	buffer = bunix_buffer_create(sizeof(struct bunix_net_neighbor_info));
+	if (buffer <= 0) {
+		return len;
+	}
+	for (u64 i = 0; i < count.words[1]; i++) {
+		struct bunix_net_neighbor_info neighbor;
+		struct bunix_msg reply;
+		struct bunix_msg iface;
+
+		if (net_call_buffer(BUNIX_NET_NEIGHBOR_AT, i, (u64)buffer,
+				    &reply) != 0 ||
+		    bunix_buffer_read((u64)buffer, 0, &neighbor,
+				      sizeof(neighbor)) != 0 ||
+		    neighbor.family != BUNIX_NET_ADDR_FAMILY_IPV4 ||
+		    net_call(BUNIX_NET_INTERFACE_INFO, neighbor.iface,
+			     &iface) != 0) {
+			continue;
+		}
+		append_ipv4_dotted(&len, neighbor.addr_lo);
+		append_str(&len, "     0x1         0x");
+		append_hex_fixed(&len, neighbor.flags == 0 ? 0x2 :
+				 neighbor.flags, 1);
+		append_str(&len, "          ");
+		append_mac48(&len, neighbor.mac_hi);
+		append_str(&len, "     *        ");
+		append_net_iface_name(&len, neighbor.iface, iface.words[2]);
+		append_char(&len, '\n');
+	}
+	bunix_handle_close((u64)buffer);
+	return len;
+}
+
 static u64 build_net_config(void)
 {
 	u64 len = 0;
@@ -1854,6 +1921,9 @@ static u64 build_file_text(u64 file)
 	case PROCFS_KIND_NET_ROUTE:
 		len = build_net_route();
 		break;
+	case PROCFS_KIND_NET_ARP:
+		len = build_net_arp();
+		break;
 	case PROCFS_KIND_NET_CONFIG:
 		len = build_net_config();
 		break;
@@ -2011,7 +2081,7 @@ static const char *net_dir_entry(u64 index, u64 *type)
 {
 	static const char *names[] = {
 		"dev", "route", "config", "sockstat", "udp", "udp6", "tcp",
-		"tcp6"
+		"tcp6", "arp"
 	};
 
 	if (index >= sizeof(names) / sizeof(names[0])) {

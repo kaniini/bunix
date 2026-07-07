@@ -263,6 +263,9 @@ static u64 next_tcp_ephemeral_port = NET_TCP_PORT_EPHEMERAL_FIRST;
 static struct icmp_socket *icmp_sockets;
 static u64 next_icmp_socket_id = 1;
 
+static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
+			   u64 mac_hi, u64 mac_lo);
+
 static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo);
 static int net_addr_is_local(u64 family, u64 hi, u64 lo);
 static int icmp_enqueue(struct icmp_socket *socket, u64 family,
@@ -1031,8 +1034,105 @@ static void reply_dhcp4_lease_install(struct bunix_msg *reply,
 
 static void reply_neighbor_count(struct bunix_msg *reply)
 {
+	u64 count = 0;
+
+	for (const struct net_neighbor *neighbor = dynamic_neighbors;
+	     neighbor != 0; neighbor = neighbor->next) {
+		count++;
+	}
 	reply->words[0] = 0;
-	reply->words[1] = 0;
+	reply->words[1] = count;
+}
+
+static void neighbor_info_store(struct bunix_net_neighbor_info *info,
+				const struct net_neighbor *neighbor)
+{
+	if (info == 0 || neighbor == 0) {
+		return;
+	}
+	info->family = neighbor->family;
+	info->addr_hi = neighbor->addr_hi;
+	info->addr_lo = neighbor->addr_lo;
+	info->iface = neighbor->iface;
+	info->mac_hi = neighbor->mac_hi;
+	info->mac_lo = neighbor->mac_lo;
+	info->flags = neighbor->flags;
+	info->state = neighbor->state;
+}
+
+static void reply_neighbor_at(struct bunix_msg *reply,
+			      const struct bunix_msg *message)
+{
+	struct net_neighbor *neighbor = dynamic_neighbors;
+	u64 index = message->words[0];
+	struct bunix_net_neighbor_info info;
+
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	while (neighbor != 0 && index != 0) {
+		neighbor = neighbor->next;
+		index--;
+	}
+	if (neighbor == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	neighbor_info_store(&info, neighbor);
+	if (bunix_buffer_write(message->cap, 0, &info, sizeof(info)) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = sizeof(info);
+}
+
+static void reply_neighbor_add(struct bunix_msg *reply,
+			       const struct bunix_msg *message)
+{
+	struct bunix_net_neighbor_info info;
+
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    bunix_buffer_read(message->cap, 0, &info, sizeof(info)) != 0 ||
+	    info.family != BUNIX_NET_ADDR_FAMILY_IPV4 ||
+	    info.addr_hi != 0 || info.addr_lo == 0 ||
+	    info.mac_hi == 0 || interface_find(info.iface) == 0 ||
+	    info.iface == NET_IFACE_LO) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	neighbor_learn(info.family, info.addr_hi, info.addr_lo, info.iface,
+		       info.mac_hi, info.mac_lo);
+	reply->words[0] = 0;
+	reply->words[1] = info.iface;
+	reply->words[2] = info.addr_lo;
+}
+
+static void reply_neighbor_delete(struct bunix_msg *reply,
+				  const struct bunix_msg *message)
+{
+	struct net_neighbor **link = &dynamic_neighbors;
+	const u64 family = message->words[0];
+	const u64 hi = message->words[1];
+	const u64 lo = message->words[2];
+	const u64 iface = message->words[3];
+
+	while (*link != 0) {
+		struct net_neighbor *neighbor = *link;
+
+		if (neighbor->family == family && neighbor->addr_hi == hi &&
+		    neighbor->addr_lo == lo && neighbor->iface == iface) {
+			*link = neighbor->next;
+			bunix_free(neighbor);
+			reply->words[0] = 0;
+			return;
+		}
+		link = &neighbor->next;
+	}
+	reply->words[0] = (u64)-1;
 }
 
 static void reply_observe_socket_count(struct bunix_msg *reply)
@@ -1317,7 +1417,7 @@ static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
 	neighbor->iface = iface;
 	neighbor->mac_hi = mac_hi;
 	neighbor->mac_lo = mac_lo;
-	neighbor->flags = 1;
+	neighbor->flags = 2;
 	neighbor->state = 1;
 }
 
@@ -3387,9 +3487,13 @@ int main(void)
 			reply_neighbor_count(&reply);
 			break;
 		case BUNIX_NET_NEIGHBOR_AT:
+			reply_neighbor_at(&reply, &message);
+			break;
 		case BUNIX_NET_NEIGHBOR_ADD:
+			reply_neighbor_add(&reply, &message);
+			break;
 		case BUNIX_NET_NEIGHBOR_DELETE:
-			reply.words[0] = (u64)-1;
+			reply_neighbor_delete(&reply, &message);
 			break;
 		case BUNIX_NET_ICMP_OPEN:
 			reply_icmp_open(&reply, &message);

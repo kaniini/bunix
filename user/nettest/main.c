@@ -426,6 +426,8 @@ static void proc_net_test(void)
 			     "nettest: proc net dev failed\n");
 	expect_file_contains("/proc/net/route", "0000007F",
 			     "nettest: proc net route failed\n");
+	expect_file_contains("/proc/net/arp", "IP address",
+			     "nettest: proc net arp failed\n");
 	expect_file_contains("/proc/net/config", "loopback 1",
 			     "nettest: proc net config failed\n");
 	expect_file_contains("/proc/net/config", "iface lo id 1 flags",
