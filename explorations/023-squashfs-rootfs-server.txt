@@ -92,12 +92,73 @@ Inventory:
   - `README.md` documents the custom rootfs builder, `disk0` image,
     `rootfs.server`, rootfs lower layer, and rootfs-specific tests.
 
+SquashFS server/VFS mount contract:
+
+- Service identity:
+  - Add a new `BUNIX_PROTO_SQUASHFS`/`BUNIX_SERVICE_SQUASHFS` FourCC and a
+    VFS device ID such as `BUNIX_VFS_DEV_SQUASHFS`.
+  - The SquashFS server registers itself through names like other filesystem
+    translators and receives ordinary `BUNIX_PROTO_VFS` requests once mounted.
+- Block capability handoff:
+  - First slice may mirror ext2/rootfs by resolving `BUNIX_SERVICE_BLOCK` with
+    send rights during bootstrap bringup, because that is how the current block
+    server exposes the boot `disk0` image.
+  - The target contract is explicit: bootstrap or a mount manager sends the
+    SquashFS server a mount/setup RPC carrying a send-capable block service
+    capability and the mount path/options.  The server must not assume GRUB
+    modules or global block service resolution after this transition point.
+  - SquashFS only needs `BUNIX_BLOCK_GET_INFO`, `BUNIX_BLOCK_READ`, and
+    `BUNIX_BLOCK_READ_BUFFER`; it must never issue write or flush operations.
+- Mount behavior:
+  - Bootstrap mounts SquashFS at `/.lower` during transition so unionfs can
+    continue to mount `/` with tmpfs at `/.upper`.
+  - Later migration may mount SquashFS directly as `/` only if the writable
+    overlay story changes; the initial contract keeps the existing
+    readonly-lower/writable-upper behavior.
+  - Mount failure must be explicit in logs: unsupported compression, unsupported
+    feature flags, malformed superblock, invalid table bounds, and missing root
+    directory should produce distinct diagnostics.
+- Readonly VFS surface:
+  - Supported operations: `OPEN_BUFFER`, `STAT_PATH_META_BUFFER`,
+    `ACCESS_BUFFER`, `READLINK_BUFFER`, `STAT_META`, `READ_FILE_BUFFER`,
+    `READDIR_BUFFER`, and `CLOSE`.
+  - Mutating operations must return `BUNIX_VFS_ERR_ACCESS` or an equivalent
+    readonly error mapping: create, write, truncate, unlink, chmod, chown,
+    mkdir, rmdir, mknod, symlink, rename, and link.
+  - Open handles should follow the existing translator shape for the first
+    implementation, while noting that `039-vfs-global-open-handle-authority.txt`
+    will later replace ambient integer handle authority.
+- Path and lookup semantics:
+  - VFS remains responsible for global path normalization and symlink
+    traversal across mount boundaries.  SquashFS receives already-rooted
+    translator-relative paths and should resolve only within its own image.
+  - `READLINK_BUFFER` returns the symlink payload without following it.
+  - Directory lookup and readdir must preserve image names exactly, reject
+    invalid/corrupt duplicate entries when detected, and expose deterministic
+    ordering from the image.
+- Root inode and stat metadata:
+  - The mounted root directory uses the SquashFS root inode from the superblock,
+    not a synthetic inode, so `/`, `/.lower`, and procfs mountinfo can report a
+    stable inode identity.
+  - `stat`/`statx` metadata maps SquashFS inode type, mode, uid/gid table
+    entries, size, link count, mtime, block count, device numbers, and inode
+    number into the existing `BUNIX_VFS_STAT_BYTES` layout.
+  - Unsupported or out-of-range uid/gid IDs should fail mount validation or map
+    to a documented overflow value, not silently become root.
+- Error translation:
+  - Missing path: `BUNIX_VFS_ERR_NOENT`.
+  - Non-directory in path traversal or readdir on file: `BUNIX_VFS_ERR_NOTDIR`.
+  - Directory opened as regular file read: `BUNIX_VFS_ERR_ISDIR` or existing
+    read failure convention, then normalize through Linux errno mapping.
+  - Unsupported/corrupt image discovered after mount should fail the request
+    with `BUNIX_VFS_ERR_INVAL` and log a bounded diagnostic.
+
 Tasks:
 
 - [x] Inventory the current rootfs, block, VFS, unionfs, tmpfs, devfs, procfs,
       sysfs, and Alpine image bringup paths.  Identify every place that assumes
       the custom rootfs image format or the `rootfs.server` service.
-- [ ] Define the SquashFS server/VFS mount contract: block capability handoff,
+- [x] Define the SquashFS server/VFS mount contract: block capability handoff,
       mount options, readonly behavior, root inode identity, stat fields,
       path lookup semantics, symlink handling, and error translation.
 - [ ] Define supported SquashFS format scope for the first slice: filesystem
