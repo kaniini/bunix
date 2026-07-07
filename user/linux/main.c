@@ -32,6 +32,7 @@ enum {
 	LINUX_ENOTEMPTY = 39,
 	LINUX_ELOOP = 40,
 	LINUX_EAFNOSUPPORT = 97,
+	LINUX_EDESTADDRREQ = 89,
 	LINUX_EPROTONOSUPPORT = 93,
 	LINUX_ENOTSOCK = 88,
 	LINUX_ESRCH = 3,
@@ -149,6 +150,7 @@ enum {
 	LINUX_AF_INET6 = 10,
 	LINUX_SOCK_STREAM = 1,
 	LINUX_SOCK_DGRAM = 2,
+	LINUX_SOCK_RAW = 3,
 	LINUX_SOL_SOCKET = 1,
 	LINUX_SO_DEBUG = 1,
 	LINUX_SO_REUSEADDR = 2,
@@ -161,8 +163,11 @@ enum {
 	LINUX_SOCKET_UTMPD = 2,
 	LINUX_SOCKET_NET_UDP = 3,
 	LINUX_SOCKET_NET_TCP = 4,
+	LINUX_SOCKET_NET_ICMP = 5,
+	LINUX_IPPROTO_ICMP = 1,
 	LINUX_IPPROTO_TCP = 6,
 	LINUX_IPPROTO_UDP = 17,
+	LINUX_IPPROTO_ICMPV6 = 58,
 	LINUX_DT_FIFO = 1,
 	LINUX_DT_CHR = 2,
 	LINUX_DT_REG = 8,
@@ -4944,9 +4949,9 @@ static long linux_parse_sockaddr_at(u64 buffer, u64 offset, u64 len,
 	return -LINUX_EAFNOSUPPORT;
 }
 
-static long linux_net_udp_sendto(u64 socket, u64 payload_buffer,
-				 u64 payload_offset, u64 payload_len,
-				 const struct linux_sockaddr *dest)
+static long linux_net_datagram_sendto(u64 op, u64 socket, u64 payload_buffer,
+				      u64 payload_offset, u64 payload_len,
+				      const struct linux_sockaddr *dest)
 {
 	const u64 header_len = 4 * sizeof(u64);
 	const long net_buffer = bunix_buffer_create(header_len + payload_len);
@@ -4981,9 +4986,8 @@ static long linux_net_udp_sendto(u64 socket, u64 payload_buffer,
 		}
 		done += copy;
 	}
-	if (linux_net_call(BUNIX_NET_UDP_SENDTO, (u64)net_buffer,
-			   BUNIX_RIGHT_RECV, socket, payload_len, 0, 0,
-			   &reply) != 0) {
+	if (linux_net_call(op, (u64)net_buffer, BUNIX_RIGHT_RECV, socket,
+			   payload_len, 0, 0, &reply) != 0) {
 		bunix_handle_close((u64)net_buffer);
 		return -LINUX_EPIPE;
 	}
@@ -5094,6 +5098,7 @@ static long linux_setsockopt(struct linux_process *process, u64 fd, u64 level,
 	}
 	if (process->fds[fd].handle != LINUX_SOCKET_NET_UDP &&
 	    process->fds[fd].handle != LINUX_SOCKET_NET_TCP &&
+	    process->fds[fd].handle != LINUX_SOCKET_NET_ICMP &&
 	    process->fds[fd].handle != LINUX_SOCKET_UNIX_STREAM &&
 	    process->fds[fd].handle != LINUX_SOCKET_UTMPD) {
 		return -LINUX_EINVAL;
@@ -5116,8 +5121,13 @@ static long linux_getsockopt(struct linux_process *process, u64 fd, u64 level,
 		return -LINUX_ENOTSOCK;
 	}
 	if (level == LINUX_SOL_SOCKET && optname == LINUX_SO_TYPE) {
-		value = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
-			LINUX_SOCK_DGRAM : LINUX_SOCK_STREAM;
+		if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP) {
+			value = LINUX_SOCK_DGRAM;
+		} else if (process->fds[fd].handle == LINUX_SOCKET_NET_ICMP) {
+			value = LINUX_SOCK_RAW;
+		} else {
+			value = LINUX_SOCK_STREAM;
+		}
 	} else if (level == LINUX_SOL_SOCKET &&
 		   (optname == LINUX_SO_ERROR ||
 		    optname == LINUX_SO_REUSEADDR ||
@@ -5170,16 +5180,23 @@ static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 	} else if (base_type == LINUX_SOCK_STREAM &&
 		   (protocol == 0 || protocol == LINUX_IPPROTO_TCP)) {
 		net_type = BUNIX_NET_TCP_OPEN;
+	} else if (base_type == LINUX_SOCK_RAW &&
+		   ((domain == LINUX_AF_INET &&
+		     protocol == LINUX_IPPROTO_ICMP) ||
+		    (domain == LINUX_AF_INET6 &&
+		     protocol == LINUX_IPPROTO_ICMPV6))) {
+		net_type = BUNIX_NET_ICMP_OPEN;
 	} else {
 		return -LINUX_EPROTONOSUPPORT;
 	}
-	if (linux_net_call(net_type, 0, 0, net_family, 0, 0, 0,
+	if (linux_net_call(net_type, 0, 0, net_family, protocol, 0, 0,
 			   &reply) != 0) {
 		return -LINUX_EIO;
 	}
 	fd = alloc_fd(process, LINUX_FD_SOCKET,
-		      net_type == BUNIX_NET_UDP_OPEN ?
-		      LINUX_SOCKET_NET_UDP : LINUX_SOCKET_NET_TCP,
+		      net_type == BUNIX_NET_UDP_OPEN ? LINUX_SOCKET_NET_UDP :
+		      net_type == BUNIX_NET_TCP_OPEN ? LINUX_SOCKET_NET_TCP :
+		      LINUX_SOCKET_NET_ICMP,
 		      domain);
 	if (fd >= 0) {
 		process->fds[fd].offset = reply.words[1];
@@ -5377,12 +5394,13 @@ static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 		return -LINUX_ENOTSOCK;
 	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
-	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
+	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP ||
+	    process->fds[fd].handle == LINUX_SOCKET_NET_ICMP) {
 		if (addr_len != 0) {
 			struct linux_sockaddr dest;
 			long parsed;
 
-			if (process->fds[fd].handle != LINUX_SOCKET_NET_UDP) {
+			if (process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
 				return -LINUX_EISCONN;
 			}
 			parsed = linux_parse_sockaddr_at(buffer, 0, addr_len,
@@ -5393,9 +5411,14 @@ static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 			if (dest.family != process->fds[fd].size) {
 				return -LINUX_EAFNOSUPPORT;
 			}
-			return linux_net_udp_sendto(process->fds[fd].offset,
-						    buffer, addr_len, len,
-						    &dest);
+			return linux_net_datagram_sendto(
+				process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
+				BUNIX_NET_UDP_SENDTO : BUNIX_NET_ICMP_SENDTO,
+				process->fds[fd].offset, buffer, addr_len, len,
+				&dest);
+		}
+		if (process->fds[fd].handle == LINUX_SOCKET_NET_ICMP) {
+			return -LINUX_EDESTADDRREQ;
 		}
 		(void)flags;
 		op = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
@@ -5438,9 +5461,12 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 		return -LINUX_ENOTSOCK;
 	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
-	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
+	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP ||
+	    process->fds[fd].handle == LINUX_SOCKET_NET_ICMP) {
 		op = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
-		     BUNIX_NET_UDP_RECV : BUNIX_NET_TCP_READ;
+		     BUNIX_NET_UDP_RECV :
+		     process->fds[fd].handle == LINUX_SOCKET_NET_TCP ?
+		     BUNIX_NET_TCP_READ : BUNIX_NET_ICMP_RECV;
 		if (linux_net_call(op, buffer, BUNIX_RIGHT_SEND,
 				   process->fds[fd].offset, len, 0, 0,
 				   &reply) != 0) {
@@ -5485,12 +5511,15 @@ static long linux_pollfd(struct linux_process *process, long fd, u64 events)
 	case LINUX_FD_SOCKET:
 		if (process->fds[fd].kind == LINUX_FD_SOCKET &&
 		    (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
-		     process->fds[fd].handle == LINUX_SOCKET_NET_TCP)) {
+		     process->fds[fd].handle == LINUX_SOCKET_NET_TCP ||
+		     process->fds[fd].handle == LINUX_SOCKET_NET_ICMP)) {
 			struct bunix_msg reply;
 			u64 net_events = 0;
 			const u64 op =
 				process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
-				BUNIX_NET_UDP_POLL : BUNIX_NET_TCP_POLL;
+				BUNIX_NET_UDP_POLL :
+				process->fds[fd].handle == LINUX_SOCKET_NET_TCP ?
+				BUNIX_NET_TCP_POLL : BUNIX_NET_ICMP_POLL;
 
 			if (linux_net_call(op, 0, 0, process->fds[fd].offset,
 					   0, 0, 0, &reply) != 0) {
@@ -5859,10 +5888,13 @@ static long linux_close(struct linux_process *process, u64 fd)
 	}
 	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
 	    (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
-	     process->fds[fd].handle == LINUX_SOCKET_NET_TCP)) {
+	     process->fds[fd].handle == LINUX_SOCKET_NET_TCP ||
+	     process->fds[fd].handle == LINUX_SOCKET_NET_ICMP)) {
 		struct bunix_msg reply;
 		const u64 op = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
-			       BUNIX_NET_UDP_CLOSE : BUNIX_NET_TCP_CLOSE;
+			       BUNIX_NET_UDP_CLOSE :
+			       process->fds[fd].handle == LINUX_SOCKET_NET_TCP ?
+			       BUNIX_NET_TCP_CLOSE : BUNIX_NET_ICMP_CLOSE;
 
 		(void)linux_net_call(op, 0, 0, process->fds[fd].offset,
 				     0, 0, 0, &reply);

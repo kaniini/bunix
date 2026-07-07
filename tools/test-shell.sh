@@ -25,6 +25,7 @@ shell_parts=${BUNIX_SHELL_PART:-all}
 . "$script_dir/shell-tests/relogin-session.sh"
 . "$script_dir/shell-tests/exec-argv-pipe.sh"
 . "$script_dir/shell-tests/procfs-cmdline.sh"
+. "$script_dir/shell-tests/network-loopback-ping.sh"
 . "$script_dir/shell-tests/rootfs-vfs-proc-dev.sh"
 . "$script_dir/shell-tests/tmpfs-basic-linux-tests.sh"
 . "$script_dir/shell-tests/path-limits-statfs.sh"
@@ -240,7 +241,7 @@ require_supported_parts() {
 		case "$part" in
 		all|vfs|procfs|devfs|tmpfs|path|statfs|large-io|mount|\
 		smoke|login-smoke|relogin-session|exec-argv-pipe|procfs-cmdline|rootfs-vfs-proc-dev|\
-		tmpfs-basic-linux-tests|path-limits-statfs|union-root-user|\
+		network-loopback-ping|tmpfs-basic-linux-tests|path-limits-statfs|union-root-user|\
 		tmpfs-extended|large-io-mount|interactive-tty|root-login-union|\
 		root-tmpfs-chown|long-login|root-mount-soak)
 			;;
@@ -357,6 +358,12 @@ if part_selected procfs-cmdline; then
 	run_procfs_cmdline
 fi
 
+if part_selected network-loopback-ping; then
+	begin_shard network-loopback-ping
+	login_user_if_needed
+	run_network_loopback_ping
+fi
+
 if part_selected rootfs-vfs-proc-dev; then
 	begin_shard rootfs-vfs-proc-dev
 	login_user_if_needed
@@ -411,6 +418,11 @@ fi
 if part_selected procfs-cmdline; then
 	check_procfs_cmdline
 	finish_shard procfs-cmdline
+fi
+
+if part_selected network-loopback-ping; then
+	check_network_loopback_ping
+	finish_shard network-loopback-ping
 fi
 
 if part_selected path-limits-statfs; then

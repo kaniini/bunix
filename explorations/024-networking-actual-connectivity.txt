@@ -183,6 +183,12 @@ Implementation progress:
   with loopback/default-route flags, interface/address/route counts, and the
   last NET0 configuration error.  `nettest` covers this alongside the existing
   `/proc/net` files.
+- Added NET0 raw ICMP socket primitives and Linux `SOCK_RAW` compatibility for
+  ICMP/ICMPv6.  BusyBox `ping -c 1 127.0.0.1` and
+  `busybox ping -6 -c 1 ::1` now exercise Linux `socket`, `sendto`,
+  `recvfrom`, and poll/select paths through NET0 loopback echo replies.
+- Added a deterministic `network-loopback-ping` shell shard covering BusyBox
+  IPv4 and IPv6 loopback ping with clean guest poweroff.
 
 Tasks:
 
@@ -203,9 +209,9 @@ Tasks:
       configuration hooks `udhcpc` needs.
 - [ ] Ensure NET0 installs DHCP-provided IPv4 address, netmask, gateway, DNS
       metadata if present, and default route through capability-checked RPCs.
-- [ ] Make BusyBox or Alpine `ping 127.0.0.1` succeed through the Linux socket
+- [x] Make BusyBox or Alpine `ping 127.0.0.1` succeed through the Linux socket
       compatibility path.
-- [ ] Make BusyBox or Alpine `ping ::1` succeed through the Linux socket
+- [x] Make BusyBox or Alpine `ping ::1` succeed through the Linux socket
       compatibility path.
 - [ ] Make BusyBox or Alpine `ping 4.2.2.1` succeed through VirtIO-net,
       DHCP-provided route state, ARP, ICMP, and receive handling.
@@ -213,7 +219,8 @@ Tasks:
       networking path.
 - [ ] Add deterministic boot/shell test shards for networking service startup,
       DHCP acquisition, loopback pings, external pings, `/proc/net` state, and
-      clean poweroff.
+      clean poweroff.  Loopback ping coverage is now present in the
+      `network-loopback-ping` shard; DHCP/external shards remain.
 - [ ] Document supported network configuration syntax, DHCP limitations,
       QEMU/test backend assumptions, and follow-up work for DNS, IPv6 external
       networking, firewalling, packet capture, and production route policy.
