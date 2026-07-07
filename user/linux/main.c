@@ -86,6 +86,7 @@ enum {
 	LINUX_VMIN = 6,
 	LINUX_SIGINT = 2,
 	LINUX_SIGTERM = 15,
+	LINUX_SIGCHLD = 17,
 	LINUX_ICRNL = 0000400,
 	LINUX_OPOST = 0000001,
 	LINUX_ONLCR = 0000004,
@@ -265,6 +266,9 @@ struct linux_process {
 	u64 pending_signals;
 	u64 signal_mask;
 	u64 signal_ignored;
+	u64 signal_handlers[64];
+	u64 signal_restorers[64];
+	u64 signal_flags[64];
 	u64 umask;
 	u64 session_id;
 	u64 session_owner;
@@ -321,6 +325,7 @@ static void linux_process_reset(struct linux_process *process);
 static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
+static int linux_signal_process(struct linux_process *process, u64 signal);
 static int linux_tty_read_queue_push(struct linux_tty *tty, char c);
 static void linux_tty_wake_reader(struct linux_tty *tty);
 static void linux_tty_cancel_reader(struct linux_tty *tty,
@@ -1880,6 +1885,11 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 	process->sid = parent->sid;
 	process->signal_mask = parent->signal_mask;
 	process->signal_ignored = parent->signal_ignored;
+	for (u64 signal = 0; signal < 64; signal++) {
+		process->signal_handlers[signal] = parent->signal_handlers[signal];
+		process->signal_restorers[signal] = parent->signal_restorers[signal];
+		process->signal_flags[signal] = parent->signal_flags[signal];
+	}
 	process->umask = parent->umask;
 	linux_process_init_links(process);
 	linux_child_link(parent, process);
@@ -2119,6 +2129,10 @@ static void linux_process_exit_status(struct linux_process *process, u64 status,
 		process->session_owner = 0;
 	}
 	notify_proc_exit(process->pid, process->exit_status, kill_task);
+	if (process->ppid != 0) {
+		(void)linux_signal_process(linux_process_find_pid(process->ppid),
+					   LINUX_SIGCHLD);
+	}
 	linux_wake_parent(process);
 }
 
@@ -2163,7 +2177,9 @@ static int linux_signal_process(struct linux_process *process, u64 signal)
 }
 
 static long linux_rt_sigaction(struct linux_process *process, u64 signal,
-			       u64 handler, u64 *old_handler)
+			       u64 handler, u64 flags, u64 restorer,
+			       u64 *old_handler, u64 *old_flags,
+			       u64 *old_restorer)
 {
 	const u64 bit = linux_signal_bit(signal);
 
@@ -2171,16 +2187,73 @@ static long linux_rt_sigaction(struct linux_process *process, u64 signal,
 		return -LINUX_EINVAL;
 	}
 	if (old_handler != 0) {
-		*old_handler = (process->signal_ignored & bit) != 0 ? 1 : 0;
+		*old_handler = (process->signal_ignored & bit) != 0 ?
+			       1 : process->signal_handlers[signal];
+	}
+	if (old_flags != 0) {
+		*old_flags = process->signal_flags[signal];
+	}
+	if (old_restorer != 0) {
+		*old_restorer = process->signal_restorers[signal];
 	}
 	if (handler != ~0ull) {
 		if (handler == 1) {
 			process->signal_ignored |= bit;
+			process->signal_handlers[signal] = 0;
+			process->signal_restorers[signal] = 0;
+			process->signal_flags[signal] = flags;
 		} else {
 			process->signal_ignored &= ~bit;
+			process->signal_handlers[signal] = handler;
+			process->signal_restorers[signal] = restorer;
+			process->signal_flags[signal] = flags;
 		}
 	}
 	return 0;
+}
+
+static u64 linux_signal_deliverable(const struct linux_process *process)
+{
+	if (process == 0) {
+		return 0;
+	}
+	for (u64 signal = 1; signal < 64; signal++) {
+		const u64 bit = linux_signal_bit(signal);
+
+		if ((process->pending_signals & bit) == 0 ||
+		    (process->signal_mask & bit) != 0 ||
+		    (process->signal_ignored & bit) != 0 ||
+		    process->signal_handlers[signal] == 0 ||
+		    process->signal_restorers[signal] == 0) {
+			continue;
+		}
+		return signal;
+	}
+	return 0;
+}
+
+static long linux_signal_dequeue(struct linux_process *process,
+				 u64 *handler, u64 *restorer,
+				 u64 *old_mask)
+{
+	const u64 signal = linux_signal_deliverable(process);
+	const u64 bit = linux_signal_bit(signal);
+
+	if (signal == 0 || bit == 0) {
+		return 0;
+	}
+	process->pending_signals &= ~bit;
+	if (handler != 0) {
+		*handler = process->signal_handlers[signal];
+	}
+	if (restorer != 0) {
+		*restorer = process->signal_restorers[signal];
+	}
+	if (old_mask != 0) {
+		*old_mask = process->signal_mask;
+	}
+	process->signal_mask |= bit;
+	return (long)signal;
 }
 
 static long linux_rt_sigprocmask(struct linux_process *process, u64 how,
@@ -6858,6 +6931,14 @@ static long linux_exec_process(struct linux_process *process)
 		return -LINUX_ESRCH;
 	}
 
+	for (u64 signal = 1; signal < 64; signal++) {
+		if (process->signal_handlers[signal] != 0) {
+			process->signal_handlers[signal] = 0;
+			process->signal_restorers[signal] = 0;
+			process->signal_flags[signal] = 0;
+		}
+	}
+
 	for (u64 fd = 0; fd < process->fd_capacity; fd++) {
 		if (process->fds[fd].kind != 0 &&
 		    (process->fds[fd].flags & LINUX_FD_CLOEXEC) != 0) {
@@ -7018,6 +7099,11 @@ static void linux_process_reset(struct linux_process *process)
 	process->pending_signals = 0;
 	process->signal_mask = 0;
 	process->signal_ignored = 0;
+	for (u64 signal = 0; signal < 64; signal++) {
+		process->signal_handlers[signal] = 0;
+		process->signal_restorers[signal] = 0;
+		process->signal_flags[signal] = 0;
+	}
 	process->umask = 0;
 	process->session_id = 0;
 	process->session_owner = 0;
@@ -7297,7 +7383,11 @@ int main(void)
 			reply.words[0] = (u64)linux_rt_sigaction(process,
 								 message.words[0],
 								 message.words[1],
-								 &reply.words[1]);
+								 message.words[2],
+								 message.words[3],
+								 &reply.words[1],
+								 &reply.words[2],
+								 &reply.words[3]);
 			break;
 		case BUNIX_LINUX_RT_SIGPROCMASK:
 			reply.words[0] = (u64)linux_rt_sigprocmask(process,
@@ -7309,6 +7399,15 @@ int main(void)
 			reply.words[0] = (u64)linux_rt_sigtimedwait(process,
 								    message.words[0],
 								    message.words[2]);
+			break;
+		case BUNIX_LINUX_SIGNAL_PENDING:
+			reply.words[0] = linux_signal_deliverable(process) != 0;
+			break;
+		case BUNIX_LINUX_SIGNAL_DEQUEUE:
+			reply.words[0] = (u64)linux_signal_dequeue(process,
+								   &reply.words[1],
+								   &reply.words[2],
+								   &reply.words[3]);
 			break;
 		case BUNIX_LINUX_IOCTL:
 			reply.words[0] = (u64)linux_ioctl(process,

@@ -92,6 +92,7 @@ enum {
 	LINUX_SYSCALL_BRK = 12,
 	LINUX_SYSCALL_RT_SIGACTION = 13,
 	LINUX_SYSCALL_RT_SIGPROCMASK = 14,
+	LINUX_SYSCALL_RT_SIGRETURN = 15,
 	LINUX_SYSCALL_RT_SIGTIMEDWAIT = 128,
 	LINUX_SYSCALL_IOCTL = 16,
 	LINUX_SYSCALL_WRITEV = 20,
@@ -206,8 +207,11 @@ enum {
 	LINUX_SYSCALL_STATX = 332,
 	LINUX_SYSCALL_EXIT_GROUP = 231,
 	LINUX_SYSCALL_FACCESSAT2 = 439,
+	LINUX_RPC_SIGNAL_PENDING = 1007,
+	LINUX_RPC_SIGNAL_DEQUEUE = 1008,
 	LINUX_CLONE_VFORK = 0x00004000,
 	LINUX_ENOENT = 2,
+	LINUX_EINTR = 4,
 	LINUX_EIO = 5,
 	LINUX_E2BIG = 7,
 	LINUX_EBADF = 9,
@@ -253,6 +257,7 @@ enum {
 	LINUX_IOV_MAX = 1024,
 	LINUX_FDSET_BITS = 1024,
 	LINUX_FDSET_BYTES = LINUX_FDSET_BITS / 8,
+	LINUX_SIGNAL_FRAME_MAGIC = 0x534947424e555858ull,
 	LINUX_MSGHDR_SIZE = 56,
 	LINUX_MSGHDR_NAME_OFF = 0,
 	LINUX_MSGHDR_NAMELEN_OFF = 8,
@@ -366,6 +371,14 @@ static struct spinlock syscall_copy_lock = SPINLOCK_INIT("syscall-copy");
 static struct spinlock linux_vfork_lock = SPINLOCK_INIT("linux-vfork");
 static struct linux_vfork_wait *linux_vfork_waiters;
 static int str_eq(const char *left, const char *right);
+
+struct linux_signal_frame {
+	u64 magic;
+	u64 saved_rax;
+	u64 old_mask;
+	struct arch_syscall_frame frame;
+};
+
 struct user_ipc_message {
 	u32 protocol;
 	u32 type;
@@ -3415,6 +3428,8 @@ static const char *linux_syscall_name(u64 number)
 		return "rt_sigaction";
 	case LINUX_SYSCALL_RT_SIGPROCMASK:
 		return "rt_sigprocmask";
+	case LINUX_SYSCALL_RT_SIGRETURN:
+		return "rt_sigreturn";
 	case LINUX_SYSCALL_RT_SIGTIMEDWAIT:
 		return "rt_sigtimedwait";
 	case LINUX_SYSCALL_IOCTL:
@@ -3821,6 +3836,102 @@ static void linux_negative_syscall_dump(struct arch_syscall_frame *frame)
 	linux_negative_syscall_dump_rbp(task, frame->rbp);
 }
 
+static u64 linux_restore_signal_frame(struct arch_syscall_frame *frame,
+				      struct ipc_port *linux,
+				      struct ipc_port *reply_port)
+{
+	struct linux_signal_frame signal_frame;
+	const u64 frame_addr = frame->user_rsp;
+
+	if (read_current_user(frame_addr, &signal_frame,
+			      sizeof(signal_frame)) != 0 ||
+	    signal_frame.magic != LINUX_SIGNAL_FRAME_MAGIC) {
+		return (u64)-LINUX_EFAULT;
+	}
+
+	(void)linux_forward_words(linux, reply_port,
+				  LINUX_SYSCALL_RT_SIGPROCMASK,
+				  2, signal_frame.old_mask, 0);
+	*frame = signal_frame.frame;
+	return signal_frame.saved_rax;
+}
+
+static u64 linux_signal_pending(struct ipc_port *linux,
+				struct ipc_port *reply_port)
+{
+	return linux_forward_words(linux, reply_port, LINUX_RPC_SIGNAL_PENDING,
+				   0, 0, 0);
+}
+
+static int linux_signal_dequeue(struct ipc_port *linux,
+				struct ipc_port *reply_port,
+				u64 *signal, u64 *handler,
+				u64 *restorer, u64 *old_mask)
+{
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = LINUX_RPC_SIGNAL_DEQUEUE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct ipc_message reply;
+
+	if (linux_forward_message(linux, reply_port, &request, &reply) != 0 ||
+	    (i64)reply.words[0] < 0) {
+		return -1;
+	}
+	*signal = reply.words[0];
+	*handler = reply.words[1];
+	*restorer = reply.words[2];
+	*old_mask = reply.words[3];
+	return 0;
+}
+
+static int linux_deliver_signal(struct arch_syscall_frame *frame,
+				struct ipc_port *linux,
+				struct ipc_port *reply_port,
+				u64 saved_rax)
+{
+	struct linux_signal_frame signal_frame;
+	u64 signal;
+	u64 handler;
+	u64 restorer;
+	u64 old_mask;
+	u64 frame_addr;
+
+	if (linux_signal_dequeue(linux, reply_port, &signal, &handler,
+				 &restorer, &old_mask) != 0 ||
+	    signal == 0 || handler == 0 || restorer == 0) {
+		return 0;
+	}
+
+	signal_frame.magic = LINUX_SIGNAL_FRAME_MAGIC;
+	signal_frame.saved_rax = saved_rax;
+	signal_frame.old_mask = old_mask;
+	signal_frame.frame = *frame;
+
+	frame_addr = align_down(frame->user_rsp - sizeof(signal_frame) - 8, 16) - 8;
+	if (write_current_user(frame_addr, &restorer, sizeof(restorer)) != 0 ||
+	    write_current_user(frame_addr + 8, &signal_frame,
+			       sizeof(signal_frame)) != 0) {
+		return -1;
+	}
+
+	frame->arg0 = signal;
+	frame->arg1 = 0;
+	frame->arg2 = 0;
+	frame->arg3 = 0;
+	frame->r8 = 0;
+	frame->r9 = 0;
+	frame->user_rip = handler;
+	frame->user_rsp = frame_addr;
+	return 1;
+}
+
 static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	__attribute__((noinline));
 
@@ -3847,6 +3958,8 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	struct ipc_message reply;
 
 	switch (number) {
+	case LINUX_SYSCALL_RT_SIGRETURN:
+		return linux_restore_signal_frame(frame, linux, reply_port);
 	case LINUX_SYSCALL_EXECVE:
 		return linux_execve(task, frame, (const char *)arg0);
 	case LINUX_SYSCALL_MMAP: {
@@ -4077,18 +4190,27 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return 0;
 	case LINUX_SYSCALL_RT_SIGACTION: {
 		u64 handler = ~0ull;
+		u64 flags = 0;
+		u64 restorer = 0;
 
 		if (arg3 != 8) {
 			return linux_einval_u64(__func__, __LINE__);
 		}
-		if (arg1 != 0 &&
-		    read_current_user(arg1, &handler, sizeof(handler)) != 0) {
-			return (u64)-LINUX_EFAULT;
+		if (arg1 != 0) {
+			if (read_current_user(arg1, &handler,
+					      sizeof(handler)) != 0 ||
+			    read_current_user(arg1 + 8, &flags,
+					      sizeof(flags)) != 0 ||
+			    read_current_user(arg1 + 16, &restorer,
+					      sizeof(restorer)) != 0) {
+				return (u64)-LINUX_EFAULT;
+			}
 		}
 		request.type = LINUX_SYSCALL_RT_SIGACTION;
 		request.words[0] = arg0;
 		request.words[1] = handler;
-		request.words[2] = 0;
+		request.words[2] = flags;
+		request.words[3] = restorer;
 		request.reply_port = reply_port;
 		if (linux_forward_message(linux, reply_port, &request,
 					  &reply) != 0) {
@@ -4103,6 +4225,10 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			mem_zero(action, sizeof(action));
 			mem_copy(action, (const u8 *)&reply.words[1],
 				 sizeof(reply.words[1]));
+			mem_copy(action + 8, (const u8 *)&reply.words[2],
+				 sizeof(reply.words[2]));
+			mem_copy(action + 16, (const u8 *)&reply.words[3],
+				 sizeof(reply.words[3]));
 			if (write_current_user(arg2, action, sizeof(action)) != 0) {
 				return (u64)-LINUX_EFAULT;
 			}
@@ -4291,6 +4417,15 @@ poll_again:
 		}
 		if (ready == 0 && timeout_ns != 0 &&
 		    (infinite_timeout || !slept)) {
+			const u64 pending = linux_signal_pending(linux,
+								 reply_port);
+
+			if ((i64)pending < 0) {
+				return pending;
+			}
+			if (pending != 0) {
+				return (u64)-LINUX_EINTR;
+			}
 			slept = 1;
 			thread_sleep_ns(infinite_timeout ? 10000000ull : timeout_ns);
 			goto poll_again;
@@ -5161,11 +5296,20 @@ poll_again:
 
 static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 {
+	struct task *task = task_current();
+	struct ipc_port *linux = ipc_port_find("linux");
+	struct ipc_port *reply_port = task_reply_port(task);
 	u64 result;
 
 	linux_strace_enter(frame);
 	result = linux_syscall_handle(frame);
 	linux_strace_log(frame, result);
+	if (frame->number != LINUX_SYSCALL_RT_SIGRETURN &&
+	    linux != 0 && reply_port != 0 &&
+	    (i64)linux_signal_pending(linux, reply_port) > 0 &&
+	    linux_deliver_signal(frame, linux, reply_port, result) < 0) {
+		return (u64)-LINUX_EFAULT;
+	}
 	return result;
 }
 

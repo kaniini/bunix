@@ -330,6 +330,21 @@ Implementation progress:
   remaining OpenRC boot blocker is initial Linux userspace signal-handler
   delivery, not physical link state, QEMU DHCP delivery, or direct
   ifupdown-ng/udhcpc operation.
+- Added initial Linux userspace signal-handler delivery for x86_64:
+  `rt_sigaction` now preserves handler, flags, and restorer metadata; child
+  exit posts SIGCHLD to the parent; blocking poll paths return `EINTR` for
+  deliverable signals; the arch layer builds a minimal signal frame on the
+  user stack and restores it through `rt_sigreturn`.  A new `signaltest`
+  covers the OpenRC-style SIGCHLD self-pipe pattern.
+- With signal delivery in place, the Alpine+VirtIO-net OpenRC networking
+  service path works.  `rc-service networking status` reports the service
+  started from the boot runlevel, `/etc/init.d/networking restart` returns
+  successfully, and `/proc/net/config` shows `eth0`, `default_ipv4 1`, and
+  drained packet queues.
+- Added `make test-boot-virtio-net-networking`, a deterministic
+  Alpine+VirtIO-net command shard covering OpenRC boot-time networking status,
+  service restart, NET0 config state, DHCP default-route installation, drained
+  queues, and clean guest poweroff.
 
 Tasks:
 
@@ -344,13 +359,10 @@ Tasks:
 - [x] Install or expose ifupdown-ng in the Alpine-style rootfs and ensure its
       `/sbin/ifup` and `/sbin/ifdown` are the tools used for normal interface
       bringup.
-- [ ] Wire OpenRC `/etc/init.d/networking` into the normal boot path so it
+- [x] Wire OpenRC `/etc/init.d/networking` into the normal boot path so it
       starts after the Bunix services it needs, reads `/etc/network/interfaces`
       through ifupdown-ng, configures loopback, starts DHCP for the external
-      interface, and reports status through logs and procfs.  Current blocker:
-      `openrc-run` can remain blocked after a successful service script body
-      because Linux userspace SIGCHLD handlers are not delivered yet, leaving
-      `/run/openrc/starting/<service>` present.
+      interface, and reports status through logs and procfs.
 - [x] Wire BusyBox/Alpine `udhcpc` as the DHCPv4 client for QEMU-user or the
       selected deterministic external-network test backend.  Do not write a
       new Bunix DHCP client; implement only the NET0, Linux socket, script, and
@@ -371,7 +383,8 @@ Tasks:
       coverage is now present in the `network-loopback-ping` shard; DHCP
       acquisition coverage is present in `test-boot-virtio-net-dhcp`;
       ifupdown-ng DHCP bringup coverage is present in
-      `test-boot-virtio-net-ifup`; OpenRC startup and external shards remain.
+      `test-boot-virtio-net-ifup`; OpenRC startup coverage is present in
+      `test-boot-virtio-net-networking`; external ping shards remain.
 - [ ] Document supported network configuration syntax, DHCP limitations,
       QEMU/test backend assumptions, and follow-up work for DNS, IPv6 external
       networking, firewalling, packet capture, and production route policy.
