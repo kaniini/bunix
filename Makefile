@@ -276,7 +276,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -796,11 +796,18 @@ $(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE
 	cp modules/vm.server $(ISO_ROOT)/modules/vm.server
 	$(GRUB_MKRESCUE) -o $@ $(ISO_ROOT)
 
-run: $(EFI_BOOT_APP)
+RUN_ROOTFS_FLAVOR ?= alpine-squashfs
+RUN_QEMU_NET_ARGS ?= $(QEMU_VIRTIO_NET_EXTERNAL_ARGS)
+
+run:
+	$(MAKE) ROOTFS_FLAVOR=$(RUN_ROOTFS_FLAVOR) run-alpine-net
+
+run-alpine-net: $(VIRTIO_NET_TEST_EFI_BOOT_APP)
 	$(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
 		-smp $(SMP) \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
-		-drive format=raw,file=fat:rw:$(ESP_DIR) \
+		-drive format=raw,file=fat:rw:$(VIRTIO_NET_TEST_ESP_DIR) \
+		$(RUN_QEMU_NET_ARGS) \
 		-serial stdio -display none -no-reboot
 
 run-virtio: $(EFI_BOOT_APP)
