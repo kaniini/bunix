@@ -35,7 +35,7 @@ Tasks:
       routes.
 - [x] Implement ARP for IPv4 on packet interfaces, including request, reply,
       cache state, timeout, and `/proc/net/arp` observability.
-- [ ] Implement enough IPv6 neighbor discovery for link-local and localhost-safe
+- [x] Implement enough IPv6 neighbor discovery for link-local and localhost-safe
       smoke tests, or explicitly defer IPv6 external traffic with a documented
       test gap.
 - [ ] Add packet-interface egress queueing from UDP/TCP route lookup into
@@ -135,3 +135,14 @@ UDP packet-interface progress:
 - The same bootstrap test binds a second IPv4 UDP socket, injects a synthetic
   Ethernet+IPv4+UDP frame addressed to that socket, verifies poll readiness,
   and receives the expected source port and payload through the NET0 UDP API.
+
+IPv6 external-traffic deferral:
+
+- External IPv6 packet-interface traffic is explicitly deferred from the first
+  VirtIO-net external smoke target.  Loopback IPv6 remains covered by the core
+  networking tests, but NET0 does not yet implement Ethernet IPv6 egress,
+  router solicitation/advertisement, neighbor solicitation/advertisement,
+  duplicate-address detection, or SLAAC.
+- The deferred IPv6 work should add ND cache state and `/proc` observability in
+  the same style as IPv4 ARP, then add equivalent packet-interface IPv6 UDP,
+  ICMPv6, and TCP smoke tests with a deterministic host-side peer.
