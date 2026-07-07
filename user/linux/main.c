@@ -5372,6 +5372,38 @@ static long linux_net_raw_ipv4_sendto(u64 payload_buffer, u64 payload_offset,
 	return (long)payload_len;
 }
 
+static long linux_net_raw_ipv4_recv(u64 buffer, u64 len)
+{
+	const long iface = linux_net_default_packet_interface();
+	struct bunix_msg reply;
+
+	if (iface < 0 || buffer == 0 || len == 0) {
+		return -LINUX_EAGAIN;
+	}
+	if (linux_net_request(BUNIX_NET_PACKET_RX_DEQUEUE, buffer,
+			      BUNIX_RIGHT_SEND, (u64)iface, len,
+			      LINUX_ETH_P_IP, LINUX_ETHERNET_HEADER_SIZE,
+			      &reply) != 0) {
+		return -LINUX_EAGAIN;
+	}
+	return (long)reply.words[2];
+}
+
+static long linux_net_raw_ipv4_poll(void)
+{
+	const long iface = linux_net_default_packet_interface();
+	struct bunix_msg reply;
+
+	if (iface < 0) {
+		return -1;
+	}
+	if (linux_net_request(BUNIX_NET_PACKET_RX_POLL, 0, 0, (u64)iface,
+			      LINUX_ETH_P_IP, 0, 0, &reply) != 0) {
+		return -1;
+	}
+	return (long)reply.words[1];
+}
+
 static long linux_net_packet_sendto(u64 payload_buffer, u64 payload_offset,
 				    u64 payload_len, u64 ifindex,
 				    const unsigned char *dest_mac,
@@ -5649,7 +5681,9 @@ static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 		     protocol == LINUX_IPPROTO_ICMPV6))) {
 		net_type = BUNIX_NET_ICMP_OPEN;
 	} else if (base_type == LINUX_SOCK_RAW &&
-		   domain == LINUX_AF_INET && protocol == LINUX_IPPROTO_RAW) {
+		   domain == LINUX_AF_INET &&
+		   (protocol == LINUX_IPPROTO_RAW ||
+		    protocol == LINUX_IPPROTO_UDP)) {
 		fd = alloc_fd(process, LINUX_FD_SOCKET, LINUX_SOCKET_NET_RAW,
 			      domain);
 		if (fd >= 0) {
@@ -6014,6 +6048,9 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 		}
 		return (long)reply.words[2];
 	}
+	if (process->fds[fd].handle == LINUX_SOCKET_NET_RAW) {
+		return linux_net_raw_ipv4_recv(buffer, len);
+	}
 	return utmps_recv_response(&process->fds[fd], len, buffer);
 }
 
@@ -6132,6 +6169,21 @@ static long linux_pollfd(struct linux_process *process, long fd, u64 events)
 			    (net_events & 2) != 0) {
 				revents |= LINUX_POLLOUT;
 			}
+		} else if (process->fds[fd].kind == LINUX_FD_SOCKET &&
+			   process->fds[fd].handle == LINUX_SOCKET_NET_RAW) {
+			const long net_events = linux_net_raw_ipv4_poll();
+
+			if (net_events < 0) {
+				revents |= LINUX_POLLERR;
+				break;
+			}
+			if ((events & LINUX_POLLIN) != 0 &&
+			    (((u64)net_events) & 1) != 0) {
+				revents |= LINUX_POLLIN;
+			}
+			if ((events & LINUX_POLLOUT) != 0) {
+				revents |= LINUX_POLLOUT;
+			}
 		} else {
 			if ((events & LINUX_POLLIN) != 0) {
 				revents |= LINUX_POLLIN;
@@ -6229,6 +6281,7 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	    (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
 	     process->fds[fd].handle == LINUX_SOCKET_NET_TCP ||
 	     process->fds[fd].handle == LINUX_SOCKET_NET_ICMP ||
+	     process->fds[fd].handle == LINUX_SOCKET_NET_RAW ||
 	     process->fds[fd].handle == LINUX_SOCKET_NET_PACKET)) {
 		return linux_recvfrom(process, fd, len, buffer);
 	}

@@ -1226,6 +1226,113 @@ static void reply_loopback_recv(struct bunix_msg *reply,
 	bunix_free(packet);
 }
 
+static u64 net_read_be16(const unsigned char *data)
+{
+	return ((u64)data[0] << 8) | data[1];
+}
+
+static u64 net_read_be32(const unsigned char *data)
+{
+	return ((u64)data[0] << 24) | ((u64)data[1] << 16) |
+	       ((u64)data[2] << 8) | data[3];
+}
+
+static int udp_socket_accepts_ipv4(struct udp_socket *socket, u64 dst_ip,
+				   u64 dst_port)
+{
+	if (socket == 0 || !socket->bound ||
+	    socket->family != BUNIX_NET_ADDR_FAMILY_IPV4 ||
+	    socket->local.port != dst_port) {
+		return 0;
+	}
+	return (socket->local.hi == 0 && socket->local.lo == 0) ||
+	       socket->local.lo == dst_ip ||
+	       dst_ip == 0xffffffffu;
+}
+
+static void udp_enqueue_external_ipv4(struct udp_socket *socket, u64 src_ip,
+				      u64 src_port, const unsigned char *data,
+				      u64 len)
+{
+	struct udp_datagram *datagram;
+
+	if (socket == 0 || len > NET_PACKET_MAX) {
+		return;
+	}
+	datagram = (struct udp_datagram *)bunix_alloc(sizeof(*datagram) + len);
+	if (datagram == 0) {
+		return;
+	}
+	datagram->next = 0;
+	datagram->source.family = BUNIX_NET_ADDR_FAMILY_IPV4;
+	datagram->source.hi = 0;
+	datagram->source.lo = src_ip;
+	datagram->source.port = src_port;
+	datagram->checksum = 0;
+	datagram->len = len;
+	for (u64 i = 0; i < len; i++) {
+		datagram->data[i] = data[i];
+	}
+	if (socket->rx_tail != 0) {
+		socket->rx_tail->next = datagram;
+	} else {
+		socket->rx_head = datagram;
+	}
+	socket->rx_tail = datagram;
+	socket->rx_len++;
+}
+
+static void packet_ingress_udp_ipv4(const unsigned char *packet, u64 len)
+{
+	const unsigned char *ip;
+	const unsigned char *udp;
+	u64 ihl;
+	u64 total_len;
+	u64 fragment;
+	u64 udp_len;
+	u64 src_ip;
+	u64 dst_ip;
+	u64 src_port;
+	u64 dst_port;
+
+	if (packet == 0 || len < 14 + 20 ||
+	    net_read_be16(packet + 12) != 0x0800) {
+		return;
+	}
+	ip = packet + 14;
+	if ((ip[0] >> 4) != 4 || ip[9] != NET_PROTO_UDP) {
+		return;
+	}
+	ihl = (ip[0] & 0x0f) * 4;
+	if (ihl < 20 || len < 14 + ihl + 8) {
+		return;
+	}
+	total_len = net_read_be16(ip + 2);
+	if (total_len < ihl + 8 || len < 14 + total_len) {
+		return;
+	}
+	fragment = net_read_be16(ip + 6);
+	if ((fragment & 0x3fff) != 0) {
+		return;
+	}
+	udp = ip + ihl;
+	udp_len = net_read_be16(udp + 4);
+	if (udp_len < 8 || udp_len > total_len - ihl) {
+		return;
+	}
+	src_ip = net_read_be32(ip + 12);
+	dst_ip = net_read_be32(ip + 16);
+	src_port = net_read_be16(udp);
+	dst_port = net_read_be16(udp + 2);
+	for (struct udp_socket *socket = udp_sockets; socket != 0;
+	     socket = socket->next) {
+		if (udp_socket_accepts_ipv4(socket, dst_ip, dst_port)) {
+			udp_enqueue_external_ipv4(socket, src_ip, src_port,
+						  udp + 8, udp_len - 8);
+		}
+	}
+}
+
 static void reply_packet_rx_submit(struct bunix_msg *reply,
 				   const struct bunix_msg *message)
 {
@@ -1265,6 +1372,7 @@ static void reply_packet_rx_submit(struct bunix_msg *reply,
 		reply->words[0] = (u64)-1;
 		return;
 	}
+	packet_ingress_udp_ipv4(packet->data, packet->len);
 	if (iface->rx_tail != 0) {
 		iface->rx_tail->next = packet;
 	} else {

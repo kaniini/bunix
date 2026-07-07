@@ -246,6 +246,23 @@ Implementation progress:
   socket receive path instead of only accepting TCP sockets.  This matches
   normal Linux socket semantics and passed `make test-boot`, but was not
   sufficient by itself to make `udhcpc` consume the queued DHCP Offer.
+- During the `udhcpc` hang, `/proc/net/udp` is empty, so the DHCP client is
+  not waiting on a NET0 UDP socket despite transmitting UDP packets on the
+  wire.  NET0 now performs initial inbound IPv4/UDP demux when packet drivers
+  submit Ethernet frames, delivering matching broadcast or addressed UDP
+  datagrams to bound IPv4 UDP sockets while still preserving the frame for
+  packet-socket consumers.
+- Linux raw IPv4 compatibility now accepts `SOCK_RAW`/`IPPROTO_UDP`, supports
+  `read`/`recvfrom` by draining the default packet interface and returning the
+  IPv4 packet without the Ethernet header, and polls raw sockets against the
+  packet RX queue instead of reporting them as always readable.  This is
+  necessary for raw-socket DHCP implementations, but the current BusyBox
+  `udhcpc` probe still does not advance past `broadcasting discover`.
+- The next `udhcpc` slice needs better post-userspace syscall observability:
+  after login, server logs move to the ring buffer and the shell rootfs lacks a
+  plain `grep`, which made the temporary raw-socket probes hard to inspect
+  from the command harness.  Add a bounded dmesg/strace capture path or a
+  purpose-built DHCP probe before making further receive-path guesses.
 
 Tasks:
 
