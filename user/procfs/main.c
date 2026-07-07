@@ -39,6 +39,7 @@ enum {
 	PROCFS_KIND_NET_TCP = 32,
 	PROCFS_KIND_NET_TCP6 = 33,
 	PROCFS_KIND_SCHED = 34,
+	PROCFS_KIND_NET_CONFIG = 35,
 };
 
 static struct bunix_id_table open_files;
@@ -530,6 +531,9 @@ static u64 file_for_path(const char *path, u64 caller_task)
 	}
 	if (str_eq(path, "/proc/net/tcp6")) {
 		return make_file(PROCFS_KIND_NET_TCP6, 0);
+	}
+	if (str_eq(path, "/proc/net/config")) {
+		return make_file(PROCFS_KIND_NET_CONFIG, 0);
 	}
 	if (str_eq(path, "/proc/self")) {
 		const u64 pid = proc_path_pid(0, caller_task);
@@ -1429,6 +1433,51 @@ static u64 build_net_route(void)
 	return len;
 }
 
+static u64 build_net_config(void)
+{
+	u64 len = 0;
+	struct bunix_net_config_status status;
+	struct bunix_msg reply;
+	long buffer;
+
+	buffer = bunix_buffer_create(sizeof(status));
+	if (buffer <= 0) {
+		return len;
+	}
+	if (net_call_buffer(BUNIX_NET_CONFIG_STATUS, 0, (u64)buffer,
+			    &reply) != 0 ||
+	    bunix_buffer_read((u64)buffer, 0, &status, sizeof(status)) != 0) {
+		bunix_handle_close((u64)buffer);
+		return len;
+	}
+	bunix_handle_close((u64)buffer);
+	append_str(&len, "loopback ");
+	append_u64(&len,
+		   (status.flags & BUNIX_NET_CONFIG_LOOPBACK) != 0 ? 1 : 0);
+	append_char(&len, '\n');
+	append_str(&len, "default_ipv4 ");
+	append_u64(&len,
+		   (status.flags & BUNIX_NET_CONFIG_DEFAULT_IPV4) != 0 ? 1 : 0);
+	append_char(&len, '\n');
+	append_str(&len, "default_ipv6 ");
+	append_u64(&len,
+		   (status.flags & BUNIX_NET_CONFIG_DEFAULT_IPV6) != 0 ? 1 : 0);
+	append_char(&len, '\n');
+	append_str(&len, "interfaces ");
+	append_u64(&len, status.interface_count);
+	append_char(&len, '\n');
+	append_str(&len, "addresses ");
+	append_u64(&len, status.address_count);
+	append_char(&len, '\n');
+	append_str(&len, "routes ");
+	append_u64(&len, status.route_count);
+	append_char(&len, '\n');
+	append_str(&len, "last_error ");
+	append_u64(&len, status.last_error);
+	append_char(&len, '\n');
+	return len;
+}
+
 static int net_socket_count(u64 *count)
 {
 	struct bunix_msg reply;
@@ -1726,6 +1775,9 @@ static u64 build_file_text(u64 file)
 	case PROCFS_KIND_NET_ROUTE:
 		len = build_net_route();
 		break;
+	case PROCFS_KIND_NET_CONFIG:
+		len = build_net_config();
+		break;
 	case PROCFS_KIND_NET_SOCKSTAT:
 		len = build_net_sockstat();
 		break;
@@ -1879,7 +1931,8 @@ static const char *proc_dir_entry(u64 index, u64 *type)
 static const char *net_dir_entry(u64 index, u64 *type)
 {
 	static const char *names[] = {
-		"dev", "route", "sockstat", "udp", "udp6", "tcp", "tcp6"
+		"dev", "route", "config", "sockstat", "udp", "udp6", "tcp",
+		"tcp6"
 	};
 
 	if (index >= sizeof(names) / sizeof(names[0])) {

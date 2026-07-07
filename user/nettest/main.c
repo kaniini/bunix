@@ -422,6 +422,8 @@ static void proc_net_test(void)
 			     "nettest: proc net dev failed\n");
 	expect_file_contains("/proc/net/route", "0000007F",
 			     "nettest: proc net route failed\n");
+	expect_file_contains("/proc/net/config", "loopback 1",
+			     "nettest: proc net config failed\n");
 	expect_file_contains("/proc/net/sockstat", "sockets: used",
 			     "nettest: proc net sockstat failed\n");
 	expect_file_contains("/proc/net/udp", "local_address",

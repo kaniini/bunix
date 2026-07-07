@@ -176,6 +176,10 @@ Implementation progress:
   DHCP client.
 - Bootstrap now takes its packet-interface self-test interface back down so
   netcfg does not confuse the synthetic test interface with real `eth0`.
+- Procfs now exposes `/proc/net/config`, backed by `BUNIX_NET_CONFIG_STATUS`,
+  with loopback/default-route flags, interface/address/route counts, and the
+  last NET0 configuration error.  `nettest` covers this alongside the existing
+  `/proc/net` files.
 
 Tasks:
 
