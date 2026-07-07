@@ -2,6 +2,14 @@ Gate privileged native syscalls behind capabilities.
 
 Parent exploration: `022-security-vulnerability-audit.txt`
 
+Problem:
+
+- Privileged native syscalls are reachable as ordinary negative syscall IDs
+  without proving the caller holds power-management or hardware-enumeration
+  authority.
+- Native syscall reachability exists for observability and cannot itself be
+  treated as privilege.
+
 Threat model:
 
 - An unprivileged Linux process can intentionally issue Bunix negative syscalls
@@ -10,7 +18,7 @@ Threat model:
   operations must require a scoped capability or must be unavailable to ordinary
   Linux tasks.
 
-Defect:
+Evidence:
 
 - `BUNIX_SYSCALL_MACHINE_POWER` in `arch/x86_64/user.c` calls `arch_poweroff()`
   without checking any task capability.
@@ -19,6 +27,13 @@ Defect:
   offset/length/ops, not on a hardware/device authority capability.
 - Related hardware access syscalls do check a hardware-resource handle, but the
   grant syscall itself is ambient authority.
+
+Root cause:
+
+- Sensitive machine power and PCI BAR grant operations are wired directly to
+  native syscall entry points instead of being gated by scoped capabilities.
+- The hardware-resource capability model starts after the BAR grant, leaving
+  the grant operation itself as ambient authority.
 
 Impact:
 

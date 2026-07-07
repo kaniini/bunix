@@ -2,6 +2,13 @@ Audit and fix borrowed handle lookup races.
 
 Parent exploration: `022-security-vulnerability-audit.txt`
 
+Problem:
+
+- Kernel handle lookup helpers return borrowed raw object pointers after
+  dropping the task handle-table lock.
+- Callers use those pointers across operations that can block, preempt, or race
+  with handle closure from another thread in the same task.
+
 Threat model:
 
 - A native task or compromised server can have more than one thread in the same
@@ -9,7 +16,7 @@ Threat model:
 - One thread can close or transfer handles while another thread is inside a
   native syscall that resolved a handle to a kernel object.
 
-Candidate defect:
+Evidence:
 
 - `task_from_handle()`, `task_port_from_handle()`,
   `task_buffer_from_handle()`, and `task_hw_resource_from_handle()` return raw
@@ -19,6 +26,13 @@ Candidate defect:
 - Object lifetimes are reference-counted elsewhere, so the intended safe
   convention should likely be either retained references or lock-contained
   use.  The current helpers look like borrowed references.
+
+Root cause:
+
+- Handle lookup APIs do not encode ownership or lifetime in their type or
+  calling convention.
+- The codebase lacks a consistent retained-reference requirement for kernel
+  objects returned from task handle tables.
 
 Potential impact:
 

@@ -2,6 +2,13 @@ Authorize management RPCs by caller identity and scoped capabilities.
 
 Parent exploration: `022-security-vulnerability-audit.txt`
 
+Problem:
+
+- High-authority user, proc, and Linux management RPCs trust caller-supplied
+  task, process, PID, credential, or session identifiers.
+- Possession of a service send capability can therefore become confused with
+  authority over the named subject.
+
 Threat model:
 
 - A compromised or buggy userspace server can resolve high-authority service
@@ -10,7 +17,7 @@ Threat model:
   mutation of another task, process, Linux PID, credentials, session, or proc
   record unless the caller also holds scoped authority for that subject.
 
-Defect:
+Evidence:
 
 - `user/user/main.c` accepts credential and session mutations using
   caller-supplied task/session IDs:
@@ -27,6 +34,13 @@ Defect:
   `BUNIX_LINUX_FORK_PROCESS`, `BUNIX_LINUX_EXEC_INIT`, and
   `BUNIX_LINUX_EXEC_PREPARE` use caller-supplied task/path/buffer values before
   the normal `linux_process_for()` sender check.
+
+Root cause:
+
+- Management protocols do not carry explicit scoped capabilities for the
+  subject being mutated and do not consistently derive subject identity from
+  `message.sender`.
+- Read/observe service access and mutate/admin access are not separated.
 
 Impact:
 

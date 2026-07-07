@@ -2,6 +2,13 @@ Constrain names service registration and replacement authority.
 
 Parent exploration: `022-security-vulnerability-audit.txt`
 
+Problem:
+
+- Names service registration and namespace creation are ambient operations for
+  callers that can send to the names service.
+- Service replacement does not prove ownership of the existing registration or
+  namespace administration authority.
+
 Threat model:
 
 - A compromised or buggy userspace server holds the names service send
@@ -9,7 +16,7 @@ Threat model:
 - Many servers receive `BUNIX_HANDLE_NAMES` or a resolved names capability so
   they can resolve dependencies or register their own service.
 
-Defect:
+Evidence:
 
 - `user/names/main.c` accepts `BUNIX_NAMES_REGISTER` from any caller that sends
   a capability with `BUNIX_RIGHT_SEND`.
@@ -18,6 +25,13 @@ Defect:
   `entry->rights` without checking that the caller owns the existing entry or
   has namespace administration authority.
 - `BUNIX_NAMES_CREATE_NS` is also ambient to anyone with the names port.
+
+Root cause:
+
+- The names protocol does not distinguish resolve authority from registration
+  or namespace-administration authority.
+- Existing registrations are mutable by service key rather than by an owner or
+  scoped namespace capability.
 
 Impact:
 

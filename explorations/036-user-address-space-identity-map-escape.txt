@@ -2,6 +2,12 @@ Remove user-accessible identity mapping from task address spaces.
 
 Parent exploration: `022-security-vulnerability-audit.txt`
 
+Problem:
+
+- User address spaces include a writable, user-accessible low identity mapping
+  that violates the kernel/user isolation boundary.
+- Ring-3 tasks should only access pages explicitly mapped for that task.
+
 Threat model:
 
 - An unprivileged Linux process or native user task runs in ring 3 with the
@@ -9,7 +15,7 @@ Threat model:
 - User tasks should only access explicitly mapped user pages, not kernel text,
   kernel data, page tables, physical memory, device MMIO, or other task memory.
 
-Defect:
+Evidence:
 
 - `arch_vm_space_init()` in `arch/x86_64/vm.c` initializes every non-kernel
   address space with a user-accessible, writable identity mapping over the
@@ -21,6 +27,12 @@ Defect:
 - Kernel code, kernel data, boot modules, slab/PMM allocations, page tables,
   and device mappings have historically lived in low physical addresses during
   bringup, so this violates the kernel/user isolation boundary.
+
+Root cause:
+
+- Bringup identity mappings were carried into per-task user page tables with
+  `PTE_USER` and `PTE_WRITABLE` instead of being restricted to kernel-only
+  mappings or removed from user address spaces.
 
 Impact:
 
