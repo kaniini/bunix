@@ -788,6 +788,36 @@ static void append_net_iface_name(u64 *len, u64 iface, u64 flags)
 		append_str(len, "lo");
 		return;
 	}
+	{
+		struct bunix_msg count;
+		u64 eth_index = 0;
+
+		if (net_call(BUNIX_NET_INTERFACE_COUNT, 0, &count) == 0) {
+			for (u64 i = 0; i < count.words[1]; i++) {
+				struct bunix_msg info;
+				u64 candidate;
+				u64 candidate_flags;
+
+				if (net_call(BUNIX_NET_INTERFACE_AT, i,
+					     &info) != 0) {
+					continue;
+				}
+				candidate = info.words[1];
+				candidate_flags = info.words[2];
+				if (candidate == 1 ||
+				    (candidate_flags &
+				     BUNIX_NET_IFACE_FLAG_LOOPBACK) != 0) {
+					continue;
+				}
+				if (candidate == iface) {
+					append_str(len, "eth");
+					append_u64(len, eth_index);
+					return;
+				}
+				eth_index++;
+			}
+		}
+	}
 	append_str(len, "eth");
 	append_u64(len, iface >= 2 ? iface - 2 : 0);
 }
@@ -1475,6 +1505,36 @@ static u64 build_net_config(void)
 	append_str(&len, "last_error ");
 	append_u64(&len, status.last_error);
 	append_char(&len, '\n');
+	for (u64 i = 0; i < status.interface_count; i++) {
+		struct bunix_msg info;
+		struct bunix_msg stats;
+		u64 iface;
+		u64 flags;
+
+		if (net_call(BUNIX_NET_INTERFACE_AT, i, &info) != 0) {
+			continue;
+		}
+		iface = info.words[1];
+		flags = info.words[2];
+		if (net_call(BUNIX_NET_INTERFACE_STATS, iface, &stats) != 0) {
+			continue;
+		}
+		append_str(&len, "iface ");
+		append_net_iface_name(&len, iface, flags);
+		append_str(&len, " id ");
+		append_u64(&len, iface);
+		append_str(&len, " flags ");
+		append_hex_fixed(&len, flags, 4);
+		append_str(&len, " mtu ");
+		append_u64(&len, info.words[3]);
+		append_str(&len, " rx ");
+		append_u64(&len, stats.words[1]);
+		append_str(&len, " tx ");
+		append_u64(&len, stats.words[2]);
+		append_str(&len, " drops ");
+		append_u64(&len, stats.words[3]);
+		append_char(&len, '\n');
+	}
 	return len;
 }
 

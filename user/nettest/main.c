@@ -424,6 +424,8 @@ static void proc_net_test(void)
 			     "nettest: proc net route failed\n");
 	expect_file_contains("/proc/net/config", "loopback 1",
 			     "nettest: proc net config failed\n");
+	expect_file_contains("/proc/net/config", "iface lo id 1 flags",
+			     "nettest: proc net interface failed\n");
 	expect_file_contains("/proc/net/sockstat", "sockets: used",
 			     "nettest: proc net sockstat failed\n");
 	expect_file_contains("/proc/net/udp", "local_address",

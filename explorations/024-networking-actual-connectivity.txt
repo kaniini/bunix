@@ -205,6 +205,20 @@ Implementation progress:
 - The same VirtIO-net `udhcpc` probe now reaches `udhcpc: started` and the
   `deconfig` script event.  The next missing primitive is packet socket
   support: `socket(AF_PACKET, SOCK_DGRAM, ETH_P_IP)`.
+- Added initial Linux `AF_PACKET`/`SOCK_DGRAM` support for `ETH_P_IP`,
+  including packet bind/send handling for `sockaddr_ll`, NET0 packet RX
+  queueing, and packet poll/dequeue RPCs for cooked IPv4 packet receive.
+- The VirtIO-net `udhcpc -n -q -i eth0 -s /bin/echo -t 1 -T 1` probe now
+  reaches `udhcpc: broadcasting discover` without the previous socket or
+  `sendto` errors, but it still does not complete or report a lease.  The next
+  slice needs to debug the post-discover hang and prove packet TX completion,
+  RX delivery, and DHCP offer handling end-to-end.
+- Verified the physical VirtIO-net link state through NET0/procfs.  The real
+  NIC reports `flags 000D` (`UP`, `BROADCAST`, `RUNNING`) in
+  `/proc/net/config`, while the bootstrap self-test interface is down.
+- Aligned procfs and Linux netdevice naming so the first non-loopback NET0
+  packet interface is consistently `eth0`, and Linux ioctls now resolve
+  `ethN` names instead of recognizing only `eth0`.
 
 Tasks:
 

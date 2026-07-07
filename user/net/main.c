@@ -39,6 +39,8 @@ struct net_interface {
 	struct net_interface *next;
 	struct net_packet *tx_head;
 	struct net_packet *tx_tail;
+	struct net_packet *rx_head;
+	struct net_packet *rx_tail;
 	u64 id;
 	u64 flags;
 	u64 mtu;
@@ -162,6 +164,8 @@ static struct net_interface loopback = {
 	.next = 0,
 	.tx_head = 0,
 	.tx_tail = 0,
+	.rx_head = 0,
+	.rx_tail = 0,
 	.id = NET_IFACE_LO,
 	.flags = BUNIX_NET_IFACE_FLAG_UP | BUNIX_NET_IFACE_FLAG_LOOPBACK,
 	.mtu = 65536,
@@ -1209,6 +1213,7 @@ static void reply_packet_rx_submit(struct bunix_msg *reply,
 {
 	struct bunix_net_packet_info info;
 	struct net_interface *iface;
+	struct net_packet *packet;
 
 	if (message->cap == 0 ||
 	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
@@ -1226,11 +1231,133 @@ static void reply_packet_rx_submit(struct bunix_msg *reply,
 		reply->words[0] = (u64)-1;
 		return;
 	}
+	packet = (struct net_packet *)bunix_alloc(sizeof(*packet) + info.len);
+	if (packet == 0) {
+		iface->rx_drops++;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	packet->next = 0;
+	packet->family = 0;
+	packet->len = info.len;
+	if (bunix_buffer_read(message->cap, sizeof(info), packet->data,
+			      info.len) != 0) {
+		bunix_free(packet);
+		iface->rx_drops++;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (iface->rx_tail != 0) {
+		iface->rx_tail->next = packet;
+	} else {
+		iface->rx_head = packet;
+	}
+	iface->rx_tail = packet;
 	iface->rx_packets++;
 	reply->words[0] = 0;
 	reply->words[1] = info.iface;
 	reply->words[2] = info.len;
 	reply->words[3] = 0;
+}
+
+static int packet_matches_ethertype(const struct net_packet *packet,
+				    u64 ethertype)
+{
+	if (ethertype == 0) {
+		return 1;
+	}
+	if (packet == 0 || packet->len < 14) {
+		return 0;
+	}
+	return ((((u64)packet->data[12] << 8) | packet->data[13]) ==
+		ethertype);
+}
+
+static void reply_packet_rx_poll(struct bunix_msg *reply,
+				 const struct bunix_msg *message)
+{
+	struct net_interface *iface = interface_find(message->words[0]);
+	const u64 ethertype = message->words[1];
+
+	reply->words[0] = 0;
+	reply->words[1] = 2;
+	if (iface == 0 || iface == &loopback ||
+	    (iface->flags & BUNIX_NET_IFACE_FLAG_RUNNING) == 0) {
+		reply->words[0] = (u64)-1;
+		reply->words[1] = 0;
+		return;
+	}
+	for (struct net_packet *packet = iface->rx_head; packet != 0;
+	     packet = packet->next) {
+		if (packet_matches_ethertype(packet, ethertype)) {
+			reply->words[1] |= 1;
+			return;
+		}
+	}
+}
+
+static void reply_packet_rx_dequeue(struct bunix_msg *reply,
+				    const struct bunix_msg *message)
+{
+	struct net_interface *iface = interface_find(message->words[0]);
+	const u64 max_len = message->words[1];
+	const u64 ethertype = message->words[2];
+	const u64 strip_len = message->words[3];
+	struct net_packet *prev = 0;
+	struct net_packet *packet;
+	u64 payload_len;
+	u64 copy_len;
+
+	if (iface == 0 || iface == &loopback ||
+	    (iface->flags & BUNIX_NET_IFACE_FLAG_RUNNING) == 0 ||
+	    max_len == 0 || message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	for (packet = iface->rx_head; packet != 0; packet = packet->next) {
+		if (packet_matches_ethertype(packet, ethertype)) {
+			break;
+		}
+		prev = packet;
+	}
+	if (packet == 0) {
+		reply->words[0] = (u64)-1;
+		reply->words[1] = iface->id;
+		reply->words[2] = 0;
+		reply->words[3] = 0;
+		return;
+	}
+	if (strip_len > packet->len) {
+		reply->words[0] = (u64)-1;
+		reply->words[1] = iface->id;
+		reply->words[2] = 0;
+		reply->words[3] = packet->len;
+		return;
+	}
+	payload_len = packet->len - strip_len;
+	copy_len = payload_len < max_len ? payload_len : max_len;
+	if (bunix_buffer_write(message->cap, 0, packet->data + strip_len,
+			       copy_len) != 0) {
+		reply->words[0] = (u64)-1;
+		reply->words[1] = iface->id;
+		reply->words[2] = 0;
+		reply->words[3] = payload_len;
+		return;
+	}
+	if (prev != 0) {
+		prev->next = packet->next;
+	} else {
+		iface->rx_head = packet->next;
+	}
+	if (iface->rx_tail == packet) {
+		iface->rx_tail = prev;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = iface->id;
+	reply->words[2] = copy_len;
+	reply->words[3] = payload_len;
+	bunix_free(packet);
 }
 
 static void reply_packet_tx_enqueue(struct bunix_msg *reply,
@@ -2721,6 +2848,12 @@ int main(void)
 			break;
 		case BUNIX_NET_PACKET_RX_SUBMIT:
 			reply_packet_rx_submit(&reply, &message);
+			break;
+		case BUNIX_NET_PACKET_RX_DEQUEUE:
+			reply_packet_rx_dequeue(&reply, &message);
+			break;
+		case BUNIX_NET_PACKET_RX_POLL:
+			reply_packet_rx_poll(&reply, &message);
 			break;
 		case BUNIX_NET_PACKET_TX_DEQUEUE:
 			reply_packet_tx_dequeue(&reply, &message);
