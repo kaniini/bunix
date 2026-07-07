@@ -108,7 +108,7 @@ static int path_is_at_or_under(const char *path, const char *prefix)
 
 static int path_is_root(const char *path)
 {
-	return bunix_tree_get(&roots, path) != 0;
+	return str_eq(path, "/") || bunix_tree_get(&roots, path) != 0;
 }
 
 static int path_parent_path(const char *path, char *parent)
@@ -257,6 +257,50 @@ static int read_rename_buffer(const struct bunix_msg *message, char *old_path,
 static struct tmpfs_file *file_find(const char *path)
 {
 	return (struct tmpfs_file *)bunix_tree_get(&files, path);
+}
+
+static void file_remove_stale_node(struct bunix_tree *tree, const char *path)
+{
+	struct bunix_tree_node *node = bunix_tree_find_node(tree, path);
+
+	if (node != 0 && node->value == 0) {
+		bunix_tree_remove_node(tree, node);
+	}
+}
+
+static int files_insert_file_into(struct bunix_tree *tree,
+				  struct tmpfs_file *file)
+{
+	struct bunix_tree_node *parent = 0;
+	struct bunix_tree_node **slot;
+	int cmp = 0;
+
+	if (tree == 0 || file == 0 || file->path == 0 || (u64)file == 0) {
+		return -1;
+	}
+	file_remove_stale_node(tree, file->path);
+	slot = &tree->root;
+	while (*slot != 0) {
+		parent = *slot;
+		cmp = bunix_tree_key_cmp(file->path, parent->key);
+		if (cmp == 0) {
+			return -1;
+		}
+		slot = cmp < 0 ? &parent->left : &parent->right;
+	}
+	file->node.left = 0;
+	file->node.right = 0;
+	file->node.parent = parent;
+	file->node.key = file->path;
+	file->node.value = (u64)file;
+	*slot = &file->node;
+	tree->count++;
+	return 0;
+}
+
+static int files_insert_file(struct tmpfs_file *file)
+{
+	return files_insert_file_into(&files, file);
 }
 
 static int path_parent_exists(const char *path)
@@ -508,8 +552,7 @@ static void files_rebuild_without_node(struct bunix_tree_node *node,
 	files_rebuild_without_node(left, skip, rebuilt);
 	files_rebuild_without_node(right, skip, rebuilt);
 	if (file != 0 && file != skip && !file->deleted) {
-		(void)bunix_tree_insert_node(rebuilt, &file->node,
-					     file->path, (u64)file);
+		(void)files_insert_file_into(rebuilt, file);
 	}
 }
 
@@ -566,32 +609,55 @@ static int file_set_size(struct tmpfs_file *file, u64 size)
 }
 
 static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
-				      u64 task)
+				      u64 task, u64 *status)
 {
 	struct tmpfs_file *file;
 	u64 uid = 0;
 	u64 gid = 0;
 
-	if (!path_parent_exists(path) || file_find(path) != 0 ||
-	    (type != BUNIX_VFS_TYPE_REGULAR &&
-	     type != BUNIX_VFS_TYPE_DIRECTORY &&
-	     type != BUNIX_VFS_TYPE_SYMLINK &&
-	     type != BUNIX_VFS_TYPE_FIFO)) {
+	if (!path_parent_exists(path)) {
+		if (status != 0) {
+			*status = BUNIX_VFS_ERR_NOENT;
+		}
+		return 0;
+	}
+	if (file_find(path) != 0) {
+		if (status != 0) {
+			*status = BUNIX_VFS_ERR_EXIST;
+		}
+		return 0;
+	}
+	if (type != BUNIX_VFS_TYPE_REGULAR &&
+	    type != BUNIX_VFS_TYPE_DIRECTORY &&
+	    type != BUNIX_VFS_TYPE_SYMLINK &&
+	    type != BUNIX_VFS_TYPE_FIFO) {
+		if (status != 0) {
+			*status = BUNIX_VFS_ERR_INVAL;
+		}
 		return 0;
 	}
 	file = (struct tmpfs_file *)bunix_calloc(1, sizeof(*file));
 	if (file == 0) {
+		if (status != 0) {
+			*status = BUNIX_VFS_ERR_INVAL;
+		}
 		return 0;
 	}
 	file->path = str_dup(path);
 	if (file->path == 0) {
 		bunix_free(file);
+		if (status != 0) {
+			*status = BUNIX_VFS_ERR_INVAL;
+		}
 		return 0;
 	}
 	file->inode = (struct tmpfs_inode *)bunix_calloc(1, sizeof(*file->inode));
 	if (file->inode == 0) {
 		bunix_free(file->path);
 		bunix_free(file);
+		if (status != 0) {
+			*status = BUNIX_VFS_ERR_INVAL;
+		}
 		return 0;
 	}
 	file->inode->refs = 1;
@@ -602,22 +668,26 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 	if (task != 0) {
 		if (user_credential(task, BUNIX_USER_GETEUID, &uid) != 0 ||
 		    user_credential(task, BUNIX_USER_GETEGID, &gid) != 0) {
-			inode_release(file->inode);
-			bunix_free(file->path);
-			bunix_free(file);
-			return 0;
+			uid = 0;
+			gid = 0;
 		}
 	}
 	file->inode->type = (unsigned int)type;
 	file->inode->mode = (unsigned int)(mode & 0777);
 	file->inode->uid = (unsigned int)uid;
 	file->inode->gid = (unsigned int)gid;
-	if (bunix_tree_insert_node(&files, &file->node, file->path,
-				   (u64)file) != 0) {
+	if (files_insert_file(file) != 0) {
+		if (status != 0) {
+			*status = bunix_tree_find_node(&files, file->path) != 0 ?
+				  BUNIX_VFS_ERR_EXIST : BUNIX_VFS_ERR_INVAL;
+		}
 		inode_release(file->inode);
 		bunix_free(file->path);
 		bunix_free(file);
 		return 0;
+	}
+	if (status != 0) {
+		*status = 0;
 	}
 	return file;
 }
@@ -810,14 +880,12 @@ static int file_move_to_path(struct tmpfs_file *file, const char *new_path)
 	old_path = file->path;
 	files_remove_file(file);
 	file->path = path_copy;
-	if (bunix_tree_insert_node(&files, &file->node, file->path,
-				   (u64)file) == 0) {
+	if (files_insert_file(file) == 0) {
 		bunix_free(old_path);
 		return 0;
 	}
 	file->path = old_path;
-	if (bunix_tree_insert_node(&files, &file->node, file->path,
-				   (u64)file) != 0) {
+	if (files_insert_file(file) != 0) {
 		file->deleted = 1;
 	}
 	bunix_free(path_copy);
@@ -892,8 +960,7 @@ static int file_move_subtree_to_path(struct tmpfs_file *file,
 
 		moved[i]->path = new_paths[i];
 		new_paths[i] = 0;
-		if (bunix_tree_insert_node(&files, &moved[i]->node,
-					   moved[i]->path, (u64)moved[i]) != 0) {
+		if (files_insert_file(moved[i]) != 0) {
 			moved[i]->deleted = 1;
 			goto out;
 		}
@@ -933,8 +1000,7 @@ static int file_link_to_path(struct tmpfs_file *file, const char *new_path)
 	}
 	link->inode = file->inode;
 	link->inode->refs++;
-	if (bunix_tree_insert_node(&files, &link->node, link->path,
-				   (u64)link) != 0) {
+	if (files_insert_file(link) != 0) {
 		inode_release(link->inode);
 		bunix_free(link->path);
 		bunix_free(link);
@@ -1203,12 +1269,16 @@ int main(void)
 			}
 			file = file_find(path);
 			if (file == 0) {
+				u64 status = 0;
+
 				file = file_create(path, message.words[3] >> 32,
 						   BUNIX_VFS_TYPE_REGULAR,
 						   message.words[3] &
-						   0xffffffff);
+						   0xffffffff, &status);
+				reply.words[0] = status;
+				break;
 			}
-			reply.words[0] = file == 0 ? (u64)-1 : 0;
+			reply.words[0] = 0;
 			break;
 		case BUNIX_VFS_MKDIR_BUFFER:
 			if (read_resolved_path(&message, path) != 0) {
@@ -1225,10 +1295,15 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
 				break;
 			}
-			file = file_create(path, message.words[3] >> 32,
-					   BUNIX_VFS_TYPE_DIRECTORY,
-					   message.words[3] & 0xffffffff);
-			reply.words[0] = file == 0 ? (u64)-1 : 0;
+			{
+				u64 status = 0;
+
+				file = file_create(path, message.words[3] >> 32,
+						   BUNIX_VFS_TYPE_DIRECTORY,
+						   message.words[3] &
+						   0xffffffff, &status);
+				reply.words[0] = status;
+			}
 			break;
 		case BUNIX_VFS_MKNOD_BUFFER: {
 			const u64 type = message.words[3] >> 48;
@@ -1248,9 +1323,14 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_EXIST;
 				break;
 			}
-			file = file_create(path, mode, type,
-					   message.words[3] & 0xffffffff);
-			reply.words[0] = file == 0 ? (u64)-1 : 0;
+			{
+				u64 status = 0;
+
+				file = file_create(path, mode, type,
+						   message.words[3] &
+						   0xffffffff, &status);
+				reply.words[0] = status;
+			}
 			break;
 		}
 		case BUNIX_VFS_SYMLINK_BUFFER: {
@@ -1267,21 +1347,28 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
 				break;
 			}
-			file = file_create(path, 0777, BUNIX_VFS_TYPE_SYMLINK,
-					   task);
+			{
+				u64 status = 0;
+
+				file = file_create(path, 0777,
+						   BUNIX_VFS_TYPE_SYMLINK,
+						   task, &status);
+				reply.words[0] = status;
+			}
 			if (file == 0 ||
 			    file_resize(file, target_len) != 0) {
 				if (file != 0) {
 					file_unlink(file);
 				}
-				reply.words[0] = (u64)-1;
+				if (reply.words[0] == 0) {
+					reply.words[0] = BUNIX_VFS_ERR_INVAL;
+				}
 				break;
 			}
 			for (u64 i = 0; i < target_len; i++) {
 				file->inode->data[i] = target[i];
 			}
 			file->inode->size = target_len - 1;
-			reply.words[0] = 0;
 			break;
 		}
 		case BUNIX_VFS_STAT_PATH_META_BUFFER:

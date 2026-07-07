@@ -67,6 +67,7 @@ chmod -R u+w "$root"
 mkdir -p "$root/bin" "$root/etc" "$root/etc/init.d" "$root/etc/runlevels/default" \
 	"$root/etc/runlevels/boot" "$root/proc" "$root/sys" "$root/dev" "$root/run" \
 	"$root/tmp" "$root/root" "$root/var/tmp"
+mkdir -p "$root/run/openrc" "$root/run/lock" "$root/lib/rc/init.d"
 rm -f "$root/bin/login"
 cp "$login" "$root/bin/login"
 chmod 0555 "$root/bin/login"
@@ -93,8 +94,7 @@ fi
 
 cat > "$root/etc/inittab" <<'EOF_INITTAB'
 ::sysinit:/sbin/openrc sysinit
-::wait:/sbin/openrc boot
-::wait:/sbin/openrc default
+::wait:/sbin/rc-service networking start
 ttyS0::respawn:/bin/login
 ::shutdown:/sbin/openrc shutdown
 EOF_INITTAB
@@ -110,14 +110,50 @@ iface eth0 inet dhcp
 EOF_INTERFACES
 chmod 0444 "$root/etc/network/interfaces"
 
-cat > "$root/etc/init.d/bunix-login" <<'EOF_LOGIN_SERVICE'
+cat > "$root/etc/init.d/networking" <<'EOF_NETWORKING'
 #!/sbin/openrc-run
-description="Bunix native login service"
-command="/bin/login"
-command_background="no"
-EOF_LOGIN_SERVICE
-chmod 0755 "$root/etc/init.d/bunix-login"
-ln -sf /etc/init.d/bunix-login "$root/etc/runlevels/default/bunix-login"
+description="Bunix ifupdown-ng networking"
+
+: ${cfgfile:="/etc/network/interfaces"}
+
+depend()
+{
+	provide net
+}
+
+start()
+{
+	ebegin "Starting networking"
+	ifup -i "$cfgfile" lo >/dev/null 2>&1 || true
+	ifup -i "$cfgfile" eth0 >/dev/null
+	eend $?
+}
+
+status()
+{
+	if [ -e /run/openrc/started/networking ]; then
+		einfo "status: started"
+		return 0
+	fi
+	einfo "status: stopped"
+	return 3
+}
+
+stop()
+{
+	ebegin "Stopping networking"
+	ifdown -i "$cfgfile" eth0 >/dev/null 2>&1 || true
+	ifdown -i "$cfgfile" lo >/dev/null 2>&1 || true
+	eend 0
+}
+
+restart()
+{
+	start
+}
+EOF_NETWORKING
+chmod 0755 "$root/etc/init.d/networking"
+
 ln -sf /etc/init.d/networking "$root/etc/runlevels/boot/networking"
 
 find "$root/var/cache/apk" -type f -delete 2>/dev/null || true

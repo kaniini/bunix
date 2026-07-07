@@ -193,9 +193,12 @@ enum {
 	LINUX_IPPROTO_UDP = 17,
 	LINUX_IPPROTO_ICMPV6 = 58,
 	LINUX_IPPROTO_RAW = 255,
+	LINUX_MSG_DONTWAIT = 0x40,
 	LINUX_ETH_P_IP_NET = 0x0008,
 	LINUX_ETH_P_IP = 0x0800,
 	LINUX_ETHERNET_HEADER_SIZE = 14,
+	LINUX_RECV_BLOCK_RETRIES = 5000,
+	LINUX_RECV_BLOCK_SLEEP_NS = 1000000,
 	LINUX_DT_FIFO = 1,
 	LINUX_DT_CHR = 2,
 	LINUX_DT_REG = 8,
@@ -6335,10 +6338,14 @@ static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 }
 
 static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
-			   u64 buffer)
+			   u64 flags, u64 buffer)
 {
 	struct bunix_msg reply;
 	u64 op;
+	const int nonblock =
+		(flags & LINUX_MSG_DONTWAIT) != 0 ||
+		(fd < process->fd_capacity &&
+		 (process->fds[fd].status_flags & LINUX_O_NONBLOCK) != 0);
 
 	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
@@ -6351,12 +6358,17 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 		     BUNIX_NET_UDP_RECV :
 		     process->fds[fd].handle == LINUX_SOCKET_NET_TCP ?
 		     BUNIX_NET_TCP_READ : BUNIX_NET_ICMP_RECV;
-		if (linux_net_call(op, buffer, BUNIX_RIGHT_SEND,
-				   process->fds[fd].offset, len, 0, 0,
-				   &reply) != 0) {
-			return -LINUX_EAGAIN;
+		for (u64 retry = 0;; retry++) {
+			if (linux_net_call(op, buffer, BUNIX_RIGHT_SEND,
+					   process->fds[fd].offset, len, 0, 0,
+					   &reply) == 0) {
+				return (long)reply.words[1];
+			}
+			if (nonblock || retry >= LINUX_RECV_BLOCK_RETRIES) {
+				return -LINUX_EAGAIN;
+			}
+			(void)bunix_sleep_ns(LINUX_RECV_BLOCK_SLEEP_NS);
 		}
-		return (long)reply.words[1];
 	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NET_PACKET) {
 		if (process->fds[fd].offset == 0) {
@@ -6382,7 +6394,8 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 }
 
 static long linux_recvmsg(struct linux_process *process, u64 fd, u64 len,
-			  u64 name_len, u64 buffer, u64 *actual_name_len)
+			  u64 flags, u64 name_len, u64 buffer,
+			  u64 *actual_name_len)
 {
 	struct bunix_msg reply;
 	const u64 sockaddr_ll_len = 20;
@@ -6397,7 +6410,7 @@ static long linux_recvmsg(struct linux_process *process, u64 fd, u64 len,
 		return -LINUX_ENOTSOCK;
 	}
 	if (process->fds[fd].handle != LINUX_SOCKET_NET_PACKET) {
-		return linux_recvfrom(process, fd, len, buffer);
+		return linux_recvfrom(process, fd, len, flags, buffer);
 	}
 	if (process->fds[fd].offset == 0) {
 		return -LINUX_EDESTADDRREQ;
@@ -6626,7 +6639,7 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	     process->fds[fd].handle == LINUX_SOCKET_NET_RAW ||
 	     process->fds[fd].handle == LINUX_SOCKET_NET_PACKET ||
 	     process->fds[fd].handle == LINUX_SOCKET_NETLINK_ROUTE)) {
-		return linux_recvfrom(process, fd, len, buffer);
+		return linux_recvfrom(process, fd, len, 0, buffer);
 	}
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
 		return -LINUX_EISDIR;
@@ -7929,6 +7942,7 @@ int main(void)
 			reply.words[0] = (u64)linux_recvfrom(process,
 							     message.words[0],
 							     message.words[1],
+							     message.words[2],
 							     message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
@@ -7938,6 +7952,7 @@ int main(void)
 			reply.words[0] = (u64)linux_recvmsg(process,
 							    message.words[0],
 							    message.words[1],
+							    message.words[2],
 							    message.words[3],
 							    message.cap,
 							    &reply.words[1]);

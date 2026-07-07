@@ -38,11 +38,14 @@ user=${BUNIX_USER:-kaniini}
 password=${BUNIX_PASSWORD:-bunix}
 prompt=${BUNIX_PROMPT:-~ $ }
 guest_poweroff=${BUNIX_GUEST_POWEROFF:-1}
+login_timeout=${BUNIX_LOGIN_TIMEOUT:-80}
+send_delay=${BUNIX_SEND_DELAY:-0.05}
 
 qemu_pid=
 cat_pid=
 sidecar_pid=
 status=0
+status_injected=0
 
 usage() {
 	echo "usage: BUNIX_CMD='command' $0" >&2
@@ -142,7 +145,7 @@ wait_for_guest_poweroff() {
 		printf '%s\n%s\n' root root >&3
 		wait_for_prompt_count_gt "~ # " "$root_prompts_before" \
 			"root shell prompt did not appear for guest poweroff" 45 180
-		printf '/sbin/poweroff\n' >&3
+		printf '/bin/busybox poweroff -f\n' >&3
 	fi
 
 	if wait "$qemu_pid"; then
@@ -210,21 +213,34 @@ start_qemu() {
 }
 
 start_qemu
-wait_for_qemu_fixed "login: " "login prompt did not appear" 80 80
+wait_for_qemu_fixed "login: " "login prompt did not appear" "$login_timeout" 80
 
 sleep 3
 exec 3>"$pipe.in"
 printf '%s\n%s\n' "$user" "$password" >&3
 wait_for_fixed "$log" "$prompt" "shell prompt did not appear for $user" 150 120
 login_prompts_before_exit=$(current_prompt_count "login: ")
+sleep "$send_delay"
 
 if [ -n "$command_file" ]; then
 	if [ ! -r "$command_file" ]; then
 		fail_command "command file is not readable: $command_file" 40
 	fi
-	cat "$command_file" >&3
+	while IFS= read -r line || [ -n "$line" ]; do
+		printf '%s\n' "$line" >&3
+		sleep "$send_delay"
+	done < "$command_file"
 else
-	printf '%s\n' "$command_text" >&3
+	if [ "$expect_qemu_exit" = 1 ]; then
+		printf '%s\n' "$command_text" >&3
+	elif [ "$guest_poweroff" = 1 ] && [ "$user" = root ]; then
+		printf '%s; status=$?; echo __BUNIX_COMMAND_STATUS__=$status; test "$status" = 0 && echo %s; test "$status" = 0 && /bin/busybox poweroff -f; exit\n' "$command_text" "$marker" >&3
+		status_injected=1
+	else
+		printf '%s; status=$?; echo __BUNIX_COMMAND_STATUS__=$status; test "$status" = 0 && echo %s; exit\n' "$command_text" "$marker" >&3
+		status_injected=1
+	fi
+	sleep "$send_delay"
 fi
 
 if [ "$expect_qemu_exit" = 1 ]; then
@@ -238,12 +254,14 @@ if [ "$expect_qemu_exit" = 1 ]; then
 	fail_command "qemu exited with status $qemu_status" 220
 fi
 
-if [ "$guest_poweroff" = 1 ] && [ "$user" = root ]; then
+if [ "$status_injected" = 1 ]; then
+	:
+elif [ "$guest_poweroff" = 1 ] && [ "$user" = root ]; then
 send_script <<EOF_COMMAND_DONE_ROOT
 status=\$?
 echo __BUNIX_COMMAND_STATUS__=\$status
 test "\$status" = 0 && echo $marker
-test "\$status" = 0 && /sbin/poweroff
+test "\$status" = 0 && /bin/busybox poweroff -f
 exit
 EOF_COMMAND_DONE_ROOT
 else
