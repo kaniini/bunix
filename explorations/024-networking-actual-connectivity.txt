@@ -115,12 +115,47 @@ Inventory findings:
   They do not exercise OpenRC networking service startup, DHCP, ICMP, ARP, or
   external packet round trips.
 
+NET0 configuration RPC contract:
+
+- Keep packet-driver registration separate from network policy.  Drivers may
+  attach packet interfaces and update physical link flags, but address
+  assignment, default routes, DHCP leases, and service status belong to the
+  networking service.
+- Add `BUNIX_NET_INTERFACE_SET_FLAGS` for administrative up/down state.  It
+  takes interface id, set mask, clear mask, and flags; NET0 preserves physical
+  `RUNNING` state from the driver and exposes the merged result through
+  interface info/procfs.
+- Add address records independent from `struct net_interface`:
+  family, address hi/lo, prefix length, interface id, flags, preferred lifetime,
+  valid lifetime.  Loopback starts with static `127.0.0.1/8` and `::1/128`
+  records.  New RPCs: `BUNIX_NET_ADDR_ADD`, `BUNIX_NET_ADDR_DELETE`,
+  `BUNIX_NET_ADDR_COUNT`, and `BUNIX_NET_ADDR_AT`.
+- Extend route management with `BUNIX_NET_ROUTE_DELETE` and define
+  `BUNIX_NET_ROUTE_ADD` as idempotent for identical route records.  Route
+  records retain family, prefix, prefix length, interface id, gateway,
+  flags, and metric.
+- Add neighbor observation/control records for ARP/ND:
+  `BUNIX_NET_NEIGHBOR_COUNT`, `BUNIX_NET_NEIGHBOR_AT`,
+  `BUNIX_NET_NEIGHBOR_ADD`, and `BUNIX_NET_NEIGHBOR_DELETE`.  The first
+  DHCP/IPv4 slice can expose an empty table plus manual add/delete until ARP
+  resolution is implemented in the external-smoke exploration.
+- Add `BUNIX_NET_DHCP4_LEASE_INSTALL` as a convenience RPC for the networking
+  service.  It carries interface id, IPv4 address, prefix length or netmask,
+  gateway, DNS server list metadata, lease lifetime, renewal time, and server
+  identifier.  NET0 validates the interface and installs the address plus
+  default route atomically.
+- Add `BUNIX_NET_CONFIG_STATUS` for bounded diagnostics.  NET0 reports whether
+  loopback is configured, whether each packet interface has an address,
+  whether a default route exists, and the last configuration error code.  The
+  networking service should log config parsing, DHCP, route, and neighbor
+  progress separately.
+
 Tasks:
 
 - [x] Inventory current NET0, VirtIO-net, Linux socket/ioctl, procfs
       networking, OpenRC service, BusyBox ping, and rootfs network config
       behavior.  Identify exactly where manual or hardcoded setup remains.
-- [ ] Define the NET0 configuration RPCs needed by a userspace networking
+- [x] Define the NET0 configuration RPCs needed by a userspace networking
       service: interface up/down, address add/delete, route add/delete,
       neighbor/ARP state observation, DHCP lease install, and status reporting.
 - [x] Add `/etc/network/interfaces` to the synthetic and Alpine root images
