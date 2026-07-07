@@ -80,6 +80,18 @@ struct net_route {
 	u64 metric;
 };
 
+struct net_neighbor {
+	struct net_neighbor *next;
+	u64 family;
+	u64 addr_hi;
+	u64 addr_lo;
+	u64 iface;
+	u64 mac_hi;
+	u64 mac_lo;
+	u64 flags;
+	u64 state;
+};
+
 struct net_addr_record {
 	struct net_addr_record *next;
 	u64 family;
@@ -238,6 +250,7 @@ static const struct net_addr_record static_addrs[] = {
 	},
 };
 static struct net_addr_record *dynamic_addrs;
+static struct net_neighbor *dynamic_neighbors;
 static u64 last_config_error;
 static struct net_packet *loopback_rx_head;
 static struct net_packet *loopback_rx_tail;
@@ -251,6 +264,10 @@ static struct icmp_socket *icmp_sockets;
 static u64 next_icmp_socket_id = 1;
 
 static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo);
+static int net_addr_is_local(u64 family, u64 hi, u64 lo);
+static int icmp_enqueue(struct icmp_socket *socket, u64 family,
+			u64 source_hi, u64 source_lo,
+			const unsigned char *data, u64 len);
 
 static long register_service(u64 service, u64 handle)
 {
@@ -1237,6 +1254,100 @@ static u64 net_read_be32(const unsigned char *data)
 	       ((u64)data[2] << 8) | data[3];
 }
 
+static u64 net_read_mac48(const unsigned char *data)
+{
+	u64 mac = 0;
+
+	for (u64 i = 0; i < 6; i++) {
+		mac = (mac << 8) | data[i];
+	}
+	return mac;
+}
+
+static void net_write_be16(unsigned char *data, u64 value)
+{
+	data[0] = (unsigned char)((value >> 8) & 0xff);
+	data[1] = (unsigned char)(value & 0xff);
+}
+
+static void net_write_be32(unsigned char *data, u64 value)
+{
+	data[0] = (unsigned char)((value >> 24) & 0xff);
+	data[1] = (unsigned char)((value >> 16) & 0xff);
+	data[2] = (unsigned char)((value >> 8) & 0xff);
+	data[3] = (unsigned char)(value & 0xff);
+}
+
+static struct net_neighbor *neighbor_find(u64 family, u64 hi, u64 lo,
+					  u64 iface)
+{
+	for (struct net_neighbor *neighbor = dynamic_neighbors; neighbor != 0;
+	     neighbor = neighbor->next) {
+		if (neighbor->family == family &&
+		    neighbor->addr_hi == hi &&
+		    neighbor->addr_lo == lo &&
+		    neighbor->iface == iface) {
+			return neighbor;
+		}
+	}
+	return 0;
+}
+
+static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
+			   u64 mac_hi, u64 mac_lo)
+{
+	struct net_neighbor *neighbor;
+
+	if (iface == NET_IFACE_LO || lo == 0 || mac_hi == 0) {
+		return;
+	}
+	neighbor = neighbor_find(family, hi, lo, iface);
+	if (neighbor == 0) {
+		neighbor = (struct net_neighbor *)bunix_calloc(1,
+							       sizeof(*neighbor));
+		if (neighbor == 0) {
+			return;
+		}
+		neighbor->next = dynamic_neighbors;
+		dynamic_neighbors = neighbor;
+	}
+	neighbor->family = family;
+	neighbor->addr_hi = hi;
+	neighbor->addr_lo = lo;
+	neighbor->iface = iface;
+	neighbor->mac_hi = mac_hi;
+	neighbor->mac_lo = mac_lo;
+	neighbor->flags = 1;
+	neighbor->state = 1;
+}
+
+static void packet_ingress_learn_ipv4_neighbor(const struct net_interface *iface,
+					       const unsigned char *packet,
+					       u64 len)
+{
+	const unsigned char *ip;
+	u64 ihl;
+	u64 src_ip;
+	u64 src_mac;
+
+	if (iface == 0 || packet == 0 || len < 14 + 20 ||
+	    net_read_be16(packet + 12) != 0x0800) {
+		return;
+	}
+	ip = packet + 14;
+	if ((ip[0] >> 4) != 4) {
+		return;
+	}
+	ihl = (ip[0] & 0x0f) * 4;
+	if (ihl < 20 || len < 14 + ihl) {
+		return;
+	}
+	src_ip = net_read_be32(ip + 12);
+	src_mac = net_read_mac48(packet + 6);
+	neighbor_learn(BUNIX_NET_ADDR_FAMILY_IPV4, 0, src_ip, iface->id,
+		       src_mac, 0);
+}
+
 static int udp_socket_accepts_ipv4(struct udp_socket *socket, u64 dst_ip,
 				   u64 dst_port)
 {
@@ -1333,6 +1444,57 @@ static void packet_ingress_udp_ipv4(const unsigned char *packet, u64 len)
 	}
 }
 
+static int icmp_socket_accepts_ipv4(struct icmp_socket *socket)
+{
+	return socket != 0 &&
+	       socket->family == BUNIX_NET_ADDR_FAMILY_IPV4 &&
+	       socket->protocol == NET_PROTO_ICMP;
+}
+
+static void packet_ingress_icmp_ipv4(const unsigned char *packet, u64 len)
+{
+	const unsigned char *ip;
+	u64 ihl;
+	u64 total_len;
+	u64 fragment;
+	u64 src_ip;
+	u64 dst_ip;
+
+	if (packet == 0 || len < 14 + 20 ||
+	    net_read_be16(packet + 12) != 0x0800) {
+		return;
+	}
+	ip = packet + 14;
+	if ((ip[0] >> 4) != 4 || ip[9] != NET_PROTO_ICMP) {
+		return;
+	}
+	ihl = (ip[0] & 0x0f) * 4;
+	if (ihl < 20 || len < 14 + ihl + 8) {
+		return;
+	}
+	total_len = net_read_be16(ip + 2);
+	if (total_len < ihl + 8 || len < 14 + total_len) {
+		return;
+	}
+	fragment = net_read_be16(ip + 6);
+	if ((fragment & 0x3fff) != 0) {
+		return;
+	}
+	src_ip = net_read_be32(ip + 12);
+	dst_ip = net_read_be32(ip + 16);
+	if (!net_addr_is_local(BUNIX_NET_ADDR_FAMILY_IPV4, 0, dst_ip)) {
+		return;
+	}
+	for (struct icmp_socket *socket = icmp_sockets; socket != 0;
+	     socket = socket->next) {
+		if (icmp_socket_accepts_ipv4(socket)) {
+			(void)icmp_enqueue(socket, BUNIX_NET_ADDR_FAMILY_IPV4,
+					   0, src_ip, ip + ihl,
+					   total_len - ihl);
+		}
+	}
+}
+
 static void reply_packet_rx_submit(struct bunix_msg *reply,
 				   const struct bunix_msg *message)
 {
@@ -1372,7 +1534,9 @@ static void reply_packet_rx_submit(struct bunix_msg *reply,
 		reply->words[0] = (u64)-1;
 		return;
 	}
+	packet_ingress_learn_ipv4_neighbor(iface, packet->data, packet->len);
 	packet_ingress_udp_ipv4(packet->data, packet->len);
+	packet_ingress_icmp_ipv4(packet->data, packet->len);
 	if (iface->rx_tail != 0) {
 		iface->rx_tail->next = packet;
 	} else {
@@ -2678,6 +2842,136 @@ static void icmp_set_checksum(unsigned char *data, u64 len, u64 family,
 	data[3] = (unsigned char)(checksum & 0xff);
 }
 
+static u64 iface_ipv4_addr(u64 iface_id)
+{
+	for (const struct net_addr_record *addr = dynamic_addrs; addr != 0;
+	     addr = addr->next) {
+		if (addr->family == BUNIX_NET_ADDR_FAMILY_IPV4 &&
+		    addr->iface == iface_id) {
+			return addr->addr_lo;
+		}
+	}
+	for (u64 i = 0; i < sizeof(static_addrs) / sizeof(static_addrs[0]); i++) {
+		if (static_addrs[i].family == BUNIX_NET_ADDR_FAMILY_IPV4 &&
+		    static_addrs[i].iface == iface_id) {
+			return static_addrs[i].addr_lo;
+		}
+	}
+	return 0;
+}
+
+static int packet_tx_enqueue_copy(struct net_interface *iface,
+				  const unsigned char *data, u64 len)
+{
+	struct net_packet *packet;
+
+	if (iface == 0 || iface == &loopback || data == 0 || len == 0 ||
+	    len > iface->mtu ||
+	    (iface->flags & BUNIX_NET_IFACE_FLAG_RUNNING) == 0) {
+		if (iface != 0 && iface != &loopback) {
+			iface->tx_drops++;
+		}
+		return -1;
+	}
+	packet = (struct net_packet *)bunix_alloc(sizeof(*packet) + len);
+	if (packet == 0) {
+		iface->tx_drops++;
+		return -1;
+	}
+	packet->next = 0;
+	packet->family = 0;
+	packet->len = len;
+	for (u64 i = 0; i < len; i++) {
+		packet->data[i] = data[i];
+	}
+	if (iface->tx_tail != 0) {
+		iface->tx_tail->next = packet;
+	} else {
+		iface->tx_head = packet;
+	}
+	iface->tx_tail = packet;
+	return 0;
+}
+
+static int icmp_sendto_external_ipv4(struct icmp_socket *socket,
+				     u64 dest_ip, unsigned char *data,
+				     u64 len)
+{
+	const struct net_route *route;
+	struct net_interface *iface;
+	unsigned char *frame;
+	u64 source_ip;
+	u64 next_hop_ip;
+	u64 dest_mac = 0;
+	u64 frame_len;
+	u64 ip_len;
+	unsigned short ip_checksum;
+
+	if (socket == 0 || socket->family != BUNIX_NET_ADDR_FAMILY_IPV4 ||
+	    data == 0 || len < 8 || len > NET_PACKET_MAX) {
+		return -1;
+	}
+	route = net_route_lookup(BUNIX_NET_ADDR_FAMILY_IPV4, 0, dest_ip);
+	if (route == 0 || (route->flags & BUNIX_NET_ROUTE_FLAG_UP) == 0) {
+		return -1;
+	}
+	iface = interface_find(route->iface);
+	next_hop_ip = route->gateway_lo != 0 ? route->gateway_lo : dest_ip;
+	{
+		struct net_neighbor *neighbor =
+			neighbor_find(BUNIX_NET_ADDR_FAMILY_IPV4, 0,
+				      next_hop_ip, route->iface);
+
+		if (neighbor != 0) {
+			dest_mac = neighbor->mac_hi;
+		}
+	}
+	source_ip = iface_ipv4_addr(route->iface);
+	ip_len = 20 + len;
+	frame_len = 14 + ip_len;
+	if (iface == 0 || source_ip == 0 || ip_len > 0xffff ||
+	    frame_len > NET_PACKET_MAX) {
+		return -1;
+	}
+	frame = (unsigned char *)bunix_alloc(frame_len);
+	if (frame == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < 6; i++) {
+		frame[i] = dest_mac != 0 ?
+			   (unsigned char)((dest_mac >> ((5 - i) * 8)) & 0xff) :
+			   0xff;
+		frame[6 + i] = (unsigned char)((iface->mac_hi >> ((5 - i) * 8)) &
+					       0xff);
+	}
+	frame[12] = 0x08;
+	frame[13] = 0x00;
+	frame[14] = 0x45;
+	frame[15] = 0;
+	net_write_be16(frame + 16, ip_len);
+	net_write_be16(frame + 18, 0);
+	net_write_be16(frame + 20, 0);
+	frame[22] = 64;
+	frame[23] = NET_PROTO_ICMP;
+	frame[24] = 0;
+	frame[25] = 0;
+	net_write_be32(frame + 26, source_ip);
+	net_write_be32(frame + 30, dest_ip);
+	icmp_set_checksum(data, len, socket->family, 0, source_ip, 0, dest_ip);
+	for (u64 i = 0; i < len; i++) {
+		frame[34 + i] = data[i];
+	}
+	ip_checksum = net_checksum_finish(net_checksum_sum(frame + 14, 20, 0));
+	frame[24] = (unsigned char)((ip_checksum >> 8) & 0xff);
+	frame[25] = (unsigned char)(ip_checksum & 0xff);
+	if (packet_tx_enqueue_copy(iface, frame, frame_len) != 0) {
+		bunix_free(frame);
+		return -1;
+	}
+	bunix_free(frame);
+	return 0;
+}
+
 static void icmp_datagrams_free_all(struct icmp_socket *socket)
 {
 	struct icmp_datagram *datagram = socket->rx_head;
@@ -2767,11 +3061,22 @@ static void reply_icmp_sendto(struct bunix_msg *reply,
 			socket->family == BUNIX_NET_ADDR_FAMILY_IPV4 ?
 			0x7f000001 : 1;
 	int echo_request;
+	int local;
 
-	if (socket == 0 || len < 8 || len > NET_PACKET_MAX || message->cap == 0 ||
-	    bunix_buffer_read(message->cap, 0, &dest, sizeof(dest)) != 0 ||
-	    dest.family != socket->family ||
-	    !net_addr_is_local(socket->family, dest.hi, dest.lo)) {
+	if (socket == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (len < 8 || len > NET_PACKET_MAX) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (message->cap == 0 ||
+	    bunix_buffer_read(message->cap, 0, &dest, sizeof(dest)) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (dest.family != socket->family) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -2790,6 +3095,23 @@ static void reply_icmp_sendto(struct bunix_msg *reply,
 		       (socket->family == BUNIX_NET_ADDR_FAMILY_IPV6 &&
 			data[0] == 128);
 	if (!echo_request) {
+		bunix_free(data);
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	local = net_addr_is_local(socket->family, dest.hi, dest.lo);
+	if (!local && socket->family == BUNIX_NET_ADDR_FAMILY_IPV4) {
+		if (icmp_sendto_external_ipv4(socket, dest.lo, data, len) != 0) {
+			bunix_free(data);
+			reply->words[0] = (u64)-1;
+			return;
+		}
+		bunix_free(data);
+		reply->words[0] = 0;
+		reply->words[1] = len;
+		return;
+	}
+	if (!local) {
 		bunix_free(data);
 		reply->words[0] = (u64)-1;
 		return;

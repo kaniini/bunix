@@ -310,6 +310,7 @@ static struct bunix_id_table pipe_ids;
 static char write_buffer[LINUX_MAX_WRITE];
 static struct linux_tty console_tty;
 static struct bunix_map file_refs;
+static struct bunix_map net_socket_refs;
 static u64 next_pid = 1;
 static u64 foreground_pgid = 1;
 static u64 user_service;
@@ -1774,6 +1775,54 @@ static long linux_file_ref_drop(u64 handle)
 	return 0;
 }
 
+static int linux_fd_is_refcounted_net_socket(const struct linux_fd *fd)
+{
+	return fd != 0 && fd->kind == LINUX_FD_SOCKET &&
+	       (fd->handle == LINUX_SOCKET_NET_UDP ||
+		fd->handle == LINUX_SOCKET_NET_TCP ||
+		fd->handle == LINUX_SOCKET_NET_ICMP);
+}
+
+static u64 linux_net_socket_ref_key(const struct linux_fd *fd)
+{
+	return (fd->handle << 56) ^ fd->offset;
+}
+
+static void linux_net_socket_ref_add(const struct linux_fd *fd)
+{
+	const u64 key = linux_net_socket_ref_key(fd);
+	u64 refs;
+
+	if (!linux_fd_is_refcounted_net_socket(fd) || fd->offset == 0) {
+		return;
+	}
+	refs = bunix_map_get(&net_socket_refs, key);
+	if (refs == 0) {
+		(void)bunix_map_set(&net_socket_refs, key, 1);
+	} else {
+		(void)bunix_map_set(&net_socket_refs, key, refs + 1);
+	}
+}
+
+static long linux_net_socket_ref_drop(const struct linux_fd *fd)
+{
+	const u64 key = linux_net_socket_ref_key(fd);
+	u64 refs;
+
+	if (!linux_fd_is_refcounted_net_socket(fd) || fd->offset == 0) {
+		return 0;
+	}
+	refs = bunix_map_get(&net_socket_refs, key);
+	if (refs > 1) {
+		(void)bunix_map_set(&net_socket_refs, key, refs - 1);
+		return 1;
+	}
+	if (refs == 1) {
+		(void)bunix_map_remove(&net_socket_refs, key);
+	}
+	return 0;
+}
+
 static struct linux_process *linux_process_find(u64 bunix_task)
 {
 	const u64 index = bunix_map_get(&process_by_task, bunix_task);
@@ -1915,6 +1964,8 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 		} else if (process->fds[fd].kind == LINUX_FD_PIPE_READ ||
 			   process->fds[fd].kind == LINUX_FD_PIPE_WRITE) {
 			linux_pipe_ref_add(&process->fds[fd]);
+		} else if (linux_fd_is_refcounted_net_socket(&process->fds[fd])) {
+			linux_net_socket_ref_add(&process->fds[fd]);
 		}
 	}
 	if (linux_process_set_cwd(process, parent->cwd) != 0) {
@@ -5856,7 +5907,8 @@ static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 	} else if (base_type == LINUX_SOCK_STREAM &&
 		   (protocol == 0 || protocol == LINUX_IPPROTO_TCP)) {
 		net_type = BUNIX_NET_TCP_OPEN;
-	} else if (base_type == LINUX_SOCK_RAW &&
+	} else if ((base_type == LINUX_SOCK_RAW ||
+		    base_type == LINUX_SOCK_DGRAM) &&
 		   ((domain == LINUX_AF_INET &&
 		     protocol == LINUX_IPPROTO_ICMP) ||
 		    (domain == LINUX_AF_INET6 &&
@@ -5889,6 +5941,7 @@ static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 		      domain);
 	if (fd >= 0) {
 		process->fds[fd].offset = reply.words[1];
+		linux_net_socket_ref_add(&process->fds[fd]);
 	}
 	if (fd >= 0 && (type & LINUX_SOCK_CLOEXEC) != 0) {
 		process->fds[fd].flags |= LINUX_FD_CLOEXEC;
@@ -6751,10 +6804,8 @@ static long linux_close(struct linux_process *process, u64 fd)
 		linux_pipe_ref_drop(&process->fds[fd]);
 		linux_pipe_wake_reader(linux_pipe_find(pipe_id));
 	}
-	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
-	    (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
-	     process->fds[fd].handle == LINUX_SOCKET_NET_TCP ||
-	     process->fds[fd].handle == LINUX_SOCKET_NET_ICMP)) {
+	if (linux_fd_is_refcounted_net_socket(&process->fds[fd]) &&
+	    linux_net_socket_ref_drop(&process->fds[fd]) == 0) {
 		struct bunix_msg reply;
 		const u64 op = process->fds[fd].handle == LINUX_SOCKET_NET_UDP ?
 			       BUNIX_NET_UDP_CLOSE :
@@ -6811,6 +6862,8 @@ static void linux_fd_ref_add(const struct linux_fd *fd)
 	} else if (fd->kind == LINUX_FD_PIPE_READ ||
 		   fd->kind == LINUX_FD_PIPE_WRITE) {
 		linux_pipe_ref_add(fd);
+	} else if (linux_fd_is_refcounted_net_socket(fd)) {
+		linux_net_socket_ref_add(fd);
 	}
 }
 
@@ -7137,6 +7190,7 @@ int main(void)
 	bunix_map_init(&process_by_task);
 	bunix_map_init(&process_by_pid);
 	bunix_map_init(&file_refs);
+	bunix_map_init(&net_socket_refs);
 	bunix_id_table_init(&pipe_ids);
 	bunix_console_log(online, sizeof(online) - 1);
 	for (;;) {

@@ -475,6 +475,18 @@ make run
 
 These targets build a standalone GRUB `BOOTX64.EFI`, expose `build/esp` as an EFI
 System Partition, boot through OVMF with KVM, and print to the serial console.
+The plain `make run` target is intentionally minimal.  For an Alpine-style boot
+with the VirtIO network device attached, use:
+
+```sh
+ROOTFS_FLAVOR=alpine-squashfs make run-virtio-net
+```
+
+The default VirtIO-net QEMU backend uses restricted user networking for
+deterministic DHCP and service tests.  External ICMP smoke testing uses the
+explicit unrestricted backend in `make test-boot-virtio-net-external-ping`, which
+boots Alpine, runs `udhcpc` through the normal userspace path, and pings
+`4.2.2.1` and `8.8.8.8` before powering off.
 
 ## EFI GRUB image
 

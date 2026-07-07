@@ -345,6 +345,25 @@ Implementation progress:
   Alpine+VirtIO-net command shard covering OpenRC boot-time networking status,
   service restart, NET0 config state, DHCP default-route installation, drained
   queues, and clean guest poweroff.
+- Fixed Linux NET socket lifetime management by refcounting NET0 UDP, TCP, and
+  ICMP socket handles across `dup` and `fork`.  BusyBox `ping` creates an ICMP
+  datagram socket and can duplicate/close descriptors during setup; without
+  shared-handle refcounts, one descriptor close could close the underlying NET0
+  ICMP socket while another descriptor still referenced it.
+- Linux ICMP compatibility now accepts BusyBox's `SOCK_DGRAM` ICMP ping socket
+  shape in addition to raw ICMP sockets.
+- NET0 now learns IPv4 neighbor MACs from inbound Ethernet/IPv4 frames, demuxes
+  inbound IPv4 ICMP replies to ICMP sockets, and can transmit IPv4 ICMP echo
+  requests on a routed packet interface using DHCP-installed source address and
+  default-route state.  DHCP traffic from QEMU-user provides the gateway
+  neighbor entry needed for external pings.
+- Added `make test-boot-virtio-net-external-ping`, an Alpine+VirtIO-net command
+  shard that opts into unrestricted QEMU user networking, obtains a DHCP lease
+  with BusyBox/Alpine `udhcpc`, checks `/proc/net/config`, pings `4.2.2.1` and
+  `8.8.8.8`, and powers off through the serial command harness.
+- Documentation now records the distinction between the minimal `make run`,
+  `ROOTFS_FLAVOR=alpine-squashfs make run-virtio-net`, the default restricted
+  VirtIO-net backend, and the explicit unrestricted external-ping test backend.
 
 Tasks:
 
@@ -373,18 +392,19 @@ Tasks:
       compatibility path.
 - [x] Make BusyBox or Alpine `ping ::1` succeed through the Linux socket
       compatibility path.
-- [ ] Make BusyBox or Alpine `ping 4.2.2.1` succeed through VirtIO-net,
+- [x] Make BusyBox or Alpine `ping 4.2.2.1` succeed through VirtIO-net,
       DHCP-provided route state, ARP, ICMP, and receive handling.
-- [ ] Make BusyBox or Alpine `ping 8.8.8.8` succeed through the same external
+- [x] Make BusyBox or Alpine `ping 8.8.8.8` succeed through the same external
       networking path.
-- [ ] Add deterministic boot/shell test shards for ifupdown-ng,
+- [x] Add deterministic boot/shell test shards for ifupdown-ng,
       `/etc/init.d/networking` startup, DHCP acquisition, loopback pings,
       external pings, `/proc/net` state, and clean poweroff.  Loopback ping
       coverage is now present in the `network-loopback-ping` shard; DHCP
       acquisition coverage is present in `test-boot-virtio-net-dhcp`;
       ifupdown-ng DHCP bringup coverage is present in
       `test-boot-virtio-net-ifup`; OpenRC startup coverage is present in
-      `test-boot-virtio-net-networking`; external ping shards remain.
-- [ ] Document supported network configuration syntax, DHCP limitations,
+      `test-boot-virtio-net-networking`; external ping coverage is present in
+      `test-boot-virtio-net-external-ping`.
+- [x] Document supported network configuration syntax, DHCP limitations,
       QEMU/test backend assumptions, and follow-up work for DNS, IPv6 external
       networking, firewalling, packet capture, and production route policy.
