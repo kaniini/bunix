@@ -1512,6 +1512,37 @@ static void packet_ingress_arp_ipv4(struct net_interface *iface,
 	(void)packet_tx_enqueue_copy(iface, reply, sizeof(reply));
 }
 
+static void arp_request_ipv4(struct net_interface *iface, u64 source_ip,
+			     u64 target_ip)
+{
+	unsigned char frame[42];
+
+	if (iface == 0 || iface == &loopback || source_ip == 0 ||
+	    target_ip == 0 || iface->mac_hi == 0) {
+		return;
+	}
+	for (u64 i = 0; i < 6; i++) {
+		frame[i] = 0xff;
+		frame[6 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	frame[12] = 0x08;
+	frame[13] = 0x06;
+	net_write_be16(frame + 14, 1);
+	net_write_be16(frame + 16, 0x0800);
+	frame[18] = 6;
+	frame[19] = 4;
+	net_write_be16(frame + 20, 1);
+	for (u64 i = 0; i < 6; i++) {
+		frame[22 + i] = (unsigned char)((iface->mac_hi >>
+						 ((5 - i) * 8)) & 0xff);
+		frame[32 + i] = 0;
+	}
+	net_write_be32(frame + 28, source_ip);
+	net_write_be32(frame + 38, target_ip);
+	(void)packet_tx_enqueue_copy(iface, frame, sizeof(frame));
+}
+
 static int udp_socket_accepts_ipv4(struct udp_socket *socket, u64 dst_ip,
 				   u64 dst_port)
 {
@@ -3097,6 +3128,9 @@ static int icmp_sendto_external_ipv4(struct icmp_socket *socket,
 	if (iface == 0 || source_ip == 0 || ip_len > 0xffff ||
 	    frame_len > NET_PACKET_MAX) {
 		return -1;
+	}
+	if (dest_mac == 0) {
+		arp_request_ipv4(iface, source_ip, next_hop_ip);
 	}
 	frame = (unsigned char *)bunix_alloc(frame_len);
 	if (frame == 0) {

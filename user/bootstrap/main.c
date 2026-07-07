@@ -2446,6 +2446,100 @@ static long net_packet_interface_selftest(u64 net)
 			return -1;
 		}
 	}
+	{
+		struct {
+			u64 dest[4];
+			unsigned char echo[8];
+		} icmp = {
+			.dest = {
+				BUNIX_NET_ADDR_FAMILY_IPV4,
+				0,
+				0x0a120003ull,
+				0,
+			},
+			.echo = { 8, 0, 0, 0, 0, 1, 0, 1 },
+		};
+		u64 icmp_socket;
+
+		request.type = BUNIX_NET_ICMP_OPEN;
+		request.cap = 0;
+		request.cap_rights = 0;
+		request.words[0] = BUNIX_NET_ADDR_FAMILY_IPV4;
+		request.words[1] = 1;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		icmp_socket = reply.words[1];
+		if (bunix_buffer_write((u64)buffer, 0, &icmp,
+				       sizeof(icmp)) != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_ICMP_SENDTO;
+		request.cap = (u64)buffer;
+		request.cap_rights = BUNIX_RIGHT_RECV;
+		request.words[0] = icmp_socket;
+		request.words[1] = sizeof(icmp.echo);
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0 ||
+		    reply.words[1] != sizeof(icmp.echo)) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_PACKET_TX_DEQUEUE;
+		request.cap = (u64)buffer;
+		request.cap_rights = BUNIX_RIGHT_SEND;
+		request.words[0] = iface_id;
+		request.words[1] = sizeof(packet.frame);
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0 || reply.words[2] != 42 ||
+		    bunix_buffer_read((u64)buffer, 0, &packet, sizeof(packet)) != 0 ||
+		    packet.info.iface != iface_id || packet.info.len != 42 ||
+		    packet.frame[0] != 0xff || packet.frame[5] != 0xff ||
+		    packet.frame[6] != 0x02 || packet.frame[12] != 0x08 ||
+		    packet.frame[13] != 0x06 || packet.frame[20] != 0x00 ||
+		    packet.frame[21] != 0x01 || packet.frame[28] != 0x0a ||
+		    packet.frame[29] != 0x12 || packet.frame[31] != 0x01 ||
+		    packet.frame[38] != 0x0a || packet.frame[39] != 0x12 ||
+		    packet.frame[41] != 0x03) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_PACKET_TX_DEQUEUE;
+		request.cap = (u64)buffer;
+		request.cap_rights = BUNIX_RIGHT_SEND;
+		request.words[0] = iface_id;
+		request.words[1] = sizeof(packet.frame);
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0 || reply.words[2] != 42 ||
+		    bunix_buffer_read((u64)buffer, 0, &packet, sizeof(packet)) != 0 ||
+		    packet.info.iface != iface_id || packet.info.len != 42 ||
+		    packet.frame[0] != 0xff || packet.frame[5] != 0xff ||
+		    packet.frame[12] != 0x08 || packet.frame[13] != 0x00 ||
+		    packet.frame[23] != 1 || packet.frame[30] != 0x0a ||
+		    packet.frame[31] != 0x12 || packet.frame[33] != 0x03) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_ICMP_CLOSE;
+		request.cap = 0;
+		request.cap_rights = 0;
+		request.words[0] = icmp_socket;
+		request.words[1] = 0;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+	}
 	packet.info.iface = iface_id;
 	packet.info.len = sizeof(packet.frame);
 	packet.info.flags = 0;

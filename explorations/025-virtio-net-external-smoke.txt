@@ -80,8 +80,8 @@ Current implementation gaps:
   complete Ethernet/ARP implementation.
 - Neighbor RPCs and `/proc/net/arp` observability now exist for IPv4.  NET0 can
   learn from IPv4 ARP frames and answer ARP requests for local IPv4 addresses,
-  but unresolved-next-hop request generation, pending egress queueing, cache
-  aging, and IPv6 ND are not implemented yet.
+  and now generates ARP requests for unresolved IPv4 next hops.  Pending egress
+  queueing, cache aging, and IPv6 ND are not implemented yet.
 - External UDP/TCP route lookup still does not feed packet-interface egress or
   ingress; localhost UDP/TCP remains covered by the core networking tests.
 - The first deterministic host-side packet generator is still unimplemented.
@@ -104,6 +104,9 @@ Neighbor/ARP progress:
   and answers ARP requests for local IPv4 addresses.  The bootstrap NET
   self-test injects a synthetic ARP request and verifies the generated ARP
   reply through the packet TX queue.
-- Full ARP is not complete yet: NET0 still needs to generate ARP requests for
-  unresolved next hops, age/cache entries, and block or queue packet egress
-  while resolution is pending.
+- NET0 now generates ARP requests before sending external IPv4 ICMP through an
+  unresolved next hop.  The bootstrap NET self-test drives `BUNIX_NET_ICMP_SENDTO`
+  to an unresolved on-link IPv4 address and verifies the ARP request frame
+  through the packet TX queue.
+- Full ARP is not complete yet: NET0 still needs to age/cache entries and block
+  or queue packet egress while resolution is pending.
