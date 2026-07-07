@@ -13,9 +13,9 @@ Problem:
 Intended outcome:
 
 - A developer can run `make run`, log in at the Alpine console, find networking
-  already up from the normal OpenRC boot path, and run ping commands without
-  manually invoking DHCP, restarting services, or applying Bunix-specific repair
-  commands.
+  already up because OpenRC initialized it through `/etc/init.d/networking`,
+  and run ping commands without manually invoking DHCP, restarting services, or
+  applying Bunix-specific repair commands.
 
 Dependencies:
 
@@ -27,6 +27,10 @@ Constraints:
 
 - Keep network policy in userspace: ifupdown-ng, OpenRC, `udhcpc`, and the
   Bunix `udhcpc` hook should drive configuration.
+- Networking must be initialized by OpenRC through the normal
+  `/etc/init.d/networking` service.  Test-only startup hooks, direct bootstrap
+  DHCP, or Bunix-specific init shortcuts are not acceptable substitutes for the
+  interactive `make run` outcome.
 - Do not paper over the service failure with boot-time special cases in the
   kernel or VirtIO-net driver.
 - Keep the NIC driver as a packet device; NET0 owns Ethernet, ARP, routes, ICMP,
@@ -56,6 +60,9 @@ Tasks:
       with the same QEMU networking used by `make run`, starts/restarts
       `/etc/init.d/networking`, verifies `eth0` DHCP configuration, and powers
       off cleanly.
+- [ ] Prove the boot path runs OpenRC's `/etc/init.d/networking` service before
+      login and that this service, not a manual command, installs the DHCP lease
+      and default route.
 - [ ] Make `/etc/init.d/networking start` and `rc-service networking restart`
       converge to a valid NET0 state when manual DHCP already works.
 - [ ] Ensure ifupdown-ng plus BusyBox/Alpine `udhcpc` use the Bunix DHCP hook
@@ -76,6 +83,8 @@ Completion criteria:
   bringup produces the same usable IPv4 state as manual DHCP.
 - After login, `eth0` already has the QEMU-user DHCP lease and default IPv4
   route installed.
+- That lease and route were installed by OpenRC's `/etc/init.d/networking`
+  service path.
 - BusyBox/Alpine `ping` works after service bringup without `recvfrom` errors.
 - The deterministic test path proves the service behavior without relying on
   ad hoc interactive commands.
