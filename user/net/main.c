@@ -31,6 +31,7 @@ enum {
 	NET_PACKET_ARPHRD_ETHER = 1,
 	NET_PACKET_HOST = 0,
 	NET_PACKET_BROADCAST = 1,
+	NET_NEIGHBOR_TTL_NS = 120000000000ull,
 };
 
 struct net_packet {
@@ -90,6 +91,7 @@ struct net_neighbor {
 	u64 mac_lo;
 	u64 flags;
 	u64 state;
+	u64 updated_ns;
 };
 
 struct net_pending_frame {
@@ -274,6 +276,7 @@ static u64 next_tcp_ephemeral_port = NET_TCP_PORT_EPHEMERAL_FIRST;
 static struct icmp_socket *icmp_sockets;
 static u64 next_icmp_socket_id = 1;
 
+static void neighbor_prune_expired(void);
 static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
 			   u64 mac_hi, u64 mac_lo);
 static u64 iface_ipv4_addr(u64 iface_id);
@@ -1050,6 +1053,7 @@ static void reply_neighbor_count(struct bunix_msg *reply)
 {
 	u64 count = 0;
 
+	neighbor_prune_expired();
 	for (const struct net_neighbor *neighbor = dynamic_neighbors;
 	     neighbor != 0; neighbor = neighbor->next) {
 		count++;
@@ -1081,6 +1085,7 @@ static void reply_neighbor_at(struct bunix_msg *reply,
 	u64 index = message->words[0];
 	struct bunix_net_neighbor_info info;
 
+	neighbor_prune_expired();
 	if (message->cap == 0 ||
 	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
 		reply->words[0] = (u64)-1;
@@ -1392,9 +1397,28 @@ static void net_write_be32(unsigned char *data, u64 value)
 	data[3] = (unsigned char)(value & 0xff);
 }
 
+static void neighbor_prune_expired(void)
+{
+	struct net_neighbor **link = &dynamic_neighbors;
+	const u64 now = bunix_clock_monotonic_ns();
+
+	while (*link != 0) {
+		struct net_neighbor *neighbor = *link;
+
+		if (neighbor->updated_ns != 0 &&
+		    now - neighbor->updated_ns > NET_NEIGHBOR_TTL_NS) {
+			*link = neighbor->next;
+			bunix_free(neighbor);
+			continue;
+		}
+		link = &neighbor->next;
+	}
+}
+
 static struct net_neighbor *neighbor_find(u64 family, u64 hi, u64 lo,
 					  u64 iface)
 {
+	neighbor_prune_expired();
 	for (struct net_neighbor *neighbor = dynamic_neighbors; neighbor != 0;
 	     neighbor = neighbor->next) {
 		if (neighbor->family == family &&
@@ -1496,6 +1520,7 @@ static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
 	neighbor->mac_lo = mac_lo;
 	neighbor->flags = 2;
 	neighbor->state = 1;
+	neighbor->updated_ns = bunix_clock_monotonic_ns();
 	pending_frames_flush(neighbor);
 }
 

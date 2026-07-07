@@ -81,8 +81,8 @@ Current implementation gaps:
 - Neighbor RPCs and `/proc/net/arp` observability now exist for IPv4.  NET0 can
   learn from IPv4 ARP frames and answer ARP requests for local IPv4 addresses,
   generates ARP requests for unresolved IPv4 next hops, and queues external
-  IPv4 ICMP egress while ARP resolution is pending.  Cache aging and IPv6 ND
-  are not implemented yet.
+  IPv4 ICMP egress while ARP resolution is pending.  IPv4 neighbor entries are
+  aged from the NET0 cache.  IPv6 ND is not implemented yet.
 - External UDP/TCP route lookup still does not feed packet-interface egress or
   ingress; localhost UDP/TCP remains covered by the core networking tests.
 - The first deterministic host-side packet generator is still unimplemented.
@@ -113,4 +113,9 @@ Neighbor/ARP progress:
   pending and flushes them with the resolved destination MAC when an ARP reply
   is learned.  The bootstrap NET self-test injects the ARP reply and verifies
   the queued ICMP frame is emitted with the resolved MAC instead of broadcast.
-- Full ARP is not complete yet: NET0 still needs neighbor cache aging.
+- NET0 now timestamps learned/manual IPv4 neighbor records and prunes stale
+  entries during neighbor lookup and observation, so expired neighbors force
+  ARP resolution again.
+- Full ARP for the ICMP path is now present enough for the current smoke scope;
+  the broader exploration still needs UDP/TCP packet-interface egress/ingress
+  and a harness-owned packet peer.
