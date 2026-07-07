@@ -14,6 +14,16 @@ enum {
 	SQUASHFS_INVALID_TABLE = (u64)-1,
 	SQUASHFS_COMPRESSOR_MIN = 1,
 	SQUASHFS_COMPRESSOR_MAX = 6,
+	SQUASHFS_INODE_BASIC_DIR = 1,
+	SQUASHFS_INODE_BASIC_FILE = 2,
+	SQUASHFS_INODE_BASIC_SYMLINK = 3,
+	SQUASHFS_INODE_BASIC_BLOCKDEV = 4,
+	SQUASHFS_INODE_BASIC_CHARDEV = 5,
+	SQUASHFS_INODE_EXT_DIR = 8,
+	SQUASHFS_INODE_EXT_FILE = 9,
+	SQUASHFS_INODE_EXT_SYMLINK = 10,
+	SQUASHFS_INODE_EXT_BLOCKDEV = 11,
+	SQUASHFS_INODE_EXT_CHARDEV = 12,
 };
 
 struct squashfs_super {
@@ -43,8 +53,30 @@ struct squashfs_metadata_cache {
 	unsigned char data[SQUASHFS_METADATA_MAX];
 };
 
+struct squashfs_inode {
+	u64 ref;
+	u64 type;
+	u64 mode;
+	u64 uid_index;
+	u64 gid_index;
+	u64 mtime;
+	u64 ino;
+	u64 nlink;
+	u64 size;
+	u64 block_start;
+	u64 directory_offset;
+	u64 fragment;
+	u64 fragment_offset;
+	u64 rdev;
+	u64 xattr;
+	u64 inline_offset;
+	u64 inline_size;
+	u64 header_size;
+};
+
 static struct squashfs_super root_super;
 static struct squashfs_metadata_cache *metadata_cache;
+static struct squashfs_inode root_inode;
 static u64 block_service;
 static u64 image_size;
 
@@ -387,6 +419,139 @@ static long validate_initial_metadata_blocks(void)
 	return 0;
 }
 
+static long decode_inode_at(u64 inode_ref, struct squashfs_inode *inode)
+{
+	unsigned char raw[64];
+	u64 table_offset = inode_ref & 0xffff;
+	u64 block_offset = inode_ref >> 16;
+	u64 fixed_size;
+
+	if (inode == 0) {
+		return -1;
+	}
+	if (metadata_read_exact(root_super.inode_table_start + block_offset,
+				table_offset, raw, sizeof(raw)) != 0) {
+		log_mount_error("inode read failed", inode_ref);
+		return -1;
+	}
+
+	inode->ref = inode_ref;
+	inode->type = load_le16(raw, 0);
+	inode->mode = load_le16(raw, 2);
+	inode->uid_index = load_le16(raw, 4);
+	inode->gid_index = load_le16(raw, 6);
+	inode->mtime = load_le32(raw, 8);
+	inode->ino = load_le32(raw, 12);
+	inode->nlink = 1;
+	inode->size = 0;
+	inode->block_start = SQUASHFS_INVALID_TABLE;
+	inode->directory_offset = 0;
+	inode->fragment = 0xffffffffUL;
+	inode->fragment_offset = 0;
+	inode->rdev = 0;
+	inode->xattr = 0xffffffffUL;
+	inode->inline_offset = table_offset;
+	inode->inline_size = 0;
+	inode->header_size = 16;
+
+	if (inode->uid_index >= root_super.ids ||
+	    inode->gid_index >= root_super.ids) {
+		log_mount_error("inode id index out of range", inode_ref);
+		return -1;
+	}
+
+	switch (inode->type) {
+	case SQUASHFS_INODE_BASIC_DIR:
+		fixed_size = 32;
+		inode->block_start = load_le32(raw, 16);
+		inode->nlink = load_le32(raw, 20);
+		inode->size = load_le16(raw, 24);
+		inode->directory_offset = load_le16(raw, 26);
+		break;
+	case SQUASHFS_INODE_BASIC_FILE:
+		fixed_size = 32;
+		inode->block_start = load_le32(raw, 16);
+		inode->fragment = load_le32(raw, 20);
+		inode->fragment_offset = load_le32(raw, 24);
+		inode->size = load_le32(raw, 28);
+		break;
+	case SQUASHFS_INODE_BASIC_SYMLINK:
+		fixed_size = 24;
+		inode->nlink = load_le32(raw, 16);
+		inode->size = load_le32(raw, 20);
+		inode->inline_offset = table_offset + fixed_size;
+		inode->inline_size = inode->size;
+		break;
+	case SQUASHFS_INODE_BASIC_BLOCKDEV:
+	case SQUASHFS_INODE_BASIC_CHARDEV:
+		fixed_size = 24;
+		inode->nlink = load_le32(raw, 16);
+		inode->rdev = load_le32(raw, 20);
+		break;
+	case SQUASHFS_INODE_EXT_DIR:
+		fixed_size = 40;
+		inode->nlink = load_le32(raw, 16);
+		inode->size = load_le32(raw, 20);
+		inode->block_start = load_le32(raw, 24);
+		inode->directory_offset = load_le16(raw, 34);
+		inode->xattr = load_le32(raw, 36);
+		break;
+	case SQUASHFS_INODE_EXT_FILE:
+		fixed_size = 56;
+		inode->block_start = load_le64(raw, 16);
+		inode->size = load_le64(raw, 24);
+		inode->nlink = load_le32(raw, 40);
+		inode->fragment = load_le32(raw, 44);
+		inode->fragment_offset = load_le32(raw, 48);
+		inode->xattr = load_le32(raw, 52);
+		break;
+	case SQUASHFS_INODE_EXT_SYMLINK:
+		fixed_size = 24;
+		inode->nlink = load_le32(raw, 16);
+		inode->size = load_le32(raw, 20);
+		inode->inline_offset = table_offset + fixed_size;
+		inode->inline_size = inode->size;
+		break;
+	case SQUASHFS_INODE_EXT_BLOCKDEV:
+	case SQUASHFS_INODE_EXT_CHARDEV:
+		fixed_size = 28;
+		inode->nlink = load_le32(raw, 16);
+		inode->rdev = load_le32(raw, 20);
+		inode->xattr = load_le32(raw, 24);
+		break;
+	default:
+		log_mount_error("unsupported inode type", inode->type);
+		return -1;
+	}
+
+	if (inode->nlink == 0) {
+		log_mount_error("inode has zero links", inode_ref);
+		return -1;
+	}
+	if ((inode->type == SQUASHFS_INODE_BASIC_SYMLINK ||
+	     inode->type == SQUASHFS_INODE_EXT_SYMLINK) &&
+	    inode->size > 4096) {
+		log_mount_error("symlink target too large", inode->size);
+		return -1;
+	}
+	inode->header_size = fixed_size;
+	return 0;
+}
+
+static long validate_root_inode(void)
+{
+	if (decode_inode_at(root_super.root_inode, &root_inode) != 0) {
+		return -1;
+	}
+	if (root_inode.type != SQUASHFS_INODE_BASIC_DIR &&
+	    root_inode.type != SQUASHFS_INODE_EXT_DIR) {
+		log_mount_error("root inode is not directory",
+				root_inode.type);
+		return -1;
+	}
+	return 0;
+}
+
 static long parse_super(const unsigned char *raw, u64 size,
 			struct squashfs_super *super)
 {
@@ -500,6 +665,9 @@ static long squashfs_mount(void)
 		return -1;
 	}
 	if (validate_initial_metadata_blocks() != 0) {
+		return -1;
+	}
+	if (validate_root_inode() != 0) {
 		return -1;
 	}
 	log_super(&root_super);

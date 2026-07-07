@@ -244,7 +244,7 @@ Tasks:
       feature flags, table offsets, and corrupted sizes.
 - [x] Implement metadata table block reading, decompression dispatch, caching,
       and safe bounds checks for all on-disk offsets and lengths.
-- [ ] Implement inode decoding for directories, regular files, symlinks, and
+- [x] Implement inode decoding for directories, regular files, symlinks, and
       device nodes needed by `/dev` handoff and Alpine userspace.
 - [ ] Implement directory lookup and readdir, including long names, duplicate
       name rejection where appropriate, stable inode numbers, and deterministic
