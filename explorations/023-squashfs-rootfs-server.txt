@@ -239,7 +239,7 @@ Tasks:
 - [x] Add host-side build tooling to generate a deterministic SquashFS root
       image from the existing synthetic root contents and Alpine root contents.
       Keep the old image generation path available until migration is complete.
-- [ ] Implement SquashFS superblock parsing and validation with explicit
+- [x] Implement SquashFS superblock parsing and validation with explicit
       diagnostics for unsupported versions, compression algorithms, block sizes,
       feature flags, table offsets, and corrupted sizes.
 - [ ] Implement metadata table block reading, decompression dispatch, caching,
