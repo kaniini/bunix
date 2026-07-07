@@ -268,7 +268,7 @@ Tasks:
 - [x] Add Alpine SquashFS image generation and boot tests that verify BusyBox,
       login, OpenRC script execution, `/sbin/init -> /bin/busybox`, and shell
       bringup from the SquashFS-backed root.
-- [ ] Migrate the default synthetic root boot path to SquashFS once tests cover
+- [x] Migrate the default synthetic root boot path to SquashFS once tests cover
       the old rootfs server behavior.
 - [ ] Migrate the Alpine root boot path to SquashFS once OpenRC and interactive
       shell tests are covered.
