@@ -42,7 +42,7 @@ Tasks:
       `BUNIX_NET_PACKET_TX_ENQUEUE`.
 - [ ] Add packet-interface ingress dispatch from `BUNIX_NET_PACKET_RX_SUBMIT`
       into Ethernet, ARP/ND, IPv4, IPv6, UDP, and TCP paths.
-- [ ] Add host-side traffic generator support for deterministic RX and TX
+- [x] Add host-side traffic generator support for deterministic RX and TX
       frames.
 - [ ] Add smoke tests for ARP, IPv4 UDP egress/ingress, IPv4 TCP connect or
       accept, route fallback behavior, `/proc/net/dev` counters, and clean
@@ -89,10 +89,9 @@ Current implementation gaps:
   TCP connect, established packet data, retransmission, FIN/RST handling, and
   route-based TCP egress are still missing.  Localhost UDP/TCP remains covered
   by the core networking tests.
-- The first deterministic host-side packet generator is still unimplemented.
-  The QEMU test harnesses can now run a sidecar process with readiness and log
-  capture, so the next slice can add a socket-backed or tap-backed Ethernet peer
-  without another harness refactor.
+- The first deterministic host-side packet generator exists for QEMU
+  socket-multicast backends, but the exploration still needs a full smoke target
+  that boots QEMU against it and asserts guest-visible RX/TX behavior.
 
 Neighbor/ARP progress:
 
@@ -161,6 +160,13 @@ Host-peer harness progress:
 - Failure artifacts now capture the sidecar log through
   `BUNIX_TEST_SIDECAR_LOG`, which will make packet-level test failures easier
   to debug once the deterministic Ethernet peer exists.
+- `tools/virtio-net-peer.py` is the first socket-backed raw Ethernet peer for
+  QEMU socket multicast netdevs.  It can send an initial ARP request, answer ARP
+  requests for a configured peer IPv4 address, echo IPv4 ICMP requests, and log
+  RX/TX frame counts.
+- `QEMU_VIRTIO_NET_SOCKET_ARGS` and `QEMU_VIRTIO_NET_SOCKET_MCAST` provide the
+  Makefile-side QEMU socket-netdev preset that future deterministic smoke tests
+  can pair with the peer sidecar.
 
 IPv6 external-traffic deferral:
 

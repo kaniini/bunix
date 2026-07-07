@@ -133,6 +133,8 @@ QEMU_VIRTIO_BLK_TEST_ARGS := -drive if=none,id=bunix-virtio0,format=raw,file=$(V
 QEMU_EXT2_FSCK_TEST_ARGS := -drive if=none,id=bunix-virtio0,format=raw,file=$(EXT2_FSCK_TEST_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
 QEMU_VIRTIO_NET_ARGS := -netdev user,id=bunix-net0,restrict=on -device virtio-net-pci,disable-legacy=on,netdev=bunix-net0,mac=52:54:00:18:00:01,bus=pcie.0,addr=0x7
 QEMU_VIRTIO_NET_EXTERNAL_ARGS := -netdev user,id=bunix-net0 -device virtio-net-pci,disable-legacy=on,netdev=bunix-net0,mac=52:54:00:18:00:01,bus=pcie.0,addr=0x7
+QEMU_VIRTIO_NET_SOCKET_MCAST ?= 230.18.0.1:18100
+QEMU_VIRTIO_NET_SOCKET_ARGS := -netdev socket,id=bunix-net0,mcast=$(QEMU_VIRTIO_NET_SOCKET_MCAST) -device virtio-net-pci,disable-legacy=on,netdev=bunix-net0,mac=52:54:00:18:00:01,bus=pcie.0,addr=0x7
 QEMU_TIMEOUT ?= $(if $(filter alpine-squashfs,$(ROOTFS_FLAVOR)),120s,60s)
 TEST_BOOT_MARKERS := $(if $(filter alpine-squashfs,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine-squashfs.txt,tools/test-boot-markers-squashfs.txt)
 ROOTFS_FLAVOR_STAMP := $(BUILD_DIR)/rootfs-flavor.stamp
