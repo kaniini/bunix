@@ -240,6 +240,11 @@ enum {
 	LINUX_TIOCSPGRP = 0x5410,
 	LINUX_TIOCGWINSZ = 0x5413,
 	LINUX_TERMIOS_SIZE = 60,
+	LINUX_SIOCGIFFLAGS = 0x8913,
+	LINUX_SIOCGIFHWADDR = 0x8927,
+	LINUX_SIOCGIFMTU = 0x8921,
+	LINUX_SIOCGIFINDEX = 0x8933,
+	LINUX_IFREQ_SIZE = 40,
 	ARCH_USER_MAX_CPUS = 8,
 	LINUX_MAX_SYSCALL_BUFFER = 65536,
 	LINUX_MAX_SHARED_BUFFER = 1024 * 1024,
@@ -4137,7 +4142,11 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_IOCTL:
 		if (arg1 == LINUX_TCGETS || arg1 == LINUX_TCSETS ||
 		    arg1 == LINUX_TIOCGPGRP || arg1 == LINUX_TIOCSPGRP ||
-		    arg1 == LINUX_TIOCGWINSZ) {
+		    arg1 == LINUX_TIOCGWINSZ ||
+		    arg1 == LINUX_SIOCGIFFLAGS ||
+		    arg1 == LINUX_SIOCGIFHWADDR ||
+		    arg1 == LINUX_SIOCGIFMTU ||
+		    arg1 == LINUX_SIOCGIFINDEX) {
 			break;
 		}
 		return (u64)-LINUX_ENOTTY;
@@ -4639,7 +4648,11 @@ poll_again:
 		if (arg1 != LINUX_TCGETS && arg1 != LINUX_TCSETS &&
 		    arg1 != LINUX_TCSETSW && arg1 != LINUX_TCSETSF &&
 		    arg1 != LINUX_TIOCGPGRP && arg1 != LINUX_TIOCSPGRP &&
-		    arg1 != LINUX_TIOCGWINSZ) {
+		    arg1 != LINUX_TIOCGWINSZ &&
+		    arg1 != LINUX_SIOCGIFFLAGS &&
+		    arg1 != LINUX_SIOCGIFHWADDR &&
+		    arg1 != LINUX_SIOCGIFMTU &&
+		    arg1 != LINUX_SIOCGIFINDEX) {
 			return (u64)-LINUX_ENOTTY;
 		}
 		if (arg2 == 0) {
@@ -4659,6 +4672,11 @@ poll_again:
 			output_size = sizeof(value);
 		} else if (arg1 == LINUX_TIOCGWINSZ) {
 			output_size = 8;
+		} else if (arg1 == LINUX_SIOCGIFFLAGS ||
+			   arg1 == LINUX_SIOCGIFHWADDR ||
+			   arg1 == LINUX_SIOCGIFMTU ||
+			   arg1 == LINUX_SIOCGIFINDEX) {
+			output_size = LINUX_IFREQ_SIZE;
 		}
 		if (output_size != 0) {
 			buffer = buffer_create(output_size);
@@ -4681,6 +4699,24 @@ poll_again:
 				buffer_release(buffer);
 				return (u64)-LINUX_ENOMEM;
 			}
+			if ((arg1 == LINUX_SIOCGIFFLAGS ||
+			     arg1 == LINUX_SIOCGIFHWADDR ||
+			     arg1 == LINUX_SIOCGIFMTU ||
+			     arg1 == LINUX_SIOCGIFINDEX) &&
+			    read_current_user(arg2, syscall_copy_buffer,
+					      output_size) != 0) {
+				buffer_release(buffer);
+				return (u64)-LINUX_EFAULT;
+			}
+			if ((arg1 == LINUX_SIOCGIFFLAGS ||
+			     arg1 == LINUX_SIOCGIFHWADDR ||
+			     arg1 == LINUX_SIOCGIFMTU ||
+			     arg1 == LINUX_SIOCGIFINDEX) &&
+			    buffer_write(buffer, 0, syscall_copy_buffer,
+					 output_size) != 0) {
+				buffer_release(buffer);
+				return (u64)-LINUX_ENOMEM;
+			}
 		}
 
 		request.type = LINUX_SYSCALL_IOCTL;
@@ -4694,6 +4730,12 @@ poll_again:
 				       arg1 == LINUX_TCSETSW ||
 				       arg1 == LINUX_TCSETSF) ?
 				      TASK_RIGHT_RECV : TASK_RIGHT_SEND) : 0;
+		if (arg1 == LINUX_SIOCGIFFLAGS ||
+		    arg1 == LINUX_SIOCGIFHWADDR ||
+		    arg1 == LINUX_SIOCGIFMTU ||
+		    arg1 == LINUX_SIOCGIFINDEX) {
+			request.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_RECV;
+		}
 		request.cap_object = buffer;
 		if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 			if (buffer != 0) {

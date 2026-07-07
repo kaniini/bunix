@@ -195,6 +195,14 @@ Implementation progress:
 - A direct VirtIO-net probe of `udhcpc -n -q -i eth0 -s /bin/echo -t 1 -T 1`
   now reaches the real DHCP client and fails at the first missing Linux socket
   primitive: `socket(AF_INET, SOCK_RAW, IPPROTO_RAW)`.
+- Added Linux compatibility for `AF_INET/SOCK_RAW/IPPROTO_RAW` socket creation
+  and forwarded read/write `ifreq` netdevice ioctls for `SIOCGIFINDEX`,
+  `SIOCGIFFLAGS`, `SIOCGIFMTU`, and `SIOCGIFHWADDR`.  NET0 now exposes an
+  interface-details RPC so Linux can answer those queries from live interface
+  state.
+- The same VirtIO-net `udhcpc` probe now reaches `udhcpc: started` and the
+  `deconfig` script event.  The next missing primitive is packet socket
+  support: `socket(AF_PACKET, SOCK_DGRAM, ETH_P_IP)`.
 
 Tasks:
 

@@ -326,6 +326,9 @@ static void reply_interface_info(struct bunix_msg *reply,
 	reply->words[3] = iface->mtu;
 }
 
+static void packet_iface_info_store(struct bunix_net_packet_interface_info *info,
+				    const struct net_interface *iface);
+
 static void reply_interface_at(struct bunix_msg *reply,
 			       const struct bunix_msg *message)
 {
@@ -336,6 +339,28 @@ static void reply_interface_at(struct bunix_msg *reply,
 		return;
 	}
 
+	reply->words[0] = 0;
+	reply->words[1] = iface->id;
+	reply->words[2] = iface->flags;
+	reply->words[3] = iface->mtu;
+}
+
+static void reply_interface_details(struct bunix_msg *reply,
+				    const struct bunix_msg *message)
+{
+	struct net_interface *iface = interface_find(message->words[0]);
+	struct bunix_net_packet_interface_info info;
+
+	if (iface == 0 || message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	packet_iface_info_store(&info, iface);
+	if (bunix_buffer_write(message->cap, 0, &info, sizeof(info)) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
 	reply->words[0] = 0;
 	reply->words[1] = iface->id;
 	reply->words[2] = iface->flags;
@@ -2603,6 +2628,9 @@ int main(void)
 			break;
 		case BUNIX_NET_INTERFACE_AT:
 			reply_interface_at(&reply, &message);
+			break;
+		case BUNIX_NET_INTERFACE_DETAILS:
+			reply_interface_details(&reply, &message);
 			break;
 		case BUNIX_NET_INTERFACE_SET_FLAGS:
 			reply_interface_set_flags(&reply, &message);
