@@ -8,10 +8,15 @@ timeout_cmd=${TIMEOUT:-timeout}
 qemu_timeout=${QEMU_TIMEOUT:-120s}
 qemu_memory=${QEMU_MEMORY:-128M}
 qemu_extra_args=${QEMU_EXTRA_ARGS:-}
+sidecar_cmd=${BUNIX_TEST_SIDECAR_CMD:-}
+sidecar_ready=${BUNIX_TEST_SIDECAR_READY_FILE:-}
+sidecar_start_delay=${BUNIX_TEST_SIDECAR_START_DELAY:-1}
+sidecar_ready_timeout=${BUNIX_TEST_SIDECAR_READY_TIMEOUT:-20}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-command-test.$run_id}
 log=$tmp/serial.log
 qemu_log=$tmp/qemu.log
+sidecar_log=$tmp/sidecar.log
 pipe=$tmp/serial
 runtime_esp=$tmp/esp
 failure_dir=${FAILURE_DIR:-build/failures/$run_id}
@@ -20,9 +25,10 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 BUNIX_COLLECT_FAILURES=1
 BUNIX_FAILURE_DIR=$failure_dir
 BUNIX_QEMU_LOG=$qemu_log
+BUNIX_TEST_SIDECAR_LOG=$sidecar_log
 BUNIX_TEST_HARNESS=$0
 BUNIX_TEST_RUNTIME_DIR=$tmp
-export BUNIX_COLLECT_FAILURES BUNIX_FAILURE_DIR BUNIX_QEMU_LOG BUNIX_TEST_HARNESS BUNIX_TEST_RUNTIME_DIR
+export BUNIX_COLLECT_FAILURES BUNIX_FAILURE_DIR BUNIX_QEMU_LOG BUNIX_TEST_SIDECAR_LOG BUNIX_TEST_HARNESS BUNIX_TEST_RUNTIME_DIR
 
 command_text=${BUNIX_CMD:-${CMD:-}}
 command_file=${BUNIX_CMD_FILE:-}
@@ -35,6 +41,7 @@ guest_poweroff=${BUNIX_GUEST_POWEROFF:-1}
 
 qemu_pid=
 cat_pid=
+sidecar_pid=
 status=0
 
 usage() {
@@ -53,6 +60,9 @@ cleanup() {
 	fi
 	if [ "${cat_pid:-}" ]; then
 		kill "$cat_pid" 2>/dev/null || true
+	fi
+	if [ "${sidecar_pid:-}" ]; then
+		kill "$sidecar_pid" 2>/dev/null || true
 	fi
 	if [ "${KEEP_TMP:-0}" != 1 ]; then
 		rm -rf "$tmp"
@@ -144,8 +154,38 @@ wait_for_guest_poweroff() {
 	fail_command "qemu exited with status $qemu_status" 220
 }
 
+start_sidecar() {
+	if [ -z "$sidecar_cmd" ]; then
+		return
+	fi
+	(
+		cd "$PWD"
+		sh -c "$sidecar_cmd"
+	) >"$sidecar_log" 2>&1 &
+	sidecar_pid=$!
+	if [ -n "$sidecar_ready" ]; then
+		i=0
+		while [ ! -e "$sidecar_ready" ]; do
+			i=$((i + 1))
+			if ! kill -0 "$sidecar_pid" 2>/dev/null; then
+				fail_command "sidecar exited before readiness: $sidecar_ready" 120
+			fi
+			if [ "$i" -gt "$sidecar_ready_timeout" ]; then
+				fail_command "sidecar readiness timed out: $sidecar_ready" 120
+			fi
+			sleep 1
+		done
+	else
+		sleep "$sidecar_start_delay"
+		if ! kill -0 "$sidecar_pid" 2>/dev/null; then
+			fail_command "sidecar exited before qemu start" 120
+		fi
+	fi
+}
+
 start_qemu() {
 	mkdir -p "$tmp"
+	: > "$sidecar_log"
 	mkfifo "$pipe.in" "$pipe.out"
 	trap cleanup EXIT INT TERM
 
@@ -160,6 +200,7 @@ start_qemu() {
 	cat "$pipe.out" > "$log" &
 	cat_pid=$!
 
+	start_sidecar
 	TMPDIR=$tmp $timeout_cmd "$qemu_timeout" "$qemu" -enable-kvm -machine q35 -cpu host -m "$qemu_memory" \
 		-smp "${SMP:-2}" \
 		-drive if=pflash,format=raw,readonly=on,file="$ovmf" \

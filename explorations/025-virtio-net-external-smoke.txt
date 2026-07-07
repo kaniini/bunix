@@ -90,8 +90,9 @@ Current implementation gaps:
   route-based TCP egress are still missing.  Localhost UDP/TCP remains covered
   by the core networking tests.
 - The first deterministic host-side packet generator is still unimplemented.
-  The next slice should choose between tap+namespace and socket-backed frames
-  based on what gives the fastest repeatable RX/TX probes under `make test`.
+  The QEMU test harnesses can now run a sidecar process with readiness and log
+  capture, so the next slice can add a socket-backed or tap-backed Ethernet peer
+  without another harness refactor.
 
 Neighbor/ARP progress:
 
@@ -148,6 +149,18 @@ TCP packet-interface progress:
   packet-interface address, injects a TCP SYN from a synthetic external peer,
   verifies the SYN-ACK frame, polls and accepts the listener, and verifies the
   accepted peer address and port.
+
+Host-peer harness progress:
+
+- `tools/test-boot.sh`, `tools/test-command.sh`, and `tools/test-shell.sh` now
+  support `BUNIX_TEST_SIDECAR_CMD` for a host-side helper process that starts
+  before QEMU and is cleaned up with the test.  Optional
+  `BUNIX_TEST_SIDECAR_READY_FILE`, `BUNIX_TEST_SIDECAR_READY_TIMEOUT`, and
+  `BUNIX_TEST_SIDECAR_START_DELAY` controls let a future packet peer signal
+  readiness deterministically.
+- Failure artifacts now capture the sidecar log through
+  `BUNIX_TEST_SIDECAR_LOG`, which will make packet-level test failures easier
+  to debug once the deterministic Ethernet peer exists.
 
 IPv6 external-traffic deferral:
 

@@ -46,6 +46,9 @@ save_failure_artifacts() {
 	if [ -n "$qemu_log" ]; then
 		cp "$qemu_log" "$out/qemu.log" 2>/dev/null || true
 	fi
+	if [ -n "${BUNIX_TEST_SIDECAR_LOG:-}" ]; then
+		cp "$BUNIX_TEST_SIDECAR_LOG" "$out/sidecar.log" 2>/dev/null || true
+	fi
 	git rev-parse HEAD > "$out/git-commit.txt" 2>/dev/null || true
 	printf '%s\n' "$out"
 }
