@@ -272,7 +272,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -886,6 +886,16 @@ test-boot-virtio-net-dhcp: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/test-lib.sh too
 		QEMU_TIMEOUT=90s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
 		BUNIX_MARKER=BUNIX_DHCP_OK \
 		BUNIX_CMD='udhcpc -n -q -i eth0 -t 1 -T 1; cat /proc/net/config; busybox grep -F "iface eth0" /proc/net/config; busybox grep -F "rxq 0 txq 0" /proc/net/config' \
+		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_ARGS)" sh tools/test-command.sh
+
+test-boot-virtio-net-ifup:
+	$(MAKE) ROOTFS_FLAVOR=alpine-squashfs test-boot-virtio-net-ifup-run
+
+test-boot-virtio-net-ifup-run: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/test-lib.sh tools/test-command.sh
+	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		QEMU_TIMEOUT=120s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
+		BUNIX_MARKER=BUNIX_IFUP_OK \
+		BUNIX_CMD='/sbin/ifdown eth0; /sbin/ifup eth0; cat /proc/net/config; busybox grep -F "iface eth0" /proc/net/config; busybox grep -F "default_ipv4 1" /proc/net/config; busybox grep -F "rxq 0 txq 0" /proc/net/config' \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_ARGS)" sh tools/test-command.sh
 
 test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) $(VIRTIO_BLK_TEST_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-squashfs.txt

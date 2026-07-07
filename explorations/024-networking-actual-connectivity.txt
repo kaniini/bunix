@@ -293,6 +293,23 @@ Implementation progress:
   `udhcpc -n -q -i eth0 -t 1 -T 1` through the default script, checks
   `/proc/net/config` for `eth0` and drained queues, prints a status marker,
   and powers off through the command harness.
+- Added a minimal Linux `AF_NETLINK`/`NETLINK_ROUTE` compatibility shim for
+  route sockets.  It accepts raw route sockets, bind, `getsockname`,
+  `setsockopt`, `SO_TYPE`, `sendmsg`/`write` request submission, ACK-style
+  receive, and poll/read behavior sufficient for BusyBox `ip link set up` in
+  ifupdown-ng's link executor.  This is deliberately not full rtnetlink
+  enumeration yet; route/link dumps still need a real NET0-backed
+  implementation in a later networking slice.
+- Added `make test-boot-virtio-net-ifup`, a deterministic Alpine+VirtIO-net
+  command shard.  It forces the Alpine rootfs, runs `/sbin/ifdown eth0` and
+  `/sbin/ifup eth0`, verifies that `udhcpc` obtains the QEMU-user lease, checks
+  `/proc/net/config` for `eth0`, `default_ipv4 1`, and drained RX/TX queues,
+  and powers off through the command harness.
+- Direct `/etc/init.d/networking restart` still returns nonzero even though
+  NET0 is configured.  The current evidence points at OpenRC wrapper/runtime
+  behavior (`readpath` noise and service return handling), so the OpenRC
+  service acceptance task remains open until the service itself returns success
+  and proves startup from the normal boot runlevel.
 
 Tasks:
 
@@ -330,7 +347,8 @@ Tasks:
       external pings, `/proc/net` state, and clean poweroff.  Loopback ping
       coverage is now present in the `network-loopback-ping` shard; DHCP
       acquisition coverage is present in `test-boot-virtio-net-dhcp`;
-      ifupdown-ng/OpenRC startup and external shards remain.
+      ifupdown-ng DHCP bringup coverage is present in
+      `test-boot-virtio-net-ifup`; OpenRC startup and external shards remain.
 - [ ] Document supported network configuration syntax, DHCP limitations,
       QEMU/test backend assumptions, and follow-up work for DNS, IPv6 external
       networking, firewalling, packet capture, and production route policy.

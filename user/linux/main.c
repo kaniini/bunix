@@ -161,6 +161,7 @@ enum {
 	LINUX_AF_UNIX = 1,
 	LINUX_AF_INET = 2,
 	LINUX_AF_INET6 = 10,
+	LINUX_AF_NETLINK = 16,
 	LINUX_AF_PACKET = 17,
 	LINUX_SOCK_STREAM = 1,
 	LINUX_SOCK_DGRAM = 2,
@@ -180,6 +181,12 @@ enum {
 	LINUX_SOCKET_NET_ICMP = 5,
 	LINUX_SOCKET_NET_RAW = 6,
 	LINUX_SOCKET_NET_PACKET = 7,
+	LINUX_SOCKET_NETLINK_ROUTE = 8,
+	LINUX_FD_NETLINK_ACK_PENDING = 2,
+	LINUX_FD_NETLINK_DONE_PENDING = 4,
+	LINUX_NETLINK_ROUTE = 0,
+	LINUX_NLMSG_ERROR = 2,
+	LINUX_NLMSG_DONE = 3,
 	LINUX_IPPROTO_ICMP = 1,
 	LINUX_IPPROTO_TCP = 6,
 	LINUX_IPPROTO_UDP = 17,
@@ -5539,6 +5546,22 @@ static long linux_socket_addr(struct linux_process *process, u64 fd, u64 max_len
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
 		return -LINUX_ENOTSOCK;
 	}
+	if (process->fds[fd].handle == LINUX_SOCKET_NETLINK_ROUTE) {
+		unsigned char raw[12] = { 0 };
+		u64 copy;
+
+		(void)peer;
+		if (actual_len != 0) {
+			*actual_len = sizeof(raw);
+		}
+		raw[0] = (unsigned char)(LINUX_AF_NETLINK & 0xff);
+		raw[1] = (unsigned char)((LINUX_AF_NETLINK >> 8) & 0xff);
+		copy = sizeof(raw) < max_len ? sizeof(raw) : max_len;
+		if (copy != 0 && bunix_buffer_write(buffer, 0, raw, copy) != 0) {
+			return -LINUX_EFAULT;
+		}
+		return 0;
+	}
 	if (process->fds[fd].handle != LINUX_SOCKET_NET_UDP &&
 	    process->fds[fd].handle != LINUX_SOCKET_NET_TCP) {
 		return -LINUX_EINVAL;
@@ -5566,6 +5589,69 @@ static long linux_socket_addr(struct linux_process *process, u64 fd, u64 max_len
 	return 0;
 }
 
+static long linux_netlink_route_send(struct linux_process *process, u64 fd,
+				     u64 len, u64 addr_len, u64 buffer)
+{
+	unsigned char header[16];
+	u64 nlmsg_len;
+	u64 nlmsg_seq;
+
+	if (len < sizeof(header) || buffer == 0 ||
+	    bunix_buffer_read(buffer, addr_len, header, sizeof(header)) != 0) {
+		return -LINUX_EFAULT;
+	}
+	nlmsg_len = ((u64)header[0]) | ((u64)header[1] << 8) |
+		    ((u64)header[2] << 16) | ((u64)header[3] << 24);
+	if (nlmsg_len < sizeof(header) || nlmsg_len > len) {
+		return -LINUX_EINVAL;
+	}
+	nlmsg_seq = ((u64)header[8]) | ((u64)header[9] << 8) |
+		    ((u64)header[10] << 16) | ((u64)header[11] << 24);
+	process->fds[fd].offset = nlmsg_seq;
+	process->fds[fd].flags |= LINUX_FD_NETLINK_ACK_PENDING |
+				  LINUX_FD_NETLINK_DONE_PENDING;
+	return (long)len;
+}
+
+static long linux_netlink_route_recv(struct linux_process *process, u64 fd,
+				     u64 len, u64 buffer)
+{
+	unsigned char ack[36] = { 0 };
+	const u64 seq = process->fds[fd].offset;
+	u64 msg_len = sizeof(ack);
+	u64 msg_type = LINUX_NLMSG_ERROR;
+	u64 copy;
+
+	if ((process->fds[fd].flags & LINUX_FD_NETLINK_ACK_PENDING) != 0) {
+		process->fds[fd].flags &= ~LINUX_FD_NETLINK_ACK_PENDING;
+	} else if ((process->fds[fd].flags &
+		    LINUX_FD_NETLINK_DONE_PENDING) != 0) {
+		msg_len = 16;
+		msg_type = LINUX_NLMSG_DONE;
+		process->fds[fd].flags &= ~LINUX_FD_NETLINK_DONE_PENDING;
+	} else {
+		return 0;
+	}
+	copy = len < msg_len ? len : msg_len;
+	if (buffer == 0 && copy != 0) {
+		return -LINUX_EFAULT;
+	}
+	ack[0] = (unsigned char)(msg_len & 0xff);
+	ack[1] = (unsigned char)((msg_len >> 8) & 0xff);
+	ack[2] = (unsigned char)((msg_len >> 16) & 0xff);
+	ack[3] = (unsigned char)((msg_len >> 24) & 0xff);
+	ack[4] = (unsigned char)(msg_type & 0xff);
+	ack[5] = (unsigned char)((msg_type >> 8) & 0xff);
+	ack[8] = (unsigned char)(seq & 0xff);
+	ack[9] = (unsigned char)((seq >> 8) & 0xff);
+	ack[10] = (unsigned char)((seq >> 16) & 0xff);
+	ack[11] = (unsigned char)((seq >> 24) & 0xff);
+	if (copy != 0 && bunix_buffer_write(buffer, 0, ack, copy) != 0) {
+		return -LINUX_EFAULT;
+	}
+	return (long)copy;
+}
+
 static long linux_setsockopt(struct linux_process *process, u64 fd, u64 level,
 			     u64 optname, u64 opt_len, u64 opt_buffer)
 {
@@ -5582,6 +5668,7 @@ static long linux_setsockopt(struct linux_process *process, u64 fd, u64 level,
 	    process->fds[fd].handle != LINUX_SOCKET_NET_ICMP &&
 	    process->fds[fd].handle != LINUX_SOCKET_NET_RAW &&
 	    process->fds[fd].handle != LINUX_SOCKET_NET_PACKET &&
+	    process->fds[fd].handle != LINUX_SOCKET_NETLINK_ROUTE &&
 	    process->fds[fd].handle != LINUX_SOCKET_UNIX_STREAM &&
 	    process->fds[fd].handle != LINUX_SOCKET_UTMPD) {
 		return -LINUX_EINVAL;
@@ -5608,6 +5695,9 @@ static long linux_getsockopt(struct linux_process *process, u64 fd, u64 level,
 			value = LINUX_SOCK_DGRAM;
 		} else if (process->fds[fd].handle == LINUX_SOCKET_NET_PACKET) {
 			value = LINUX_SOCK_DGRAM;
+		} else if (process->fds[fd].handle ==
+			   LINUX_SOCKET_NETLINK_ROUTE) {
+			value = LINUX_SOCK_RAW;
 		} else if (process->fds[fd].handle == LINUX_SOCKET_NET_ICMP ||
 			   process->fds[fd].handle == LINUX_SOCKET_NET_RAW) {
 			value = LINUX_SOCK_RAW;
@@ -5643,6 +5733,7 @@ static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 	if (domain != LINUX_AF_UNIX &&
 	    domain != LINUX_AF_INET &&
 	    domain != LINUX_AF_INET6 &&
+	    domain != LINUX_AF_NETLINK &&
 	    domain != LINUX_AF_PACKET) {
 		return -LINUX_EAFNOSUPPORT;
 	}
@@ -5653,6 +5744,18 @@ static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 	if (domain == LINUX_AF_UNIX) {
 		fd = alloc_fd(process, LINUX_FD_SOCKET,
 			      LINUX_SOCKET_UNIX_STREAM, 0);
+		if (fd >= 0 && (type & LINUX_SOCK_CLOEXEC) != 0) {
+			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
+		}
+		return fd;
+	}
+	if (domain == LINUX_AF_NETLINK) {
+		if (base_type != LINUX_SOCK_RAW ||
+		    protocol != LINUX_NETLINK_ROUTE) {
+			return -LINUX_EPROTONOSUPPORT;
+		}
+		fd = alloc_fd(process, LINUX_FD_SOCKET,
+			      LINUX_SOCKET_NETLINK_ROUTE, protocol);
 		if (fd >= 0 && (type & LINUX_SOCK_CLOEXEC) != 0) {
 			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
 		}
@@ -5730,6 +5833,11 @@ static long linux_bind(struct linux_process *process, u64 fd, u64 addr_len,
 	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
 		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle == LINUX_SOCKET_NETLINK_ROUTE) {
+		(void)addr_len;
+		(void)addr_buffer;
+		return 0;
 	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NET_PACKET) {
 		u64 protocol;
@@ -5923,6 +6031,11 @@ static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
 		return -LINUX_ENOTSOCK;
 	}
+	if (process->fds[fd].handle == LINUX_SOCKET_NETLINK_ROUTE) {
+		(void)flags;
+		return linux_netlink_route_send(process, fd, len, addr_len,
+						buffer);
+	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NET_PACKET) {
 		unsigned char dest_mac[8];
 		u64 dest_mac_len = 0;
@@ -6055,6 +6168,9 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NET_RAW) {
 		return linux_net_raw_ipv4_recv(buffer, len);
+	}
+	if (process->fds[fd].handle == LINUX_SOCKET_NETLINK_ROUTE) {
+		return linux_netlink_route_recv(process, fd, len, buffer);
 	}
 	return utmps_recv_response(&process->fds[fd], len, buffer);
 }
@@ -6189,6 +6305,17 @@ static long linux_pollfd(struct linux_process *process, long fd, u64 events)
 			if ((events & LINUX_POLLOUT) != 0) {
 				revents |= LINUX_POLLOUT;
 			}
+		} else if (process->fds[fd].kind == LINUX_FD_SOCKET &&
+			   process->fds[fd].handle ==
+			   LINUX_SOCKET_NETLINK_ROUTE) {
+			if ((events & LINUX_POLLIN) != 0 &&
+			    (process->fds[fd].flags &
+			     LINUX_FD_NETLINK_ACK_PENDING) != 0) {
+				revents |= LINUX_POLLIN;
+			}
+			if ((events & LINUX_POLLOUT) != 0) {
+				revents |= LINUX_POLLOUT;
+			}
 		} else {
 			if ((events & LINUX_POLLIN) != 0) {
 				revents |= LINUX_POLLIN;
@@ -6291,7 +6418,8 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	     process->fds[fd].handle == LINUX_SOCKET_NET_TCP ||
 	     process->fds[fd].handle == LINUX_SOCKET_NET_ICMP ||
 	     process->fds[fd].handle == LINUX_SOCKET_NET_RAW ||
-	     process->fds[fd].handle == LINUX_SOCKET_NET_PACKET)) {
+	     process->fds[fd].handle == LINUX_SOCKET_NET_PACKET ||
+	     process->fds[fd].handle == LINUX_SOCKET_NETLINK_ROUTE)) {
 		return linux_recvfrom(process, fd, len, buffer);
 	}
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
@@ -6399,6 +6527,10 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 	}
 	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
 	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
+		return linux_sendto(process, fd, len, 0, 0, buffer);
+	}
+	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
+	    process->fds[fd].handle == LINUX_SOCKET_NETLINK_ROUTE) {
 		return linux_sendto(process, fd, len, 0, 0, buffer);
 	}
 	if (process->fds[fd].kind == LINUX_FD_FILE) {
