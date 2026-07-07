@@ -344,10 +344,27 @@ enum {
 	BUNIX_NET_ROUTE_COUNT = 37,
 	BUNIX_NET_ROUTE_AT = 38,
 	BUNIX_NET_PACKET_TX_ENQUEUE = 39,
+	BUNIX_NET_INTERFACE_SET_FLAGS = 40,
+	BUNIX_NET_ADDR_ADD = 41,
+	BUNIX_NET_ADDR_DELETE = 42,
+	BUNIX_NET_ADDR_COUNT = 43,
+	BUNIX_NET_ADDR_AT = 44,
+	BUNIX_NET_ROUTE_DELETE = 45,
+	BUNIX_NET_CONFIG_STATUS = 46,
+	BUNIX_NET_DHCP4_LEASE_INSTALL = 47,
+	BUNIX_NET_NEIGHBOR_COUNT = 48,
+	BUNIX_NET_NEIGHBOR_AT = 49,
+	BUNIX_NET_NEIGHBOR_ADD = 50,
+	BUNIX_NET_NEIGHBOR_DELETE = 51,
 	BUNIX_NET_IFACE_FLAG_UP = 1 << 0,
 	BUNIX_NET_IFACE_FLAG_LOOPBACK = 1 << 1,
 	BUNIX_NET_IFACE_FLAG_BROADCAST = 1 << 2,
 	BUNIX_NET_IFACE_FLAG_RUNNING = 1 << 3,
+	BUNIX_NET_ROUTE_FLAG_UP = 1 << 0,
+	BUNIX_NET_ROUTE_FLAG_GATEWAY = 1 << 1,
+	BUNIX_NET_CONFIG_LOOPBACK = 1 << 0,
+	BUNIX_NET_CONFIG_DEFAULT_IPV4 = 1 << 1,
+	BUNIX_NET_CONFIG_DEFAULT_IPV6 = 1 << 2,
 	BUNIX_NET_ADDR_FAMILY_IPV4 = 4,
 	BUNIX_NET_ADDR_FAMILY_IPV6 = 6,
 	BUNIX_UNIONFS_SET_UPPER = 1,
@@ -576,6 +593,51 @@ struct bunix_net_route_info {
 	u64 gateway_lo;
 	u64 flags;
 	u64 metric;
+};
+
+struct bunix_net_addr_info {
+	u64 family;
+	u64 addr_hi;
+	u64 addr_lo;
+	u64 prefix_len;
+	u64 iface;
+	u64 flags;
+	u64 preferred_lifetime;
+	u64 valid_lifetime;
+};
+
+struct bunix_net_neighbor_info {
+	u64 family;
+	u64 addr_hi;
+	u64 addr_lo;
+	u64 iface;
+	u64 mac_hi;
+	u64 mac_lo;
+	u64 flags;
+	u64 state;
+};
+
+struct bunix_net_dhcp4_lease {
+	u64 iface;
+	u64 address;
+	u64 prefix_len;
+	u64 gateway;
+	u64 dns0;
+	u64 dns1;
+	u64 lease_lifetime;
+	u64 renewal_time;
+	u64 server;
+};
+
+struct bunix_net_config_status {
+	u64 flags;
+	u64 interface_count;
+	u64 address_count;
+	u64 route_count;
+	u64 default_ipv4_iface;
+	u64 default_ipv6_iface;
+	u64 last_error;
+	u64 reserved;
 };
 
 static inline void bunix_store_u64_le(unsigned char *buffer, u64 offset,

@@ -69,6 +69,18 @@ struct net_route {
 	u64 metric;
 };
 
+struct net_addr_record {
+	struct net_addr_record *next;
+	u64 family;
+	u64 addr_hi;
+	u64 addr_lo;
+	u64 prefix_len;
+	u64 iface;
+	u64 flags;
+	u64 preferred_lifetime;
+	u64 valid_lifetime;
+};
+
 struct udp_datagram {
 	struct udp_datagram *next;
 	struct net_addr source;
@@ -169,6 +181,32 @@ static const struct net_route routes[] = {
 	},
 };
 static struct net_route *dynamic_routes;
+static const struct net_addr_record static_addrs[] = {
+	{
+		.next = 0,
+		.family = BUNIX_NET_ADDR_FAMILY_IPV4,
+		.addr_hi = 0,
+		.addr_lo = 0x7f000001,
+		.prefix_len = 8,
+		.iface = NET_IFACE_LO,
+		.flags = 1,
+		.preferred_lifetime = 0,
+		.valid_lifetime = 0,
+	},
+	{
+		.next = 0,
+		.family = BUNIX_NET_ADDR_FAMILY_IPV6,
+		.addr_hi = 0,
+		.addr_lo = 1,
+		.prefix_len = 128,
+		.iface = NET_IFACE_LO,
+		.flags = 1,
+		.preferred_lifetime = 0,
+		.valid_lifetime = 0,
+	},
+};
+static struct net_addr_record *dynamic_addrs;
+static u64 last_config_error;
 static struct net_packet *loopback_rx_head;
 static struct net_packet *loopback_rx_tail;
 static struct udp_socket *udp_sockets;
@@ -177,6 +215,8 @@ static u64 next_ephemeral_port = NET_UDP_PORT_EPHEMERAL_FIRST;
 static struct tcp_socket *tcp_sockets;
 static u64 next_tcp_socket_id = 1;
 static u64 next_tcp_ephemeral_port = NET_TCP_PORT_EPHEMERAL_FIRST;
+
+static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo);
 
 static long register_service(u64 service, u64 handle)
 {
@@ -368,6 +408,30 @@ static void reply_packet_interface_link(struct bunix_msg *reply,
 	reply->words[3] = iface->mtu;
 }
 
+static void reply_interface_set_flags(struct bunix_msg *reply,
+				      const struct bunix_msg *message)
+{
+	struct net_interface *iface = interface_find(message->words[0]);
+	const u64 set = message->words[1];
+	const u64 clear = message->words[2];
+	const u64 mutable = BUNIX_NET_IFACE_FLAG_UP |
+			    BUNIX_NET_IFACE_FLAG_BROADCAST;
+	u64 preserved;
+
+	if (iface == 0 || iface == &loopback) {
+		last_config_error = BUNIX_NET_INTERFACE_SET_FLAGS;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	preserved = iface->flags & ~mutable;
+	iface->flags = preserved | ((iface->flags | (set & mutable)) &
+				    ~(clear & mutable));
+	reply->words[0] = 0;
+	reply->words[1] = iface->id;
+	reply->words[2] = iface->flags;
+	reply->words[3] = iface->mtu;
+}
+
 static int net_route_valid_prefix(u64 family, u64 prefix_len)
 {
 	if (family == BUNIX_NET_ADDR_FAMILY_IPV4) {
@@ -377,6 +441,181 @@ static int net_route_valid_prefix(u64 family, u64 prefix_len)
 		return prefix_len <= 128;
 	}
 	return 0;
+}
+
+static int net_addr_valid_prefix(u64 family, u64 prefix_len)
+{
+	return net_route_valid_prefix(family, prefix_len);
+}
+
+static u64 addr_count(void)
+{
+	u64 count = sizeof(static_addrs) / sizeof(static_addrs[0]);
+
+	for (const struct net_addr_record *addr = dynamic_addrs; addr != 0;
+	     addr = addr->next) {
+		count++;
+	}
+	return count;
+}
+
+static const struct net_addr_record *addr_at(u64 index)
+{
+	for (const struct net_addr_record *addr = dynamic_addrs; addr != 0;
+	     addr = addr->next) {
+		if (index == 0) {
+			return addr;
+		}
+		index--;
+	}
+	if (index < sizeof(static_addrs) / sizeof(static_addrs[0])) {
+		return &static_addrs[index];
+	}
+	return 0;
+}
+
+static int addr_equal_record(const struct net_addr_record *addr,
+			     const struct bunix_net_addr_info *info)
+{
+	return addr != 0 && info != 0 &&
+	       addr->family == info->family &&
+	       addr->addr_hi == info->addr_hi &&
+	       addr->addr_lo == info->addr_lo &&
+	       addr->prefix_len == info->prefix_len &&
+	       addr->iface == info->iface;
+}
+
+static int addr_exists(const struct bunix_net_addr_info *info)
+{
+	for (const struct net_addr_record *addr = dynamic_addrs; addr != 0;
+	     addr = addr->next) {
+		if (addr_equal_record(addr, info)) {
+			return 1;
+		}
+	}
+	for (u64 i = 0; i < sizeof(static_addrs) / sizeof(static_addrs[0]); i++) {
+		if (addr_equal_record(&static_addrs[i], info)) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void addr_info_store(struct bunix_net_addr_info *info,
+			    const struct net_addr_record *addr)
+{
+	if (info == 0 || addr == 0) {
+		return;
+	}
+	info->family = addr->family;
+	info->addr_hi = addr->addr_hi;
+	info->addr_lo = addr->addr_lo;
+	info->prefix_len = addr->prefix_len;
+	info->iface = addr->iface;
+	info->flags = addr->flags;
+	info->preferred_lifetime = addr->preferred_lifetime;
+	info->valid_lifetime = addr->valid_lifetime;
+}
+
+static void reply_addr_add(struct bunix_msg *reply,
+			   const struct bunix_msg *message)
+{
+	struct bunix_net_addr_info info;
+	struct net_addr_record *addr;
+
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    bunix_buffer_read(message->cap, 0, &info, sizeof(info)) != 0 ||
+	    interface_find(info.iface) == 0 ||
+	    !net_addr_valid_prefix(info.family, info.prefix_len)) {
+		last_config_error = BUNIX_NET_ADDR_ADD;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (addr_exists(&info)) {
+		reply->words[0] = 0;
+		reply->words[1] = info.iface;
+		reply->words[2] = addr_count();
+		reply->words[3] = info.prefix_len;
+		return;
+	}
+	addr = (struct net_addr_record *)bunix_calloc(1, sizeof(*addr));
+	if (addr == 0) {
+		last_config_error = BUNIX_NET_ADDR_ADD;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	addr->family = info.family;
+	addr->addr_hi = info.addr_hi;
+	addr->addr_lo = info.addr_lo;
+	addr->prefix_len = info.prefix_len;
+	addr->iface = info.iface;
+	addr->flags = info.flags;
+	addr->preferred_lifetime = info.preferred_lifetime;
+	addr->valid_lifetime = info.valid_lifetime;
+	addr->next = dynamic_addrs;
+	dynamic_addrs = addr;
+	reply->words[0] = 0;
+	reply->words[1] = addr->iface;
+	reply->words[2] = addr_count();
+	reply->words[3] = addr->prefix_len;
+}
+
+static void reply_addr_delete(struct bunix_msg *reply,
+			      const struct bunix_msg *message)
+{
+	struct bunix_net_addr_info info;
+	struct net_addr_record **link = &dynamic_addrs;
+
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    bunix_buffer_read(message->cap, 0, &info, sizeof(info)) != 0) {
+		last_config_error = BUNIX_NET_ADDR_DELETE;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	while (*link != 0) {
+		struct net_addr_record *addr = *link;
+
+		if (addr_equal_record(addr, &info)) {
+			*link = addr->next;
+			bunix_free(addr);
+			reply->words[0] = 0;
+			reply->words[1] = addr_count();
+			return;
+		}
+		link = &addr->next;
+	}
+	last_config_error = BUNIX_NET_ADDR_DELETE;
+	reply->words[0] = (u64)-1;
+}
+
+static void reply_addr_count(struct bunix_msg *reply)
+{
+	reply->words[0] = 0;
+	reply->words[1] = addr_count();
+}
+
+static void reply_addr_at(struct bunix_msg *reply,
+			  const struct bunix_msg *message)
+{
+	const struct net_addr_record *addr = addr_at(message->words[0]);
+	struct bunix_net_addr_info info;
+
+	if (addr == 0 || message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	addr_info_store(&info, addr);
+	if (bunix_buffer_write(message->cap, 0, &info, sizeof(info)) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = addr->iface;
+	reply->words[2] = addr->family;
+	reply->words[3] = addr->prefix_len;
 }
 
 static u64 route_count(void)
@@ -422,6 +661,37 @@ static void route_info_store(struct bunix_net_route_info *info,
 	info->metric = route->metric;
 }
 
+static int route_equal_info(const struct net_route *route,
+			    const struct bunix_net_route_info *info)
+{
+	return route != 0 && info != 0 &&
+	       route->family == info->family &&
+	       route->prefix_hi == info->prefix_hi &&
+	       route->prefix_lo == info->prefix_lo &&
+	       route->prefix_len == info->prefix_len &&
+	       route->iface == info->iface &&
+	       route->gateway_hi == info->gateway_hi &&
+	       route->gateway_lo == info->gateway_lo &&
+	       route->flags == info->flags &&
+	       route->metric == info->metric;
+}
+
+static int route_exists(const struct bunix_net_route_info *info)
+{
+	for (const struct net_route *route = dynamic_routes; route != 0;
+	     route = route->next) {
+		if (route_equal_info(route, info)) {
+			return 1;
+		}
+	}
+	for (u64 i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
+		if (route_equal_info(&routes[i], info)) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
 static void reply_route_add(struct bunix_msg *reply,
 			    const struct bunix_msg *message)
 {
@@ -433,11 +703,20 @@ static void reply_route_add(struct bunix_msg *reply,
 	    bunix_buffer_read(message->cap, 0, &info, sizeof(info)) != 0 ||
 	    interface_find(info.iface) == 0 ||
 	    !net_route_valid_prefix(info.family, info.prefix_len)) {
+		last_config_error = BUNIX_NET_ROUTE_ADD;
 		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (route_exists(&info)) {
+		reply->words[0] = 0;
+		reply->words[1] = info.iface;
+		reply->words[2] = route_count();
+		reply->words[3] = info.prefix_len;
 		return;
 	}
 	route = (struct net_route *)bunix_calloc(1, sizeof(*route));
 	if (route == 0) {
+		last_config_error = BUNIX_NET_ROUTE_ADD;
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -456,6 +735,35 @@ static void reply_route_add(struct bunix_msg *reply,
 	reply->words[1] = route->iface;
 	reply->words[2] = route_count();
 	reply->words[3] = route->prefix_len;
+}
+
+static void reply_route_delete(struct bunix_msg *reply,
+			       const struct bunix_msg *message)
+{
+	struct bunix_net_route_info info;
+	struct net_route **link = &dynamic_routes;
+
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    bunix_buffer_read(message->cap, 0, &info, sizeof(info)) != 0) {
+		last_config_error = BUNIX_NET_ROUTE_DELETE;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	while (*link != 0) {
+		struct net_route *route = *link;
+
+		if (route_equal_info(route, &info)) {
+			*link = route->next;
+			bunix_free(route);
+			reply->words[0] = 0;
+			reply->words[1] = route_count();
+			return;
+		}
+		link = &route->next;
+	}
+	last_config_error = BUNIX_NET_ROUTE_DELETE;
+	reply->words[0] = (u64)-1;
 }
 
 static void reply_route_count(struct bunix_msg *reply)
@@ -484,6 +792,158 @@ static void reply_route_at(struct bunix_msg *reply,
 	reply->words[1] = route->iface;
 	reply->words[2] = route->family;
 	reply->words[3] = route->prefix_len;
+}
+
+static int has_addr(u64 family, u64 iface)
+{
+	for (const struct net_addr_record *addr = dynamic_addrs; addr != 0;
+	     addr = addr->next) {
+		if (addr->family == family && addr->iface == iface) {
+			return 1;
+		}
+	}
+	for (u64 i = 0; i < sizeof(static_addrs) / sizeof(static_addrs[0]); i++) {
+		if (static_addrs[i].family == family &&
+		    static_addrs[i].iface == iface) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static const struct net_route *default_route(u64 family)
+{
+	const struct net_route *best =
+		net_route_lookup(family, 0, family == BUNIX_NET_ADDR_FAMILY_IPV4 ?
+				 0x08080808ull : 0);
+
+	return best != 0 && best->prefix_len == 0 ? best : 0;
+}
+
+static void reply_config_status(struct bunix_msg *reply,
+				const struct bunix_msg *message)
+{
+	struct bunix_net_config_status status = {
+		.flags = 0,
+		.interface_count = interface_count(),
+		.address_count = addr_count(),
+		.route_count = route_count(),
+		.default_ipv4_iface = 0,
+		.default_ipv6_iface = 0,
+		.last_error = last_config_error,
+		.reserved = 0,
+	};
+	const struct net_route *route4 = default_route(BUNIX_NET_ADDR_FAMILY_IPV4);
+	const struct net_route *route6 = default_route(BUNIX_NET_ADDR_FAMILY_IPV6);
+
+	if (has_addr(BUNIX_NET_ADDR_FAMILY_IPV4, NET_IFACE_LO) &&
+	    has_addr(BUNIX_NET_ADDR_FAMILY_IPV6, NET_IFACE_LO)) {
+		status.flags |= BUNIX_NET_CONFIG_LOOPBACK;
+	}
+	if (route4 != 0) {
+		status.flags |= BUNIX_NET_CONFIG_DEFAULT_IPV4;
+		status.default_ipv4_iface = route4->iface;
+	}
+	if (route6 != 0) {
+		status.flags |= BUNIX_NET_CONFIG_DEFAULT_IPV6;
+		status.default_ipv6_iface = route6->iface;
+	}
+	if (message->cap != 0 &&
+	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0 &&
+	    bunix_buffer_write(message->cap, 0, &status,
+			       sizeof(status)) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = status.flags;
+	reply->words[2] = status.address_count;
+	reply->words[3] = status.route_count;
+}
+
+static void reply_dhcp4_lease_install(struct bunix_msg *reply,
+				      const struct bunix_msg *message)
+{
+	struct bunix_net_dhcp4_lease lease;
+	struct bunix_net_addr_info addr;
+	struct bunix_net_route_info route;
+	long buffer;
+	struct bunix_msg synthetic = *message;
+
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    bunix_buffer_read(message->cap, 0, &lease, sizeof(lease)) != 0 ||
+	    lease.address == 0 || lease.prefix_len > 32 ||
+	    interface_find(lease.iface) == 0) {
+		last_config_error = BUNIX_NET_DHCP4_LEASE_INSTALL;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	buffer = bunix_buffer_create(sizeof(route) > sizeof(addr) ?
+				     sizeof(route) : sizeof(addr));
+	if (buffer <= 0) {
+		last_config_error = BUNIX_NET_DHCP4_LEASE_INSTALL;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	addr.family = BUNIX_NET_ADDR_FAMILY_IPV4;
+	addr.addr_hi = 0;
+	addr.addr_lo = lease.address;
+	addr.prefix_len = lease.prefix_len;
+	addr.iface = lease.iface;
+	addr.flags = 1;
+	addr.preferred_lifetime = lease.lease_lifetime;
+	addr.valid_lifetime = lease.lease_lifetime;
+	synthetic.cap = (u64)buffer;
+	synthetic.cap_rights = BUNIX_RIGHT_RECV;
+	if (bunix_buffer_write((u64)buffer, 0, &addr, sizeof(addr)) != 0) {
+		bunix_handle_close((u64)buffer);
+		last_config_error = BUNIX_NET_DHCP4_LEASE_INSTALL;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply_addr_add(reply, &synthetic);
+	if (reply->words[0] != 0) {
+		bunix_handle_close((u64)buffer);
+		last_config_error = BUNIX_NET_DHCP4_LEASE_INSTALL;
+		return;
+	}
+	if (lease.gateway != 0) {
+		route.family = BUNIX_NET_ADDR_FAMILY_IPV4;
+		route.prefix_hi = 0;
+		route.prefix_lo = 0;
+		route.prefix_len = 0;
+		route.iface = lease.iface;
+		route.gateway_hi = 0;
+		route.gateway_lo = lease.gateway;
+		route.flags = BUNIX_NET_ROUTE_FLAG_UP |
+			      BUNIX_NET_ROUTE_FLAG_GATEWAY;
+		route.metric = 100;
+		if (bunix_buffer_write((u64)buffer, 0, &route,
+				       sizeof(route)) != 0) {
+			bunix_handle_close((u64)buffer);
+			last_config_error = BUNIX_NET_DHCP4_LEASE_INSTALL;
+			reply->words[0] = (u64)-1;
+			return;
+		}
+		reply_route_add(reply, &synthetic);
+		if (reply->words[0] != 0) {
+			bunix_handle_close((u64)buffer);
+			last_config_error = BUNIX_NET_DHCP4_LEASE_INSTALL;
+			return;
+		}
+	}
+	bunix_handle_close((u64)buffer);
+	reply->words[0] = 0;
+	reply->words[1] = lease.iface;
+	reply->words[2] = addr_count();
+	reply->words[3] = route_count();
+}
+
+static void reply_neighbor_count(struct bunix_msg *reply)
+{
+	reply->words[0] = 0;
+	reply->words[1] = 0;
 }
 
 static void reply_observe_socket_count(struct bunix_msg *reply)
@@ -856,10 +1316,19 @@ static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo)
 
 static int net_addr_is_local(u64 family, u64 hi, u64 lo)
 {
-	const struct net_route *route = net_route_lookup(family, hi, lo);
-
-	if (route != 0 && route->iface == NET_IFACE_LO) {
-		return 1;
+	for (const struct net_addr_record *addr = dynamic_addrs; addr != 0;
+	     addr = addr->next) {
+		if (addr->family == family && addr->addr_hi == hi &&
+		    addr->addr_lo == lo) {
+			return 1;
+		}
+	}
+	for (u64 i = 0; i < sizeof(static_addrs) / sizeof(static_addrs[0]); i++) {
+		if (static_addrs[i].family == family &&
+		    static_addrs[i].addr_hi == hi &&
+		    static_addrs[i].addr_lo == lo) {
+			return 1;
+		}
 	}
 	return 0;
 }
@@ -1787,6 +2256,9 @@ int main(void)
 		case BUNIX_NET_INTERFACE_AT:
 			reply_interface_at(&reply, &message);
 			break;
+		case BUNIX_NET_INTERFACE_SET_FLAGS:
+			reply_interface_set_flags(&reply, &message);
+			break;
 		case BUNIX_NET_LOOPBACK_SEND:
 			reply_loopback_send(&reply, &message);
 			break;
@@ -1883,14 +2355,43 @@ int main(void)
 		case BUNIX_NET_PACKET_TX_ENQUEUE:
 			reply_packet_tx_enqueue(&reply, &message);
 			break;
+		case BUNIX_NET_ADDR_ADD:
+			reply_addr_add(&reply, &message);
+			break;
+		case BUNIX_NET_ADDR_DELETE:
+			reply_addr_delete(&reply, &message);
+			break;
+		case BUNIX_NET_ADDR_COUNT:
+			reply_addr_count(&reply);
+			break;
+		case BUNIX_NET_ADDR_AT:
+			reply_addr_at(&reply, &message);
+			break;
 		case BUNIX_NET_ROUTE_ADD:
 			reply_route_add(&reply, &message);
+			break;
+		case BUNIX_NET_ROUTE_DELETE:
+			reply_route_delete(&reply, &message);
 			break;
 		case BUNIX_NET_ROUTE_COUNT:
 			reply_route_count(&reply);
 			break;
 		case BUNIX_NET_ROUTE_AT:
 			reply_route_at(&reply, &message);
+			break;
+		case BUNIX_NET_CONFIG_STATUS:
+			reply_config_status(&reply, &message);
+			break;
+		case BUNIX_NET_DHCP4_LEASE_INSTALL:
+			reply_dhcp4_lease_install(&reply, &message);
+			break;
+		case BUNIX_NET_NEIGHBOR_COUNT:
+			reply_neighbor_count(&reply);
+			break;
+		case BUNIX_NET_NEIGHBOR_AT:
+		case BUNIX_NET_NEIGHBOR_ADD:
+		case BUNIX_NET_NEIGHBOR_DELETE:
+			reply.words[0] = (u64)-1;
 			break;
 		default:
 			reply.words[0] = (u64)-1;

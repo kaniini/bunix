@@ -2174,6 +2174,81 @@ static long net_packet_interface_selftest(u64 net)
 		return -1;
 	}
 	{
+		struct bunix_net_addr_info addr = {
+			.family = BUNIX_NET_ADDR_FAMILY_IPV4,
+			.addr_hi = 0,
+			.addr_lo = 0x0a120001ull,
+			.prefix_len = 16,
+			.iface = iface_id,
+			.flags = 1,
+			.preferred_lifetime = 0,
+			.valid_lifetime = 0,
+		};
+		struct bunix_net_config_status status;
+		u64 addr_count;
+		int found = 0;
+
+		if (bunix_buffer_write((u64)buffer, 0, &addr,
+				       sizeof(addr)) != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_ADDR_ADD;
+		request.cap = (u64)buffer;
+		request.cap_rights = BUNIX_RIGHT_RECV;
+		request.words[0] = 0;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_ADDR_COUNT;
+		request.cap = 0;
+		request.cap_rights = 0;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0 || reply.words[1] < 3) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		addr_count = reply.words[1];
+		for (u64 i = 0; i < addr_count; i++) {
+			request.type = BUNIX_NET_ADDR_AT;
+			request.cap = (u64)buffer;
+			request.cap_rights = BUNIX_RIGHT_SEND;
+			request.words[0] = i;
+			if (bunix_ipc_call(net, &request, &reply) != 0 ||
+			    reply.words[0] != 0 ||
+			    bunix_buffer_read((u64)buffer, 0, &addr,
+					      sizeof(addr)) != 0) {
+				bunix_handle_close((u64)buffer);
+				return -1;
+			}
+			if (addr.iface == iface_id &&
+			    addr.family == BUNIX_NET_ADDR_FAMILY_IPV4 &&
+			    addr.addr_lo == 0x0a120001ull &&
+			    addr.prefix_len == 16) {
+				found = 1;
+			}
+		}
+		if (!found) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		request.type = BUNIX_NET_CONFIG_STATUS;
+		request.cap = (u64)buffer;
+		request.cap_rights = BUNIX_RIGHT_SEND;
+		request.words[0] = 0;
+		if (bunix_ipc_call(net, &request, &reply) != 0 ||
+		    reply.words[0] != 0 ||
+		    bunix_buffer_read((u64)buffer, 0, &status,
+				      sizeof(status)) != 0 ||
+		    (status.flags & BUNIX_NET_CONFIG_LOOPBACK) == 0 ||
+		    status.address_count < 3) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+	}
+	{
 		struct bunix_net_route_info route = {
 			.family = BUNIX_NET_ADDR_FAMILY_IPV4,
 			.prefix_hi = 0,

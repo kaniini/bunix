@@ -150,6 +150,21 @@ NET0 configuration RPC contract:
   networking service should log config parsing, DHCP, route, and neighbor
   progress separately.
 
+Implementation progress:
+
+- Added the initial NET0 configuration RPC surface in `user/include/bunix/syscall.h`
+  and `user/net/main.c`: administrative interface flags, address
+  add/delete/enumeration, idempotent route add, route delete, DHCPv4 lease
+  install, neighbor count stub, and config status.
+- NET0 now treats assigned address records as the source of local address
+  truth.  The static loopback addresses remain present at boot, while future
+  DHCP/service configuration can add packet-interface addresses dynamically.
+- Bootstrap's NET0 self-test now verifies address add/enumeration and config
+  status in addition to the existing packet interface and route paths.
+- DHCPv4 lease install currently installs the IPv4 address and default route
+  atomically.  DNS metadata is accepted in the lease record but still needs a
+  persistence/observation path before the DHCP task can be considered complete.
+
 Tasks:
 
 - [x] Inventory current NET0, VirtIO-net, Linux socket/ioctl, procfs
