@@ -1,0 +1,69 @@
+Gate privileged native syscalls behind capabilities.
+
+Parent exploration: `022-security-vulnerability-audit.txt`
+
+Threat model:
+
+- An unprivileged Linux process can intentionally issue Bunix negative syscalls
+  for native observability.
+- Native syscall access is therefore not itself authority.  Sensitive native
+  operations must require a scoped capability or must be unavailable to ordinary
+  Linux tasks.
+
+Defect:
+
+- `BUNIX_SYSCALL_MACHINE_POWER` in `arch/x86_64/user.c` calls `arch_poweroff()`
+  without checking any task capability.
+- `BUNIX_SYSCALL_HW_PCI_BAR_GRANT` in `arch/x86_64/user.c` grants PIO/MMIO
+  access to virtio PCI BAR ranges based only on device identity and requested
+  offset/length/ops, not on a hardware/device authority capability.
+- Related hardware access syscalls do check a hardware-resource handle, but the
+  grant syscall itself is ambient authority.
+
+Impact:
+
+- At least High: an unprivileged process can cause persistent denial of service
+  by powering off the guest.
+- Potentially Critical: an unprivileged process may be able to manipulate
+  virtio devices through PIO/MMIO and interfere with storage/network/device
+  state outside the intended driver/server authority model.
+
+Exploit/reproducer plan:
+
+- Add a local test program that issues `BUNIX_SYSCALL_MACHINE_POWER` from an
+  unprivileged Linux session and prove the guest powers off without holding a
+  privileged capability.
+- Add a local test program that calls `BUNIX_SYSCALL_HW_PCI_BAR_GRANT` for a
+  known virtio BAR and proves a hardware-resource handle is returned without
+  having a device or hardware authority capability.
+- Keep both reproducers local to Bunix/QEMU test fixtures.
+
+Fix plan:
+
+- Introduce explicit power-management and hardware-enumeration authority
+  capabilities, or reuse the existing hardware-resource capability model with a
+  narrowly scoped root hardware authority issued only to the intended server.
+- Require the relevant authority for machine power operations and PCI BAR
+  grants.
+- Ensure bootstrap grants these authorities only to the power/device bus
+  owner, not to ordinary Linux tasks or broad server sets.
+- Preserve native observability by keeping read-only/stat syscalls available
+  where they do not mutate privileged state.
+
+Regression gate:
+
+- Focused tests proving unprivileged Linux/native callers receive failure for
+  poweroff and PCI BAR grant attempts.
+- Existing boot, virtio, OpenRC, and full `make test` gates proving authorized
+  shutdown and device bringup still work.
+
+Tasks:
+
+- [ ] Build local unprivileged reproducers for poweroff and PCI BAR grant.
+- [ ] Add authority representation and bootstrap grants for privileged power
+      and hardware enumeration operations.
+- [ ] Gate `BUNIX_SYSCALL_MACHINE_POWER` and
+      `BUNIX_SYSCALL_HW_PCI_BAR_GRANT`.
+- [ ] Add regression tests for denied unprivileged calls and authorized
+      platform/device paths.
+- [ ] Run focused boot/virtio/OpenRC tests, then full `make test`.

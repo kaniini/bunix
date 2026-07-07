@@ -1,0 +1,63 @@
+Audit and fix borrowed handle lookup races.
+
+Parent exploration: `022-security-vulnerability-audit.txt`
+
+Threat model:
+
+- A native task or compromised server can have more than one thread in the same
+  Bunix task and therefore share one task handle table.
+- One thread can close or transfer handles while another thread is inside a
+  native syscall that resolved a handle to a kernel object.
+
+Candidate defect:
+
+- `task_from_handle()`, `task_port_from_handle()`,
+  `task_buffer_from_handle()`, and `task_hw_resource_from_handle()` return raw
+  object pointers after dropping the task handle-table lock.
+- Callers frequently use those raw pointers across copyin/copyout, IPC send,
+  VM operations, hardware operations, or other blocking/preemptible paths.
+- Object lifetimes are reference-counted elsewhere, so the intended safe
+  convention should likely be either retained references or lock-contained
+  use.  The current helpers look like borrowed references.
+
+Potential impact:
+
+- Use-after-free of ports, buffers, task objects, or owned hardware-resource
+  descriptors if a racing thread closes the last handle reference.
+- Depending on reachable thread creation and object reuse, this could become
+  memory corruption, capability confusion, or unauthorized access to a reused
+  object.
+
+Proof plan:
+
+- Confirm the minimum reachable native task model that can run multiple
+  threads sharing one handle table from untrusted or less-privileged code.
+- Build a local stress/reproducer that races `BUNIX_SYSCALL_HANDLE_CLOSE`
+  against at least one syscall using each borrowed helper class.
+- Instrument object refcounts or add temporary debug assertions to prove
+  whether a stale pointer can be used after final release.
+
+Fix plan:
+
+- Convert handle lookup APIs to retained-reference APIs, with explicit release
+  obligations for callers.
+- Audit every caller and add releases on all success/error paths.
+- Keep any truly lock-contained lookup as an internal helper with a name that
+  makes borrowing explicit.
+- Add tests that exercise close/use races across ports, buffers, tasks, and
+  hardware-resource handles.
+
+Regression gate:
+
+- Focused race/stress tests for handle close/use patterns.
+- Existing IPC, VFS, Linux shell, virtio, and full `make test` gates.
+
+Tasks:
+
+- [ ] Prove or disprove reachable same-task multithreaded handle races.
+- [ ] Build local close/use race reproducers for port, buffer, task, and
+      hardware-resource handles where reachable.
+- [ ] Convert public handle lookup helpers to retained references or otherwise
+      make lifetime rules explicit.
+- [ ] Update all callers and add releases on every path.
+- [ ] Add regression coverage and run full `make test`.
