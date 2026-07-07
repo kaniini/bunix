@@ -1,0 +1,68 @@
+Fix host-side path safety in rootfs builders and test harnesses.
+
+Problem:
+
+- Host tooling accepts build/test paths from arguments and environment
+  variables, then removes, overwrites, or imports those paths without a shared
+  safety layer.
+- `mkrootfs --tree` walks a host directory with `lstat()`, but later opens
+  regular-file sources by path.  A changing or malicious tree can race the
+  lstat/open boundary and cause the generated rootfs image to include data from
+  a different host file than the one audited.
+- Test harnesses and image builders perform `rm -rf` on caller-controlled
+  runtime directories without the guard already present in
+  `tools/test-prune-artifacts.sh`.
+
+Threat model:
+
+- Tertiary attacker: malformed or malicious rootfs fixture trees, generated
+  Alpine rootfs contents, or environment-controlled build/test paths used in
+  local Bunix build automation.
+- Impact candidates: host file disclosure into generated Bunix rootfs images,
+  accidental or malicious deletion of host directories during tests/builds,
+  corrupted release/test artifacts, and test-environment compromise.
+
+Evidence:
+
+- `tools/mkrootfs.c` uses `lstat()` during `import_tree_path()`, records
+  regular-file source paths, and later copies file contents with `fopen()` in
+  `copy_file()`.  The source path can change between those operations.
+- `tools/build-alpine-rootfs.sh` removes `$stage` with `rm -rf "$stage"` where
+  `stage` can be supplied through `ALPINE_ROOTFS_STAGE`.
+- `tools/test-boot.sh`, `tools/test-command.sh`, and `tools/test-shell.sh`
+  remove `$tmp` during cleanup, where `tmp` can be supplied through
+  `BUNIX_TEST_RUNTIME_DIR`.
+- `tools/build-ext2-test-image.sh` removes `$tmp` and overwrites `$out`
+  without using a common safe path helper.
+
+Root cause:
+
+- Host tools do not have a common path-safety policy for scratch directories,
+  generated artifacts, symlink handling, tree import, and cleanup.
+- `mkrootfs` imports mutable host paths rather than stable file descriptors or
+  `openat()` traversal with no-follow checks.
+
+Fix plan:
+
+- Add a small shared shell helper for refusing unsafe scratch/output paths:
+  empty, `/`, `.`, repository root, home directory, and paths outside expected
+  build/tmp prefixes unless explicitly allowed.
+- Update test harness cleanup and rootfs/image builders to use the helper
+  before every `rm -rf`, generated artifact overwrite, or recursive copy.
+- Refactor `mkrootfs --tree` to walk with descriptor-relative APIs where
+  possible, use no-follow semantics for symlinks, and verify that copied files
+  still match the metadata used for the rootfs entry.
+- Add tests for unsafe runtime-directory refusal and for a changing-tree
+  `mkrootfs --tree` import.
+- Document which environment variables are allowed to point outside `build/`
+  or `/tmp`, and require an explicit override for dangerous paths.
+
+Tasks:
+
+- [ ] Build local reproducers for unsafe cleanup path selection and the
+      `mkrootfs --tree` lstat/open race.
+- [ ] Add a shared shell path-safety helper and convert build/test scripts.
+- [ ] Harden `mkrootfs --tree` against symlink and replacement races.
+- [ ] Add tests for refused unsafe cleanup/output paths.
+- [ ] Add a rootfs import race regression test.
+- [ ] Run focused tooling tests and full tests before completion.
