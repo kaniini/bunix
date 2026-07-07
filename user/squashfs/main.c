@@ -1,8 +1,11 @@
 #include <bunix/alloc.h>
 #include <bunix/libbunix.h>
+#include <bunix/tree.h>
 
 enum {
 	SQUASHFS_HANDLE_NAMES = 3,
+	SQUASHFS_MAX_PATH = 4096,
+	SQUASHFS_NAME_MAX = 255,
 	SQUASHFS_MAGIC = 0x73717368,
 	SQUASHFS_SUPER_SIZE = 96,
 	SQUASHFS_MAJOR = 4,
@@ -24,6 +27,7 @@ enum {
 	SQUASHFS_INODE_EXT_SYMLINK = 10,
 	SQUASHFS_INODE_EXT_BLOCKDEV = 11,
 	SQUASHFS_INODE_EXT_CHARDEV = 12,
+	SQUASHFS_OPEN_NODE = 1,
 };
 
 struct squashfs_super {
@@ -74,9 +78,35 @@ struct squashfs_inode {
 	u64 header_size;
 };
 
+struct squashfs_node {
+	struct bunix_tree_node path_node;
+	struct squashfs_node *parent;
+	struct squashfs_node *first_child;
+	struct squashfs_node *last_child;
+	struct squashfs_node *next_sibling;
+	struct squashfs_node *next_all;
+	char *path;
+	char *name;
+	struct squashfs_inode inode;
+	u64 dir_index;
+};
+
+struct squashfs_open {
+	struct bunix_u64_tree_node node;
+	u64 id;
+	u64 kind;
+	struct squashfs_node *fs_node;
+};
+
 static struct squashfs_super root_super;
 static struct squashfs_metadata_cache *metadata_cache;
 static struct squashfs_inode root_inode;
+static struct bunix_tree nodes_by_path;
+static struct bunix_u64_tree open_files;
+static struct squashfs_node *root_node;
+static struct squashfs_node *all_nodes;
+static u64 node_count;
+static u64 next_open_id = 1;
 static u64 block_service;
 static u64 image_size;
 
@@ -102,10 +132,73 @@ static u64 text_len(const char *text)
 {
 	u64 len = 0;
 
-	while (text != 0 && text[len] != 0) {
+	while (text != 0 && len < SQUASHFS_MAX_PATH && text[len] != 0) {
 		len++;
 	}
 	return len;
+}
+
+static int text_eq(const char *left, const char *right)
+{
+	u64 i = 0;
+
+	while (left != 0 && right != 0 && left[i] != 0 && right[i] != 0) {
+		if (left[i] != right[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return left != 0 && right != 0 && left[i] == right[i];
+}
+
+static int text_eq_len(const char *left, const char *right, u64 right_len)
+{
+	u64 i;
+
+	if (left == 0 || right == 0) {
+		return 0;
+	}
+	for (i = 0; i < right_len; i++) {
+		if (left[i] == 0 || left[i] != right[i]) {
+			return 0;
+		}
+	}
+	return left[i] == 0;
+}
+
+static char *copy_text_len(const char *text, u64 len)
+{
+	char *copy;
+
+	if (text == 0 || len >= SQUASHFS_MAX_PATH) {
+		return 0;
+	}
+	copy = (char *)bunix_alloc(len + 1);
+	if (copy == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < len; i++) {
+		copy[i] = text[i];
+	}
+	copy[len] = 0;
+	return copy;
+}
+
+static int copy_path(char *target, const char *path)
+{
+	u64 i;
+
+	if (target == 0 || path == 0 || path[0] != '/') {
+		return -1;
+	}
+	for (i = 0; i + 1 < SQUASHFS_MAX_PATH && path[i] != 0; i++) {
+		target[i] = path[i];
+	}
+	if (path[i] != 0) {
+		return -1;
+	}
+	target[i] = 0;
+	return 0;
 }
 
 static void append_char(char *line, u64 size, u64 *offset, char c)
@@ -193,6 +286,18 @@ static void log_super(const struct squashfs_super *super)
 	append_u64_dec(line, sizeof(line), &offset, super->inodes);
 	append_text(line, sizeof(line), &offset, " ids=");
 	append_u64_dec(line, sizeof(line), &offset, super->ids);
+	append_char(line, sizeof(line), &offset, '\n');
+	(void)bunix_console_log(line, offset);
+}
+
+static void log_index(void)
+{
+	char line[128];
+	u64 offset = 0;
+
+	line[0] = 0;
+	append_text(line, sizeof(line), &offset, "squashfs: indexed nodes=");
+	append_u64_dec(line, sizeof(line), &offset, node_count);
 	append_char(line, sizeof(line), &offset, '\n');
 	(void)bunix_console_log(line, offset);
 }
@@ -404,6 +509,157 @@ static long metadata_read_exact(u64 table_start, u64 table_offset,
 	return 0;
 }
 
+static int squashfs_is_directory_type(u64 type)
+{
+	return type == SQUASHFS_INODE_BASIC_DIR ||
+	       type == SQUASHFS_INODE_EXT_DIR;
+}
+
+static int squashfs_is_regular_type(u64 type)
+{
+	return type == SQUASHFS_INODE_BASIC_FILE ||
+	       type == SQUASHFS_INODE_EXT_FILE;
+}
+
+static int squashfs_is_symlink_type(u64 type)
+{
+	return type == SQUASHFS_INODE_BASIC_SYMLINK ||
+	       type == SQUASHFS_INODE_EXT_SYMLINK;
+}
+
+static u64 squashfs_vfs_type(u64 type)
+{
+	if (squashfs_is_directory_type(type)) {
+		return BUNIX_VFS_TYPE_DIRECTORY;
+	}
+	if (squashfs_is_regular_type(type)) {
+		return BUNIX_VFS_TYPE_REGULAR;
+	}
+	if (squashfs_is_symlink_type(type)) {
+		return BUNIX_VFS_TYPE_SYMLINK;
+	}
+	if (type == SQUASHFS_INODE_BASIC_CHARDEV ||
+	    type == SQUASHFS_INODE_EXT_CHARDEV) {
+		return BUNIX_VFS_TYPE_CHARACTER;
+	}
+	return BUNIX_VFS_TYPE_REGULAR;
+}
+
+static int dir_name_valid(const char *name, u64 len)
+{
+	if (name == 0 || len == 0 || len > SQUASHFS_NAME_MAX) {
+		return 0;
+	}
+	for (u64 i = 0; i < len; i++) {
+		if (name[i] == 0 || name[i] == '/') {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static char *make_child_path(const char *parent, const char *name,
+			     u64 name_len)
+{
+	const u64 parent_len = text_len(parent);
+	const u64 slash = text_eq(parent, "/") ? 0 : 1;
+	const u64 len = parent_len + slash + name_len;
+	char *path;
+	u64 offset = 0;
+
+	if (parent == 0 || name == 0 || len == 0 || len >= SQUASHFS_MAX_PATH) {
+		return 0;
+	}
+	path = (char *)bunix_alloc(len + 1);
+	if (path == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < parent_len; i++) {
+		path[offset++] = parent[i];
+	}
+	if (slash != 0) {
+		path[offset++] = '/';
+	}
+	for (u64 i = 0; i < name_len; i++) {
+		path[offset++] = name[i];
+	}
+	path[offset] = 0;
+	return path;
+}
+
+static struct squashfs_node *find_child(const struct squashfs_node *parent,
+					const char *name, u64 name_len)
+{
+	struct squashfs_node *child;
+
+	if (parent == 0) {
+		return 0;
+	}
+	child = parent->first_child;
+	while (child != 0) {
+		if (text_eq_len(child->name, name, name_len)) {
+			return child;
+		}
+		child = child->next_sibling;
+	}
+	return 0;
+}
+
+static struct squashfs_node *find_node(const char *path)
+{
+	return (struct squashfs_node *)bunix_tree_get(&nodes_by_path, path);
+}
+
+static long add_node(struct squashfs_node *parent, const char *name,
+		     u64 name_len, const struct squashfs_inode *inode,
+		     struct squashfs_node **out)
+{
+	struct squashfs_node *node;
+
+	if (out == 0 || inode == 0 ||
+	    (parent != 0 && !dir_name_valid(name, name_len)) ||
+	    (parent != 0 && find_child(parent, name, name_len) != 0)) {
+		log_mount_error("duplicate or invalid directory name",
+				inode->ref);
+		return -1;
+	}
+	node = (struct squashfs_node *)bunix_calloc(1, sizeof(*node));
+	if (node == 0) {
+		log_text("squashfs: mount rejected: node alloc failed\n");
+		return -1;
+	}
+	node->parent = parent;
+	node->inode = *inode;
+	if (parent == 0) {
+		node->name = copy_text_len("/", 1);
+		node->path = copy_text_len("/", 1);
+	} else {
+		node->name = copy_text_len(name, name_len);
+		node->path = make_child_path(parent->path, name, name_len);
+	}
+	if (node->name == 0 || node->path == 0 ||
+	    bunix_tree_insert_node(&nodes_by_path, &node->path_node,
+				   node->path, (u64)node) != 0) {
+		log_mount_error("path index insert failed", inode->ref);
+		return -1;
+	}
+	if (parent != 0) {
+		node->dir_index = parent->last_child == 0 ? 0 :
+				  parent->last_child->dir_index + 1;
+		if (parent->last_child == 0) {
+			parent->first_child = node;
+		} else {
+			parent->last_child->next_sibling = node;
+		}
+		parent->last_child = node;
+	}
+	node->next_all = all_nodes;
+	all_nodes = node;
+	node_count++;
+	*out = node;
+	return 0;
+}
+
 static long validate_initial_metadata_blocks(void)
 {
 	unsigned char sample[16];
@@ -552,6 +808,267 @@ static long validate_root_inode(void)
 	return 0;
 }
 
+static long index_directory(struct squashfs_node *directory)
+{
+	u64 dir_size;
+	u64 consumed = 0;
+
+	if (directory == 0 || !squashfs_is_directory_type(directory->inode.type)) {
+		return -1;
+	}
+	if (directory->inode.size <= 3) {
+		return 0;
+	}
+	dir_size = directory->inode.size - 3;
+	while (consumed < dir_size) {
+		unsigned char header[12];
+		u64 count;
+		u64 start_block;
+		u64 inode_base;
+
+		if (dir_size - consumed < sizeof(header) ||
+		    metadata_read_exact(root_super.directory_table_start +
+					directory->inode.block_start,
+					directory->inode.directory_offset +
+					consumed, header, sizeof(header)) != 0) {
+			log_mount_error("bad directory header",
+					directory->inode.ref);
+			return -1;
+		}
+		count = load_le32(header, 0) + 1;
+		start_block = load_le32(header, 4);
+		inode_base = load_le32(header, 8);
+		consumed += sizeof(header);
+		if (count == 0 || count > 256) {
+			log_mount_error("bad directory entry count", count);
+			return -1;
+		}
+		for (u64 i = 0; i < count; i++) {
+			unsigned char entry_raw[8 + SQUASHFS_NAME_MAX + 1];
+			struct squashfs_inode inode;
+			struct squashfs_node *child;
+			u64 offset;
+			u64 inode_delta;
+			u64 type;
+			u64 name_len;
+			u64 entry_len;
+			u64 inode_ref;
+
+			if (dir_size - consumed < 8 ||
+			    metadata_read_exact(root_super.directory_table_start +
+						directory->inode.block_start,
+						directory->inode.directory_offset +
+						consumed, entry_raw, 8) != 0) {
+				log_mount_error("bad directory entry",
+						directory->inode.ref);
+				return -1;
+			}
+			offset = load_le16(entry_raw, 0);
+			inode_delta = load_le16(entry_raw, 2);
+			type = load_le16(entry_raw, 4);
+			name_len = load_le16(entry_raw, 6) + 1;
+			entry_len = 8 + name_len;
+			if (name_len == 0 ||
+			    name_len > SQUASHFS_NAME_MAX ||
+			    entry_len > sizeof(entry_raw) ||
+			    entry_len > dir_size - consumed ||
+			    metadata_read_exact(root_super.directory_table_start +
+						directory->inode.block_start,
+						directory->inode.directory_offset +
+						consumed, entry_raw,
+						entry_len) != 0 ||
+			    !dir_name_valid((const char *)&entry_raw[8],
+					    name_len)) {
+				log_mount_error("bad directory name",
+						directory->inode.ref);
+				return -1;
+			}
+			(void)inode_base;
+			(void)type;
+			inode_ref = (start_block << 16) | offset;
+			if (decode_inode_at(inode_ref, &inode) != 0 ||
+			    add_node(directory, (const char *)&entry_raw[8],
+				     name_len, &inode, &child) != 0) {
+				return -1;
+			}
+			if (squashfs_is_directory_type(child->inode.type) &&
+			    index_directory(child) != 0) {
+				return -1;
+			}
+			(void)inode_delta;
+			consumed += entry_len;
+		}
+	}
+	return consumed == dir_size ? 0 : -1;
+}
+
+static long build_directory_index(void)
+{
+	if (add_node(0, "/", 1, &root_inode, &root_node) != 0) {
+		return -1;
+	}
+	if (index_directory(root_node) != 0) {
+		return -1;
+	}
+	log_index();
+	return 0;
+}
+
+static int read_path_buffer_at(u64 buffer, u64 offset, u64 len, char *path)
+{
+	if (buffer == 0 || len == 0 || len > SQUASHFS_MAX_PATH) {
+		return -1;
+	}
+	for (u64 i = 0; i < SQUASHFS_MAX_PATH; i++) {
+		path[i] = 0;
+	}
+	if (bunix_buffer_read(buffer, offset, path, len) != 0 ||
+	    path[len - 1] != 0) {
+		return -1;
+	}
+	return text_len(path) < SQUASHFS_MAX_PATH ? 0 : -1;
+}
+
+static int read_resolved_path(const struct bunix_msg *message, char *path)
+{
+	char cwd[SQUASHFS_MAX_PATH];
+	char full_path[SQUASHFS_MAX_PATH];
+
+	if ((message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    read_path_buffer_at(message->cap, 0, message->words[0],
+				cwd) != 0 ||
+	    read_path_buffer_at(message->cap, message->words[0],
+				message->words[1], full_path) != 0 ||
+	    full_path[0] != '/') {
+		return -1;
+	}
+	(void)cwd;
+	return copy_path(path, full_path);
+}
+
+static u64 remember_open(struct squashfs_node *node)
+{
+	struct squashfs_open *open;
+	u64 id;
+
+	open = (struct squashfs_open *)bunix_calloc(1, sizeof(*open));
+	if (open == 0) {
+		return 0;
+	}
+	id = next_open_id++;
+	while (id == 0 || bunix_u64_tree_get(&open_files, id) != 0) {
+		id = next_open_id++;
+	}
+	open->id = id;
+	open->kind = SQUASHFS_OPEN_NODE;
+	open->fs_node = node;
+	if (bunix_u64_tree_insert_node(&open_files, &open->node, id,
+				       (u64)open) != 0) {
+		bunix_free(open);
+		return 0;
+	}
+	return id;
+}
+
+static struct squashfs_open *open_from_handle(u64 handle)
+{
+	return (struct squashfs_open *)bunix_u64_tree_get(&open_files, handle);
+}
+
+static void forget_open(struct squashfs_open *open)
+{
+	if (open == 0) {
+		return;
+	}
+	bunix_u64_tree_remove_node(&open_files, &open->node);
+	bunix_free(open);
+}
+
+static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
+		       const char *path)
+{
+	struct squashfs_node *node = find_node(path);
+	u64 handle;
+
+	(void)message;
+	if (node == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	handle = remember_open(node);
+	if (handle == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = handle;
+	reply->words[2] = node->inode.size;
+	reply->words[3] = squashfs_vfs_type(node->inode.type);
+}
+
+static void reply_readdir_buffer(struct squashfs_open *open,
+				 const struct bunix_msg *message,
+				 struct bunix_msg *reply)
+{
+	struct squashfs_node *child;
+
+	if (open == 0 || open->kind != SQUASHFS_OPEN_NODE ||
+	    open->fs_node == 0 ||
+	    !squashfs_is_directory_type(open->fs_node->inode.type)) {
+		reply->words[0] = BUNIX_VFS_ERR_NOTDIR;
+		return;
+	}
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	child = open->fs_node->first_child;
+	while (child != 0 && child->dir_index < message->words[1]) {
+		child = child->next_sibling;
+	}
+	if (child == 0 || child->dir_index != message->words[1]) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	const u64 name_len = text_len(child->name);
+	u64 written = name_len;
+
+	if (written > message->words[3]) {
+		written = message->words[3];
+	}
+	if (written != 0 &&
+	    bunix_buffer_write(message->cap, message->words[2], child->name,
+			       written) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = (child->dir_index + 1) |
+			  (squashfs_vfs_type(child->inode.type) << 32);
+	reply->words[2] = name_len;
+	reply->words[3] = written;
+}
+
+static void forward_open_handle(struct bunix_msg *message,
+				struct bunix_msg *reply)
+{
+	struct squashfs_open *open = open_from_handle(message->words[0]);
+
+	if (open == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (message->type == BUNIX_VFS_CLOSE) {
+		forget_open(open);
+		reply->words[0] = 0;
+	} else if (message->type == BUNIX_VFS_READDIR_BUFFER) {
+		reply_readdir_buffer(open, message, reply);
+	} else {
+		reply->words[0] = BUNIX_VFS_ERR_INVAL;
+	}
+}
+
 static long parse_super(const unsigned char *raw, u64 size,
 			struct squashfs_super *super)
 {
@@ -670,6 +1187,9 @@ static long squashfs_mount(void)
 	if (validate_root_inode() != 0) {
 		return -1;
 	}
+	if (build_directory_index() != 0) {
+		return -1;
+	}
 	log_super(&root_super);
 	return 0;
 }
@@ -680,6 +1200,8 @@ int main(void)
 	struct bunix_msg message;
 
 	bunix_console_log(online, sizeof(online) - 1);
+	bunix_tree_init(&nodes_by_path);
+	bunix_u64_tree_init(&open_files);
 	block_service = resolve_service(BUNIX_SERVICE_BLOCK, BUNIX_RIGHT_SEND);
 	if (block_service == 0 ||
 	    squashfs_mount() != 0 ||
@@ -693,11 +1215,30 @@ int main(void)
 			.type = 0,
 			.words = { BUNIX_VFS_ERR_INVAL, 0, 0, 0 },
 		};
+		char path[SQUASHFS_MAX_PATH];
 
 		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0) {
 			continue;
 		}
 		reply.type = message.type;
+		if (message.protocol == BUNIX_PROTO_VFS) {
+			switch (message.type) {
+			case BUNIX_VFS_OPEN_BUFFER:
+				if (read_resolved_path(&message, path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply_open(&message, &reply, path);
+				}
+				break;
+			case BUNIX_VFS_READDIR_BUFFER:
+			case BUNIX_VFS_CLOSE:
+				forward_open_handle(&message, &reply);
+				break;
+			default:
+				reply.words[0] = BUNIX_VFS_ERR_INVAL;
+				break;
+			}
+		}
 		if (message.cap != 0) {
 			bunix_handle_close(message.cap);
 		}

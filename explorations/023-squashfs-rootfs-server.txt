@@ -246,7 +246,7 @@ Tasks:
       and safe bounds checks for all on-disk offsets and lengths.
 - [x] Implement inode decoding for directories, regular files, symlinks, and
       device nodes needed by `/dev` handoff and Alpine userspace.
-- [ ] Implement directory lookup and readdir, including long names, duplicate
+- [x] Implement directory lookup and readdir, including long names, duplicate
       name rejection where appropriate, stable inode numbers, and deterministic
       ordering from the image.
 - [ ] Implement regular file reads across direct data blocks and fragments,
