@@ -74,17 +74,18 @@ Backend decision:
 Current implementation gaps:
 
 - NET0 has packet-interface TX/RX queues and an external IPv4 ICMP send path.
-  External ICMP currently builds Ethernet+IPv4 frames in NET0 and enqueues them
-  to VirtIO-net, but it uses a broadcast destination when no neighbor record is
-  present.  That is sufficient for the current QEMU-user smoke test, not a
-  complete Ethernet/ARP implementation.
+  External ICMP and UDP currently build Ethernet+IPv4 frames in NET0 and
+  enqueue them to VirtIO-net.  Unresolved next hops are held behind ARP
+  resolution instead of being sent as broadcast IPv4 frames.
 - Neighbor RPCs and `/proc/net/arp` observability now exist for IPv4.  NET0 can
   learn from IPv4 ARP frames and answer ARP requests for local IPv4 addresses,
   generates ARP requests for unresolved IPv4 next hops, and queues external
   IPv4 ICMP egress while ARP resolution is pending.  IPv4 neighbor entries are
   aged from the NET0 cache.  IPv6 ND is not implemented yet.
-- External UDP/TCP route lookup still does not feed packet-interface egress or
-  ingress; localhost UDP/TCP remains covered by the core networking tests.
+- External UDP route lookup now feeds packet-interface egress for IPv4,
+  including ARP-backed queueing.  External TCP route lookup still does not feed
+  packet-interface egress or ingress; localhost UDP/TCP remains covered by the
+  core networking tests.
 - The first deterministic host-side packet generator is still unimplemented.
   The next slice should choose between tap+namespace and socket-backed frames
   based on what gives the fastest repeatable RX/TX probes under `make test`.
@@ -119,3 +120,14 @@ Neighbor/ARP progress:
 - Full ARP for the ICMP path is now present enough for the current smoke scope;
   the broader exploration still needs UDP/TCP packet-interface egress/ingress
   and a harness-owned packet peer.
+
+UDP packet-interface progress:
+
+- IPv4 UDP send/connect now accepts routed non-local destinations.  NET0 builds
+  Ethernet+IPv4+UDP frames, binds an ephemeral source port for unbound sockets,
+  resolves the next hop with the IPv4 neighbor cache, and queues the UDP frame
+  while ARP resolution is pending.
+- The bootstrap NET self-test opens an IPv4 UDP socket, sends to a synthetic
+  non-local address, verifies the generated ARP request, injects an ARP reply,
+  and verifies the queued UDP frame is emitted with the resolved MAC, IPv4
+  protocol 17, expected UDP destination port, length, and payload.

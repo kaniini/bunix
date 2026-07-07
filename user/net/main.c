@@ -282,6 +282,10 @@ static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
 static u64 iface_ipv4_addr(u64 iface_id);
 static int packet_tx_enqueue_copy(struct net_interface *iface,
 				  const unsigned char *data, u64 len);
+static long udp_bind_socket(struct udp_socket *socket, u64 hi, u64 lo,
+			    u64 port);
+static u64 net_checksum_sum(const unsigned char *data, u64 len, u64 sum);
+static unsigned short net_checksum_finish(u64 sum);
 
 static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo);
 static int net_addr_is_local(u64 family, u64 hi, u64 lo);
@@ -1656,6 +1660,107 @@ static int udp_socket_accepts_ipv4(struct udp_socket *socket, u64 dst_ip,
 	       dst_ip == 0xffffffffu;
 }
 
+static int udp_sendto_external_ipv4(struct udp_socket *socket,
+				    const struct net_addr *dest,
+				    const unsigned char *data, u64 len)
+{
+	const struct net_route *route;
+	struct net_interface *iface;
+	unsigned char *frame;
+	u64 source_ip;
+	u64 next_hop_ip;
+	u64 dest_mac = 0;
+	u64 udp_len;
+	u64 ip_len;
+	u64 frame_len;
+	unsigned short ip_checksum;
+
+	if (socket == 0 || dest == 0 || data == 0 ||
+	    socket->family != BUNIX_NET_ADDR_FAMILY_IPV4 ||
+	    dest->family != BUNIX_NET_ADDR_FAMILY_IPV4 ||
+	    dest->hi != 0 || dest->lo == 0 || dest->port == 0 ||
+	    dest->port > 65535 || len > NET_PACKET_MAX) {
+		return -1;
+	}
+	route = net_route_lookup(BUNIX_NET_ADDR_FAMILY_IPV4, 0, dest->lo);
+	if (route == 0 || (route->flags & BUNIX_NET_ROUTE_FLAG_UP) == 0) {
+		return -1;
+	}
+	iface = interface_find(route->iface);
+	source_ip = iface_ipv4_addr(route->iface);
+	next_hop_ip = route->gateway_lo != 0 ? route->gateway_lo : dest->lo;
+	udp_len = 8 + len;
+	ip_len = 20 + udp_len;
+	frame_len = 14 + ip_len;
+	if (iface == 0 || source_ip == 0 || udp_len > 0xffff ||
+	    ip_len > 0xffff || frame_len > NET_PACKET_MAX) {
+		return -1;
+	}
+	{
+		struct net_neighbor *neighbor =
+			neighbor_find(BUNIX_NET_ADDR_FAMILY_IPV4, 0,
+				      next_hop_ip, route->iface);
+
+		if (neighbor != 0) {
+			dest_mac = neighbor->mac_hi;
+		}
+	}
+	if (!socket->bound && udp_bind_socket(socket, 0, 0, 0) != 0) {
+		return -1;
+	}
+	frame = (unsigned char *)bunix_alloc(frame_len);
+	if (frame == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < 6; i++) {
+		frame[i] = dest_mac != 0 ?
+			   (unsigned char)((dest_mac >> ((5 - i) * 8)) & 0xff) :
+			   0xff;
+		frame[6 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	frame[12] = 0x08;
+	frame[13] = 0x00;
+	frame[14] = 0x45;
+	frame[15] = 0;
+	net_write_be16(frame + 16, ip_len);
+	net_write_be16(frame + 18, 0);
+	net_write_be16(frame + 20, 0);
+	frame[22] = 64;
+	frame[23] = NET_PROTO_UDP;
+	frame[24] = 0;
+	frame[25] = 0;
+	net_write_be32(frame + 26, source_ip);
+	net_write_be32(frame + 30, dest->lo);
+	net_write_be16(frame + 34, socket->local.port);
+	net_write_be16(frame + 36, dest->port);
+	net_write_be16(frame + 38, udp_len);
+	net_write_be16(frame + 40, 0);
+	for (u64 i = 0; i < len; i++) {
+		frame[42 + i] = data[i];
+	}
+	ip_checksum = net_checksum_finish(net_checksum_sum(frame + 14, 20, 0));
+	frame[24] = (unsigned char)((ip_checksum >> 8) & 0xff);
+	frame[25] = (unsigned char)(ip_checksum & 0xff);
+	if (dest_mac == 0) {
+		if (pending_frame_add(BUNIX_NET_ADDR_FAMILY_IPV4, 0,
+				      next_hop_ip, route->iface, frame,
+				      frame_len) != 0) {
+			bunix_free(frame);
+			return -1;
+		}
+		arp_request_ipv4(iface, source_ip, next_hop_ip);
+		bunix_free(frame);
+		return 0;
+	}
+	if (packet_tx_enqueue_copy(iface, frame, frame_len) != 0) {
+		bunix_free(frame);
+		return -1;
+	}
+	bunix_free(frame);
+	return 0;
+}
+
 static void udp_enqueue_external_ipv4(struct udp_socket *socket, u64 src_ip,
 				      u64 src_port, const unsigned char *data,
 				      u64 len)
@@ -2333,11 +2438,18 @@ static void reply_udp_connect(struct bunix_msg *reply,
 			      const struct bunix_msg *message)
 {
 	struct udp_socket *socket = udp_find(message->words[0]);
+	const u64 hi = message->words[1];
+	const u64 lo = message->words[2];
+	const u64 port = message->words[3];
+	const int local = socket != 0 &&
+			  net_addr_is_local(socket->family, hi, lo);
+	const int routed_ipv4 = socket != 0 &&
+				socket->family == BUNIX_NET_ADDR_FAMILY_IPV4 &&
+				hi == 0 &&
+				net_route_lookup(socket->family, hi, lo) != 0;
 
-	if (socket == 0 ||
-	    !net_addr_is_local(socket->family, message->words[1],
-			       message->words[2]) ||
-	    message->words[3] == 0 || message->words[3] > 65535) {
+	if (socket == 0 || (!local && !routed_ipv4) ||
+	    port == 0 || port > 65535) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -2345,9 +2457,9 @@ static void reply_udp_connect(struct bunix_msg *reply,
 		reply->words[0] = (u64)-1;
 		return;
 	}
-	socket->peer.hi = message->words[1];
-	socket->peer.lo = message->words[2];
-	socket->peer.port = message->words[3];
+	socket->peer.hi = hi;
+	socket->peer.lo = lo;
+	socket->peer.port = port;
 	socket->connected = 1;
 	reply->words[0] = 0;
 	reply->words[1] = socket->local.port;
@@ -2406,9 +2518,11 @@ static int udp_deliver_to(struct udp_socket *source, const struct net_addr *dest
 
 	if (source == 0 || dest_addr == 0 ||
 	    source->family != dest_addr->family ||
-	    !net_addr_is_local(source->family, dest_addr->hi, dest_addr->lo) ||
 	    dest_addr->port == 0 || dest_addr->port > 65535) {
 		return -1;
+	}
+	if (!net_addr_is_local(source->family, dest_addr->hi, dest_addr->lo)) {
+		return udp_sendto_external_ipv4(source, dest_addr, data, len);
 	}
 	if (!source->bound && udp_bind_socket(source, 0, 0, 0) != 0) {
 		return -1;
@@ -2446,7 +2560,13 @@ static void reply_udp_send(struct bunix_msg *reply,
 		reply->words[0] = (u64)-1;
 		return;
 	}
-	delivered = udp_deliver(socket, data, len);
+	if (net_addr_is_local(socket->family, socket->peer.hi,
+			      socket->peer.lo)) {
+		delivered = udp_deliver(socket, data, len);
+	} else {
+		delivered = udp_sendto_external_ipv4(socket, &socket->peer,
+						     data, len);
+	}
 	bunix_free(data);
 	if (delivered != 0) {
 		reply->words[0] = (u64)-1;
