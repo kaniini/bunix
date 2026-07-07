@@ -31,7 +31,7 @@ Tasks:
 - [x] Choose the first deterministic host backend: isolated QEMU socket,
       tap+namespace, or constrained QEMU user networking with explicit packet
       probes.
-- [ ] Add Ethernet encapsulation and decapsulation in NET0 for packet-interface
+- [x] Add Ethernet encapsulation and decapsulation in NET0 for packet-interface
       routes.
 - [x] Implement ARP for IPv4 on packet interfaces, including request, reply,
       cache state, timeout, and `/proc/net/arp` observability.
@@ -40,14 +40,14 @@ Tasks:
       test gap.
 - [x] Add packet-interface egress queueing from UDP/TCP route lookup into
       `BUNIX_NET_PACKET_TX_ENQUEUE`.
-- [ ] Add packet-interface ingress dispatch from `BUNIX_NET_PACKET_RX_SUBMIT`
+- [x] Add packet-interface ingress dispatch from `BUNIX_NET_PACKET_RX_SUBMIT`
       into Ethernet, ARP/ND, IPv4, IPv6, UDP, and TCP paths.
 - [x] Add host-side traffic generator support for deterministic RX and TX
       frames.
 - [x] Add smoke tests for ARP, IPv4 UDP egress/ingress, IPv4 TCP connect or
       accept, route fallback behavior, `/proc/net/dev` counters, and clean
       guest poweroff.
-- [ ] Add equivalent IPv6 smoke tests once neighbor discovery is present.
+- [x] Add equivalent IPv6 smoke tests once neighbor discovery is present.
 - [x] Document remaining production-networking work after the first smoke tests:
       DHCP/SLAAC, DNS, firewall/filtering, packet capture, offload negotiation,
       multiqueue policy, and performance counters.
@@ -64,12 +64,11 @@ Backend decision:
   networking.  Those tests validate device bringup, NET0 config, OpenRC
   networking service behavior, and drained packet queues without depending on
   external host reachability.
-- Treat QEMU user networking as the phase-1 backend only.  It is good enough to
-  prove the Bunix userspace/NIC/NET0/Linux-personality path can exchange real
-  packets, but it is not enough to prove full Ethernet behavior because QEMU's
-  slirp backend can accept simplified broadcast IPv4 frames.  ARP/ND, UDP/TCP
-  ingress/egress, and route fallback still need a harness-owned peer such as a
-  tap+namespace or socket-backed packet generator.
+- Treat QEMU user networking as the compatibility backend only.  It is good
+  enough to prove the Bunix userspace/NIC/NET0/Linux-personality path can
+  exchange packets through a familiar QEMU backend, while the socket-multicast
+  peer target now proves deterministic host-owned Ethernet RX/TX for the first
+  IPv4 smoke scope.
 
 Current implementation gaps:
 
@@ -91,8 +90,8 @@ Current implementation gaps:
   handling, and receive windows are still missing.  Localhost UDP/TCP remains
   covered by the core networking tests.
 - The first deterministic host-side packet generator exists for QEMU
-  socket-multicast backends, but the exploration still needs a full smoke target
-  that boots QEMU against it and asserts guest-visible RX/TX behavior.
+  socket-multicast backends, and `make test-boot-virtio-net-socket-peer`
+  verifies guest-visible RX/TX behavior against it.
 
 Neighbor/ARP progress:
 
@@ -121,9 +120,8 @@ Neighbor/ARP progress:
 - NET0 now timestamps learned/manual IPv4 neighbor records and prunes stale
   entries during neighbor lookup and observation, so expired neighbors force
   ARP resolution again.
-- Full ARP for the ICMP path is now present enough for the current smoke scope;
-  the broader exploration still needs UDP/TCP packet-interface egress/ingress
-  and a harness-owned packet peer.
+- Full ARP for the IPv4 ICMP, UDP, and TCP SYN paths is now present enough for
+  the current smoke scope.
 
 UDP packet-interface progress:
 
@@ -188,7 +186,8 @@ IPv6 external-traffic deferral:
   duplicate-address detection, or SLAAC.
 - The deferred IPv6 work should add ND cache state and `/proc` observability in
   the same style as IPv4 ARP, then add equivalent packet-interface IPv6 UDP,
-  ICMPv6, and TCP smoke tests with a deterministic host-side peer.
+  ICMPv6, and TCP smoke tests with a deterministic host-side peer.  This is now
+  tracked separately by `046-ipv6-nd-external-smoke.txt`.
 
 Production networking follow-up:
 

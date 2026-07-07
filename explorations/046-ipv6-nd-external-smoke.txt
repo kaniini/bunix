@@ -1,0 +1,48 @@
+Implement IPv6 neighbor discovery and deterministic external IPv6 smokes.
+
+Problem:
+
+- Exploration 025 intentionally deferred external IPv6 packet-interface traffic
+  while bringing up the first deterministic VirtIO-net IPv4 smoke path.
+- NET0 needs real IPv6 Ethernet behavior before IPv6 external smokes can be
+  treated as equivalent to the IPv4 ARP/ICMP/UDP/TCP coverage.
+
+Dependencies:
+
+- Builds on `025-virtio-net-external-smoke.txt`.
+- Requires the QEMU sidecar harness and `tools/virtio-net-peer.py` or a
+  successor host-side peer that can generate and consume IPv6 Ethernet frames.
+
+Constraints:
+
+- Keep IPv6 neighbor discovery in NET0, not in the VirtIO-net driver.
+- Keep Linux socket compatibility layered on NET0 sockets and RPCs.
+- Use deterministic host-owned packet peers; do not depend on ambient host
+  network configuration.
+
+Tasks:
+
+- [ ] Add IPv6 Ethernet encapsulation and decapsulation in NET0 for
+      packet-interface routes.
+- [ ] Implement ICMPv6 neighbor solicitation and neighbor advertisement parsing
+      and generation.
+- [ ] Add IPv6 neighbor cache state, timeout policy, and `/proc` observability
+      equivalent to `/proc/net/arp`.
+- [ ] Add router solicitation/advertisement parsing sufficient for deterministic
+      smoke tests, or document an explicit static-route-only first phase.
+- [ ] Add duplicate-address-detection behavior or explicitly defer it with
+      tests proving the deferral is isolated from configured static addresses.
+- [ ] Add packet-interface IPv6 ICMP echo egress/ingress smokes with the
+      host-side peer.
+- [ ] Add packet-interface IPv6 UDP egress/ingress smokes with the host-side
+      peer.
+- [ ] Add packet-interface IPv6 TCP SYN connect/accept smokes with the
+      host-side peer.
+- [ ] Add `/proc/net/dev` and neighbor-table counter checks for IPv6 RX/TX.
+- [ ] Add clean guest poweroff coverage for the deterministic IPv6 smoke target.
+
+Non-goals for the first slice:
+
+- Full production SLAAC, DNS resolver updates, firewalling, and multiqueue
+  policy remain production-networking follow-up work unless pulled into this
+  exploration explicitly.
