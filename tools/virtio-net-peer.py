@@ -191,8 +191,8 @@ class Peer:
 def self_test():
     guest_mac = parse_mac("52:54:00:18:00:01")
     peer_mac = parse_mac("52:54:00:18:00:fe")
-    guest_ip = parse_ipv4("10.18.0.1")
-    peer_ip = parse_ipv4("10.18.0.254")
+    guest_ip = parse_ipv4("10.0.2.15")
+    peer_ip = parse_ipv4("10.0.2.2")
     request = arp_request(peer_mac, peer_ip, guest_ip)
     assert request[:6] == b"\xff" * 6
     assert request[12:14] == b"\x08\x06"
@@ -214,8 +214,8 @@ def main():
                         help="QEMU socket multicast endpoint GROUP:PORT")
     parser.add_argument("--guest-mac", default="52:54:00:18:00:01")
     parser.add_argument("--peer-mac", default="52:54:00:18:00:fe")
-    parser.add_argument("--guest-ip", default="10.18.0.1")
-    parser.add_argument("--peer-ip", default="10.18.0.254")
+    parser.add_argument("--guest-ip", default="10.0.2.15")
+    parser.add_argument("--peer-ip", default="10.0.2.2")
     parser.add_argument("--duration", type=float, default=30.0)
     parser.add_argument("--ready-file")
     parser.add_argument("--send-arp", action="store_true")
