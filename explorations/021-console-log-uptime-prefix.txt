@@ -24,6 +24,18 @@ Design direction:
 - Make the format stable enough for tests while avoiding overfitting existing
   marker checks to a single timestamp value.
 
+Implemented format:
+
+- Log records are prefixed as `[seconds.useconds] `, for example
+  `[0.120000] kernel: idle`.
+- Precision is microseconds derived from the generic kernel
+  `timer_monotonic_ns()` API.
+- Prefixing is line-oriented on the kernel log stream.  The first byte after
+  boot or after `\n` emits one prefix.  Fragmented server log writes continue
+  the current line until a newline arrives, so chunking does not double-prefix
+  one logical log line.
+- Raw console/TTY writes stay unprefixed.
+
 Constraints:
 
 - Do not break existing serial marker tests.  Tests that look for substrings
@@ -39,22 +51,27 @@ Constraints:
 
 Tasks:
 
-- [ ] Inventory all console write paths and classify them as log records,
+- [x] Inventory all console write paths and classify them as log records,
       terminal/user writes, early boot diagnostics, or raw device output.
-- [ ] Define the exact uptime prefix format, precision, early-boot fallback,
+- [x] Define the exact uptime prefix format, precision, early-boot fallback,
       and whether continuation lines inherit or suppress prefixes.
-- [ ] Implement line-oriented prefixing in the kernel console log path so each
+- [x] Implement line-oriented prefixing in the kernel console log path so each
       complete log line gets one uptime prefix in both serial output and the
       dmesg ring.
-- [ ] Ensure `bunix_console_write()` and Linux `/dev/console`/TTY output remain
+- [x] Ensure `bunix_console_write()` and Linux `/dev/console`/TTY output remain
       unprefixed.
-- [ ] Ensure `bunix_console_log()` from userspace servers is prefixed exactly
+- [x] Ensure `bunix_console_log()` from userspace servers is prefixed exactly
       once, including fragmented writes and lines without a trailing newline.
-- [ ] Update marker tests and exact-line tests to tolerate uptime prefixes only
+- [x] Update marker tests and exact-line tests to tolerate uptime prefixes only
       where they apply to logs.
-- [ ] Add focused tests proving log lines are prefixed, interactive shell
+- [x] Add focused tests proving log lines are prefixed, interactive shell
       output is not prefixed, and BusyBox `dmesg` exposes the prefixed records.
 - [ ] Verify boot, shell, Alpine/OpenRC boot, and dmesg behavior with narrow
       tests before running the full completion gate.
 - [ ] Document any remaining log-format limitations or future structured-log
       work.
+
+Verification so far:
+
+- `make`
+- `BUNIX_SHELL_PART=rootfs-vfs-proc-dev make test-shell-part`

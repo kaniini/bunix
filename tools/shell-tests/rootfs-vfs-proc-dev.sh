@@ -45,6 +45,7 @@ busybox cat /proc/self/cmdline && echo PROC_CMDLINE_OK
 busybox cat /proc/self/mounts > /tmp/proc-self-mounts && busybox grep "sysfs /sys sysfs" /tmp/proc-self-mounts && echo PROC_SELF_MOUNTS_OK
 busybox cat /proc/self/mountinfo > /tmp/proc-self-mountinfo && busybox grep " - sysfs sysfs " /tmp/proc-self-mountinfo && echo PROC_PID_MOUNTINFO_OK
 busybox cat /proc/self/cgroup > /tmp/proc-self-cgroup && busybox grep "0::/" /tmp/proc-self-cgroup && echo PROC_PID_CGROUP_OK
+busybox dmesg > /tmp/dmesg-prefix && busybox grep -E '^\[[0-9][0-9]*\.[0-9][0-9][0-9][0-9][0-9][0-9]\] kernel:' /tmp/dmesg-prefix >/dev/null && echo DMESG_PREFIX_OK
 busybox test -d /sys && echo SYS_DIR_OK
 busybox test -d /sys/class && echo SYS_CLASS_OK
 busybox test -d /sys/class/tty && echo SYS_CLASS_TTY_OK
@@ -70,6 +71,7 @@ busybox test -c /dev/null && echo DEV_NULL_CHAR_OK
 busybox test -c /dev/zero && echo DEV_ZERO_CHAR_OK
 busybox test -c /dev/console && echo DEV_CONSOLE_CHAR_OK
 busybox test -c /dev/ttyS0 && echo DEV_TTYS0_CHAR_OK
+busybox sh -c 'printf "RAW_CONSOLE_UNPREFIXED_OK\n" > /dev/console' && echo DEV_CONSOLE_RAW_WRITE_OK
 busybox sh -c 'i=0; while [ "$i" -lt 300 ]; do printf a; i=$((i + 1)); done; echo DEV_CONSOLE_BIG_END' > /dev/console && echo DEV_CONSOLE_BIG_WRITE_OK
 EOF_ROOTFS_VFS_PROC_DEV
 	wait_for_fixed "$log" "DEV_CONSOLE_BIG_WRITE_OK" \
@@ -108,13 +110,14 @@ check_rootfs_vfs_proc_dev() {
 
 	wait_for_each_fixed "$log" "devfs character-device regression missing" 45 180 \
 		DEV_NULL_CHAR_OK DEV_ZERO_CHAR_OK DEV_CONSOLE_CHAR_OK \
-		DEV_TTYS0_CHAR_OK
+		DEV_TTYS0_CHAR_OK DEV_CONSOLE_RAW_WRITE_OK
 	wait_for_each_fixed "$log" "procfs content regression missing" 45 220 \
 		"cpu  " "busybox" "direct_delivered " "direct_handoff " \
 		PROC_SCHED_OK "switches " "runq_load "
 	wait_for_each_fixed "$log" "openrc procfs surface missing" 45 220 \
 		PROC_CMDLINE_GLOBAL_OK PROC_DEVICES_OK PROC_MODULES_OK \
-		PROC_SELF_MOUNTS_OK PROC_PID_MOUNTINFO_OK PROC_PID_CGROUP_OK
+		PROC_SELF_MOUNTS_OK PROC_PID_MOUNTINFO_OK PROC_PID_CGROUP_OK \
+		DMESG_PREFIX_OK
 	wait_for_each_fixed "$log" "sysfs regression missing" 45 220 \
 		SYS_DIR_OK SYS_CLASS_OK SYS_CLASS_TTY_OK SYS_CLASS_TTY_LS_OK \
 		SYS_CPU_DIR_OK SYS_CPU_ONLINE_OK PROC_MOUNTS_SYSFS_OK \

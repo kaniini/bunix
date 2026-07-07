@@ -1,6 +1,7 @@
 #include "console.h"
 #include "sched.h"
 #include "spinlock.h"
+#include "timer.h"
 #include <arch/io.h>
 #include <stdarg.h>
 
@@ -22,6 +23,7 @@ static struct spinlock console_input_lock = SPINLOCK_INIT("console-input");
 static char console_log_buffer[CONSOLE_LOG_BUFFER_SIZE];
 static u64 console_log_start;
 static u64 console_log_len;
+static int console_log_line_start = 1;
 static int console_log_ring_only;
 static char console_input_pending[CONSOLE_INPUT_PENDING_SIZE];
 static u64 console_input_pending_start;
@@ -422,13 +424,6 @@ static void console_log_putc_raw(char c)
 	}
 }
 
-static void console_log_write_raw(const char *text)
-{
-	while (*text != '\0') {
-		console_log_putc_raw(*text++);
-	}
-}
-
 static void console_log_emit_raw(char c)
 {
 	console_log_putc_raw(c);
@@ -437,17 +432,80 @@ static void console_log_emit_raw(char c)
 	}
 }
 
-static void console_log_emit_text_raw(const char *text)
+static void console_log_write_decimal_raw(u64 value)
 {
-	while (*text != '\0') {
-		console_log_emit_raw(*text++);
+	char buffer[32];
+	u32 cursor = 0;
+
+	if (value == 0) {
+		console_log_emit_raw('0');
+		return;
+	}
+
+	while (value != 0) {
+		buffer[cursor++] = (char)('0' + (value % 10));
+		value /= 10;
+	}
+
+	while (cursor > 0) {
+		console_log_emit_raw(buffer[--cursor]);
 	}
 }
 
-static void console_write_token_raw(const char *text)
+static void console_log_write_decimal_padded_raw(u64 value, u32 width)
+{
+	u64 divisor = 1;
+
+	for (u32 i = 1; i < width; i++) {
+		divisor *= 10;
+	}
+	while (divisor != 0) {
+		console_log_emit_raw((char)('0' + ((value / divisor) % 10)));
+		divisor /= 10;
+	}
+}
+
+static void console_log_prefix_raw(void)
+{
+	enum {
+		NSEC_PER_SEC = 1000000000ULL,
+		NSEC_PER_USEC = 1000ULL,
+	};
+	const u64 now = timer_monotonic_ns();
+	const u64 seconds = now / NSEC_PER_SEC;
+	const u64 useconds = (now % NSEC_PER_SEC) / NSEC_PER_USEC;
+
+	console_log_emit_raw('[');
+	console_log_write_decimal_raw(seconds);
+	console_log_emit_raw('.');
+	console_log_write_decimal_padded_raw(useconds, 6);
+	console_log_emit_raw(']');
+	console_log_emit_raw(' ');
+}
+
+static void console_log_emit(char c)
+{
+	if (console_log_line_start) {
+		console_log_prefix_raw();
+		console_log_line_start = 0;
+	}
+	console_log_emit_raw(c);
+	if (c == '\n') {
+		console_log_line_start = 1;
+	}
+}
+
+static void console_log_emit_text(const char *text)
+{
+	while (*text != '\0') {
+		console_log_emit(*text++);
+	}
+}
+
+static void console_log_write_token(const char *text)
 {
 	while (*text != '\0' && *text != ' ') {
-		console_putc_raw(*text++);
+		console_log_emit(*text++);
 	}
 }
 
@@ -456,9 +514,9 @@ void console_set_verbosity(const char *level)
 	const u64 flags = spin_lock_irqsave(&console_lock);
 
 	console_verbosity = log_level_from_name(level);
-	console_write_raw("kernel: log level ");
-	console_write_token_raw(level != 0 ? level : "info");
-	console_putc_raw('\n');
+	console_log_emit_text("kernel: log level ");
+	console_log_write_token(level != 0 ? level : "info");
+	console_log_emit('\n');
 
 	spin_unlock_irqrestore(&console_lock, flags);
 }
@@ -468,7 +526,7 @@ void console_logs_to_ring(void)
 	const u64 flags = spin_lock_irqsave(&console_lock);
 
 	console_log_ring_only = 1;
-	console_log_write_raw("kernel: console logs routed to dmesg\n");
+	console_log_emit_text("kernel: console logs routed to dmesg\n");
 
 	spin_unlock_irqrestore(&console_lock, flags);
 }
@@ -505,7 +563,7 @@ void console_log_write_len(const char *text, u64 len)
 	const u64 flags = spin_lock_irqsave(&console_lock);
 
 	for (u64 i = 0; i < len; i++) {
-		console_log_emit_raw(text[i]);
+		console_log_emit(text[i]);
 	}
 
 	spin_unlock_irqrestore(&console_lock, flags);
@@ -632,12 +690,12 @@ static void console_log_write_uint_raw(u64 value, u32 base, int is_signed)
 	u32 cursor = 0;
 
 	if (is_signed && (i64)value < 0) {
-		console_log_emit_raw('-');
+		console_log_emit('-');
 		value = (u64)(-(i64)value);
 	}
 
 	if (value == 0) {
-		console_log_emit_raw('0');
+		console_log_emit('0');
 		return;
 	}
 
@@ -649,7 +707,7 @@ static void console_log_write_uint_raw(u64 value, u32 base, int is_signed)
 	}
 
 	while (cursor > 0) {
-		console_log_emit_raw(buffer[--cursor]);
+		console_log_emit(buffer[--cursor]);
 	}
 }
 
@@ -658,9 +716,9 @@ static void console_log_write_pointer_raw(const void *ptr)
 	const u64 value = (u64)ptr;
 	static const char digits[] = "0123456789abcdef";
 
-	console_log_emit_text_raw("0x");
+	console_log_emit_text("0x");
 	for (int shift = 60; shift >= 0; shift -= 4) {
-		console_log_emit_raw(digits[(value >> shift) & 0x0f]);
+		console_log_emit(digits[(value >> shift) & 0x0f]);
 	}
 }
 
@@ -668,24 +726,24 @@ static void console_vprintf_raw(const char *fmt, va_list args)
 {
 	while (*fmt != '\0') {
 		if (*fmt != '%') {
-			console_log_emit_raw(*fmt++);
+			console_log_emit(*fmt++);
 			continue;
 		}
 
 		fmt++;
 		switch (*fmt) {
 		case '\0':
-			console_log_emit_raw('%');
+			console_log_emit('%');
 			return;
 		case '%':
-			console_log_emit_raw('%');
+			console_log_emit('%');
 			break;
 		case 'c':
-			console_log_emit_raw((char)va_arg(args, int));
+			console_log_emit((char)va_arg(args, int));
 			break;
 		case 's': {
 			const char *text = va_arg(args, const char *);
-			console_log_emit_text_raw(text != 0 ? text : "(null)");
+			console_log_emit_text(text != 0 ? text : "(null)");
 			break;
 		}
 		case 'd':
@@ -706,8 +764,8 @@ static void console_vprintf_raw(const char *fmt, va_list args)
 							     const void *));
 			break;
 		default:
-			console_log_emit_raw('%');
-			console_log_emit_raw(*fmt);
+			console_log_emit('%');
+			console_log_emit(*fmt);
 			break;
 		}
 
