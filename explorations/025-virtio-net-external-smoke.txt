@@ -84,9 +84,11 @@ Current implementation gaps:
   aged from the NET0 cache.  IPv6 ND is not implemented yet.
 - External UDP route lookup now feeds packet-interface egress for IPv4,
   including ARP-backed queueing, and packet-interface IPv4 UDP ingress is
-  dispatched into bound UDP sockets.  External TCP route lookup still does not
-  feed packet-interface egress or ingress; localhost UDP/TCP remains covered by
-  the core networking tests.
+  dispatched into bound UDP sockets.  Packet-interface IPv4 TCP can now accept
+  inbound SYN frames for local listeners and emit SYN-ACK replies, but external
+  TCP connect, established packet data, retransmission, FIN/RST handling, and
+  route-based TCP egress are still missing.  Localhost UDP/TCP remains covered
+  by the core networking tests.
 - The first deterministic host-side packet generator is still unimplemented.
   The next slice should choose between tap+namespace and socket-backed frames
   based on what gives the fastest repeatable RX/TX probes under `make test`.
@@ -135,6 +137,17 @@ UDP packet-interface progress:
 - The same bootstrap test binds a second IPv4 UDP socket, injects a synthetic
   Ethernet+IPv4+UDP frame addressed to that socket, verifies poll readiness,
   and receives the expected source port and payload through the NET0 UDP API.
+
+TCP packet-interface progress:
+
+- NET0 now dispatches inbound Ethernet+IPv4+TCP SYN frames to IPv4 TCP
+  listeners bound on packet-interface addresses.  A matching SYN creates an
+  accepted TCP socket with the external peer address, queues it on the listener,
+  and emits an Ethernet+IPv4+TCP SYN-ACK reply through the packet TX queue.
+- The bootstrap NET self-test binds an IPv4 TCP listener on the synthetic
+  packet-interface address, injects a TCP SYN from a synthetic external peer,
+  verifies the SYN-ACK frame, polls and accepts the listener, and verifies the
+  accepted peer address and port.
 
 IPv6 external-traffic deferral:
 

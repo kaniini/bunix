@@ -279,6 +279,8 @@ static u64 next_icmp_socket_id = 1;
 static void neighbor_prune_expired(void);
 static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
 			   u64 mac_hi, u64 mac_lo);
+static void packet_ingress_tcp_ipv4(struct net_interface *iface,
+				    const unsigned char *packet, u64 len);
 static u64 iface_ipv4_addr(u64 iface_id);
 static int packet_tx_enqueue_copy(struct net_interface *iface,
 				  const unsigned char *data, u64 len);
@@ -1937,6 +1939,7 @@ static void reply_packet_rx_submit(struct bunix_msg *reply,
 	packet_ingress_arp_ipv4(iface, packet->data, packet->len);
 	packet_ingress_learn_ipv4_neighbor(iface, packet->data, packet->len);
 	packet_ingress_udp_ipv4(packet->data, packet->len);
+	packet_ingress_tcp_ipv4(iface, packet->data, packet->len);
 	packet_ingress_icmp_ipv4(packet->data, packet->len);
 	if (iface->rx_tail != 0) {
 		iface->rx_tail->next = packet;
@@ -2888,6 +2891,156 @@ static int tcp_pending_push(struct tcp_socket *listener, u64 socket_id)
 	listener->pending_tail = pending;
 	listener->pending_count++;
 	return 0;
+}
+
+static unsigned short tcp_ipv4_checksum(const unsigned char *tcp, u64 len,
+					u64 source_ip, u64 dest_ip)
+{
+	unsigned char pseudo[12];
+
+	net_write_be32(pseudo, source_ip);
+	net_write_be32(pseudo + 4, dest_ip);
+	pseudo[8] = 0;
+	pseudo[9] = NET_PROTO_TCP;
+	net_write_be16(pseudo + 10, len);
+	return net_checksum_finish(net_checksum_sum(tcp, len,
+						    net_checksum_sum(pseudo,
+								     sizeof(pseudo),
+								     0)));
+}
+
+static void tcp_send_synack_ipv4(struct net_interface *iface,
+				 const unsigned char *request,
+				 u64 source_ip, u64 dest_ip,
+				 u64 source_port, u64 dest_port,
+				 u64 ack_seq)
+{
+	unsigned char frame[54];
+	unsigned short ip_checksum;
+	unsigned short tcp_checksum;
+	const u64 source_mac = net_read_mac48(request + 6);
+
+	if (iface == 0 || iface == &loopback || source_mac == 0 ||
+	    iface->mac_hi == 0) {
+		return;
+	}
+	for (u64 i = 0; i < 6; i++) {
+		frame[i] = (unsigned char)((source_mac >> ((5 - i) * 8)) &
+					   0xff);
+		frame[6 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	frame[12] = 0x08;
+	frame[13] = 0x00;
+	frame[14] = 0x45;
+	frame[15] = 0;
+	net_write_be16(frame + 16, 40);
+	net_write_be16(frame + 18, 0);
+	net_write_be16(frame + 20, 0);
+	frame[22] = 64;
+	frame[23] = NET_PROTO_TCP;
+	frame[24] = 0;
+	frame[25] = 0;
+	net_write_be32(frame + 26, source_ip);
+	net_write_be32(frame + 30, dest_ip);
+	net_write_be16(frame + 34, source_port);
+	net_write_be16(frame + 36, dest_port);
+	net_write_be32(frame + 38, 0);
+	net_write_be32(frame + 42, ack_seq);
+	frame[46] = 0x50;
+	frame[47] = 0x12;
+	net_write_be16(frame + 48, 65535);
+	net_write_be16(frame + 50, 0);
+	net_write_be16(frame + 52, 0);
+	ip_checksum = net_checksum_finish(net_checksum_sum(frame + 14, 20, 0));
+	frame[24] = (unsigned char)((ip_checksum >> 8) & 0xff);
+	frame[25] = (unsigned char)(ip_checksum & 0xff);
+	tcp_checksum = tcp_ipv4_checksum(frame + 34, 20, source_ip, dest_ip);
+	frame[50] = (unsigned char)((tcp_checksum >> 8) & 0xff);
+	frame[51] = (unsigned char)(tcp_checksum & 0xff);
+	(void)packet_tx_enqueue_copy(iface, frame, sizeof(frame));
+}
+
+static void packet_ingress_tcp_ipv4(struct net_interface *iface,
+				    const unsigned char *packet, u64 len)
+{
+	const unsigned char *ip;
+	const unsigned char *tcp;
+	struct tcp_socket *listener;
+	struct tcp_socket *server;
+	u64 ihl;
+	u64 total_len;
+	u64 fragment;
+	u64 tcp_header_len;
+	u64 src_ip;
+	u64 dst_ip;
+	u64 src_port;
+	u64 dst_port;
+	u64 seq;
+	u64 flags;
+
+	if (iface == 0 || packet == 0 || len < 14 + 20 ||
+	    net_read_be16(packet + 12) != 0x0800) {
+		return;
+	}
+	ip = packet + 14;
+	if ((ip[0] >> 4) != 4 || ip[9] != NET_PROTO_TCP) {
+		return;
+	}
+	ihl = (ip[0] & 0x0f) * 4;
+	if (ihl < 20 || len < 14 + ihl + 20) {
+		return;
+	}
+	total_len = net_read_be16(ip + 2);
+	if (total_len < ihl + 20 || len < 14 + total_len) {
+		return;
+	}
+	fragment = net_read_be16(ip + 6);
+	if ((fragment & 0x3fff) != 0) {
+		return;
+	}
+	src_ip = net_read_be32(ip + 12);
+	dst_ip = net_read_be32(ip + 16);
+	if (!net_addr_is_local(BUNIX_NET_ADDR_FAMILY_IPV4, 0, dst_ip)) {
+		return;
+	}
+	tcp = ip + ihl;
+	tcp_header_len = (tcp[12] >> 4) * 4;
+	if (tcp_header_len < 20 || total_len < ihl + tcp_header_len) {
+		return;
+	}
+	src_port = net_read_be16(tcp);
+	dst_port = net_read_be16(tcp + 2);
+	flags = tcp[13];
+	if (src_ip == 0 || src_port == 0 || dst_port == 0 ||
+	    (flags & 0x02) == 0 || (flags & 0x10) != 0) {
+		return;
+	}
+	listener = tcp_find_listener(BUNIX_NET_ADDR_FAMILY_IPV4, 0, dst_ip,
+				     dst_port);
+	if (listener == 0) {
+		return;
+	}
+	server = tcp_alloc_socket(BUNIX_NET_ADDR_FAMILY_IPV4);
+	if (server == 0) {
+		return;
+	}
+	server->state = NET_TCP_STATE_ESTABLISHED;
+	server->local.family = BUNIX_NET_ADDR_FAMILY_IPV4;
+	server->local.hi = 0;
+	server->local.lo = dst_ip;
+	server->local.port = dst_port;
+	server->peer_addr.family = BUNIX_NET_ADDR_FAMILY_IPV4;
+	server->peer_addr.hi = 0;
+	server->peer_addr.lo = src_ip;
+	server->peer_addr.port = src_port;
+	seq = net_read_be32(tcp + 4);
+	if (tcp_pending_push(listener, server->id) != 0) {
+		server->state = NET_TCP_STATE_CLOSED;
+		return;
+	}
+	tcp_send_synack_ipv4(iface, packet, dst_ip, src_ip, dst_port,
+			     src_port, seq + 1);
 }
 
 static void reply_tcp_connect(struct bunix_msg *reply,
