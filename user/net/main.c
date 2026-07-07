@@ -3043,22 +3043,138 @@ static void packet_ingress_tcp_ipv4(struct net_interface *iface,
 			     src_port, seq + 1);
 }
 
+static int tcp_connect_external_ipv4(struct tcp_socket *client, u64 dest_ip,
+				     u64 dest_port)
+{
+	const struct net_route *route;
+	struct net_interface *iface;
+	unsigned char *frame;
+	u64 source_ip;
+	u64 next_hop_ip;
+	u64 dest_mac = 0;
+	unsigned short ip_checksum;
+	unsigned short tcp_checksum;
+
+	if (client == 0 || client->state != NET_TCP_STATE_OPEN ||
+	    client->family != BUNIX_NET_ADDR_FAMILY_IPV4 || dest_ip == 0 ||
+	    dest_port == 0 || dest_port > 65535) {
+		return -1;
+	}
+	route = net_route_lookup(BUNIX_NET_ADDR_FAMILY_IPV4, 0, dest_ip);
+	if (route == 0 || (route->flags & BUNIX_NET_ROUTE_FLAG_UP) == 0) {
+		return -1;
+	}
+	iface = interface_find(route->iface);
+	source_ip = iface_ipv4_addr(route->iface);
+	next_hop_ip = route->gateway_lo != 0 ? route->gateway_lo : dest_ip;
+	if (iface == 0 || source_ip == 0 || iface->mac_hi == 0) {
+		return -1;
+	}
+	if (client->local.port == 0 &&
+	    tcp_bind_socket(client, 0, 0, 0) != 0) {
+		return -1;
+	}
+	{
+		struct net_neighbor *neighbor =
+			neighbor_find(BUNIX_NET_ADDR_FAMILY_IPV4, 0,
+				      next_hop_ip, route->iface);
+
+		if (neighbor != 0) {
+			dest_mac = neighbor->mac_hi;
+		}
+	}
+	frame = (unsigned char *)bunix_alloc(54);
+	if (frame == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < 6; i++) {
+		frame[i] = dest_mac != 0 ?
+			   (unsigned char)((dest_mac >> ((5 - i) * 8)) & 0xff) :
+			   0xff;
+		frame[6 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	frame[12] = 0x08;
+	frame[13] = 0x00;
+	frame[14] = 0x45;
+	frame[15] = 0;
+	net_write_be16(frame + 16, 40);
+	net_write_be16(frame + 18, 0);
+	net_write_be16(frame + 20, 0);
+	frame[22] = 64;
+	frame[23] = NET_PROTO_TCP;
+	frame[24] = 0;
+	frame[25] = 0;
+	net_write_be32(frame + 26, source_ip);
+	net_write_be32(frame + 30, dest_ip);
+	net_write_be16(frame + 34, client->local.port);
+	net_write_be16(frame + 36, dest_port);
+	net_write_be32(frame + 38, 0);
+	net_write_be32(frame + 42, 0);
+	frame[46] = 0x50;
+	frame[47] = 0x02;
+	net_write_be16(frame + 48, 65535);
+	net_write_be16(frame + 50, 0);
+	net_write_be16(frame + 52, 0);
+	ip_checksum = net_checksum_finish(net_checksum_sum(frame + 14, 20, 0));
+	frame[24] = (unsigned char)((ip_checksum >> 8) & 0xff);
+	frame[25] = (unsigned char)(ip_checksum & 0xff);
+	tcp_checksum = tcp_ipv4_checksum(frame + 34, 20, source_ip, dest_ip);
+	frame[50] = (unsigned char)((tcp_checksum >> 8) & 0xff);
+	frame[51] = (unsigned char)(tcp_checksum & 0xff);
+	if (dest_mac == 0) {
+		if (pending_frame_add(BUNIX_NET_ADDR_FAMILY_IPV4, 0,
+				      next_hop_ip, route->iface, frame,
+				      54) != 0) {
+			bunix_free(frame);
+			return -1;
+		}
+		arp_request_ipv4(iface, source_ip, next_hop_ip);
+	} else if (packet_tx_enqueue_copy(iface, frame, 54) != 0) {
+		bunix_free(frame);
+		return -1;
+	}
+	bunix_free(frame);
+	client->state = NET_TCP_STATE_ESTABLISHED;
+	client->peer_addr.family = BUNIX_NET_ADDR_FAMILY_IPV4;
+	client->peer_addr.hi = 0;
+	client->peer_addr.lo = dest_ip;
+	client->peer_addr.port = dest_port;
+	client->peer_socket = 0;
+	return 0;
+}
+
 static void reply_tcp_connect(struct bunix_msg *reply,
 			      const struct bunix_msg *message)
 {
 	struct tcp_socket *client = tcp_find(message->words[0]);
 	struct tcp_socket *listener;
 	struct tcp_socket *server;
+	const u64 hi = message->words[1];
+	const u64 lo = message->words[2];
+	const u64 port = message->words[3];
+	const int local = client != 0 &&
+			  net_addr_is_local(client->family, hi, lo);
+	const int routed_ipv4 = client != 0 &&
+				client->family == BUNIX_NET_ADDR_FAMILY_IPV4 &&
+				hi == 0 &&
+				net_route_lookup(client->family, hi, lo) != 0;
 
 	if (client == 0 || client->state != NET_TCP_STATE_OPEN ||
-	    !net_addr_is_local(client->family, message->words[1],
-			       message->words[2]) ||
-	    message->words[3] == 0 || message->words[3] > 65535) {
+	    (!local && !routed_ipv4) || port == 0 || port > 65535) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
-	listener = tcp_find_listener(client->family, message->words[1],
-				     message->words[2], message->words[3]);
+	if (!local) {
+		if (tcp_connect_external_ipv4(client, lo, port) != 0) {
+			reply->words[0] = (u64)-1;
+			return;
+		}
+		reply->words[0] = 0;
+		reply->words[1] = client->local.port;
+		return;
+	}
+	listener = tcp_find_listener(client->family, hi, lo, port);
 	if (listener == 0) {
 		client->reset = 1;
 		reply->words[0] = (u64)-1;
@@ -3079,9 +3195,9 @@ static void reply_tcp_connect(struct bunix_msg *reply,
 	server->peer_addr = client->local;
 	server->peer_socket = client->id;
 	client->state = NET_TCP_STATE_ESTABLISHED;
-	client->peer_addr.hi = message->words[1];
-	client->peer_addr.lo = message->words[2];
-	client->peer_addr.port = message->words[3];
+	client->peer_addr.hi = hi;
+	client->peer_addr.lo = lo;
+	client->peer_addr.port = port;
 	client->peer_socket = server->id;
 	if (tcp_pending_push(listener, server->id) != 0) {
 		server->state = NET_TCP_STATE_CLOSED;

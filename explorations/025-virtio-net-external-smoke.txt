@@ -38,7 +38,7 @@ Tasks:
 - [x] Implement enough IPv6 neighbor discovery for link-local and localhost-safe
       smoke tests, or explicitly defer IPv6 external traffic with a documented
       test gap.
-- [ ] Add packet-interface egress queueing from UDP/TCP route lookup into
+- [x] Add packet-interface egress queueing from UDP/TCP route lookup into
       `BUNIX_NET_PACKET_TX_ENQUEUE`.
 - [ ] Add packet-interface ingress dispatch from `BUNIX_NET_PACKET_RX_SUBMIT`
       into Ethernet, ARP/ND, IPv4, IPv6, UDP, and TCP paths.
@@ -85,10 +85,11 @@ Current implementation gaps:
 - External UDP route lookup now feeds packet-interface egress for IPv4,
   including ARP-backed queueing, and packet-interface IPv4 UDP ingress is
   dispatched into bound UDP sockets.  Packet-interface IPv4 TCP can now accept
-  inbound SYN frames for local listeners and emit SYN-ACK replies, but external
-  TCP connect, established packet data, retransmission, FIN/RST handling, and
-  route-based TCP egress are still missing.  Localhost UDP/TCP remains covered
-  by the core networking tests.
+  inbound SYN frames for local listeners and emit SYN-ACK replies.  Route-based
+  IPv4 TCP connect can emit SYN frames through ARP-backed packet-interface
+  egress.  Established packet data, ACK processing, retransmission, FIN/RST
+  handling, and receive windows are still missing.  Localhost UDP/TCP remains
+  covered by the core networking tests.
 - The first deterministic host-side packet generator exists for QEMU
   socket-multicast backends, but the exploration still needs a full smoke target
   that boots QEMU against it and asserts guest-visible RX/TX behavior.
@@ -148,6 +149,11 @@ TCP packet-interface progress:
   packet-interface address, injects a TCP SYN from a synthetic external peer,
   verifies the SYN-ACK frame, polls and accepts the listener, and verifies the
   accepted peer address and port.
+- Route-backed IPv4 TCP connect now binds an ephemeral local port, resolves the
+  next hop through the IPv4 neighbor cache, queues the SYN while ARP is pending,
+  and emits the SYN through the packet TX queue after resolution.  The bootstrap
+  NET self-test verifies the generated ARP request, injects an ARP reply, and
+  verifies the queued SYN frame.
 
 Host-peer harness progress:
 
