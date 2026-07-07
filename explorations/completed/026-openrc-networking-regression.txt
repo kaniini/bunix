@@ -78,7 +78,7 @@ Tasks:
 - [x] Add observability to the test failure artifacts so the next networking
       regression includes `/proc/net/config`, `/proc/net/dev`, `/proc/net/arp`,
       OpenRC status, and recent dmesg output.
-- [ ] Re-run the narrow networking targets and full tests before marking the
+- [x] Re-run the narrow networking targets and full tests before marking the
       exploration complete.
 
 Status:
