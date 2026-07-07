@@ -26,6 +26,11 @@ enum {
 	NET_PROTO_ICMPV6 = 58,
 	NET_ICMP_POLLIN = 1 << 0,
 	NET_ICMP_POLLOUT = 1 << 1,
+	NET_PACKET_SOCKADDR_LL_SIZE = 20,
+	NET_PACKET_AF_PACKET = 17,
+	NET_PACKET_ARPHRD_ETHER = 1,
+	NET_PACKET_HOST = 0,
+	NET_PACKET_BROADCAST = 1,
 };
 
 struct net_packet {
@@ -333,6 +338,17 @@ static void reply_interface_info(struct bunix_msg *reply,
 static void packet_iface_info_store(struct bunix_net_packet_interface_info *info,
 				    const struct net_interface *iface);
 
+static u64 packet_queue_count(const struct net_packet *packet)
+{
+	u64 count = 0;
+
+	while (packet != 0) {
+		count++;
+		packet = packet->next;
+	}
+	return count;
+}
+
 static void reply_interface_at(struct bunix_msg *reply,
 			       const struct bunix_msg *message)
 {
@@ -402,6 +418,8 @@ static void packet_iface_info_store(struct bunix_net_packet_interface_info *info
 	info->tx_packets = iface->tx_packets;
 	info->rx_drops = iface->rx_drops;
 	info->tx_drops = iface->tx_drops;
+	info->rx_pending = packet_queue_count(iface->rx_head);
+	info->tx_pending = packet_queue_count(iface->tx_head);
 }
 
 static void reply_packet_interface_attach(struct bunix_msg *reply,
@@ -1302,7 +1320,8 @@ static void reply_packet_rx_dequeue(struct bunix_msg *reply,
 	struct net_interface *iface = interface_find(message->words[0]);
 	const u64 max_len = message->words[1];
 	const u64 ethertype = message->words[2];
-	const u64 strip_len = message->words[3];
+	const u64 strip_len = message->words[3] & 0xffffffffu;
+	const u64 sockaddr_len = message->words[3] >> 32;
 	struct net_packet *prev = 0;
 	struct net_packet *packet;
 	u64 payload_len;
@@ -1344,6 +1363,46 @@ static void reply_packet_rx_dequeue(struct bunix_msg *reply,
 		reply->words[2] = 0;
 		reply->words[3] = payload_len;
 		return;
+	}
+	if (sockaddr_len != 0) {
+		unsigned char sockaddr[NET_PACKET_SOCKADDR_LL_SIZE];
+		u64 copy = sockaddr_len < sizeof(sockaddr) ?
+			   sockaddr_len : sizeof(sockaddr);
+
+		for (u64 i = 0; i < sizeof(sockaddr); i++) {
+			sockaddr[i] = 0;
+		}
+		sockaddr[0] = NET_PACKET_AF_PACKET;
+		sockaddr[1] = 0;
+		sockaddr[2] = packet->len >= 14 ? packet->data[12] : 0;
+		sockaddr[3] = packet->len >= 14 ? packet->data[13] : 0;
+		sockaddr[4] = (unsigned char)(iface->id & 0xff);
+		sockaddr[5] = (unsigned char)((iface->id >> 8) & 0xff);
+		sockaddr[6] = (unsigned char)((iface->id >> 16) & 0xff);
+		sockaddr[7] = (unsigned char)((iface->id >> 24) & 0xff);
+		sockaddr[8] = NET_PACKET_ARPHRD_ETHER;
+		sockaddr[9] = 0;
+		sockaddr[10] = packet->len >= 6 &&
+			       packet->data[0] == 0xff &&
+			       packet->data[1] == 0xff &&
+			       packet->data[2] == 0xff &&
+			       packet->data[3] == 0xff &&
+			       packet->data[4] == 0xff &&
+			       packet->data[5] == 0xff ?
+			       NET_PACKET_BROADCAST : NET_PACKET_HOST;
+		sockaddr[11] = 6;
+		for (u64 i = 0; i < 6 && packet->len >= 12; i++) {
+			sockaddr[12 + i] = packet->data[6 + i];
+		}
+		if (copy != 0 &&
+		    bunix_buffer_write(message->cap, max_len, sockaddr,
+				       copy) != 0) {
+			reply->words[0] = (u64)-1;
+			reply->words[1] = iface->id;
+			reply->words[2] = 0;
+			reply->words[3] = payload_len;
+			return;
+		}
 	}
 	if (prev != 0) {
 		prev->next = packet->next;

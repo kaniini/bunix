@@ -3010,12 +3010,21 @@ static long linux_net_default_packet_interface(void)
 	}
 	count = reply.words[1];
 	for (u64 i = 0; i < count; i++) {
+		struct bunix_net_packet_interface_info info;
+
 		if (linux_net_request(BUNIX_NET_INTERFACE_AT, 0, 0, i, 0, 0, 0,
 				      &reply) != 0) {
 			return -LINUX_ENODEV;
 		}
-		if (reply.words[1] != 1) {
-			return (long)reply.words[1];
+		if (reply.words[1] == 1) {
+			continue;
+		}
+		if (linux_net_interface_details(reply.words[1], &info) == 0 &&
+		    (info.flags & (BUNIX_NET_IFACE_FLAG_UP |
+				   BUNIX_NET_IFACE_FLAG_RUNNING)) ==
+			    (BUNIX_NET_IFACE_FLAG_UP |
+			     BUNIX_NET_IFACE_FLAG_RUNNING)) {
+			return (long)info.id;
 		}
 	}
 	return -LINUX_ENODEV;
@@ -6008,6 +6017,38 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 	return utmps_recv_response(&process->fds[fd], len, buffer);
 }
 
+static long linux_recvmsg(struct linux_process *process, u64 fd, u64 len,
+			  u64 name_len, u64 buffer, u64 *actual_name_len)
+{
+	struct bunix_msg reply;
+	const u64 sockaddr_ll_len = 20;
+	const u64 encoded = LINUX_ETHERNET_HEADER_SIZE |
+			    ((name_len != 0 ? name_len : 0) << 32);
+
+	if (actual_name_len != 0) {
+		*actual_name_len = 0;
+	}
+	if (fd >= process->fd_capacity ||
+	    process->fds[fd].kind != LINUX_FD_SOCKET) {
+		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle != LINUX_SOCKET_NET_PACKET) {
+		return linux_recvfrom(process, fd, len, buffer);
+	}
+	if (process->fds[fd].offset == 0) {
+		return -LINUX_EDESTADDRREQ;
+	}
+	if (linux_net_request(BUNIX_NET_PACKET_RX_DEQUEUE, buffer,
+			      BUNIX_RIGHT_SEND, process->fds[fd].offset, len,
+			      LINUX_ETH_P_IP, encoded, &reply) != 0) {
+		return -LINUX_EAGAIN;
+	}
+	if (actual_name_len != 0 && name_len != 0) {
+		*actual_name_len = sockaddr_ll_len;
+	}
+	return (long)reply.words[2];
+}
+
 static long linux_pollfd(struct linux_process *process, long fd, u64 events)
 {
 	enum {
@@ -7421,6 +7462,17 @@ int main(void)
 							     message.words[0],
 							     message.words[1],
 							     message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_RECVMSG:
+			reply.words[0] = (u64)linux_recvmsg(process,
+							    message.words[0],
+							    message.words[1],
+							    message.words[3],
+							    message.cap,
+							    &reply.words[1]);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

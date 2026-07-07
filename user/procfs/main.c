@@ -1506,8 +1506,11 @@ static u64 build_net_config(void)
 	append_u64(&len, status.last_error);
 	append_char(&len, '\n');
 	for (u64 i = 0; i < status.interface_count; i++) {
+		struct bunix_net_packet_interface_info detail;
+		struct bunix_msg detail_reply;
 		struct bunix_msg info;
 		struct bunix_msg stats;
+		long detail_buffer;
 		u64 iface;
 		u64 flags;
 
@@ -1519,6 +1522,18 @@ static u64 build_net_config(void)
 		if (net_call(BUNIX_NET_INTERFACE_STATS, iface, &stats) != 0) {
 			continue;
 		}
+		detail_buffer = bunix_buffer_create(sizeof(detail));
+		if (detail_buffer <= 0) {
+			continue;
+		}
+		if (net_call_buffer(BUNIX_NET_INTERFACE_DETAILS, iface,
+				    (u64)detail_buffer, &detail_reply) != 0 ||
+		    bunix_buffer_read((u64)detail_buffer, 0, &detail,
+				      sizeof(detail)) != 0) {
+			bunix_handle_close((u64)detail_buffer);
+			continue;
+		}
+		bunix_handle_close((u64)detail_buffer);
 		append_str(&len, "iface ");
 		append_net_iface_name(&len, iface, flags);
 		append_str(&len, " id ");
@@ -1533,6 +1548,10 @@ static u64 build_net_config(void)
 		append_u64(&len, stats.words[2]);
 		append_str(&len, " drops ");
 		append_u64(&len, stats.words[3]);
+		append_str(&len, " rxq ");
+		append_u64(&len, detail.rx_pending);
+		append_str(&len, " txq ");
+		append_u64(&len, detail.tx_pending);
 		append_char(&len, '\n');
 	}
 	return len;

@@ -1351,15 +1351,16 @@ static u64 linux_forward_recvmsg(struct ipc_port *linux,
 		}
 		total += iov.len;
 	}
-	buffer = buffer_create(total == 0 ? 1 : total);
+	buffer = buffer_create(total + msg.namelen == 0 ? 1 :
+			       total + msg.namelen);
 	if (buffer == 0) {
 		return (u64)-LINUX_ENOMEM;
 	}
-	request->type = LINUX_SYSCALL_RECVFROM;
+	request->type = LINUX_SYSCALL_RECVMSG;
 	request->words[0] = fd;
 	request->words[1] = total;
 	request->words[2] = flags;
-	request->words[3] = 0;
+	request->words[3] = msg.namelen;
 	request->cap_type = IPC_CAP_BUFFER;
 	request->cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP;
 	request->cap_object = buffer;
@@ -1400,6 +1401,33 @@ static u64 linux_forward_recvmsg(struct ipc_port *linux,
 		}
 	}
 	spin_unlock_irqrestore(&syscall_copy_lock, irq_flags);
+	if (msg.namelen != 0 && reply.words[1] != 0) {
+		u32 actual = (u32)reply.words[1];
+		u64 copy = msg.namelen < reply.words[1] ?
+			   msg.namelen : reply.words[1];
+
+		irq_flags = spin_lock_irqsave(&syscall_copy_lock);
+		if ((copy != 0 &&
+		     (buffer_read(buffer, total, syscall_copy_buffer, copy) != 0 ||
+		      write_current_user(msg.name, syscall_copy_buffer,
+					 copy) != 0)) ||
+		    write_current_user(user_msghdr + LINUX_MSGHDR_NAMELEN_OFF,
+				       &actual, sizeof(actual)) != 0) {
+			spin_unlock_irqrestore(&syscall_copy_lock, irq_flags);
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
+		spin_unlock_irqrestore(&syscall_copy_lock, irq_flags);
+	}
+	{
+		u32 out_flags = 0;
+
+		if (write_current_user(user_msghdr + LINUX_MSGHDR_FLAGS_OFF,
+				       &out_flags, sizeof(out_flags)) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
+	}
 	buffer_release(buffer);
 	return reply.words[0];
 }

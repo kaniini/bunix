@@ -188,6 +188,7 @@ enum {
 	BUNIX_LINUX_ACCEPT = 43,
 	BUNIX_LINUX_SENDTO = 44,
 	BUNIX_LINUX_RECVFROM = 45,
+	BUNIX_LINUX_RECVMSG = 47,
 	BUNIX_LINUX_GETSOCKNAME = 51,
 	BUNIX_LINUX_GETPEERNAME = 52,
 	BUNIX_LINUX_SETSOCKOPT = 54,
@@ -584,6 +585,8 @@ struct bunix_net_packet_interface_info {
 	u64 tx_packets;
 	u64 rx_drops;
 	u64 tx_drops;
+	u64 rx_pending;
+	u64 tx_pending;
 };
 
 struct bunix_net_packet_info {
