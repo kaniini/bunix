@@ -12,8 +12,7 @@ apk_plain_log=$artifact_dir/apk.plain.log
 apk_cache=${APK_CACHE_DIR:-$artifact_dir/apk-cache}
 repositories=${APK_REPOSITORIES_FILE:-/etc/apk/repositories}
 apk_packages=${ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc}
-rootfs_tool=${ROOTFS_TOOL:-build/tools/mkrootfs}
-rootfs_format=${ROOTFS_IMAGE_FORMAT:-custom}
+rootfs_format=${ROOTFS_IMAGE_FORMAT:-squashfs}
 login=${LOGIN_MODULE:-build/modules/login.user}
 statidtest=${STATIDTEST_MODULE:-build/modules/statidtest.user}
 
@@ -115,9 +114,6 @@ find "$root/var/cache/apk" -type f -delete 2>/dev/null || true
 } > "$manifest"
 
 case "$rootfs_format" in
-custom)
-	"$rootfs_tool" "$out" --tree "$root"
-	;;
 squashfs)
 	mksquashfs "$root" "$out" -noappend -no-compression -no-fragments \
 		-no-exports -no-xattrs -all-root -root-mode 0755 -b 128K \

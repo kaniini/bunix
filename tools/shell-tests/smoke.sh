@@ -9,9 +9,9 @@ EOF_SMOKE
 }
 
 check_smoke() {
-	marker_file=$script_dir/test-boot-markers.txt
+	marker_file=$script_dir/test-boot-markers-squashfs.txt
 	if [ "${SMP:-2}" = 1 ]; then
-		marker_file=$script_dir/test-boot-markers-up.txt
+		marker_file=$script_dir/test-boot-markers-squashfs-up.txt
 	fi
 
 	check_fixed_markers_file "$log" "$marker_file" \

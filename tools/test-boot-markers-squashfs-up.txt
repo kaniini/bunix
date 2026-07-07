@@ -4,14 +4,9 @@ timer: pit 100hz
 interrupts: enabled
 user: gdt/tss/syscall ready
 multiboot2: acpi rsdp=
-smp: discovered cpus=2
+smp: discovered cpus=1
 timer: lapic cpu=0 periodic
-timer: lapic cpu=1 periodic
-smp: ap online cpu=1
-smp: started aps=1
-sched: init cpus=2 boot_cpu=0
-sched: cpu=1 online
-smp: scheduler aps=1
+sched: init cpus=1 boot_cpu=0
 names: init dynamic
 slab: init caches=
 buffer: init max=2097152
@@ -67,27 +62,14 @@ first: aux proc=4
 first: large buffer ok
 alloctest: ok
 phdrstress: ok
-nettest: udp msg ok
-nettest: udp ok
-nettest: udp6 ok
-nettest: tcp select ok
-nettest: tcp ok
-nettest: tcp6 ok
-nettest: proc net ok
-nettest: edges ok
-nettest: ok
 linux-server: online
 linux-server: registered
 linux-server: openat
 block: online
 virtio-bus: ready devices=
-net: loopback lo ipv4=127.0.0.1 ipv6=::1
-bootstrap: net loopback ok
-bootstrap: net udp ok
-bootstrap: net tcp ok
-bootstrap: net packet iface ok
-bootstrap: net route ok
-rootfs: online
+squashfs: online
+squashfs: indexed nodes=
+squashfs: super ok block_size=131072
 vfs: online
 procfs: online
 tmpfs: online
@@ -100,11 +82,11 @@ vfs: ready
 vfs: mounted translator
 bootstrap: launching servers
 bootstrap: names ready
+bootstrap: squashfs root
 bootstrap: fs namespace
 bootstrap: fs ready
 bootstrap: linux init exec
 login:
-rootfs: module
 bootstrap: bad cap denied
 kernel: launching module server time
 kernel: launching module server user
@@ -114,7 +96,7 @@ kernel: launching module server procfs
 kernel: launching module server tmpfs
 kernel: launching module server devfs
 kernel: launching module server utmpfs
-kernel: launching module server rootfs
+kernel: launching module server squashfs
 kernel: launching module server block
 kernel: launching module server vfs
 kernel: launching module server ping

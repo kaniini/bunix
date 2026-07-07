@@ -1,7 +1,7 @@
 TRUN
 TRUNCATE_CAT_OK
 unionfs on / type unionfs (rw)
-rootfs on /.lower type rootfs (rw)
+squashfs on /.lower type squashfs (rw)
 tmpfs on /.upper type tmpfs (rw)
 tmpfs on /run type tmpfs (rw)
 tmpfs on /tmp type tmpfs (rw)

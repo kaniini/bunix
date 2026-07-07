@@ -50,8 +50,6 @@ SYSFS_MODULE := $(BUILD_DIR)/modules/sysfs.server
 SYSFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/sysfs/main.c.o
 UTMPFS_MODULE := $(BUILD_DIR)/modules/utmpfs.server
 UTMPFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/utmpfs/main.c.o
-ROOTFS_MODULE := $(BUILD_DIR)/modules/rootfs.server
-ROOTFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/rootfs/main.c.o
 UNIONFS_MODULE := $(BUILD_DIR)/modules/unionfs.server
 UNIONFS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/unionfs/main.c.o
 EXT2_MODULE := $(BUILD_DIR)/modules/ext2.server
@@ -118,12 +116,10 @@ BUSYBOX ?= $(BUSYBOX_DYNAMIC)
 MUSL_LDSO ?= /lib/ld-musl-x86_64.so.1
 PING_MODULE := $(BUILD_DIR)/modules/ping.server
 PING_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/ping/main.c.o
-SYNTHETIC_BLOCK_IMAGE := $(BUILD_DIR)/modules/disk0.img
-ALPINE_BLOCK_IMAGE := $(BUILD_DIR)/modules/alpine-disk0.img
 SYNTHETIC_SQUASHFS_IMAGE := $(BUILD_DIR)/modules/disk0.sqfs
 ALPINE_SQUASHFS_IMAGE := $(BUILD_DIR)/modules/alpine-disk0.sqfs
 ROOTFS_FLAVOR ?= squashfs
-BLOCK_IMAGE := $(if $(filter alpine,$(ROOTFS_FLAVOR)),$(ALPINE_BLOCK_IMAGE),$(if $(filter alpine-squashfs,$(ROOTFS_FLAVOR)),$(ALPINE_SQUASHFS_IMAGE),$(if $(filter squashfs,$(ROOTFS_FLAVOR)),$(SYNTHETIC_SQUASHFS_IMAGE),$(SYNTHETIC_BLOCK_IMAGE))))
+BLOCK_IMAGE := $(if $(filter alpine-squashfs,$(ROOTFS_FLAVOR)),$(ALPINE_SQUASHFS_IMAGE),$(SYNTHETIC_SQUASHFS_IMAGE))
 VIRTIO_BLOCK_IMAGE ?= $(BLOCK_IMAGE)
 VIRTIO_BLK_TEST_IMAGE := $(BUILD_DIR)/virtio-blk-test.img
 EXT2_TEST_IMAGE := $(BUILD_DIR)/modules/ext2-test.img
@@ -132,11 +128,10 @@ QEMU_VIRTIO_BLK_ARGS := -drive if=none,id=bunix-virtio0,format=raw,readonly=on,f
 QEMU_VIRTIO_BLK_TEST_ARGS := -drive if=none,id=bunix-virtio0,format=raw,file=$(VIRTIO_BLK_TEST_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
 QEMU_EXT2_FSCK_TEST_ARGS := -drive if=none,id=bunix-virtio0,format=raw,file=$(EXT2_FSCK_TEST_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
 QEMU_VIRTIO_NET_ARGS := -netdev user,id=bunix-net0,restrict=on -device virtio-net-pci,disable-legacy=on,netdev=bunix-net0,mac=52:54:00:18:00:01,bus=pcie.0,addr=0x7
-TEST_BOOT_MARKERS := $(if $(filter alpine,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine.txt,$(if $(filter alpine-squashfs,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine-squashfs.txt,$(if $(filter squashfs,$(ROOTFS_FLAVOR)),tools/test-boot-markers-squashfs.txt,tools/test-boot-markers.txt)))
+TEST_BOOT_MARKERS := $(if $(filter alpine-squashfs,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine-squashfs.txt,tools/test-boot-markers-squashfs.txt)
 ROOTFS_FLAVOR_STAMP := $(BUILD_DIR)/rootfs-flavor.stamp
 PARALLEL_TEST_SET := $(if $(BUNIX_TEST_SET),$(BUNIX_TEST_SET),all)
 PARALLEL_ALPINE_ESP := $(if $(filter all openrc,$(PARALLEL_TEST_SET)),$(ALPINE_EFI_BOOT_APP))
-ROOTFS_TOOL := $(BUILD_DIR)/tools/mkrootfs
 ROOTFS_HELLO := modules/hello.txt
 ROOTFS_SECRET := modules/secret.txt
 ROOTFS_NESTED := modules/nested.txt
@@ -272,7 +267,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool test-alpine-rootfs list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -514,21 +509,6 @@ $(PING_MODULE): $(PING_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PING_MODULE_OBJS)
 
-$(ROOTFS_MODULE): $(ROOTFS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(ROOTFS_MODULE_OBJS)
-
-$(ROOTFS_TOOL): tools/mkrootfs.c
-	mkdir -p $(dir $@)
-	$(CC) -std=c11 -O2 -Wall -Wextra -Werror $< -o $@
-
-$(SYNTHETIC_BLOCK_IMAGE): $(ROOTFS_TOOL) $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(ROOTFS_SHEBANGTEST) $(ROOTFS_SHEBANGLOOP_A) $(ROOTFS_SHEBANGLOOP_B) $(ROOTFS_SHEBANGBAD) $(FIRST_MODULE) $(ALLOCTEST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(VFORKSTRESS_MODULE) $(EXECOK_MODULE) $(READBIG_MODULE) $(MMAPBIG_MODULE) $(MMAPHUGE_MODULE) $(EXECBIG_MODULE) $(PHDRSTRESS_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(IOVTEST_MODULE) $(FCHMODATTEST_MODULE) $(WAITPGIDTEST_MODULE) $(EXECLONGTEST_MODULE) $(AUXIDTEST_MODULE) $(PATHMAXTEST_MODULE) $(PATHERRTEST_MODULE) $(STATIDTEST_MODULE) $(FCNTLLOCKTEST_MODULE) $(SYSRACETEST_MODULE) $(SCHEDSTRESS_MODULE) $(UPTIMETEST_MODULE) $(NETTEST_MODULE) $(BUSYBOX) $(MUSL_LDSO)
-	mkdir -p $(dir $@)
-	$(ROOTFS_TOOL) $@ /hello.txt $(ROOTFS_HELLO) /secret.txt $(ROOTFS_SECRET) /rename-lower.txt $(ROOTFS_NESTED) /usr/share/bunix/nested/hello.txt $(ROOTFS_NESTED) $(ROOTFS_LONG_PATH) $(ROOTFS_NESTED) $(ROOTFS_LONG_EXEC_PATH) $(DYN_HELLO_MODULE) $(ROOTFS_LONG_PROC_EXEC_PATH) $(FIRST_MODULE) /etc/passwd $(ROOTFS_PASSWD) /etc/shadow $(ROOTFS_SHADOW) /etc/group $(ROOTFS_GROUP) /etc/inittab $(ROOTFS_INITTAB) /etc/execs $(ROOTFS_EXECS) /etc/spawns $(ROOTFS_SPAWNS) /bin/shebangtest $(ROOTFS_SHEBANGTEST) /bin/shebangloop-a $(ROOTFS_SHEBANGLOOP_A) /bin/shebangloop-b $(ROOTFS_SHEBANGLOOP_B) /bin/shebangbad $(ROOTFS_SHEBANGBAD) /lib/ld-musl-x86_64.so.1 $(MUSL_LDSO) /bin/first $(FIRST_MODULE) /bin/alloctest $(ALLOCTEST_MODULE) /bin/ipcstress $(IPCSTRESS_MODULE) /bin/login $(LOGIN_MODULE) /bin/lxtest $(LXTEST_MODULE) /bin/getdentstest $(GETDENTSTEST_MODULE) /bin/vforkstress $(VFORKSTRESS_MODULE) /bin/execok $(EXECOK_MODULE) /bin/readbig $(READBIG_MODULE) /bin/mmapbig $(MMAPBIG_MODULE) /bin/mmaphuge $(MMAPHUGE_MODULE) /bin/execbig $(EXECBIG_MODULE) /bin/phdrstress $(PHDRSTRESS_MODULE) /bin/musl-hello $(MUSL_HELLO_MODULE) /bin/dyn-hello $(DYN_HELLO_MODULE) /bin/fputest $(FPUTEST_MODULE) /bin/iovtest $(IOVTEST_MODULE) /bin/fchmodattest $(FCHMODATTEST_MODULE) /bin/waitpgidtest $(WAITPGIDTEST_MODULE) /bin/execlongtest $(EXECLONGTEST_MODULE) /bin/auxidtest $(AUXIDTEST_MODULE) /bin/pathmaxtest $(PATHMAXTEST_MODULE) /bin/patherrtest $(PATHERRTEST_MODULE) /bin/statidtest $(STATIDTEST_MODULE) /bin/fcntllocktest $(FCNTLLOCKTEST_MODULE) /bin/sysracetest $(SYSRACETEST_MODULE) /bin/schedstress $(SCHEDSTRESS_MODULE) /bin/uptimetest $(UPTIMETEST_MODULE) /bin/nettest $(NETTEST_MODULE) /bin/busybox $(BUSYBOX) --dir /home/kaniini --dir /root --dir /tmp --dir /run --dir /mnt --dir /sys --dir /var/tmp --dir /var/run --symlink $(ROOTFS_LONG_SYMLINK) $(ROOTFS_LONG_PATH) --symlink /lib/libc.musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1 $(ROOTFS_BUSYBOX_LINKS)
-
-$(ALPINE_BLOCK_IMAGE): $(ROOTFS_TOOL) $(LOGIN_MODULE) $(STATIDTEST_MODULE) tools/build-alpine-rootfs.sh modules/passwd modules/shadow modules/group
-	ROOTFS_TOOL=$(ROOTFS_TOOL) LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) sh tools/build-alpine-rootfs.sh $@
-
 $(SYNTHETIC_SQUASHFS_IMAGE): tools/build-synthetic-squashfs-rootfs.sh $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(ROOTFS_SHEBANGTEST) $(ROOTFS_SHEBANGLOOP_A) $(ROOTFS_SHEBANGLOOP_B) $(ROOTFS_SHEBANGBAD) $(FIRST_MODULE) $(ALLOCTEST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(VFORKSTRESS_MODULE) $(EXECOK_MODULE) $(READBIG_MODULE) $(MMAPBIG_MODULE) $(MMAPHUGE_MODULE) $(EXECBIG_MODULE) $(PHDRSTRESS_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(IOVTEST_MODULE) $(FCHMODATTEST_MODULE) $(WAITPGIDTEST_MODULE) $(EXECLONGTEST_MODULE) $(AUXIDTEST_MODULE) $(PATHMAXTEST_MODULE) $(PATHERRTEST_MODULE) $(STATIDTEST_MODULE) $(FCNTLLOCKTEST_MODULE) $(SYSRACETEST_MODULE) $(SCHEDSTRESS_MODULE) $(UPTIMETEST_MODULE) $(NETTEST_MODULE) $(BUSYBOX) $(MUSL_LDSO)
 	BUSYBOX=$(BUSYBOX) MUSL_LDSO=$(MUSL_LDSO) MODULE_DIR=$(BUILD_DIR)/modules sh tools/build-synthetic-squashfs-rootfs.sh $@
 
@@ -581,7 +561,7 @@ $(VIRTIO_NET_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 $(EXT2_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 	mkdir -p $(BUILD_DIR)
 	sed -e 's|@KERNEL_CMDLINE@|$(EXT2_TEST_CMDLINE)|g' \
-		-e '/rootfs\.server/a module2 /modules/ext2.server ext2' \
+		-e '/squashfs\.server/a module2 /modules/ext2.server ext2' \
 		-e '/disk0\.img/a module2 /modules/ext2-test.img ext2disk' \
 		$< > $@.tmp
 	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
@@ -589,12 +569,12 @@ $(EXT2_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 	mkdir -p $(BUILD_DIR)
 	sed -e 's|@KERNEL_CMDLINE@|$(EXT2_FSCK_TEST_CMDLINE)|g' \
-		-e '/rootfs\.server/a module2 /modules/ext2.server ext2' \
+		-e '/squashfs\.server/a module2 /modules/ext2.server ext2' \
 		-e '/virtio-bus\.server/a module2 /modules/virtio-blk.server virtio-blk' \
 		$< > $@.tmp
 	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
 
-$(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -615,7 +595,6 @@ $(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTS
 		"modules/devfs.server=$(DEVFS_MODULE)" \
 		"modules/sysfs.server=$(SYSFS_MODULE)" \
 		"modules/utmpfs.server=$(UTMPFS_MODULE)" \
-		"modules/rootfs.server=$(ROOTFS_MODULE)" \
 		"modules/squashfs.server=$(SQUASHFS_MODULE)" \
 		"modules/unionfs.server=$(UNIONFS_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
@@ -626,7 +605,7 @@ $(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTS
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(VIRTIO_BLK_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VIRTIO_BLK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(VIRTIO_BLK_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VIRTIO_BLK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -647,7 +626,7 @@ $(VIRTIO_BLK_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG
 		"modules/devfs.server=$(DEVFS_MODULE)" \
 		"modules/sysfs.server=$(SYSFS_MODULE)" \
 		"modules/utmpfs.server=$(UTMPFS_MODULE)" \
-		"modules/rootfs.server=$(ROOTFS_MODULE)" \
+		"modules/squashfs.server=$(SQUASHFS_MODULE)" \
 		"modules/unionfs.server=$(UNIONFS_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
@@ -658,7 +637,7 @@ $(VIRTIO_BLK_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(VIRTIO_NET_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_NET_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VIRTIO_NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(VIRTIO_NET_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_NET_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VIRTIO_NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -679,7 +658,7 @@ $(VIRTIO_NET_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_NET_TEST_GRUB_STANDALONE_CFG
 		"modules/devfs.server=$(DEVFS_MODULE)" \
 		"modules/sysfs.server=$(SYSFS_MODULE)" \
 		"modules/utmpfs.server=$(UTMPFS_MODULE)" \
-		"modules/rootfs.server=$(ROOTFS_MODULE)" \
+		"modules/squashfs.server=$(SQUASHFS_MODULE)" \
 		"modules/unionfs.server=$(UNIONFS_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
@@ -690,7 +669,7 @@ $(VIRTIO_NET_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_NET_TEST_GRUB_STANDALONE_CFG
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EXT2_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(EXT2_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE) $(EXT2_TEST_IMAGE)
+$(EXT2_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(EXT2_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE) $(EXT2_TEST_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -711,7 +690,7 @@ $(EXT2_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_F
 		"modules/devfs.server=$(DEVFS_MODULE)" \
 		"modules/sysfs.server=$(SYSFS_MODULE)" \
 		"modules/utmpfs.server=$(UTMPFS_MODULE)" \
-		"modules/rootfs.server=$(ROOTFS_MODULE)" \
+		"modules/squashfs.server=$(SQUASHFS_MODULE)" \
 		"modules/unionfs.server=$(UNIONFS_MODULE)" \
 		"modules/ext2.server=$(EXT2_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
@@ -723,7 +702,7 @@ $(EXT2_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_F
 		"modules/ext2-test.img=$(EXT2_TEST_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EXT2_FSCK_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(UNIONFS_MODULE) $(EXT2_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VIRTIO_BLK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EXT2_FSCK_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(EXT2_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VIRTIO_BLK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -744,7 +723,7 @@ $(EXT2_FSCK_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG) 
 		"modules/devfs.server=$(DEVFS_MODULE)" \
 		"modules/sysfs.server=$(SYSFS_MODULE)" \
 		"modules/utmpfs.server=$(UTMPFS_MODULE)" \
-		"modules/rootfs.server=$(ROOTFS_MODULE)" \
+		"modules/squashfs.server=$(SQUASHFS_MODULE)" \
 		"modules/unionfs.server=$(UNIONFS_MODULE)" \
 		"modules/ext2.server=$(EXT2_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
@@ -756,7 +735,7 @@ $(EXT2_FSCK_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG) 
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(ROOTFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -779,7 +758,6 @@ $(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE
 	cp $(DEVFS_MODULE) $(ISO_ROOT)/modules/devfs.server
 	cp $(SYSFS_MODULE) $(ISO_ROOT)/modules/sysfs.server
 	cp $(UTMPFS_MODULE) $(ISO_ROOT)/modules/utmpfs.server
-	cp $(ROOTFS_MODULE) $(ISO_ROOT)/modules/rootfs.server
 	cp $(SQUASHFS_MODULE) $(ISO_ROOT)/modules/squashfs.server
 	cp $(UNIONFS_MODULE) $(ISO_ROOT)/modules/unionfs.server
 	cp $(BLOCK_MODULE) $(ISO_ROOT)/modules/block.server
@@ -829,7 +807,7 @@ run-iso: $(EFI_BOOT_IMG)
 
 test: test-parallel
 
-test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt tools/test-boot-markers-alpine.txt tools/test-boot-markers-alpine-smoke.txt tools/test-boot-markers-squashfs.txt tools/test-boot-markers-alpine-squashfs.txt
+test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-squashfs.txt tools/test-boot-markers-squashfs-up.txt tools/test-boot-markers-alpine-smoke.txt tools/test-boot-markers-alpine-squashfs.txt
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
@@ -856,7 +834,7 @@ test-boot-ext2-fsck: $(EXT2_FSCK_TEST_EFI_BOOT_APP) $(EXT2_FSCK_TEST_IMAGE) tool
 	grep -aF "virtio-blk: block online" $(BUILD_DIR)/serial.log >/dev/null
 	/sbin/e2fsck -fn $(EXT2_FSCK_TEST_IMAGE) >/dev/null
 
-test-boot-virtio: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
+test-boot-virtio: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-squashfs.txt
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_BLK_ARGS)" sh tools/test-boot.sh
@@ -866,7 +844,7 @@ test-boot-virtio: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools
 	! grep -aF "virtio-bus: features index=0 device=0 " $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-bus: ready devices=1" $(BUILD_DIR)/serial.log >/dev/null
 
-test-boot-virtio-net: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
+test-boot-virtio-net: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-squashfs.txt
 	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_ARGS)" sh tools/test-boot.sh
@@ -883,7 +861,7 @@ test-boot-virtio-net: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/check-markers.sh too
 	grep -aF "virtio-net: rx ready" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: tx ready" $(BUILD_DIR)/serial.log >/dev/null
 
-test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) $(VIRTIO_BLK_TEST_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt
+test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) $(VIRTIO_BLK_TEST_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-squashfs.txt
 	ESP_DIR=$(VIRTIO_BLK_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_BLK_TEST_ARGS)" sh tools/test-boot.sh
@@ -938,12 +916,6 @@ test-shell-dynamic:
 
 test-shell-static:
 	$(MAKE) -B test-shell BUSYBOX=$(BUSYBOX_STATIC)
-
-test-rootfs-tool: $(ROOTFS_TOOL)
-	sh tools/test-rootfs-tool.sh $(ROOTFS_TOOL)
-
-test-alpine-rootfs: $(ALPINE_BLOCK_IMAGE)
-	sh tools/test-alpine-rootfs.sh $(ALPINE_BLOCK_IMAGE)
 
 list-shell-shards:
 	sh tools/list-shell-shards.sh

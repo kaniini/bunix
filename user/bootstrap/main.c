@@ -2531,7 +2531,7 @@ int main(void)
 		(void)bunix_machine_poweroff(0);
 		for (;;) {
 		}
-	} else if (bunix_cmdline_has("squashfs-root") > 0) {
+	} else {
 		u64 squashfs;
 
 		bunix_console_log(squashfs_root, sizeof(squashfs_root) - 1);
@@ -2547,22 +2547,6 @@ int main(void)
 				      "/.lower") != 0 ||
 		    vfs_mount_service(vfs, "/.lower",
 				      BUNIX_SERVICE_SQUASHFS) != 0) {
-			return 1;
-		}
-	} else {
-		u64 rootfs;
-
-		bunix_launch_module_with_caps("rootfs", fs_caps,
-					      sizeof(fs_caps) /
-						      sizeof(fs_caps[0]));
-		rootfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
-						    BUNIX_SERVICE_ROOTFS,
-						    BUNIX_RIGHT_SEND);
-		if (rootfs == 0 ||
-		    send_path_command(rootfs, BUNIX_PROTO_ROOTFS,
-				      BUNIX_ROOTFS_MOUNT_PATH, "/.lower") != 0 ||
-		    vfs_mount_service(vfs, "/.lower",
-				      BUNIX_SERVICE_ROOTFS) != 0) {
 			return 1;
 		}
 	}

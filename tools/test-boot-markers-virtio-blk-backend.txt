@@ -78,7 +78,9 @@ bootstrap: net udp ok
 bootstrap: net tcp ok
 bootstrap: net packet iface ok
 bootstrap: net route ok
-rootfs: online
+squashfs: online
+squashfs: indexed nodes=
+squashfs: super ok block_size=131072
 vfs: online
 procfs: online
 tmpfs: online
@@ -95,7 +97,7 @@ bootstrap: fs namespace
 bootstrap: fs ready
 bootstrap: linux init exec
 login:
-rootfs: module
+bootstrap: squashfs root
 bootstrap: bad cap denied
 kernel: launching module server time
 kernel: launching module server user
@@ -105,7 +107,7 @@ kernel: launching module server procfs
 kernel: launching module server tmpfs
 kernel: launching module server devfs
 kernel: launching module server utmpfs
-kernel: launching module server rootfs
+kernel: launching module server squashfs
 kernel: launching module server vfs
 kernel: launching module server ping
 kernel: starting module server ping

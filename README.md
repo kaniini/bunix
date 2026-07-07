@@ -62,11 +62,12 @@ as `LINX` protocol messages. The VM server remains kernel-hosted for the
 current performance-oriented design, but still exposes a VM IPC port for events
 and the kernel exports low-level task memory primitives for allocation and range
 cloning.
-The host-side rootfs builder keeps the on-disk format simple but grows its entry
-table dynamically, so larger test images are no longer capped by the builder's
-initial table size. It also supports importing a staged directory tree,
-preserving regular-file mode bits and symlink targets for package-built rootfs
-fixtures.
+The readonly lower root filesystem is a deterministic SquashFS image generated
+by host tooling. The first runtime SquashFS server supports uncompressed
+SquashFS v4 images with 128 KiB blocks, no fragments, no xattrs, no exports,
+directories, regular files, symlinks, device-node metadata, uid/gid tables, and
+stable stat metadata. Unsupported compression, fragments, malformed metadata,
+and unsupported feature tables fail explicitly during mount or lookup.
 
 Userspace servers now have a small buddy allocator backed by native task
 allocation, and their object registries grow dynamically instead of using fixed
@@ -150,36 +151,32 @@ event-port style IPC, currently exercised by the ping heartbeat server.
 ## Filesystem Path
 
 The filesystem path is still a server-to-server read flow. The build generates
-a tiny `disk0` image containing `/hello.txt`, `/secret.txt`, `/etc/passwd`,
-`/etc/shadow`, `/etc/group`, `/etc/inittab`, `/etc/execs`, `/etc/spawns`,
-`/bin/first`, `/bin/lxtest`, `/bin/login`, `/bin/musl-hello`, `/bin/busybox`,
-and BusyBox applet links, then GRUB loads that image as a Multiboot2 data
-module. The kernel assigns that
-boot module only to the block server. Init launches a block server and a VFS
-server with only console and names capabilities. The block server registers
-`BLK0` in the root namespace and serves read-only bytes from its assigned disk
-image. The rootfs server registers `RFS0` and translates that image into
-read-only VFS operations. VFS registers `VFS0` and delegates paths to
-user-space filesystem translators. Procfs attaches at `/proc`, tmpfs attaches
-at `/tmp`, `/run`, and `/var/tmp`, and unionfs attaches at `/` with rootfs as
-its lower layer so the read-only rootfs image is visible through a writable
-tmpfs-backed upper layer.
+a `disk0.sqfs` SquashFS image containing `/hello.txt`, `/secret.txt`,
+`/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/inittab`, `/etc/execs`,
+`/etc/spawns`, `/bin/first`, `/bin/lxtest`, `/bin/login`, `/bin/musl-hello`,
+`/bin/busybox`, BusyBox applet links, and the current test binaries. GRUB loads
+that image as the `disk0.img` Multiboot2 data module. The kernel assigns that
+boot module only to the block server. Bootstrap launches block, VFS, and the
+SquashFS server with delegated capabilities. The block server registers `BLK0`
+and serves read-only bytes from its assigned image; `squashfs.server` registers
+`SQFS`, consumes the block service, and exposes readonly VFS operations. VFS
+registers `VFS0` and delegates paths to user-space filesystem translators.
+Procfs attaches at `/proc`, tmpfs attaches at `/tmp`, `/run`, and `/var/tmp`,
+and unionfs attaches at `/` with SquashFS at `/.lower` and tmpfs at `/.upper`.
 Unionfs materializes lower-only parent directories into the upper layer before
 creating files or copying lower files up, so writes under read-only rootfs
 subtrees such as `/usr/share/...` no longer require pre-created upper parents.
 
-This is intentionally not a real disk filesystem yet. The useful primitive is
-the capability-shaped chain `init/proc -> names -> vfs -> unionfs -> rootfs +
-tmpfs -> block`, which is the path that can later point at a real disk image
-and then at an Alpine root filesystem format. Runtime Linux/VFS path handling
-and the generated rootfs image both follow the Linux 4096-byte `PATH_MAX`
-budget.
+The useful primitive is the capability-shaped chain `bootstrap/proc -> names ->
+vfs -> unionfs -> squashfs + tmpfs -> block`. VirtIO block can become the
+preferred backing device later without changing the VFS-facing SquashFS
+contract. Runtime Linux/VFS path handling and generated root images follow the
+Linux 4096-byte `PATH_MAX` budget.
 
 An Alpine/OpenRC fixture can be built separately from the default synthetic
 test rootfs:
 
 ```sh
-make test-alpine-rootfs
 ROOTFS_FLAVOR=alpine-squashfs make esp
 ```
 
@@ -190,7 +187,8 @@ uses `/etc/apk/repositories`, `/etc/apk/cache`, and the package set
 `APK_REPOSITORIES_FILE`, `APK_CACHE_DIR`, or `ALPINE_ROOTFS_PACKAGES`. The build
 overlays Bunix's native `/bin/login` plus the project passwd/shadow/group files,
 because Bunix login must contact the user server. It writes the resolved package
-manifest to `build/alpine-rootfs/manifest.txt`.
+manifest to `build/alpine-rootfs/manifest.txt` and emits a SquashFS image with
+`mksquashfs -no-compression -no-fragments -no-exports -no-xattrs -b 128K`.
 
 `procfs.server` is a separate user-space server that dynamically attaches
 itself to VFS as the `/proc` translator. It currently exposes `/proc/kthreads`,
@@ -226,8 +224,8 @@ chunk copies internally while preserving the handle API. VFS exposes the exec-fa
 file operations proc needs now: open a named regular file, query its size/type,
 read positioned byte ranges through a shared buffer, and close the open object.
 Proc allocates a buffer, sends duplicate/write authority to VFS, VFS forwards
-write-only authority to block, block fills it from the rootfs module, and proc
-copies the bytes back through its read authority. Proc builds the initial exec
+the request through unionfs to the mounted SquashFS translator, and proc copies
+the bytes back through its read authority. Proc builds the initial exec
 stack with caller-supplied `argc`, `argv[]`, `envp[]`, and auxv entries for page
 size, entry point, program headers, and `AT_EXECFN`; argv/env address staging is
 allocated dynamically instead of capped by fixed pointer arrays.
@@ -286,14 +284,14 @@ vectors, long executable paths, more than 16 supplementary login groups, and
 home-directory startup are exercised by the
 shell regression.
 
-The current rootfs can run a statically linked musl hello program, a dynamic
+The current SquashFS-backed root can run a statically linked musl hello program, a dynamic
 musl hello program, and a dynamically linked BusyBox shell through `/bin/login`.
 Dynamic test binaries use musl's normal `/lib/ld-musl-x86_64.so.1` interpreter
-directly; the generated rootfs no longer installs a `/lib/ld.so` compatibility
+directly; the generated root image no longer installs a `/lib/ld.so` compatibility
 symlink.
 BusyBox applets currently exercised by the test loop include `cat`, `echo`,
 `env`, `stat`, `ls`, `uptime`, `id`, `stty`, `kill`, `sleep`, `dmesg`, `pwd`,
-and `cd` through the shell. The generated rootfs includes explicit
+and `cd` through the shell. The generated root image includes explicit
 `/home/kaniini`, `/root`, `/tmp`, `/run`, `/mnt`, `/sys`, `/var/tmp`, and
 `/var/run` directories plus `/usr/bin/env` for script-style command lookup.
 Backspace, canonical tty input, Ctrl-C delivery to foreground jobs, login
@@ -320,7 +318,7 @@ Linux syscall forwarding uses bounded shared buffers internally. Large
 `write(2)` calls are chunked, and large `getdents64(2)` user buffers are
 handled as short directory reads instead of being rejected; `/bin/getdentstest`
 keeps that path covered by the shell regression.
-VFS, rootfs, tmpfs, unionfs, procfs, and devfs use buffer-backed directory entry
+VFS, SquashFS, tmpfs, unionfs, procfs, and devfs use buffer-backed directory entry
 names, so Linux `getdents64(2)` can return names longer than the inline IPC word
 payload. The old packed 16-byte VFS directory-entry protocol has been removed;
 the shell regression creates and lists filenames longer than the old inline IPC
@@ -330,7 +328,7 @@ VFS read, open, and path metadata lookups now use open handles plus
 shared-buffer transport through proc, Linux, VFS, and mounted translators; the
 old inline-word read/open/stat path operations have been removed.
 Linux `readlink(2)`/`readlinkat(2)` now use a buffer-backed VFS target window
-through VFS, unionfs, rootfs, and procfs, so symlink targets are no longer
+through VFS, unionfs, SquashFS, and procfs, so symlink targets are no longer
 truncated to the inline IPC word payload.
 Linux `execve` now collects argv/env with growable kernel vectors instead of a
 256-entry fixed table, and the initial Linux stack is 256 KiB. The shell
@@ -432,7 +430,7 @@ For the interactive BusyBox shell regression:
 make test-shell
 ```
 
-`make test-shell` builds the default dynamic-BusyBox rootfs, drives the serial
+`make test-shell` builds the default dynamic-BusyBox SquashFS root, drives the serial
 console, logs in, runs BusyBox applets,
 checks pipes and file reads, verifies login/session-visible `uptime`, checks
 `id`, `stat`, `ls`, `cat`, append writes, long tmpfs paths, shell `cd`/`pwd`, backspace, Ctrl-C,
@@ -462,12 +460,6 @@ OVMF, file descriptors, disk space, and obvious RAM pressure before scheduling;
 `make test-prune-artifacts` removes old successful `build/test-runs/` entries
 while keeping the newest ten and any run with failures; set
 `BUNIX_TEST_KEEP_RUNS=N` or `BUNIX_TEST_PRUNE_DRY_RUN=1` to adjust pruning.
-
-`make test-rootfs-tool` is a host-side regression for the rootfs image builder;
-it creates more than 128 entries to verify the builder's dynamic entry table and
-checks directory-tree import. `make test-alpine-rootfs` builds the Alpine
-fixture image and inspects `/etc/alpine-release`, OpenRC files, `/sbin/init`,
-and the Bunix login overlay.
 
 The static PIE BusyBox path remains available as a compatibility regression:
 

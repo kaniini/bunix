@@ -16,7 +16,9 @@ proc: online
 unionfs: online
 linux-server: online
 block: online
-rootfs: online
+squashfs: online
+squashfs: indexed nodes=
+squashfs: super ok block_size=131072
 vfs: online
 tmpfs: online
 devfs: online
