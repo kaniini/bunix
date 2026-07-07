@@ -78,8 +78,10 @@ Current implementation gaps:
   to VirtIO-net, but it uses a broadcast destination when no neighbor record is
   present.  That is sufficient for the current QEMU-user smoke test, not a
   complete Ethernet/ARP implementation.
-- Neighbor RPCs and `/proc/net/arp` observability now exist for IPv4, but ARP
-  request/reply processing, cache aging, and IPv6 ND are not implemented yet.
+- Neighbor RPCs and `/proc/net/arp` observability now exist for IPv4.  NET0 can
+  learn from IPv4 ARP frames and answer ARP requests for local IPv4 addresses,
+  but unresolved-next-hop request generation, pending egress queueing, cache
+  aging, and IPv6 ND are not implemented yet.
 - External UDP/TCP route lookup still does not feed packet-interface egress or
   ingress; localhost UDP/TCP remains covered by the core networking tests.
 - The first deterministic host-side packet generator is still unimplemented.
@@ -98,6 +100,10 @@ Neighbor/ARP progress:
   IPv4/MAC pairs into the neighbor table.  External IPv4 ICMP uses a learned
   neighbor for the next hop when one exists, and keeps the current broadcast
   fallback for the phase-1 QEMU-user smoke path.
-- Full ARP is not complete yet: NET0 still needs to generate ARP requests,
-  consume ARP replies, answer requests for local IPv4 addresses, age/cache
-  entries, and block or queue packet egress while resolution is pending.
+- NET0 now consumes IPv4 ARP requests/replies, learns sender IPv4/MAC pairs,
+  and answers ARP requests for local IPv4 addresses.  The bootstrap NET
+  self-test injects a synthetic ARP request and verifies the generated ARP
+  reply through the packet TX queue.
+- Full ARP is not complete yet: NET0 still needs to generate ARP requests for
+  unresolved next hops, age/cache entries, and block or queue packet egress
+  while resolution is pending.

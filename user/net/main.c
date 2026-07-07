@@ -265,6 +265,9 @@ static u64 next_icmp_socket_id = 1;
 
 static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
 			   u64 mac_hi, u64 mac_lo);
+static u64 iface_ipv4_addr(u64 iface_id);
+static int packet_tx_enqueue_copy(struct net_interface *iface,
+				  const unsigned char *data, u64 len);
 
 static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo);
 static int net_addr_is_local(u64 family, u64 hi, u64 lo);
@@ -1448,6 +1451,67 @@ static void packet_ingress_learn_ipv4_neighbor(const struct net_interface *iface
 		       src_mac, 0);
 }
 
+static void packet_ingress_arp_ipv4(struct net_interface *iface,
+				    const unsigned char *packet, u64 len)
+{
+	const unsigned char *arp;
+	unsigned char reply[42];
+	u64 opcode;
+	u64 sender_mac;
+	u64 sender_ip;
+	u64 target_ip;
+	u64 local_ip;
+
+	if (iface == 0 || packet == 0 || len < sizeof(reply) ||
+	    net_read_be16(packet + 12) != 0x0806) {
+		return;
+	}
+	arp = packet + 14;
+	if (net_read_be16(arp) != 1 || net_read_be16(arp + 2) != 0x0800 ||
+	    arp[4] != 6 || arp[5] != 4) {
+		return;
+	}
+	opcode = net_read_be16(arp + 6);
+	if (opcode != 1 && opcode != 2) {
+		return;
+	}
+	sender_mac = net_read_mac48(arp + 8);
+	sender_ip = net_read_be32(arp + 14);
+	target_ip = net_read_be32(arp + 24);
+	neighbor_learn(BUNIX_NET_ADDR_FAMILY_IPV4, 0, sender_ip, iface->id,
+		       sender_mac, 0);
+	if (opcode != 1) {
+		return;
+	}
+	local_ip = iface_ipv4_addr(iface->id);
+	if (local_ip == 0 || target_ip != local_ip || sender_mac == 0 ||
+	    sender_ip == 0) {
+		return;
+	}
+	for (u64 i = 0; i < 6; i++) {
+		reply[i] = (unsigned char)((sender_mac >> ((5 - i) * 8)) &
+					   0xff);
+		reply[6 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	reply[12] = 0x08;
+	reply[13] = 0x06;
+	net_write_be16(reply + 14, 1);
+	net_write_be16(reply + 16, 0x0800);
+	reply[18] = 6;
+	reply[19] = 4;
+	net_write_be16(reply + 20, 2);
+	for (u64 i = 0; i < 6; i++) {
+		reply[22 + i] = (unsigned char)((iface->mac_hi >>
+						 ((5 - i) * 8)) & 0xff);
+		reply[32 + i] = (unsigned char)((sender_mac >>
+						 ((5 - i) * 8)) & 0xff);
+	}
+	net_write_be32(reply + 28, local_ip);
+	net_write_be32(reply + 38, sender_ip);
+	(void)packet_tx_enqueue_copy(iface, reply, sizeof(reply));
+}
+
 static int udp_socket_accepts_ipv4(struct udp_socket *socket, u64 dst_ip,
 				   u64 dst_port)
 {
@@ -1634,6 +1698,7 @@ static void reply_packet_rx_submit(struct bunix_msg *reply,
 		reply->words[0] = (u64)-1;
 		return;
 	}
+	packet_ingress_arp_ipv4(iface, packet->data, packet->len);
 	packet_ingress_learn_ipv4_neighbor(iface, packet->data, packet->len);
 	packet_ingress_udp_ipv4(packet->data, packet->len);
 	packet_ingress_icmp_ipv4(packet->data, packet->len);
