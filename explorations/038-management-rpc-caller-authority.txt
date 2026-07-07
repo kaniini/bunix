@@ -1,0 +1,73 @@
+Authorize management RPCs by caller identity and scoped capabilities.
+
+Parent exploration: `022-security-vulnerability-audit.txt`
+
+Threat model:
+
+- A compromised or buggy userspace server can resolve high-authority service
+  ports through names or inherit them during bootstrap.
+- Possession of a service send capability should not authorize arbitrary
+  mutation of another task, process, Linux PID, credentials, session, or proc
+  record unless the caller also holds scoped authority for that subject.
+
+Defect:
+
+- `user/user/main.c` accepts credential and session mutations using
+  caller-supplied task/session IDs:
+  `BUNIX_USER_REGISTER_PROCESS`, `FORK_PROCESS`, `EXIT_PROCESS`,
+  `SETRESUID`, `SETRESGID`, `SETGROUPS`, `APPLY_LOGIN`, `SESSION_BEGIN`,
+  `SESSION_END`, and `SESSION_SET_FOREGROUND` do not authenticate that the
+  sender is the Linux/proc/login authority or the subject task.
+- `user/proc/main.c` accepts process-management RPCs using caller-supplied
+  PIDs/task IDs.  Examples include `BUNIX_PROC_EXIT`,
+  `BUNIX_PROC_SET_CMDLINE_BUFFER`, and `BUNIX_PROC_REGISTER_LINUX`, while only
+  `BUNIX_PROC_SELF` visibly keys off `message.sender`.
+- `user/linux/main.c` uses `message.sender` for normal Linux syscall RPCs, but
+  privileged management paths such as `BUNIX_LINUX_REGISTER_PROCESS`,
+  `BUNIX_LINUX_FORK_PROCESS`, `BUNIX_LINUX_EXEC_INIT`, and
+  `BUNIX_LINUX_EXEC_PREPARE` use caller-supplied task/path/buffer values before
+  the normal `linux_process_for()` sender check.
+
+Impact:
+
+- High: a compromised server with a resolved service port may be able to alter
+  credentials, sessions, proc metadata, process lifecycle, or Linux process
+  registration for tasks it does not own.
+- Depending on reachable capabilities, this can become privilege escalation,
+  process impersonation, unauthorized process kill/exit, TTY/session confusion,
+  or hiding/misreporting process state.
+
+Exploit/reproducer plan:
+
+- Build local server/test fixtures that use only resolved service send caps to
+  attempt credential mutation, proc exit/registration, and Linux management RPCs
+  for a task they do not own.
+- Prove which calls currently succeed and classify each by impact before
+  fixing.
+
+Fix plan:
+
+- Define per-service management authorities: bootstrap/proc/linux/login/user
+  should hold distinct capabilities for privileged lifecycle and credential
+  operations.
+- Where possible, bind ordinary operations to `message.sender` and reject
+  caller-supplied subject IDs that do not match the sender's authorized object.
+- Split observe/read RPCs from mutate/admin RPCs so broad service resolution
+  does not imply mutation authority.
+- Add explicit reply/status errors for unauthorized management requests.
+
+Regression gate:
+
+- Focused tests proving unauthorized callers cannot mutate credentials,
+  sessions, proc lifecycle, or Linux management state.
+- Existing login/relogin, root/user, procfs, OpenRC, and full `make test`
+  gates.
+
+Tasks:
+
+- [ ] Build reproducers for unauthorized user/proc/linux management RPCs.
+- [ ] Define management capability split and bootstrap grants.
+- [ ] Gate user server credential/session mutations.
+- [ ] Gate proc server lifecycle/registration/cmdline mutations.
+- [ ] Gate Linux server management RPCs.
+- [ ] Add regression tests and run full `make test`.

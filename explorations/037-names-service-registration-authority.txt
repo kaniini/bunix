@@ -1,0 +1,62 @@
+Constrain names service registration and replacement authority.
+
+Parent exploration: `022-security-vulnerability-audit.txt`
+
+Threat model:
+
+- A compromised or buggy userspace server holds the names service send
+  capability inherited at bootstrap.
+- Many servers receive `BUNIX_HANDLE_NAMES` or a resolved names capability so
+  they can resolve dependencies or register their own service.
+
+Defect:
+
+- `user/names/main.c` accepts `BUNIX_NAMES_REGISTER` from any caller that sends
+  a capability with `BUNIX_RIGHT_SEND`.
+- Registration is keyed only by caller-supplied `(namespace, service)` words.
+- If an entry already exists, `register_name()` replaces `entry->handle` and
+  `entry->rights` without checking that the caller owns the existing entry or
+  has namespace administration authority.
+- `BUNIX_NAMES_CREATE_NS` is also ambient to anyone with the names port.
+
+Impact:
+
+- High: a compromised server with names access can spoof or replace root
+  namespace services such as VFS, USER, PROC, LINUX, NET, or device services.
+- Replacing a service can redirect future capability resolution, capture
+  credentials/paths/buffers, deny service, or mint a confused-deputy path to a
+  server that trusts the resolved service.
+
+Exploit/reproducer plan:
+
+- Build a local server/test fixture that receives names access, registers its
+  own port as an existing root service, and proves later `NAMES_RESOLVE` returns
+  the attacker-controlled port.
+- Demonstrate impact with a non-destructive spoof, such as replacing a test
+  service or intercepting a safe dependency lookup.
+
+Fix plan:
+
+- Introduce explicit namespace administration or service-registration
+  capabilities.
+- Allow bootstrap to create namespaces and register initial service owners.
+- Allow a service to refresh/replace only its own registration, or require a
+  namespace admin capability for replacement.
+- Consider separating resolve authority from register/create-namespace
+  authority so normal dependency resolution does not imply global mutation.
+
+Regression gate:
+
+- Focused test proving an unprivileged or non-owner server cannot replace an
+  existing root namespace registration.
+- Existing boot, shell, OpenRC, service registration, and full `make test`
+  gates.
+
+Tasks:
+
+- [ ] Build a local service spoofing reproducer.
+- [ ] Add registration/namespace authority model.
+- [ ] Gate register, replacement, and namespace creation.
+- [ ] Add regression tests for denied spoof/replacement and allowed owner
+      refresh.
+- [ ] Run focused service boot tests, then full `make test`.
