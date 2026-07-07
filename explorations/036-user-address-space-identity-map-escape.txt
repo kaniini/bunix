@@ -1,0 +1,65 @@
+Remove user-accessible identity mapping from task address spaces.
+
+Parent exploration: `022-security-vulnerability-audit.txt`
+
+Threat model:
+
+- An unprivileged Linux process or native user task runs in ring 3 with the
+  task VM space active.
+- User tasks should only access explicitly mapped user pages, not kernel text,
+  kernel data, page tables, physical memory, device MMIO, or other task memory.
+
+Defect:
+
+- `arch_vm_space_init()` in `arch/x86_64/vm.c` initializes every non-kernel
+  address space with a user-accessible, writable identity mapping over the
+  first 1 GiB:
+  `pd[i] = i * LARGE_PAGE_SIZE | PTE_PRESENT | PTE_WRITABLE | PTE_USER |
+  PTE_LARGE`.
+- This makes low physical memory visible and writable from ring 3 for every
+  task unless a later mapping happens to override a page.
+- Kernel code, kernel data, boot modules, slab/PMM allocations, page tables,
+  and device mappings have historically lived in low physical addresses during
+  bringup, so this violates the kernel/user isolation boundary.
+
+Impact:
+
+- Critical: an unprivileged process can potentially read or overwrite kernel
+  memory, page tables, other tasks' memory, boot data, or device state through
+  direct low virtual addresses.
+- This can lead to arbitrary kernel control-flow corruption, forged
+  capabilities, credential/session bypass, or persistent denial of service.
+
+Exploit/reproducer plan:
+
+- Add a local user test that reads from a known low kernel/boot address and
+  proves the access succeeds before the fix.
+- Add a write-oriented local reproducer that targets a harmless low-memory
+  sentinel or controlled page to avoid corrupting unrelated state while still
+  proving ring-3 write access.
+- Keep the reproducer local to Bunix/QEMU and avoid host-relevant payloads.
+
+Fix plan:
+
+- Stop installing the low 1 GiB identity map in user address spaces.
+- Provide only the minimal kernel mappings required for safe trap/syscall
+  entry, or switch to the kernel page table on entry if this codebase prefers
+  that model.
+- Keep user mappings explicitly created by VM/task map/allocation APIs with
+  `PTE_USER`; kernel-only mappings must not carry `PTE_USER`.
+- Revisit `vm_read_user()`/`vm_write_user()`, MMIO helpers, LAPIC mapping, and
+  syscall entry assumptions after the identity map is removed.
+
+Regression gate:
+
+- Focused test proving unprivileged reads/writes to low kernel addresses fault
+  or fail after the fix.
+- Existing static/dynamic shell, OpenRC, virtio, and full `make test` gates.
+
+Tasks:
+
+- [ ] Build local read/write reproducers for low-memory user access.
+- [ ] Remove user-accessible low identity mappings from task page tables.
+- [ ] Preserve required syscall/trap/kernel execution mappings safely.
+- [ ] Add regression coverage for denied low-memory access.
+- [ ] Run focused boot/shell/virtio/OpenRC tests, then full `make test`.
