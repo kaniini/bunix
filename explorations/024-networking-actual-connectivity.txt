@@ -235,6 +235,17 @@ Implementation progress:
 - Aligned procfs and Linux netdevice naming so the first non-loopback NET0
   packet interface is consistently `eth0`, and Linux ioctls now resolve
   `ethN` names instead of recognizing only `eth0`.
+- Verified the QEMU DHCP path on the wire with a packet dump: Bunix transmits
+  the DHCP Discover from `52:54:00:18:00:01`, and QEMU replies with a DHCP
+  Offer for `10.0.2.15`.  NET0 receives and queues that Offer on the running
+  `eth0` packet interface (`rxq 1` in `/proc/net/config`), but `udhcpc` still
+  does not dequeue or process the packet.  The next missing piece is in the
+  Linux packet-socket receive/wait path used by `udhcpc`, not in physical link
+  bringup or QEMU packet delivery.
+- Linux `read()` now routes UDP, TCP, ICMP, and packet sockets through the
+  socket receive path instead of only accepting TCP sockets.  This matches
+  normal Linux socket semantics and passed `make test-boot`, but was not
+  sufficient by itself to make `udhcpc` consume the queued DHCP Offer.
 
 Tasks:
 

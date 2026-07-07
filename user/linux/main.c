@@ -6226,7 +6226,10 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 		return linux_pipe_read_available(pipe, len, buffer);
 	}
 	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
-	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
+	    (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
+	     process->fds[fd].handle == LINUX_SOCKET_NET_TCP ||
+	     process->fds[fd].handle == LINUX_SOCKET_NET_ICMP ||
+	     process->fds[fd].handle == LINUX_SOCKET_NET_PACKET)) {
 		return linux_recvfrom(process, fd, len, buffer);
 	}
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
