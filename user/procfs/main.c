@@ -2057,7 +2057,7 @@ static void readlink_buffer_reply(const struct bunix_msg *message,
 	u64 written;
 
 	if (file_kind(file) != PROCFS_KIND_PID_EXE) {
-		reply->words[0] = (u64)-1;
+		reply->words[0] = BUNIX_VFS_ERR_INVAL;
 		return;
 	}
 	target = pid_cmdline(file_arg(file));

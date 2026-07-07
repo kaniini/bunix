@@ -310,6 +310,20 @@ Implementation progress:
   behavior (`readpath` noise and service return handling), so the OpenRC
   service acceptance task remains open until the service itself returns success
   and proves startup from the normal boot runlevel.
+- Fixed the false `readpath`/`realpath` noise by preserving VFS
+  `EINVAL` for `readlinkat` on non-symlink path components instead of
+  collapsing every readlink failure to `ENOENT`.  SquashFS, tmpfs, and procfs
+  now report `BUNIX_VFS_ERR_INVAL` for non-symlink readlink requests, and the
+  Linux personality propagates that as `EINVAL`.  `patherrtest` covers
+  `readlink("/hello.txt") == EINVAL`.
+- With the readlink error fixed, OpenRC reaches actual service execution and
+  then blocks after `fsck` reports success.  A sysinit-only diagnostic boot
+  showed `/sbin/openrc-run /etc/init.d/fsck start` prints the service success
+  path but remains waitable forever, leaving `/run/openrc/starting/fsck` and
+  the exclusive service lock in place.  The next slice should focus on the
+  Linux process/terminal/pipe behavior used by the OpenRC C wrapper after its
+  shell service body exits; DHCP and ifupdown-ng still work when invoked
+  directly.
 
 Tasks:
 
@@ -327,7 +341,9 @@ Tasks:
 - [ ] Wire OpenRC `/etc/init.d/networking` into the normal boot path so it
       starts after the Bunix services it needs, reads `/etc/network/interfaces`
       through ifupdown-ng, configures loopback, starts DHCP for the external
-      interface, and reports status through logs and procfs.
+      interface, and reports status through logs and procfs.  Current blocker:
+      `openrc-run` can remain blocked after a successful service script body,
+      leaving `/run/openrc/starting/<service>` present.
 - [x] Wire BusyBox/Alpine `udhcpc` as the DHCPv4 client for QEMU-user or the
       selected deterministic external-network test backend.  Do not write a
       new Bunix DHCP client; implement only the NET0, Linux socket, script, and

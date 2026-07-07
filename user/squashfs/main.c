@@ -1257,8 +1257,11 @@ static void reply_readlink(const struct bunix_msg *message,
 		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 		return;
 	}
-	if (!squashfs_is_symlink_type(node->inode.type) ||
-	    node->inode.inline_size >= sizeof(target) ||
+	if (!squashfs_is_symlink_type(node->inode.type)) {
+		reply->words[0] = BUNIX_VFS_ERR_INVAL;
+		return;
+	}
+	if (node->inode.inline_size >= sizeof(target) ||
 	    metadata_read_exact(root_super.inode_table_start +
 				(node->inode.ref >> 16),
 				node->inode.inline_offset, target,

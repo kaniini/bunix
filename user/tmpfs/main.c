@@ -994,7 +994,7 @@ static void reply_readlink(const struct bunix_msg *message,
 
 	if (file == 0 || file->inode->type != BUNIX_VFS_TYPE_SYMLINK ||
 	    file->inode->data == 0) {
-		reply->words[0] = (u64)-1;
+		reply->words[0] = BUNIX_VFS_ERR_INVAL;
 		return;
 	}
 	reply->words[0] = 0;

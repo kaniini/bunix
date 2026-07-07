@@ -4811,9 +4811,10 @@ static long linux_readlinkat(struct linux_process *process, u64 dirfd,
 	if (base_result != 0) {
 		return base_result;
 	}
-	if (linux_vfs_readlink_call(process, base_handle, path, out_size,
-				    path_buffer, &copy_len) != 0) {
-		return -LINUX_ENOENT;
+	path_result = linux_vfs_readlink_call(process, base_handle, path,
+					      out_size, path_buffer, &copy_len);
+	if (path_result != 0) {
+		return path_result;
 	}
 	return (long)copy_len;
 }

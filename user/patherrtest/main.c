@@ -64,6 +64,14 @@ int main(void)
 		return 1;
 	}
 
+	errno = 0;
+	if (expect_errno("readlink-nonsymlink",
+			 (int)readlink("/hello.txt", link_buf,
+				       sizeof(link_buf)),
+			 EINVAL) != 0) {
+		return 1;
+	}
+
 	(void)unlink("/tmp/patherr-link");
 	if (symlink("/hello.txt", "/tmp/patherr-link") != 0) {
 		perror("linux patherr symlink");
