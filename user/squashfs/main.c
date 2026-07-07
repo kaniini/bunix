@@ -115,6 +115,7 @@ static u64 node_count;
 static u64 next_open_id = 1;
 static u64 block_service;
 static u64 image_size;
+static char squashfs_mount_path[SQUASHFS_MAX_PATH] = "/";
 
 static u64 load_le16(const unsigned char *buffer, u64 offset)
 {
@@ -205,6 +206,39 @@ static int copy_path(char *target, const char *path)
 	}
 	target[i] = 0;
 	return 0;
+}
+
+static int set_mount_relative_path(char *out, const char *full_path)
+{
+	const u64 mount_len = text_len(squashfs_mount_path);
+
+	if (copy_path(out, full_path) != 0) {
+		return -1;
+	}
+	if (text_eq(squashfs_mount_path, "/")) {
+		return 0;
+	}
+	for (u64 i = 0; i < mount_len; i++) {
+		if (full_path[i] != squashfs_mount_path[i]) {
+			return -1;
+		}
+	}
+	if (full_path[mount_len] == 0) {
+		out[0] = '/';
+		out[1] = 0;
+		return 0;
+	}
+	if (full_path[mount_len] != '/') {
+		return -1;
+	}
+	out[0] = '/';
+	for (u64 i = 1; i < SQUASHFS_MAX_PATH; i++) {
+		out[i] = full_path[mount_len + i];
+		if (out[i] == 0) {
+			return 0;
+		}
+	}
+	return -1;
 }
 
 static void append_char(char *line, u64 size, u64 *offset, char c)
@@ -1065,7 +1099,7 @@ static int read_resolved_path(const struct bunix_msg *message, char *path)
 		return -1;
 	}
 	(void)cwd;
-	return copy_path(path, full_path);
+	return set_mount_relative_path(path, full_path);
 }
 
 static u64 remember_open(struct squashfs_node *node)
@@ -1587,6 +1621,26 @@ int main(void)
 		char path[SQUASHFS_MAX_PATH];
 
 		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0) {
+			continue;
+		}
+		if (message.protocol == BUNIX_PROTO_SQUASHFS &&
+		    message.type == BUNIX_SQUASHFS_MOUNT_PATH) {
+			reply.protocol = BUNIX_PROTO_SQUASHFS;
+			reply.type = message.type;
+			if (bunix_read_path_cap(&message, squashfs_mount_path,
+						sizeof(squashfs_mount_path)) != 0) {
+				squashfs_mount_path[0] = '/';
+				squashfs_mount_path[1] = 0;
+				reply.words[0] = (u64)-1;
+			} else {
+				reply.words[0] = 0;
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			if (message.reply != 0) {
+				bunix_ipc_send(message.reply, &reply);
+			}
 			continue;
 		}
 		reply.type = message.type;

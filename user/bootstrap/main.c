@@ -2306,6 +2306,7 @@ int main(void)
 	const char net_route_ok[] = "bootstrap: net route ok\n";
 	const char ext2_ok[] = "bootstrap: ext2 readonly ok\n";
 	const char ext2_root_ok[] = "bootstrap: ext2 root ok\n";
+	const char squashfs_root[] = "bootstrap: squashfs root\n";
 	char file[17];
 	char ext2_root_text[32];
 	u64 console;
@@ -2530,23 +2531,39 @@ int main(void)
 		(void)bunix_machine_poweroff(0);
 		for (;;) {
 		}
+	} else if (bunix_cmdline_has("squashfs-root") > 0) {
+		u64 squashfs;
+
+		bunix_console_log(squashfs_root, sizeof(squashfs_root) - 1);
+		bunix_launch_module_with_caps("squashfs", fs_caps,
+					      sizeof(fs_caps) /
+						      sizeof(fs_caps[0]));
+		squashfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						      BUNIX_SERVICE_SQUASHFS,
+						      BUNIX_RIGHT_SEND);
+		if (squashfs == 0 ||
+		    send_path_command(squashfs, BUNIX_PROTO_SQUASHFS,
+				      BUNIX_SQUASHFS_MOUNT_PATH,
+				      "/.lower") != 0 ||
+		    vfs_mount_service(vfs, "/.lower",
+				      BUNIX_SERVICE_SQUASHFS) != 0) {
+			return 1;
+		}
 	} else {
+		u64 rootfs;
+
 		bunix_launch_module_with_caps("rootfs", fs_caps,
 					      sizeof(fs_caps) /
 						      sizeof(fs_caps[0]));
-		{
-			u64 rootfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
-							       BUNIX_SERVICE_ROOTFS,
-							       BUNIX_RIGHT_SEND);
-
-			if (rootfs == 0 ||
-			    send_path_command(rootfs, BUNIX_PROTO_ROOTFS,
-					      BUNIX_ROOTFS_MOUNT_PATH,
-					      "/.lower") != 0 ||
-			    vfs_mount_service(vfs, "/.lower",
-					      BUNIX_SERVICE_ROOTFS) != 0) {
-				return 1;
-			}
+		rootfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						    BUNIX_SERVICE_ROOTFS,
+						    BUNIX_RIGHT_SEND);
+		if (rootfs == 0 ||
+		    send_path_command(rootfs, BUNIX_PROTO_ROOTFS,
+				      BUNIX_ROOTFS_MOUNT_PATH, "/.lower") != 0 ||
+		    vfs_mount_service(vfs, "/.lower",
+				      BUNIX_SERVICE_ROOTFS) != 0) {
+			return 1;
 		}
 	}
 	bunix_launch_module_with_caps("unionfs", fs_caps,

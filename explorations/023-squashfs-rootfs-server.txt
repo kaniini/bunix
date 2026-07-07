@@ -258,7 +258,7 @@ Tasks:
 - [x] Implement stat/statx metadata mapping for SquashFS inode mode, uid/gid,
       size, link count, timestamps, block counts, device numbers, and inode
       numbers.
-- [ ] Connect the SquashFS server to the current boot flow as an optional root
+- [x] Connect the SquashFS server to the current boot flow as an optional root
       filesystem backend behind the existing VFS-facing root mount behavior.
 - [ ] Add `ROOTFS_FLAVOR=squashfs` or equivalent run/test modes that boot the
       synthetic root from a SquashFS image through the block server.
