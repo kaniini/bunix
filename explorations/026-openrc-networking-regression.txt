@@ -10,6 +10,13 @@ Problem:
   means the Linux socket compatibility path is not yet robust enough for normal
   interactive networking.
 
+Intended outcome:
+
+- A developer can run `make run`, log in at the Alpine console, find networking
+  already up from the normal OpenRC boot path, and run ping commands without
+  manually invoking DHCP, restarting services, or applying Bunix-specific repair
+  commands.
+
 Dependencies:
 
 - Builds on `024-networking-actual-connectivity.txt` for ifupdown-ng/OpenRC
@@ -67,6 +74,8 @@ Completion criteria:
 
 - In a fresh `make run` Alpine environment, normal OpenRC networking service
   bringup produces the same usable IPv4 state as manual DHCP.
+- After login, `eth0` already has the QEMU-user DHCP lease and default IPv4
+  route installed.
 - BusyBox/Alpine `ping` works after service bringup without `recvfrom` errors.
 - The deterministic test path proves the service behavior without relying on
   ad hoc interactive commands.
