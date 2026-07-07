@@ -114,8 +114,11 @@ static u64 *id_values;
 static u64 node_count;
 static u64 next_open_id = 1;
 static u64 block_service;
+static u64 user_service;
 static u64 image_size;
 static char squashfs_mount_path[SQUASHFS_MAX_PATH] = "/";
+
+static int squashfs_is_directory_type(u64 type);
 
 static u64 load_le16(const unsigned char *buffer, u64 offset)
 {
@@ -373,6 +376,78 @@ static long register_service(u64 service, u64 handle)
 		return -1;
 	}
 	return reply.words[0] == 0 ? 0 : -1;
+}
+
+static u64 service_user(void)
+{
+	if (user_service == 0) {
+		user_service = resolve_service(BUNIX_SERVICE_USER,
+					       BUNIX_RIGHT_SEND);
+	}
+	return user_service;
+}
+
+static int node_owner_mode(const struct squashfs_node *node, u64 *uid,
+			   u64 *gid, u64 *mode)
+{
+	if (node == 0 || id_values == 0 ||
+	    node->inode.uid_index >= root_super.ids ||
+	    node->inode.gid_index >= root_super.ids) {
+		return -1;
+	}
+	if (uid != 0) {
+		*uid = id_values[node->inode.uid_index];
+	}
+	if (gid != 0) {
+		*gid = id_values[node->inode.gid_index];
+	}
+	if (mode != 0) {
+		*mode = node->inode.mode & 07777;
+	}
+	return 0;
+}
+
+static int user_can_access(u64 task, const struct squashfs_node *node, u64 mask)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_CAN_ACCESS,
+		.words = { task, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = service_user();
+	u64 uid;
+	u64 gid;
+	u64 mode;
+
+	if (mask == 0) {
+		return node != 0;
+	}
+	if (task == 0) {
+		return node != 0;
+	}
+	if (node_owner_mode(node, &uid, &gid, &mode) != 0 || user == 0) {
+		return 0;
+	}
+	request.words[1] = uid;
+	request.words[2] = gid;
+	request.words[3] = (mode << 32) | mask;
+	if (bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return 0;
+	}
+	return reply.words[1] != 0;
+}
+
+static int node_can_open(u64 task, const struct squashfs_node *node)
+{
+	if (node == 0) {
+		return 0;
+	}
+	if (squashfs_is_directory_type(node->inode.type)) {
+		return user_can_access(task, node, 05);
+	}
+	return user_can_access(task, node, 04);
 }
 
 static long block_get_size(u64 block, u64 *size)
@@ -1151,6 +1226,10 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
 		return;
 	}
+	if (!node_can_open(message->words[3] & 0xffffffff, node)) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
 	handle = remember_open(node);
 	if (handle == 0) {
 		reply->words[0] = (u64)-1;
@@ -1172,6 +1251,10 @@ static void reply_readlink(const struct bunix_msg *message,
 
 	if (node == 0) {
 		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	if (!user_can_access(message->words[3] & 0xffffffff, node, 04)) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 		return;
 	}
 	if (!squashfs_is_symlink_type(node->inode.type) ||
@@ -1276,6 +1359,21 @@ static void reply_path_stat(const struct bunix_msg *message,
 		return;
 	}
 	reply_stat_node(message, reply, node);
+}
+
+static void reply_access(const struct bunix_msg *message,
+			 struct bunix_msg *reply, const char *path)
+{
+	struct squashfs_node *node = find_node(path);
+	const u64 task = message->words[3] & 0xffffffff;
+	const u64 mask = message->words[3] >> 32;
+
+	if (node == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	reply->words[0] = user_can_access(task, node, mask) ? 0 :
+			  BUNIX_VFS_ERR_ACCESS;
 }
 
 static void reply_readdir_buffer(struct squashfs_open *open,
@@ -1667,11 +1765,34 @@ int main(void)
 					reply_path_stat(&message, &reply, path);
 				}
 				break;
+			case BUNIX_VFS_ACCESS_BUFFER:
+				if (read_resolved_path(&message, path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply_access(&message, &reply, path);
+				}
+				break;
 			case BUNIX_VFS_STAT_META:
 			case BUNIX_VFS_READDIR_BUFFER:
 			case BUNIX_VFS_READ_FILE_BUFFER:
 			case BUNIX_VFS_CLOSE:
 				forward_open_handle(&message, &reply);
+				break;
+			case BUNIX_VFS_CREATE_BUFFER:
+			case BUNIX_VFS_WRITE_FILE_BUFFER:
+			case BUNIX_VFS_TRUNCATE:
+			case BUNIX_VFS_UNLINK_BUFFER:
+			case BUNIX_VFS_CHMOD_BUFFER:
+			case BUNIX_VFS_CHOWN_BUFFER:
+			case BUNIX_VFS_MKDIR_BUFFER:
+			case BUNIX_VFS_RMDIR_BUFFER:
+			case BUNIX_VFS_MKNOD_BUFFER:
+			case BUNIX_VFS_SYMLINK_BUFFER:
+			case BUNIX_VFS_RENAME_BUFFER:
+			case BUNIX_VFS_LINK_BUFFER:
+			case BUNIX_VFS_CHMOD:
+			case BUNIX_VFS_CHOWN:
+				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
 				break;
 			default:
 				reply.words[0] = BUNIX_VFS_ERR_INVAL;
