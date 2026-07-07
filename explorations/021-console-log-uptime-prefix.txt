@@ -66,12 +66,26 @@ Tasks:
       where they apply to logs.
 - [x] Add focused tests proving log lines are prefixed, interactive shell
       output is not prefixed, and BusyBox `dmesg` exposes the prefixed records.
-- [ ] Verify boot, shell, Alpine/OpenRC boot, and dmesg behavior with narrow
+- [x] Verify boot, shell, Alpine/OpenRC boot, and dmesg behavior with narrow
       tests before running the full completion gate.
-- [ ] Document any remaining log-format limitations or future structured-log
+- [x] Document any remaining log-format limitations or future structured-log
       work.
 
 Verification so far:
 
 - `make`
 - `BUNIX_SHELL_PART=rootfs-vfs-proc-dev make test-shell-part`
+- `make test-boot`
+- `/bin/sh -lc 'BUNIX_BOOT_PHASE=smoke exec make ROOTFS_FLAVOR=alpine ESP_DIR=build/esp-alpine TEST_BOOT_MARKERS=tools/test-boot-markers-alpine-smoke.txt test-boot'`
+
+Limitations/future work:
+
+- The prefix is text-only and does not yet carry structured severity,
+  subsystem, CPU, task, thread, or sequence metadata.
+- The log ring stores already-formatted lines, so future structured logging
+  should introduce records before text formatting rather than trying to parse
+  these prefixes back out.
+- Lines that are intentionally emitted without a newline remain open and the
+  next log fragment continues the same record.  That preserves fragmented log
+  writes, but it means a permanently unterminated line is not independently
+  closed by the console layer.
