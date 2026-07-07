@@ -236,7 +236,7 @@ Tasks:
 - [x] Choose the initial compression support policy.  Prefer a small first
       target such as uncompressed SquashFS or gzip if a permissively licensed
       decompressor is already available or can be imported cleanly.
-- [ ] Add host-side build tooling to generate a deterministic SquashFS root
+- [x] Add host-side build tooling to generate a deterministic SquashFS root
       image from the existing synthetic root contents and Alpine root contents.
       Keep the old image generation path available until migration is complete.
 - [ ] Implement SquashFS superblock parsing and validation with explicit

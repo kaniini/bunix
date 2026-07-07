@@ -13,6 +13,7 @@ apk_cache=${APK_CACHE_DIR:-$artifact_dir/apk-cache}
 repositories=${APK_REPOSITORIES_FILE:-/etc/apk/repositories}
 apk_packages=${ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc}
 rootfs_tool=${ROOTFS_TOOL:-build/tools/mkrootfs}
+rootfs_format=${ROOTFS_IMAGE_FORMAT:-custom}
 login=${LOGIN_MODULE:-build/modules/login.user}
 statidtest=${STATIDTEST_MODULE:-build/modules/statidtest.user}
 
@@ -113,5 +114,18 @@ find "$root/var/cache/apk" -type f -delete 2>/dev/null || true
 	apk --root "$root" info 2>/dev/null | sort
 } > "$manifest"
 
-"$rootfs_tool" "$out" --tree "$root"
-echo "alpine rootfs image ok out=$out stage=$stage manifest=$manifest"
+case "$rootfs_format" in
+custom)
+	"$rootfs_tool" "$out" --tree "$root"
+	;;
+squashfs)
+	mksquashfs "$root" "$out" -noappend -no-compression -no-fragments \
+		-no-exports -no-xattrs -all-root -root-mode 0755 -b 128K \
+		-repro-time 0 >/dev/null
+	;;
+*)
+	echo "unknown ROOTFS_IMAGE_FORMAT: $rootfs_format" >&2
+	exit 2
+	;;
+esac
+echo "alpine rootfs image ok format=$rootfs_format out=$out stage=$stage manifest=$manifest"
