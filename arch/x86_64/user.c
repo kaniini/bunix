@@ -1212,14 +1212,16 @@ static int linux_read_msghdr(u64 user_msghdr, struct linux_msghdr_copy *out)
 	out->namelen = namelen;
 	out->flags = flags;
 	if (out->iovlen > LINUX_IOV_MAX ||
-	    out->namelen > LINUX_MAX_SOCKADDR ||
-	    out->controllen != 0) {
+	    out->namelen > LINUX_MAX_SOCKADDR) {
 		return -LINUX_EINVAL;
 	}
 	if (out->iovlen != 0 && out->iov == 0) {
 		return -LINUX_EFAULT;
 	}
 	if (out->namelen != 0 && out->name == 0) {
+		return -LINUX_EFAULT;
+	}
+	if (out->controllen != 0 && out->control == 0) {
 		return -LINUX_EFAULT;
 	}
 	return 0;
@@ -1246,6 +1248,9 @@ static u64 linux_forward_sendmsg(struct ipc_port *linux,
 	rc = linux_read_msghdr(user_msghdr, &msg);
 	if (rc != 0) {
 		return (u64)rc;
+	}
+	if (msg.controllen != 0) {
+		return linux_einval_u64(__func__, __LINE__);
 	}
 	for (u64 i = 0; i < msg.iovlen; i++) {
 		if (read_current_user(msg.iov + i * sizeof(iov), &iov,
@@ -1418,6 +1423,16 @@ static u64 linux_forward_recvmsg(struct ipc_port *linux,
 			return (u64)-LINUX_EFAULT;
 		}
 		spin_unlock_irqrestore(&syscall_copy_lock, irq_flags);
+	}
+	if (msg.controllen != 0) {
+		u64 zero = 0;
+
+		if (write_current_user(user_msghdr +
+				       LINUX_MSGHDR_CONTROLLEN_OFF,
+				       &zero, sizeof(zero)) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
 	}
 	{
 		u32 out_flags = 0;

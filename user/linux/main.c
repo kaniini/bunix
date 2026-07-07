@@ -143,6 +143,7 @@ enum {
 	LINUX_O_EXCL = 0200,
 	LINUX_O_TRUNC = 01000,
 	LINUX_O_APPEND = 02000,
+	LINUX_O_NONBLOCK = 04000,
 	LINUX_O_NOFOLLOW = 00400000,
 	LINUX_O_DIRECTORY = 00200000,
 	LINUX_O_CLOEXEC = 02000000,
@@ -1619,7 +1620,7 @@ static long linux_pipe_create(struct linux_process *process, u64 flags,
 	long left;
 	long right;
 
-	if ((flags & ~LINUX_O_CLOEXEC) != 0 ||
+	if ((flags & ~(LINUX_O_CLOEXEC | LINUX_O_NONBLOCK)) != 0 ||
 	    read_fd == 0 || write_fd == 0) {
 		return -LINUX_EINVAL;
 	}
@@ -1657,6 +1658,10 @@ static long linux_pipe_create(struct linux_process *process, u64 flags,
 	if ((flags & LINUX_O_CLOEXEC) != 0) {
 		process->fds[left].flags |= LINUX_FD_CLOEXEC;
 		process->fds[right].flags |= LINUX_FD_CLOEXEC;
+	}
+	if ((flags & LINUX_O_NONBLOCK) != 0) {
+		process->fds[left].status_flags |= LINUX_O_NONBLOCK;
+		process->fds[right].status_flags |= LINUX_O_NONBLOCK;
 	}
 	*read_fd = (u64)left;
 	*write_fd = (u64)right;
@@ -6264,6 +6269,10 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 			if (pipe->write_refs == 0) {
 				return 0;
 			}
+			if ((process->fds[fd].status_flags &
+			     LINUX_O_NONBLOCK) != 0) {
+				return -LINUX_EAGAIN;
+			}
 			if (reply_handle == 0 || pipe->reader_reply != 0) {
 				return -LINUX_EAGAIN;
 			}
@@ -6643,7 +6652,7 @@ static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 	if (cmd == LINUX_F_SETFL) {
 		process->fds[fd].status_flags =
 			(process->fds[fd].status_flags & LINUX_O_ACCMODE) |
-			(arg & LINUX_O_APPEND);
+			(arg & (LINUX_O_APPEND | LINUX_O_NONBLOCK));
 		return 0;
 	}
 	if (cmd == LINUX_F_DUPFD || cmd == LINUX_F_DUPFD_CLOEXEC) {

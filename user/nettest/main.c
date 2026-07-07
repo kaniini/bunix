@@ -92,6 +92,7 @@ static void udp_test(void)
 	char buffer[32];
 	char msg_buffer_a[8];
 	char msg_buffer_b[8];
+	unsigned char control[32];
 	struct sockaddr_in addr;
 	struct sockaddr_in check;
 	struct msghdr msg;
@@ -169,10 +170,13 @@ static void udp_test(void)
 	iov[1].iov_len = sizeof(msg_b);
 	msg.msg_iov = iov;
 	msg.msg_iovlen = 2;
+	msg.msg_control = control;
+	msg.msg_controllen = sizeof(control);
 	if (recvmsg(server, &msg, 0) !=
 	    (ssize_t)(sizeof(msg_a) - 1 + sizeof(msg_b)) ||
 	    memcmp(msg_buffer_a, msg_a, sizeof(msg_a) - 1) != 0 ||
-	    memcmp(msg_buffer_b, msg_b, sizeof(msg_b)) != 0) {
+	    memcmp(msg_buffer_b, msg_b, sizeof(msg_b)) != 0 ||
+	    msg.msg_controllen != 0) {
 		die("nettest: udp recvmsg failed\n");
 	}
 	say("nettest: udp msg ok\n");
@@ -439,6 +443,51 @@ static void proc_net_test(void)
 	say("nettest: proc net ok\n");
 }
 
+static void pipe_nonblock_test(void)
+{
+	const char payload = 'x';
+	char buffer = 0;
+	struct pollfd pfd;
+	int fds[2];
+	int flags;
+
+	if (pipe(fds) != 0) {
+		die("nettest: pipe failed\n");
+	}
+	flags = fcntl(fds[0], F_GETFL, 0);
+	if (flags < 0 ||
+	    fcntl(fds[0], F_SETFL, flags | O_NONBLOCK) != 0) {
+		die("nettest: pipe fcntl set failed\n");
+	}
+	flags = fcntl(fds[0], F_GETFL, 0);
+	if (flags < 0 || (flags & O_NONBLOCK) == 0) {
+		die("nettest: pipe fcntl get failed\n");
+	}
+	errno = 0;
+	if (read(fds[0], &buffer, 1) != -1 || errno != EAGAIN) {
+		die("nettest: pipe nonblock read failed\n");
+	}
+	pfd.fd = fds[0];
+	pfd.events = POLLIN;
+	pfd.revents = 0;
+	if (poll(&pfd, 1, 0) != 0 || pfd.revents != 0) {
+		die("nettest: pipe empty poll failed\n");
+	}
+	if (write(fds[1], &payload, 1) != 1) {
+		die("nettest: pipe write failed\n");
+	}
+	pfd.revents = 0;
+	if (poll(&pfd, 1, 0) != 1 || (pfd.revents & POLLIN) == 0) {
+		die("nettest: pipe data poll failed\n");
+	}
+	if (read(fds[0], &buffer, 1) != 1 || buffer != payload) {
+		die("nettest: pipe data read failed\n");
+	}
+	close(fds[0]);
+	close(fds[1]);
+	say("nettest: pipe nonblock ok\n");
+}
+
 static void edge_test(void)
 {
 	struct sockaddr_in addr;
@@ -486,6 +535,7 @@ int main(void)
 	tcp_test();
 	tcp6_test();
 	proc_net_test();
+	pipe_nonblock_test();
 	edge_test();
 	say("nettest: ok\n");
 	return 0;

@@ -258,11 +258,23 @@ Implementation progress:
   packet RX queue instead of reporting them as always readable.  This is
   necessary for raw-socket DHCP implementations, but the current BusyBox
   `udhcpc` probe still does not advance past `broadcasting discover`.
-- The next `udhcpc` slice needs better post-userspace syscall observability:
-  after login, server logs move to the ring buffer and the shell rootfs lacks a
-  plain `grep`, which made the temporary raw-socket probes hard to inspect
-  from the command harness.  Add a bounded dmesg/strace capture path or a
-  purpose-built DHCP probe before making further receive-path guesses.
+- Fixed the post-discover `udhcpc` wait path by preserving `O_NONBLOCK` through
+  `fcntl(F_SETFL)`, honoring nonblocking empty-pipe reads with `EAGAIN`, and
+  covering that behavior in `nettest`.  BusyBox uses this signal pipe around
+  its DHCP poll loop; dropping the flag caused it to block before processing
+  packet-socket readiness.
+- Fixed receive-side `recvmsg` compatibility for ancillary-control buffers.
+  BusyBox enables `PACKET_AUXDATA` and passes a control buffer to
+  packet-socket `recvmsg`; Bunix now accepts that receive shape and reports
+  zero control data instead of returning `EINVAL`.  `nettest` now covers
+  `recvmsg` with a control buffer.
+- Verified direct QEMU-user DHCP acquisition with
+  `udhcpc -n -q -i eth0 -s /bin/echo -t 1 -T 1`: Bunix sends Discover and
+  Select/Request packets, QEMU replies, `udhcpc` obtains lease `10.0.2.15`
+  from server `10.0.2.2`, and `/proc/net/config` shows `eth0` with drained
+  RX/TX queues (`rxq 0`, `txq 0`).  The remaining DHCP work is integration:
+  ifupdown-ng/OpenRC script execution, lease installation through Bunix hooks,
+  and deterministic test-shard poweroff.
 
 Tasks:
 
