@@ -66,6 +66,16 @@ install_file /etc/group modules/group 0444
 install_file /etc/inittab modules/inittab 0444
 install_file /etc/execs modules/execs 0444
 install_file /etc/spawns modules/spawns 0444
+mkdir -p "$root/etc/network"
+cat > "$root/etc/network/interfaces" <<'EOF_INTERFACES'
+auto lo
+iface lo inet loopback
+iface lo inet6 loopback
+
+auto eth0
+iface eth0 inet dhcp
+EOF_INTERFACES
+chmod 0444 "$root/etc/network/interfaces"
 
 install_file /bin/shebangtest modules/shebangtest.sh 0555
 install_file /bin/shebangloop-a modules/shebangloop-a.sh 0555

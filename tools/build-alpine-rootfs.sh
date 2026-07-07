@@ -94,6 +94,17 @@ ttyS0::respawn:/bin/login
 ::shutdown:/sbin/openrc shutdown
 EOF_INITTAB
 
+mkdir -p "$root/etc/network"
+cat > "$root/etc/network/interfaces" <<'EOF_INTERFACES'
+auto lo
+iface lo inet loopback
+iface lo inet6 loopback
+
+auto eth0
+iface eth0 inet dhcp
+EOF_INTERFACES
+chmod 0444 "$root/etc/network/interfaces"
+
 cat > "$root/etc/init.d/bunix-login" <<'EOF_LOGIN_SERVICE'
 #!/sbin/openrc-run
 description="Bunix native login service"

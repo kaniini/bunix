@@ -78,15 +78,52 @@ Design notes:
   DHCP and ICMP, define a dedicated tap/namespace or socket-backed test shard
   and keep it separate from default fast boot tests until stable.
 
+Inventory findings:
+
+- NET0 lives in `user/net/main.c` and registers `BUNIX_SERVICE_NET`/`NET0`.
+  It currently owns loopback interface state, packet-interface attachment,
+  dynamic route add/enumeration, packet TX/RX queues, UDP sockets, TCP sockets,
+  and `/proc/net` observation records.
+- Existing NET0 configuration-style RPCs are
+  `BUNIX_NET_PACKET_INTERFACE_ATTACH`, `BUNIX_NET_PACKET_INTERFACE_LINK`,
+  `BUNIX_NET_ROUTE_ADD`, `BUNIX_NET_ROUTE_COUNT`, and `BUNIX_NET_ROUTE_AT`.
+  There is no address add/delete RPC yet; IPv4/IPv6 addresses are embedded in
+  the loopback interface record, and packet interfaces only expose flags, MTU,
+  MAC, and counters.
+- Loopback routes for `127.0.0.0/8` and `::1/128` are static inside NET0.
+  UDP/TCP delivery is localhost-only today because socket connect/send paths
+  require `net_addr_is_local()`.
+- VirtIO-net lives in `user/virtio-net/main.c`; it attaches a packet interface,
+  polls RX/TX, and currently installs a hardcoded QEMU-user IPv4 route
+  (`10.0.2.0/24`) from inside the driver.  That is a manual policy leak that
+  should move to the networking service.
+- Bootstrap starts `virtio-net` only when `virtio-net-test` is present on the
+  kernel command line.  Normal Alpine/OpenRC boots start NET0 but do not start a
+  network configuration service or NIC driver.
+- Linux socket compatibility in `user/linux/main.c` supports AF_INET/AF_INET6
+  UDP/TCP sockets over NET0, including bind/connect/listen/accept/send/recv,
+  `getsockname`, `getpeername`, `setsockopt`, `getsockopt`, and poll/select
+  integration.  There is no ICMP socket path for BusyBox `ping` yet.
+- Procfs networking observability is already backed by NET0 for
+  `/proc/net/dev`, `/proc/net/route`, `/proc/net/sockstat`,
+  `/proc/net/{udp,udp6,tcp,tcp6}` and is covered by `nettest`.
+- Root image generation did not install `/etc/network/interfaces` before this
+  exploration.  Synthetic and Alpine images now get a first config with `lo`
+  loopback and `eth0` DHCP intent.
+- Existing tests cover boot-time NET0 self-tests, Linux localhost TCP/UDP in
+  `nettest`, procfs network files, and VirtIO-net device attach/queue bringup.
+  They do not exercise OpenRC networking service startup, DHCP, ICMP, ARP, or
+  external packet round trips.
+
 Tasks:
 
-- [ ] Inventory current NET0, VirtIO-net, Linux socket/ioctl, procfs
+- [x] Inventory current NET0, VirtIO-net, Linux socket/ioctl, procfs
       networking, OpenRC service, BusyBox ping, and rootfs network config
       behavior.  Identify exactly where manual or hardcoded setup remains.
 - [ ] Define the NET0 configuration RPCs needed by a userspace networking
       service: interface up/down, address add/delete, route add/delete,
       neighbor/ARP state observation, DHCP lease install, and status reporting.
-- [ ] Add `/etc/network/interfaces` to the synthetic and Alpine root images
+- [x] Add `/etc/network/interfaces` to the synthetic and Alpine root images
       with loopback plus DHCP configuration for the first VirtIO-net interface.
 - [ ] Implement or wire a networking service that reads
       `/etc/network/interfaces`, configures loopback, starts DHCP for the
