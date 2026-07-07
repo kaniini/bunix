@@ -1080,6 +1080,51 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 	reply->words[3] = squashfs_vfs_type(node->inode.type);
 }
 
+static void reply_readlink(const struct bunix_msg *message,
+			   struct bunix_msg *reply, const char *path)
+{
+	struct squashfs_node *node = find_node(path);
+	unsigned char target[SQUASHFS_MAX_PATH];
+	const u64 out_cap = message->words[3] >> 32;
+	u64 written;
+
+	if (node == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	if (!squashfs_is_symlink_type(node->inode.type) ||
+	    node->inode.inline_size >= sizeof(target) ||
+	    metadata_read_exact(root_super.inode_table_start +
+				(node->inode.ref >> 16),
+				node->inode.inline_offset, target,
+				node->inode.inline_size) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = node->inode.inline_size;
+	if (out_cap == 0) {
+		return;
+	}
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	written = node->inode.inline_size;
+	if (written > out_cap) {
+		written = out_cap;
+	}
+	if (written != 0 &&
+	    bunix_buffer_write(message->cap, message->words[0] +
+			       message->words[1], target, written) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[2] = node->inode.inline_size;
+	reply->words[3] = written;
+}
+
 static void reply_readdir_buffer(struct squashfs_open *open,
 				 const struct bunix_msg *message,
 				 struct bunix_msg *reply)
@@ -1428,6 +1473,13 @@ int main(void)
 					reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				} else {
 					reply_open(&message, &reply, path);
+				}
+				break;
+			case BUNIX_VFS_READLINK_BUFFER:
+				if (read_resolved_path(&message, path) != 0) {
+					reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				} else {
+					reply_readlink(&message, &reply, path);
 				}
 				break;
 			case BUNIX_VFS_READDIR_BUFFER:
