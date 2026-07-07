@@ -92,6 +92,16 @@ struct net_neighbor {
 	u64 state;
 };
 
+struct net_pending_frame {
+	struct net_pending_frame *next;
+	u64 family;
+	u64 addr_hi;
+	u64 addr_lo;
+	u64 iface;
+	u64 len;
+	unsigned char data[];
+};
+
 struct net_addr_record {
 	struct net_addr_record *next;
 	u64 family;
@@ -251,6 +261,7 @@ static const struct net_addr_record static_addrs[] = {
 };
 static struct net_addr_record *dynamic_addrs;
 static struct net_neighbor *dynamic_neighbors;
+static struct net_pending_frame *pending_frames;
 static u64 last_config_error;
 static struct net_packet *loopback_rx_head;
 static struct net_packet *loopback_rx_tail;
@@ -1396,6 +1407,69 @@ static struct net_neighbor *neighbor_find(u64 family, u64 hi, u64 lo,
 	return 0;
 }
 
+static int pending_frame_add(u64 family, u64 hi, u64 lo, u64 iface,
+			     const unsigned char *data, u64 len)
+{
+	struct net_pending_frame *pending;
+
+	if (data == 0 || len == 0 || len > NET_PACKET_MAX ||
+	    family != BUNIX_NET_ADDR_FAMILY_IPV4 || hi != 0 || lo == 0) {
+		return -1;
+	}
+	pending = (struct net_pending_frame *)bunix_alloc(sizeof(*pending) +
+							  len);
+	if (pending == 0) {
+		return -1;
+	}
+	pending->next = pending_frames;
+	pending->family = family;
+	pending->addr_hi = hi;
+	pending->addr_lo = lo;
+	pending->iface = iface;
+	pending->len = len;
+	for (u64 i = 0; i < len; i++) {
+		pending->data[i] = data[i];
+	}
+	pending_frames = pending;
+	return 0;
+}
+
+static void pending_frames_flush(const struct net_neighbor *neighbor)
+{
+	struct net_pending_frame **link = &pending_frames;
+	struct net_interface *iface;
+
+	if (neighbor == 0 || neighbor->mac_hi == 0) {
+		return;
+	}
+	iface = interface_find(neighbor->iface);
+	if (iface == 0) {
+		return;
+	}
+	while (*link != 0) {
+		struct net_pending_frame *pending = *link;
+
+		if (pending->family == neighbor->family &&
+		    pending->addr_hi == neighbor->addr_hi &&
+		    pending->addr_lo == neighbor->addr_lo &&
+		    pending->iface == neighbor->iface &&
+		    pending->len >= 6) {
+			for (u64 i = 0; i < 6; i++) {
+				pending->data[i] =
+					(unsigned char)((neighbor->mac_hi >>
+							 ((5 - i) * 8)) &
+							0xff);
+			}
+			(void)packet_tx_enqueue_copy(iface, pending->data,
+						     pending->len);
+			*link = pending->next;
+			bunix_free(pending);
+			continue;
+		}
+		link = &pending->next;
+	}
+}
+
 static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
 			   u64 mac_hi, u64 mac_lo)
 {
@@ -1422,6 +1496,7 @@ static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
 	neighbor->mac_lo = mac_lo;
 	neighbor->flags = 2;
 	neighbor->state = 1;
+	pending_frames_flush(neighbor);
 }
 
 static void packet_ingress_learn_ipv4_neighbor(const struct net_interface *iface,
@@ -3129,9 +3204,6 @@ static int icmp_sendto_external_ipv4(struct icmp_socket *socket,
 	    frame_len > NET_PACKET_MAX) {
 		return -1;
 	}
-	if (dest_mac == 0) {
-		arp_request_ipv4(iface, source_ip, next_hop_ip);
-	}
 	frame = (unsigned char *)bunix_alloc(frame_len);
 	if (frame == 0) {
 		return -1;
@@ -3163,6 +3235,17 @@ static int icmp_sendto_external_ipv4(struct icmp_socket *socket,
 	ip_checksum = net_checksum_finish(net_checksum_sum(frame + 14, 20, 0));
 	frame[24] = (unsigned char)((ip_checksum >> 8) & 0xff);
 	frame[25] = (unsigned char)(ip_checksum & 0xff);
+	if (dest_mac == 0) {
+		if (pending_frame_add(BUNIX_NET_ADDR_FAMILY_IPV4, 0,
+				      next_hop_ip, route->iface, frame,
+				      frame_len) != 0) {
+			bunix_free(frame);
+			return -1;
+		}
+		arp_request_ipv4(iface, source_ip, next_hop_ip);
+		bunix_free(frame);
+		return 0;
+	}
 	if (packet_tx_enqueue_copy(iface, frame, frame_len) != 0) {
 		bunix_free(frame);
 		return -1;
