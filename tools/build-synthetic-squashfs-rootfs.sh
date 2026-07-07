@@ -102,6 +102,7 @@ install_symlink /sbin/init /bin/busybox
 for path in /bin/sh /usr/bin/env /bin/dmesg /bin/cat /bin/stat /bin/uptime \
 	/bin/sleep /bin/ls /bin/mount /bin/umount /bin/free /bin/df /bin/ps \
 	/bin/top /bin/id /bin/kill /bin/echo /bin/env /bin/stty /bin/pwd \
+	/bin/ping /sbin/ifup /sbin/ifdown /sbin/ip /sbin/route /sbin/udhcpc \
 	/bin/poweroff /sbin/poweroff /sbin/halt /sbin/reboot; do
 	install_symlink "$path" /bin/busybox
 done

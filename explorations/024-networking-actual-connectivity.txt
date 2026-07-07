@@ -189,6 +189,12 @@ Implementation progress:
   `recvfrom`, and poll/select paths through NET0 loopback echo replies.
 - Added a deterministic `network-loopback-ping` shell shard covering BusyBox
   IPv4 and IPv6 loopback ping with clean guest poweroff.
+- Exposed the BusyBox networking applets in the synthetic rootfs:
+  `/sbin/udhcpc`, `/sbin/ifup`, `/sbin/ifdown`, `/sbin/ip`, `/sbin/route`,
+  and `/bin/ping`.
+- A direct VirtIO-net probe of `udhcpc -n -q -i eth0 -s /bin/echo -t 1 -T 1`
+  now reaches the real DHCP client and fails at the first missing Linux socket
+  primitive: `socket(AF_INET, SOCK_RAW, IPPROTO_RAW)`.
 
 Tasks:
 
