@@ -1,0 +1,69 @@
+Fix console TTY input and foreground-control authority.
+
+Problem:
+
+- The Linux server accepts `BUNIX_LINUX_TTY_INPUT` before resolving the message
+  sender to a Linux process or checking that the sender is the console driver.
+- The console TTY is a single global object.  Foreground process group state is
+  also global, and `TIOCSPGRP` updates it without checking session membership
+  or controlling-terminal ownership.
+- A caller with a send-capable Linux service capability can potentially inject
+  keystrokes, synthesize control characters, deliver signals through the TTY
+  path, or redirect foreground terminal state.
+
+Threat model:
+
+- Primary attacker: an unprivileged Linux process if it can obtain or influence
+  a Linux service send capability through native/hybrid Bunix RPC paths or
+  service-resolution bugs.
+- Secondary attacker: a compromised userspace server that can resolve or was
+  granted the Linux service port.
+- Impact candidates: cross-session input injection, password/command injection
+  at the login shell, unauthorized SIGINT delivery to foreground jobs,
+  foreground process-group confusion, and denial of service of the interactive
+  console.
+
+Evidence:
+
+- `user/console/main.c` polls serial input and forwards bytes to the Linux
+  server as `BUNIX_LINUX_TTY_INPUT`.
+- `user/linux/main.c` handles `BUNIX_LINUX_TTY_INPUT` before
+  `linux_process_for(&message)`, so the message is not bound to a Linux
+  process or to a console-driver authority.
+- `linux_tty_input_event()` appends bytes to the global `console_tty` queue,
+  echoes according to global termios state, and handles interrupt characters by
+  calling `linux_tty_interrupt_foreground()`.
+- `linux_set_foreground_pgid()` assigns the global `foreground_pgid` without
+  validating controlling-terminal ownership, process-group membership, or
+  session relationship.
+
+Root cause:
+
+- Console input is represented as an ordinary Linux server message instead of
+  an authority held only by the console driver or a TTY server.
+- TTY state is global and not modeled as a session-owned device object.
+
+Fix plan:
+
+- Introduce an explicit console/TTY input authority delegated only to the
+  console driver or future TTY server.
+- Reject `BUNIX_LINUX_TTY_INPUT` unless the caller proves that authority.
+- Move toward per-TTY objects with owner/session/foreground state instead of a
+  global `console_tty` and global `foreground_pgid`.
+- Enforce Linux controlling-terminal rules for `TIOCSPGRP`, `TIOCGPGRP`,
+  reads, writes, and generated terminal signals.
+- Add regression tests that prove ordinary Linux processes and unrelated
+  servers cannot inject input or change another session's foreground group.
+
+Tasks:
+
+- [ ] Build a local reproducer that sends `BUNIX_LINUX_TTY_INPUT` from a
+      non-console principal and observes whether input is delivered.
+- [ ] Define the console/TTY input authority and how bootstrap delegates it.
+- [ ] Gate TTY input messages on that authority.
+- [ ] Replace global foreground terminal state with per-TTY/session state.
+- [ ] Add controlling-terminal checks for foreground process-group ioctls and
+      generated terminal signals.
+- [ ] Add regression tests for input injection, cross-session SIGINT, and
+      unauthorized `TIOCSPGRP`.
+- [ ] Run focused login/TTY shell tests and full tests before completion.
