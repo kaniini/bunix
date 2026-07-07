@@ -32,9 +32,69 @@ Constraints:
 - Host-side image generation may use standard tools such as `mksquashfs`, but
   runtime code must remain compatible with the project licensing constraints.
 
+Inventory:
+
+- Boot modules:
+  - `boot/grub.cfg` and `boot/grub-standalone.cfg` always include
+    `rootfs.server` and `disk0.img`.
+  - `kernel/server.c` treats `disk0` as the boot data module for the `block`
+    server. This is the current block handoff path SquashFS should reuse first.
+  - `kernel/server.c` still knows `rootfs` as a boot server name, so retiring
+    the legacy server requires removing it from boot server discovery and all
+    GRUB/module construction rules.
+- Build rules and host images:
+  - `Makefile` defines `ROOTFS_MODULE`, `ROOTFS_TOOL`, `SYNTHETIC_BLOCK_IMAGE`,
+    `ALPINE_BLOCK_IMAGE`, `ROOTFS_FLAVOR`, `BLOCK_IMAGE`, and
+    `ROOTFS_FLAVOR_STAMP` around the custom `mkrootfs` image format.
+  - `tools/mkrootfs.c` writes the custom `RFS0` image with fixed rootfs entry
+    records and data payloads. Synthetic root generation passes explicit file,
+    directory, and symlink entries to this tool.
+  - `tools/build-alpine-rootfs.sh` stages Alpine with `apk --root ... --initdb`
+    and then calls `mkrootfs --tree "$root"` to produce
+    `build/modules/alpine-disk0.img`.
+  - `tools/test-rootfs-tool.sh` and `tools/test-alpine-rootfs.sh` directly
+    parse the custom rootfs format and must either be replaced with SquashFS
+    tests or kept only while the legacy image path exists.
+- Runtime servers and protocols:
+  - `user/rootfs/main.c` is the active readonly translator for the custom
+    image. It reads through `BUNIX_SERVICE_BLOCK`, parses `ROOTFS_MAGIC`, and
+    registers `BUNIX_SERVICE_ROOTFS`.
+  - `user/include/bunix/syscall.h` defines `BUNIX_PROTO_ROOTFS`,
+    `BUNIX_SERVICE_ROOTFS`, `BUNIX_ROOTFS_MOUNT_PATH`, and
+    `BUNIX_VFS_DEV_ROOTFS`; those protocol and device IDs become obsolete when
+    the legacy server is deleted.
+  - `user/vfs/main.c` still contains rootfs entry structures, lookup, stat,
+    readdir, symlink, and read helpers backed by a `root_block`, but current
+    VFS startup only initializes that tree and does not populate it. Treat this
+    as legacy/dead rootfs behavior to delete after the mounted-translator path
+    is fully SquashFS-backed.
+  - `user/procfs/main.c` reports `rootfs` in filesystems/mount output and maps
+    `BUNIX_VFS_DEV_ROOTFS` to `"rootfs"`.
+- Bootstrap mount flow:
+  - `user/bootstrap/main.c` launches `vfs`, `procfs`, `tmpfs`, `devfs`,
+    `sysfs`, and `utmpfs`; mounts tmpfs roots at `/.upper`, `/tmp`, `/run`,
+    `/var/tmp`; then launches `rootfs` and mounts it at `/.lower`.
+  - Bootstrap then launches `unionfs`, sets lower to `/.lower`, upper to
+    `/.upper`, and mounts unionfs at `/`.
+  - Ext2 test modes bypass part of this by mounting ext2 at `/` or
+    `/mnt/ext2`, but normal synthetic and Alpine boots use the
+    `rootfs + tmpfs + unionfs` stack.
+- Tests and docs:
+  - Boot marker files look for `rootfs: online`, `rootfs: module`, and
+    `kernel: launching module server rootfs`.
+  - Shell tests named `rootfs-vfs-proc-dev` and content tests in
+    `tmpfs-extended`, `union-root-user`, and `tmpfs-basic-linux-tests` assume
+    the lower readonly filesystem reports as rootfs and contains the synthetic
+    fixture files.
+  - `tools/test-parallel.sh` only accepts `synthetic` and `alpine` rootfs
+    flavors today. SquashFS needs either a new flavor or a compatible mapping
+    before parallel tests can cover it.
+  - `README.md` documents the custom rootfs builder, `disk0` image,
+    `rootfs.server`, rootfs lower layer, and rootfs-specific tests.
+
 Tasks:
 
-- [ ] Inventory the current rootfs, block, VFS, unionfs, tmpfs, devfs, procfs,
+- [x] Inventory the current rootfs, block, VFS, unionfs, tmpfs, devfs, procfs,
       sysfs, and Alpine image bringup paths.  Identify every place that assumes
       the custom rootfs image format or the `rootfs.server` service.
 - [ ] Define the SquashFS server/VFS mount contract: block capability handoff,
