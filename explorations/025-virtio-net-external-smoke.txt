@@ -48,7 +48,7 @@ Tasks:
       accept, route fallback behavior, `/proc/net/dev` counters, and clean
       guest poweroff.
 - [ ] Add equivalent IPv6 smoke tests once neighbor discovery is present.
-- [ ] Document remaining production-networking work after the first smoke tests:
+- [x] Document remaining production-networking work after the first smoke tests:
       DHCP/SLAAC, DNS, firewall/filtering, packet capture, offload negotiation,
       multiqueue policy, and performance counters.
 
@@ -146,3 +146,28 @@ IPv6 external-traffic deferral:
 - The deferred IPv6 work should add ND cache state and `/proc` observability in
   the same style as IPv4 ARP, then add equivalent packet-interface IPv6 UDP,
   ICMPv6, and TCP smoke tests with a deterministic host-side peer.
+
+Production networking follow-up:
+
+- DHCP is currently enough for the QEMU-user IPv4 smoke path through `udhcpc`
+  and the NET0 lease-install RPC, but production networking needs lease
+  renewal/rebind state, route replacement policy, resolver configuration, and
+  ifupdown-ng/OpenRC integration tests that cover service restart behavior.
+- IPv6 production networking needs SLAAC, router advertisement parsing,
+  neighbor discovery, duplicate-address detection, default-route management,
+  and resolver configuration.
+- DNS should be a normal userspace service/client path layered on sockets and
+  VFS files such as `/etc/resolv.conf`, not special-cased in the NIC driver.
+- Packet filtering/firewalling belongs in NET0 or a dedicated policy server at
+  the protocol boundary, with explicit capability-controlled management RPCs.
+- Packet capture should be exposed as a capability-controlled packet tap so
+  tools can observe interface traffic without giving raw transmit rights.
+- VirtIO-net offload negotiation should grow beyond the current conservative
+  baseline: checksum offload, segmentation offload, mergeable buffers, and
+  host feature refusal all need explicit policy and tests before enabling.
+- Multiqueue support needs per-queue ownership, CPU/shard assignment policy,
+  stats, and backpressure; queue policy should stay outside Linux socket
+  compatibility.
+- Performance counters should distinguish driver queue counters, NET0 protocol
+  counters, drops by reason, neighbor-cache activity, route lookups, packet tap
+  activity, and per-socket queue pressure.
