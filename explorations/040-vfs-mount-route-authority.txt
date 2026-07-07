@@ -1,0 +1,64 @@
+Fix ambient VFS mount, unmount, and route authority.
+
+Problem:
+
+- The VFS server accepts mount, unmount, route resolution, route pinning, and
+  route unpinning requests from any sender that can send to the VFS service.
+- Mount requests resolve the requested filesystem service by FourCC and install
+  it at the caller-supplied path without a dedicated mount authority.
+- Route pinning returns a duplicated translator service capability and a route
+  ID, while unpinning trusts only the numeric route ID.
+
+Threat model:
+
+- Primary attacker: an unprivileged Linux process if Linux exposes mount or
+  unmount paths without adequate credential checks, or if generic Bunix/VFS RPC
+  access becomes available to hybrid programs.
+- Secondary attacker: a compromised server with ordinary VFS send authority.
+- Impact candidates: namespace takeover, filesystem service spoofing, hiding
+  files by replacing mounts, denying service by unmounting/pinning routes, and
+  acquiring translator capabilities outside intended delegation paths.
+
+Evidence:
+
+- `user/vfs/main.c` handles `BUNIX_VFS_MOUNT_BUFFER` by reading a caller path,
+  resolving `message.words[1]` as a service, and calling
+  `mount_translator(path, service, message.words[1])`.
+- `BUNIX_VFS_UNMOUNT_BUFFER` calls `unmount_translator(path)` without checking
+  caller authority.
+- `BUNIX_VFS_RESOLVE_MOUNT_BUFFER` and `BUNIX_VFS_PIN_ROUTE_BUFFER` call
+  `vfs_reply_mount_route()`, which duplicates the mounted service capability
+  into the reply.
+- `BUNIX_VFS_UNPIN_ROUTE` calls `vfs_unpin_mount_route(message.words[0])`;
+  route IDs are server-global integers.
+
+Root cause:
+
+- Mount-table authority is ambient in the VFS service port instead of expressed
+  as scoped mount namespace, mountpoint, or route capabilities.
+
+Fix plan:
+
+- Introduce explicit VFS mount-management authority, preferably as scoped
+  capabilities delegated by bootstrap to only the components that should mutate
+  the mount table.
+- Split ordinary path operations from administrative mount/route operations if
+  that makes authority easier to reason about.
+- Make route pins capability-backed or caller-owned so unrelated callers cannot
+  unpin routes by numeric ID.
+- Restrict translator capability duplication to intentional delegation paths.
+- Add tests proving ordinary Linux userspace and ordinary servers cannot mount,
+  unmount, pin, unpin, or acquire translator service caps without authority.
+
+Tasks:
+
+- [ ] Build a local reproducer for unauthorized mount-table mutation or route
+      capability acquisition.
+- [ ] Define the VFS mount/route authority model and bootstrap delegation.
+- [ ] Gate mount, unmount, route pin, route unpin, and route resolve as needed.
+- [ ] Update unionfs/procfs/devfs/sysfs/utmpfs/tmpfs bringup paths to use the
+      explicit authority model.
+- [ ] Add regression tests for unauthorized mount, unmount, route pin/unpin,
+      and translator capability resolution.
+- [ ] Run focused VFS/mount tests, shell tests, and full tests before
+      completion.

@@ -1,0 +1,68 @@
+Fix VFS and filesystem translator open-handle authority.
+
+Problem:
+
+- VFS and filesystem translators return small integer open handles from
+  process-global tables, then accept later read, write, stat, readdir, chmod,
+  chown, truncate, and close operations by integer handle alone.
+- Those handles are not capabilities, are not scoped to the caller task, and
+  are generally allocated from predictable monotonically increasing counters.
+- A caller that can send to VFS or a translator can potentially operate on
+  another caller's open file by guessing, racing, or learning the handle ID.
+
+Threat model:
+
+- Primary attacker: an unprivileged Linux process if it can cause the Linux
+  personality to issue operations against guessed handles or otherwise expose
+  raw VFS handles across process boundaries.
+- Secondary attacker: a compromised userspace server with a send-capable VFS
+  or translator capability.
+- Impact candidates: unauthorized file read/write, unauthorized close,
+  cross-process descriptor interference, procfs information disclosure,
+  filesystem metadata mutation, and denial of service.
+
+Evidence:
+
+- `user/vfs/main.c` stores `struct vfs_open` objects in global
+  `open_files`, allocates IDs from `next_open_id`, and looks them up with
+  `open_from_handle(message.words[0])` for open-handle operations.
+- `user/rootfs/main.c`, `user/tmpfs/main.c`, `user/unionfs/main.c`,
+  `user/ext2/main.c`, and `user/procfs/main.c` repeat the same pattern with
+  per-server global open tables.
+- The open records do not store the opener's task, sender port, process,
+  Linux PID, session, or a delegated capability token.
+
+Root cause:
+
+- VFS open state is represented as ambient integers rather than object
+  capabilities or per-client descriptors.
+- The protocol trusts possession of a numeric ID as authority.
+
+Fix plan:
+
+- Decide whether VFS open objects should be kernel capabilities, server-local
+  capabilities, or VFS-issued opaque unforgeable tokens.
+- Bind every open object to the authority that created it, or transfer a
+  scoped capability for operations on that object.
+- Keep descriptor-level sharing explicit: dup/fork/inheritance should delegate
+  the same open-object authority intentionally rather than relying on global
+  integers.
+- Update VFS and translator protocols so raw numeric handles are no longer
+  accepted as standalone authority.
+- Add close/read/write/stat/readdir regression tests that prove one process
+  cannot use or close another process's open object.
+
+Tasks:
+
+- [ ] Build a local QEMU reproducer that attempts to operate on another
+      process's VFS handle.
+- [ ] Determine whether the exploit path is reachable directly from Linux
+      userspace, only through Linux-server bugs, or through compromised server
+      authority.
+- [ ] Replace ambient open-handle authority with scoped capabilities or
+      unforgeable delegated tokens.
+- [ ] Update all VFS translators to enforce the new authority model.
+- [ ] Add regression tests for cross-process handle guessing, close stealing,
+      and unauthorized read/write attempts.
+- [ ] Run focused VFS tests, shell tests, and then full tests before
+      completion.

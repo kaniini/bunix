@@ -1,0 +1,66 @@
+Fix VFS permission checks that trust caller-supplied task IDs.
+
+Problem:
+
+- VFS and filesystem translators frequently decide permissions using task IDs
+  supplied in RPC payload words rather than deriving caller identity from the
+  sender or from an authenticated delegation.
+- Several permission helpers treat task ID `0` as privileged.
+- A caller with direct VFS or translator send authority can potentially forge
+  task identity, including task `0`, to bypass file mode checks or metadata
+  ownership checks.
+
+Threat model:
+
+- Primary attacker: an unprivileged Linux process if Linux-server syscall paths
+  can be confused into forwarding forged task IDs or if hybrid programs gain
+  direct VFS RPC authority.
+- Secondary attacker: a compromised userspace server with VFS or translator
+  send authority.
+- Impact candidates: unauthorized file read/write, chmod/chown, node creation,
+  tmpfs mutation, mount-layer mutation, and protected metadata disclosure.
+
+Evidence:
+
+- `user/vfs/main.c` uses `message.words[3] & 0xffffffff` as the task passed to
+  `can_read_entry()`, `can_search_entry()`, `vfs_resolve_symlinks()`, and
+  downstream translator requests.
+- `user/tmpfs/main.c` uses task IDs from `message.words[3]` in
+  `task_can_access()`, `task_can_chmod()`, and `task_can_chown()`, and those
+  helpers treat `task == 0` as privileged.
+- `user/rootfs/main.c` has the same pattern in `task_can_access()`, including
+  special handling for `task == 0`.
+- `user/procfs/main.c` uses the task ID embedded in path/stat/readlink message
+  words to resolve `/proc/self` and related process views.
+
+Root cause:
+
+- The VFS protocol conflates request metadata with authority.  Task identity is
+  passed as untrusted message data rather than being bound to the authenticated
+  sender or to a delegated credential object.
+
+Fix plan:
+
+- Define a VFS credential/subject primitive that can represent Linux process
+  credentials, Bunix task identity, and explicitly delegated server authority.
+- Bind path and open operations to authenticated subjects instead of accepting
+  raw task IDs from arbitrary callers.
+- Preserve legitimate server-initiated filesystem operations by giving servers
+  explicit scoped credentials or service authority.
+- Remove `task == 0` as an ambient privilege shortcut from translators, or
+  restrict it to requests carrying a bootstrap/root filesystem authority.
+- Add regression tests for forged task IDs on read, write, chmod, chown,
+  mkdir, mknod, symlink, truncate, procfs `/proc/self`, and tmpfs mutation.
+
+Tasks:
+
+- [ ] Build a local reproducer that forges VFS task identity from a weaker
+      caller and proves whether it can bypass file permissions.
+- [ ] Define the VFS credential/subject model for Linux processes, native
+      Bunix tasks, and privileged servers.
+- [ ] Update VFS and translators to derive/check authenticated subjects.
+- [ ] Remove or strictly gate privileged `task == 0` behavior.
+- [ ] Add regression tests for forged task IDs across rootfs, tmpfs, procfs,
+      unionfs, and ext2 paths.
+- [ ] Run focused permission tests, shell tests, and full tests before
+      completion.
