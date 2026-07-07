@@ -265,7 +265,7 @@ Tasks:
 - [x] Add tests for SquashFS mount, lookup, readdir, file read, symlink read,
       long paths, permissions metadata, stat fields, BusyBox applet symlinks,
       dynamic linker file access, and clean poweroff.
-- [ ] Add Alpine SquashFS image generation and boot tests that verify BusyBox,
+- [x] Add Alpine SquashFS image generation and boot tests that verify BusyBox,
       login, OpenRC script execution, `/sbin/init -> /bin/busybox`, and shell
       bringup from the SquashFS-backed root.
 - [ ] Migrate the default synthetic root boot path to SquashFS once tests cover

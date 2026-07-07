@@ -123,7 +123,7 @@ ALPINE_BLOCK_IMAGE := $(BUILD_DIR)/modules/alpine-disk0.img
 SYNTHETIC_SQUASHFS_IMAGE := $(BUILD_DIR)/modules/disk0.sqfs
 ALPINE_SQUASHFS_IMAGE := $(BUILD_DIR)/modules/alpine-disk0.sqfs
 ROOTFS_FLAVOR ?= synthetic
-BLOCK_IMAGE := $(if $(filter alpine,$(ROOTFS_FLAVOR)),$(ALPINE_BLOCK_IMAGE),$(if $(filter squashfs,$(ROOTFS_FLAVOR)),$(SYNTHETIC_SQUASHFS_IMAGE),$(SYNTHETIC_BLOCK_IMAGE)))
+BLOCK_IMAGE := $(if $(filter alpine,$(ROOTFS_FLAVOR)),$(ALPINE_BLOCK_IMAGE),$(if $(filter alpine-squashfs,$(ROOTFS_FLAVOR)),$(ALPINE_SQUASHFS_IMAGE),$(if $(filter squashfs,$(ROOTFS_FLAVOR)),$(SYNTHETIC_SQUASHFS_IMAGE),$(SYNTHETIC_BLOCK_IMAGE))))
 VIRTIO_BLOCK_IMAGE ?= $(BLOCK_IMAGE)
 VIRTIO_BLK_TEST_IMAGE := $(BUILD_DIR)/virtio-blk-test.img
 EXT2_TEST_IMAGE := $(BUILD_DIR)/modules/ext2-test.img
@@ -132,7 +132,7 @@ QEMU_VIRTIO_BLK_ARGS := -drive if=none,id=bunix-virtio0,format=raw,readonly=on,f
 QEMU_VIRTIO_BLK_TEST_ARGS := -drive if=none,id=bunix-virtio0,format=raw,file=$(VIRTIO_BLK_TEST_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
 QEMU_EXT2_FSCK_TEST_ARGS := -drive if=none,id=bunix-virtio0,format=raw,file=$(EXT2_FSCK_TEST_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
 QEMU_VIRTIO_NET_ARGS := -netdev user,id=bunix-net0,restrict=on -device virtio-net-pci,disable-legacy=on,netdev=bunix-net0,mac=52:54:00:18:00:01,bus=pcie.0,addr=0x7
-TEST_BOOT_MARKERS := $(if $(filter alpine,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine.txt,$(if $(filter squashfs,$(ROOTFS_FLAVOR)),tools/test-boot-markers-squashfs.txt,tools/test-boot-markers.txt))
+TEST_BOOT_MARKERS := $(if $(filter alpine,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine.txt,$(if $(filter alpine-squashfs,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine-squashfs.txt,$(if $(filter squashfs,$(ROOTFS_FLAVOR)),tools/test-boot-markers-squashfs.txt,tools/test-boot-markers.txt)))
 ROOTFS_FLAVOR_STAMP := $(BUILD_DIR)/rootfs-flavor.stamp
 PARALLEL_TEST_SET := $(if $(BUNIX_TEST_SET),$(BUNIX_TEST_SET),all)
 PARALLEL_ALPINE_ESP := $(if $(filter all openrc,$(PARALLEL_TEST_SET)),$(ALPINE_EFI_BOOT_APP))
@@ -192,7 +192,7 @@ GRUB_MKRESCUE ?= grub-mkrescue
 GRUB_MKSTANDALONE ?= grub-mkstandalone
 OVMF_CODE ?= /usr/share/OVMF/OVMF_CODE.fd
 KERNEL_CMDLINE ?= log=info
-EFFECTIVE_KERNEL_CMDLINE := $(KERNEL_CMDLINE)$(if $(filter squashfs,$(ROOTFS_FLAVOR)), squashfs-root)
+EFFECTIVE_KERNEL_CMDLINE := $(KERNEL_CMDLINE)$(if $(filter squashfs alpine-squashfs,$(ROOTFS_FLAVOR)), squashfs-root)
 
 CFLAGS := -m64 -std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 	-fno-pic -fno-pie -fno-builtin -mno-red-zone \
@@ -829,7 +829,7 @@ run-iso: $(EFI_BOOT_IMG)
 
 test: test-parallel
 
-test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt tools/test-boot-markers-alpine.txt tools/test-boot-markers-alpine-smoke.txt tools/test-boot-markers-squashfs.txt
+test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt tools/test-boot-markers-alpine.txt tools/test-boot-markers-alpine-smoke.txt tools/test-boot-markers-squashfs.txt tools/test-boot-markers-alpine-squashfs.txt
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
