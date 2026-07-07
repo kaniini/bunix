@@ -6,9 +6,9 @@ Problem:
   and initial route state, but the system does not yet behave like a normal
   userspace networked system.
 - Alpine/OpenRC expects persistent network configuration under
-  `/etc/network/interfaces`, a networking service that configures interfaces
-  during boot, and ordinary tools such as `ping` to work without Bunix-specific
-  manual setup.
+  `/etc/network/interfaces`, ifupdown-ng to apply that configuration, the
+  `/etc/init.d/networking` service to run during boot, and ordinary tools such
+  as `ping` to work without Bunix-specific manual setup.
 - The next useful milestone is end-to-end connectivity from the booted system:
   loopback IPv4, loopback IPv6, DHCP-provisioned external IPv4, and repeatable
   smoke tests against known external addresses.
@@ -21,9 +21,10 @@ Constraints:
 - Preserve the server split: NET0 owns protocol state, routes, interfaces,
   socket behavior, and packet queues; VirtIO-net owns the NIC device; Linux
   compatibility translates Linux syscalls and ioctls into server RPCs.
-- Use `/etc/network/interfaces` as the first network configuration source.
-  Do not hide network setup in bootstrap-only hardcoded defaults except for
-  minimum bringup needed to start the networking service.
+- Use ifupdown-ng plus `/etc/network/interfaces` as the first network
+  configuration source.  Do not hide network setup in bootstrap-only hardcoded
+  defaults except for minimum bringup needed to start OpenRC and
+  `/etc/init.d/networking`.
 - Use BusyBox/Alpine `udhcpc` for external IPv4 DHCP configuration.  Static
   QEMU-user defaults are acceptable only as a fallback or test fixture when
   DHCP is explicitly absent.  Do not implement a Bunix DHCP client in this
@@ -50,14 +51,16 @@ Inventory:
 
 Target behavior:
 
-- The root filesystem contains a normal `/etc/network/interfaces` suitable for
-  Bunix's current Alpine bringup.  Initial target contents should configure:
+- The root filesystem contains ifupdown-ng and a normal
+  `/etc/network/interfaces` suitable for Bunix's current Alpine bringup.
+  Initial target contents should configure:
   - `lo` as loopback with `127.0.0.1/8` and `::1/128`.
   - The first VirtIO-net interface for DHCP IPv4 when present.
-- A networking service starts during the normal boot path, parses
-  `/etc/network/interfaces`, configures loopback, starts DHCP for the external
-  interface, installs address and default-route state through NET0 RPCs, and
-  exposes clear status/logging.
+- OpenRC starts `/etc/init.d/networking` during the normal boot path.  That
+  service uses ifupdown-ng to parse `/etc/network/interfaces`, configure
+  loopback, start `udhcpc` for the external interface, install address and
+  default-route state through Bunix-compatible hooks, and expose clear
+  status/logging.
 - BusyBox or Alpine `ping` succeeds for:
   - `127.0.0.1`
   - `::1`
@@ -69,13 +72,19 @@ Target behavior:
 
 Design notes:
 
+- Interface policy should be driven by ifupdown-ng and OpenRC's
+  `/etc/init.d/networking`, not by a parallel Bunix-specific configuration
+  manager.  Existing native helpers such as `netcfg.server` may provide Bunix
+  RPC hooks or temporary deterministic test setup, but the normal Alpine path
+  should be ifupdown-ng invoking standard interface methods and hook scripts.
 - DHCP should be driven by BusyBox/Alpine `udhcpc`, not by a new Bunix DHCP
-  client.  The Bunix networking service and Linux compatibility layer should
-  provide the socket, script, route, address, and resolver plumbing needed for
-  `udhcpc` to configure NET0 through explicit RPCs rather than mutating NET0
-  internals.
-- The networking service should be able to run from OpenRC, but the Bunix test
-  harness may invoke a narrow bringup command first if that shortens debugging.
+  client.  The Bunix Linux compatibility layer, NET0 RPC surface, and hook
+  scripts should provide the socket, script, route, address, and resolver
+  plumbing needed for `udhcpc` and ifupdown-ng to configure NET0 through
+  explicit RPCs rather than mutating NET0 internals.
+- `/etc/init.d/networking` should be able to run from OpenRC.  The Bunix test
+  harness may invoke a narrow `ifup` or `udhcpc` command first if that shortens
+  debugging, but acceptance should come from the normal OpenRC service path.
 - `ping` should exercise the Linux socket path where practical.  Native Bunix
   observability tools may be added for debugging, but the acceptance target is
   ordinary userspace commands.
@@ -101,10 +110,11 @@ Inventory findings:
 - VirtIO-net lives in `user/virtio-net/main.c`; it attaches a packet interface,
   polls RX/TX, and currently installs a hardcoded QEMU-user IPv4 route
   (`10.0.2.0/24`) from inside the driver.  That is a manual policy leak that
-  should move to the networking service.
+  should move to ifupdown-ng/OpenRC bringup or a narrow Bunix hook invoked by
+  that path.
 - Bootstrap starts `virtio-net` only when `virtio-net-test` is present on the
-  kernel command line.  Normal Alpine/OpenRC boots start NET0 but do not start a
-  network configuration service or NIC driver.
+  kernel command line.  Normal Alpine/OpenRC boots start NET0 but still need
+  the NIC driver and OpenRC `/etc/init.d/networking` path wired cleanly.
 - Linux socket compatibility in `user/linux/main.c` supports AF_INET/AF_INET6
   UDP/TCP sockets over NET0, including bind/connect/listen/accept/send/recv,
   `getsockname`, `getpeername`, `setsockopt`, `getsockopt`, and poll/select
@@ -117,15 +127,15 @@ Inventory findings:
   loopback and `eth0` DHCP intent.
 - Existing tests cover boot-time NET0 self-tests, Linux localhost TCP/UDP in
   `nettest`, procfs network files, and VirtIO-net device attach/queue bringup.
-  They do not exercise OpenRC networking service startup, DHCP, ICMP, ARP, or
-  external packet round trips.
+  They do not exercise ifupdown-ng, OpenRC `/etc/init.d/networking` startup,
+  DHCP, ICMP, ARP, or external packet round trips.
 
 NET0 configuration RPC contract:
 
 - Keep packet-driver registration separate from network policy.  Drivers may
   attach packet interfaces and update physical link flags, but address
-  assignment, default routes, DHCP leases, and service status belong to the
-  networking service.
+  assignment, default routes, DHCP leases, and service status belong to
+  ifupdown-ng/OpenRC policy or Bunix hooks invoked by that policy.
 - Add `BUNIX_NET_INTERFACE_SET_FLAGS` for administrative up/down state.  It
   takes interface id, set mask, clear mask, and flags; NET0 preserves physical
   `RUNNING` state from the driver and exposes the merged result through
@@ -145,15 +155,15 @@ NET0 configuration RPC contract:
   DHCP/IPv4 slice can expose an empty table plus manual add/delete until ARP
   resolution is implemented in the external-smoke exploration.
 - Add `BUNIX_NET_DHCP4_LEASE_INSTALL` as a convenience RPC for the networking
-  service.  It carries interface id, IPv4 address, prefix length or netmask,
+  path.  It carries interface id, IPv4 address, prefix length or netmask,
   gateway, DNS server list metadata, lease lifetime, renewal time, and server
   identifier.  NET0 validates the interface and installs the address plus
-  default route atomically.
+  default route atomically for the `udhcpc`/ifupdown-ng hook.
 - Add `BUNIX_NET_CONFIG_STATUS` for bounded diagnostics.  NET0 reports whether
   loopback is configured, whether each packet interface has an address,
   whether a default route exists, and the last configuration error code.  The
-  networking service should log config parsing, DHCP, route, and neighbor
-  progress separately.
+  ifupdown-ng/OpenRC bringup path should log config parsing, DHCP, route, and
+  neighbor progress separately.
 
 Implementation progress:
 
@@ -173,7 +183,9 @@ Implementation progress:
   after unionfs mounts `/`, waits for the `NETC` service registration, and then
   continues into Linux init.  `netcfg` reads `/etc/network/interfaces`,
   idempotently configures loopback through NET0, reports status through logs,
-  and treats absent `eth0` as a normal no-NIC boot.
+  and treats absent `eth0` as a normal no-NIC boot.  This is now considered a
+  Bunix helper/test fixture; the target Alpine boot path should move policy to
+  ifupdown-ng and OpenRC `/etc/init.d/networking`.
 - VirtIO-net no longer installs the QEMU-user route itself.  In
   `virtio-net-test` boots, `netcfg` finds the running VirtIO packet interface
   and installs the current deterministic QEMU-user IPv4 lease through
@@ -194,6 +206,10 @@ Implementation progress:
 - Exposed the BusyBox networking applets in the synthetic rootfs:
   `/sbin/udhcpc`, `/sbin/ifup`, `/sbin/ifdown`, `/sbin/ip`, `/sbin/route`,
   and `/bin/ping`.
+- The current target for interface bringup is ifupdown-ng's `/sbin/ifup` and
+  `/sbin/ifdown`, started by OpenRC's `/etc/init.d/networking` service.  BusyBox
+  applets may remain useful in the synthetic rootfs, but Alpine compatibility
+  should not depend on BusyBox `ifup` semantics when ifupdown-ng is present.
 - A direct VirtIO-net probe of `udhcpc -n -q -i eth0 -s /bin/echo -t 1 -T 1`
   now reaches the real DHCP client and fails at the first missing Linux socket
   primitive: `socket(AF_INET, SOCK_RAW, IPPROTO_RAW)`.
@@ -230,13 +246,17 @@ Tasks:
       neighbor/ARP state observation, DHCP lease install, and status reporting.
 - [x] Add `/etc/network/interfaces` to the synthetic and Alpine root images
       with loopback plus DHCP configuration for the first VirtIO-net interface.
-- [ ] Implement or wire a networking service that reads
-      `/etc/network/interfaces`, configures loopback, starts DHCP for the
-      external interface, and reports status through logs and procfs.
+- [ ] Install or expose ifupdown-ng in the Alpine-style rootfs and ensure its
+      `/sbin/ifup` and `/sbin/ifdown` are the tools used for normal interface
+      bringup.
+- [ ] Wire OpenRC `/etc/init.d/networking` into the normal boot path so it
+      starts after the Bunix services it needs, reads `/etc/network/interfaces`
+      through ifupdown-ng, configures loopback, starts DHCP for the external
+      interface, and reports status through logs and procfs.
 - [ ] Wire BusyBox/Alpine `udhcpc` as the DHCPv4 client for QEMU-user or the
       selected deterministic external-network test backend.  Do not write a
       new Bunix DHCP client; implement only the NET0, Linux socket, script, and
-      configuration hooks `udhcpc` needs.
+      configuration hooks `udhcpc` and ifupdown-ng need.
 - [ ] Ensure NET0 installs DHCP-provided IPv4 address, netmask, gateway, DNS
       metadata if present, and default route through capability-checked RPCs.
 - [x] Make BusyBox or Alpine `ping 127.0.0.1` succeed through the Linux socket
@@ -247,10 +267,11 @@ Tasks:
       DHCP-provided route state, ARP, ICMP, and receive handling.
 - [ ] Make BusyBox or Alpine `ping 8.8.8.8` succeed through the same external
       networking path.
-- [ ] Add deterministic boot/shell test shards for networking service startup,
-      DHCP acquisition, loopback pings, external pings, `/proc/net` state, and
-      clean poweroff.  Loopback ping coverage is now present in the
-      `network-loopback-ping` shard; DHCP/external shards remain.
+- [ ] Add deterministic boot/shell test shards for ifupdown-ng,
+      `/etc/init.d/networking` startup, DHCP acquisition, loopback pings,
+      external pings, `/proc/net` state, and clean poweroff.  Loopback ping
+      coverage is now present in the `network-loopback-ping` shard;
+      DHCP/external shards remain.
 - [ ] Document supported network configuration syntax, DHCP limitations,
       QEMU/test backend assumptions, and follow-up work for DNS, IPv6 external
       networking, firewalling, packet capture, and production route policy.
