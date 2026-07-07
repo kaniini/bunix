@@ -28,7 +28,7 @@ Constraints:
 
 Tasks:
 
-- [ ] Choose the first deterministic host backend: isolated QEMU socket,
+- [x] Choose the first deterministic host backend: isolated QEMU socket,
       tap+namespace, or constrained QEMU user networking with explicit packet
       probes.
 - [ ] Add Ethernet encapsulation and decapsulation in NET0 for packet-interface
@@ -51,3 +51,37 @@ Tasks:
 - [ ] Document remaining production-networking work after the first smoke tests:
       DHCP/SLAAC, DNS, firewall/filtering, packet capture, offload negotiation,
       multiqueue policy, and performance counters.
+
+Backend decision:
+
+- Use QEMU user networking as the first external smoke backend, but keep it
+  explicit instead of ambient: `make test-boot-virtio-net-external-ping` uses
+  `QEMU_VIRTIO_NET_EXTERNAL_ARGS` with unrestricted user networking, boots the
+  Alpine rootfs, obtains the current deterministic QEMU-user IPv4 lease through
+  the userspace `udhcpc` path, pings `4.2.2.1` and `8.8.8.8`, checks NET0
+  config, checks `/proc/net/dev` has the `eth0` interface, and powers off.
+- Keep the default VirtIO-net boot and service tests on restricted QEMU user
+  networking.  Those tests validate device bringup, NET0 config, OpenRC
+  networking service behavior, and drained packet queues without depending on
+  external host reachability.
+- Treat QEMU user networking as the phase-1 backend only.  It is good enough to
+  prove the Bunix userspace/NIC/NET0/Linux-personality path can exchange real
+  packets, but it is not enough to prove full Ethernet behavior because QEMU's
+  slirp backend can accept simplified broadcast IPv4 frames.  ARP/ND, UDP/TCP
+  ingress/egress, and route fallback still need a harness-owned peer such as a
+  tap+namespace or socket-backed packet generator.
+
+Current implementation gaps:
+
+- NET0 has packet-interface TX/RX queues and an external IPv4 ICMP send path.
+  External ICMP currently builds Ethernet+IPv4 frames in NET0 and enqueues them
+  to VirtIO-net, but it uses a broadcast destination when no neighbor record is
+  present.  That is sufficient for the current QEMU-user smoke test, not a
+  complete Ethernet/ARP implementation.
+- Neighbor RPCs are present in the protocol, but ARP/ND cache management and
+  `/proc/net/arp` observability are not implemented yet.
+- External UDP/TCP route lookup still does not feed packet-interface egress or
+  ingress; localhost UDP/TCP remains covered by the core networking tests.
+- The first deterministic host-side packet generator is still unimplemented.
+  The next slice should choose between tap+namespace and socket-backed frames
+  based on what gives the fastest repeatable RX/TX probes under `make test`.
