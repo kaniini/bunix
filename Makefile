@@ -272,7 +272,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool test-alpine-rootfs list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic test-rootfs-tool test-alpine-rootfs list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -829,7 +829,7 @@ run-iso: $(EFI_BOOT_IMG)
 
 test: test-parallel
 
-test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt tools/test-boot-markers-alpine.txt tools/test-boot-markers-alpine-smoke.txt
+test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers.txt tools/test-boot-markers-alpine.txt tools/test-boot-markers-alpine-smoke.txt tools/test-boot-markers-squashfs.txt
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
@@ -905,6 +905,9 @@ test-shell: $(EFI_BOOT_APP)
 test-shell-part: $(EFI_BOOT_APP)
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		BUNIX_SHELL_PART="$(BUNIX_SHELL_PART)" sh tools/test-shell.sh
+
+test-shell-squashfs-rootfs:
+	$(MAKE) ROOTFS_FLAVOR=squashfs BUNIX_SHELL_PART=rootfs-vfs-proc-dev test-shell-part
 
 test-smoke: $(EFI_BOOT_APP)
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

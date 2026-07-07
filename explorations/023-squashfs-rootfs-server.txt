@@ -262,7 +262,7 @@ Tasks:
       filesystem backend behind the existing VFS-facing root mount behavior.
 - [x] Add `ROOTFS_FLAVOR=squashfs` or equivalent run/test modes that boot the
       synthetic root from a SquashFS image through the block server.
-- [ ] Add tests for SquashFS mount, lookup, readdir, file read, symlink read,
+- [x] Add tests for SquashFS mount, lookup, readdir, file read, symlink read,
       long paths, permissions metadata, stat fields, BusyBox applet symlinks,
       dynamic linker file access, and clean poweroff.
 - [ ] Add Alpine SquashFS image generation and boot tests that verify BusyBox,
