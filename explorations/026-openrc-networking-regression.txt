@@ -1,0 +1,72 @@
+Fix the Alpine OpenRC networking service and ping receive path.
+
+Problem:
+
+- Plain `make run` now boots the Alpine squashfs environment with VirtIO-net
+  enabled, and manual DHCP can acquire a lease.
+- Starting or restarting the Alpine `/etc/init.d/networking` service does not
+  reliably produce the same working network state.
+- BusyBox/Alpine `ping` can complain about `recvfrom` errors after DHCP, which
+  means the Linux socket compatibility path is not yet robust enough for normal
+  interactive networking.
+
+Dependencies:
+
+- Builds on `024-networking-actual-connectivity.txt` for ifupdown-ng/OpenRC
+  policy, `025-virtio-net-external-smoke.txt` for external IPv4 packet
+  behavior, and the default `make run` Alpine VirtIO-net target.
+
+Constraints:
+
+- Keep network policy in userspace: ifupdown-ng, OpenRC, `udhcpc`, and the
+  Bunix `udhcpc` hook should drive configuration.
+- Do not paper over the service failure with boot-time special cases in the
+  kernel or VirtIO-net driver.
+- Keep the NIC driver as a packet device; NET0 owns Ethernet, ARP, routes, ICMP,
+  UDP, TCP, and socket state.
+- Tests must use the normal Alpine rootfs path and end in guest poweroff.
+
+Investigation targets:
+
+- Capture the exact difference between:
+  - manual `udhcpc -i eth0 ...` that succeeds, and
+  - `/etc/init.d/networking start` or `rc-service networking restart` that does
+    not.
+- Confirm whether ifupdown-ng is invoking the expected DHCP method, hook script,
+  environment variables, interface name, and process lifecycle.
+- Inspect `/proc/net/config`, `/proc/net/dev`, `/proc/net/arp`, OpenRC service
+  status, and relevant dmesg/syslog ring-buffer output before and after service
+  start/restart.
+- Trace Linux socket calls for BusyBox/Alpine `ping`, especially `socket`,
+  `sendto`, `poll`/`select`, `recvmsg`, `recvfrom`, `close`, and errno mapping.
+- Determine whether the `recvfrom` failures come from missing ICMP error-queue
+  semantics, nonblocking readiness mismatch, packet demultiplexing, fd lifetime,
+  route/neighbor churn after service restart, or stale socket state.
+
+Tasks:
+
+- [ ] Add or update a deterministic Alpine VirtIO-net command test that boots
+      with the same QEMU networking used by `make run`, starts/restarts
+      `/etc/init.d/networking`, verifies `eth0` DHCP configuration, and powers
+      off cleanly.
+- [ ] Make `/etc/init.d/networking start` and `rc-service networking restart`
+      converge to a valid NET0 state when manual DHCP already works.
+- [ ] Ensure ifupdown-ng plus BusyBox/Alpine `udhcpc` use the Bunix DHCP hook
+      correctly without Bunix-specific manual commands.
+- [ ] Fix BusyBox/Alpine `ping` `recvfrom` errors after DHCP and service
+      restart, preserving correct Linux errno behavior.
+- [ ] Add regression coverage for `ping 10.0.2.2`, `ping 4.2.2.1`, and
+      `ping 8.8.8.8` after OpenRC networking service bringup.
+- [ ] Add observability to the test failure artifacts so the next networking
+      regression includes `/proc/net/config`, `/proc/net/dev`, `/proc/net/arp`,
+      OpenRC status, and recent dmesg output.
+- [ ] Re-run the narrow networking targets and full tests before marking the
+      exploration complete.
+
+Completion criteria:
+
+- In a fresh `make run` Alpine environment, normal OpenRC networking service
+  bringup produces the same usable IPv4 state as manual DHCP.
+- BusyBox/Alpine `ping` works after service bringup without `recvfrom` errors.
+- The deterministic test path proves the service behavior without relying on
+  ad hoc interactive commands.
