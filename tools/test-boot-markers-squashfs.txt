@@ -49,9 +49,9 @@ first: argc=1
 first: argc=4
 first: argv0=/bin/first
 first: argv0=/usr/share/bunix/alpine/very/long/rootfs/path/that
-first: argv1=alpha
-first: argv2=beta
-first: argv3=gamma
+alpha
+beta
+gamma
 first: argv65=x065-abcdefghijklmnopqrstuvwxyz0123456789
 first: argv120=x120-abcdefghijklmnopqrstuvwxyz0123456789
 first: env PROC_SPAWN_ENV=ok
@@ -105,6 +105,11 @@ bootstrap: names ready
 bootstrap: squashfs root
 bootstrap: fs namespace
 bootstrap: fs ready
+netcfg: online
+netcfg: interfaces loaded
+netcfg: loopback configured
+netcfg: configured
+bootstrap: netcfg ready
 bootstrap: linux init exec
 login:
 bootstrap: bad cap denied

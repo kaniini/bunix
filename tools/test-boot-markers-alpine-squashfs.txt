@@ -20,6 +20,11 @@ linux-server: online
 bootstrap: squashfs root
 bootstrap: fs namespace
 bootstrap: fs ready
+netcfg: online
+netcfg: interfaces loaded
+netcfg: loopback configured
+netcfg: configured
+bootstrap: netcfg ready
 bootstrap: linux init exec
 OpenRC
 Mounting /proc

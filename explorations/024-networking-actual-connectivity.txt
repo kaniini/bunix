@@ -164,6 +164,18 @@ Implementation progress:
 - DHCPv4 lease install currently installs the IPv4 address and default route
   atomically.  DNS metadata is accepted in the lease record but still needs a
   persistence/observation path before the DHCP task can be considered complete.
+- Added an initial `netcfg.server` userspace service.  Bootstrap launches it
+  after unionfs mounts `/`, waits for the `NETC` service registration, and then
+  continues into Linux init.  `netcfg` reads `/etc/network/interfaces`,
+  idempotently configures loopback through NET0, reports status through logs,
+  and treats absent `eth0` as a normal no-NIC boot.
+- VirtIO-net no longer installs the QEMU-user route itself.  In
+  `virtio-net-test` boots, `netcfg` finds the running VirtIO packet interface
+  and installs the current deterministic QEMU-user IPv4 lease through
+  `BUNIX_NET_DHCP4_LEASE_INSTALL`.  This is an interim fallback, not the final
+  DHCP client.
+- Bootstrap now takes its packet-interface self-test interface back down so
+  netcfg does not confuse the synthetic test interface with real `eth0`.
 
 Tasks:
 

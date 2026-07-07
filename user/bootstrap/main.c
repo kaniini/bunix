@@ -2362,6 +2362,17 @@ static long net_packet_interface_selftest(u64 net)
 		bunix_handle_close((u64)buffer);
 		return -1;
 	}
+	request.type = BUNIX_NET_PACKET_INTERFACE_LINK;
+	request.cap = 0;
+	request.cap_rights = 0;
+	request.words[0] = iface_id;
+	request.words[1] = 0;
+	if (bunix_ipc_call(net, &request, &reply) != 0 ||
+	    reply.words[0] != 0 ||
+	    (reply.words[2] & BUNIX_NET_IFACE_FLAG_RUNNING) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
 	bunix_handle_close((u64)buffer);
 	return 0;
 }
@@ -2379,6 +2390,7 @@ int main(void)
 	const char net_tcp_ok[] = "bootstrap: net tcp ok\n";
 	const char net_packet_ok[] = "bootstrap: net packet iface ok\n";
 	const char net_route_ok[] = "bootstrap: net route ok\n";
+	const char netcfg_ready[] = "bootstrap: netcfg ready\n";
 	const char ext2_ok[] = "bootstrap: ext2 readonly ok\n";
 	const char ext2_root_ok[] = "bootstrap: ext2 root ok\n";
 	const char squashfs_root[] = "bootstrap: squashfs root\n";
@@ -2640,6 +2652,13 @@ int main(void)
 			return 1;
 		}
 	}
+	bunix_launch_module_with_caps("netcfg", fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_NETCFG,
+				      BUNIX_RIGHT_SEND) == 0) {
+		return 1;
+	}
+	bunix_console_log(netcfg_ready, sizeof(netcfg_ready) - 1);
 	if (bunix_cmdline_has("ext2-test") > 0 &&
 	    bunix_cmdline_has("ext2-fsck-test") <= 0) {
 		u64 ext2;
