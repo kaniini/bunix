@@ -12,12 +12,22 @@ static volatile u32 worker_switched;
 static u8 worker_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_kernel_stack[4096] __attribute__((aligned(16)));
-static u8 native_user_stack[4096] __attribute__((aligned(16)));
-static u8 native_user_kernel_stack[4096] __attribute__((aligned(16)));
+static u8 mapped_user_kernel_stack[4096] __attribute__((aligned(16)));
+static u8 mapped_user_text[4096] __attribute__((aligned(4096)));
+static u8 mapped_user_stack[4096] __attribute__((aligned(4096)));
+static u64 early_root_table[512] __attribute__((aligned(4096)));
+static u64 early_user_l1[512] __attribute__((aligned(4096)));
+static u64 early_user_l0[512] __attribute__((aligned(4096)));
 
 static const char riscv64_bootpkg_magic[] = "BUNIX-RV64-BOOTPKG\n";
 static const char riscv64_bootpkg_module_prefix[] = "module ";
-static const char riscv64_bootpkg_native_smoke[] = "native-smoke.user";
+static const char riscv64_bootpkg_abi_smoke[] = "abi-smoke.user";
+
+enum {
+	SATP_MODE_SV39 = 8ULL << 60,
+	USER_STACK_TOP = 0x800000ULL,
+	USER_STACK_PAGE = USER_STACK_TOP - RISCV64_PAGE_SIZE,
+};
 
 const struct riscv64_boot_info *riscv64_boot_info(void)
 {
@@ -220,13 +230,39 @@ static void memory_zero(u8 *dest, u64 size)
 	}
 }
 
-static int load_user_elf(u64 start, u64 size, u64 *entry)
+static u64 build_user_stack_mapped(u8 *stack_phys, u64 stack_vaddr,
+				   const char *argv0)
+{
+	const char *src = argv0;
+	const u64 argv0_len = cstr_len(argv0) + 1;
+	u64 sp_offset = RISCV64_PAGE_SIZE;
+	u64 string_offset;
+	u64 *words;
+
+	sp_offset -= argv0_len;
+	string_offset = sp_offset;
+	for (u64 i = 0; i < argv0_len; i++) {
+		stack_phys[string_offset + i] = src[i];
+	}
+	sp_offset &= ~15ULL;
+	sp_offset -= 4 * sizeof(u64);
+	words = (u64 *)(stack_phys + sp_offset);
+	words[0] = 1;
+	words[1] = stack_vaddr + string_offset;
+	words[2] = 0;
+	words[3] = 0;
+	return stack_vaddr + sp_offset;
+}
+
+static int load_user_elf_page(u64 start, u64 size, u64 user_vaddr,
+			      u8 *backing, u64 backing_size, u64 *entry)
 {
 	const u8 *elf = (const u8 *)start;
 	const u32 pt_load = 1;
 	const u64 phoff = read_le64(elf + 32);
 	const u16 phentsize = read_le16(elf + 54);
 	const u16 phnum = read_le16(elf + 56);
+	u32 loaded = 0;
 
 	if (!user_elf_is_riscv64(start, size) || phentsize < 56) {
 		return -1;
@@ -234,6 +270,7 @@ static int load_user_elf(u64 start, u64 size, u64 *entry)
 	if (phoff + (u64)phentsize * phnum > size) {
 		return -1;
 	}
+	memory_zero(backing, backing_size);
 
 	for (u16 i = 0; i < phnum; i++) {
 		const u8 *ph = elf + phoff + (u64)i * phentsize;
@@ -242,45 +279,77 @@ static int load_user_elf(u64 start, u64 size, u64 *entry)
 		const u64 vaddr = read_le64(ph + 16);
 		const u64 filesz = read_le64(ph + 32);
 		const u64 memsz = read_le64(ph + 40);
+		const u64 page_offset = vaddr - user_vaddr;
 
 		if (type != pt_load) {
 			continue;
 		}
-		if (memsz < filesz || offset + filesz > size || vaddr == 0) {
+		if (vaddr < user_vaddr || page_offset > backing_size ||
+		    memsz < filesz || page_offset + memsz > backing_size ||
+		    offset + filesz > size) {
 			return -1;
 		}
-		memory_copy((u8 *)vaddr, elf + offset, filesz);
-		if (memsz > filesz) {
-			memory_zero((u8 *)(vaddr + filesz), memsz - filesz);
-		}
+		memory_copy(backing + page_offset, elf + offset, filesz);
+		loaded = 1;
 	}
 
 	__asm__ volatile ("fence.i" ::: "memory");
 	*entry = read_le64(elf + 24);
-	return *entry != 0 ? 0 : -1;
+	return loaded != 0 && *entry != 0 ? 0 : -1;
 }
 
-static u64 build_user_stack(u8 *stack, u64 size, const char *argv0)
+static u64 pte_table(u64 table)
 {
-	const char *src = argv0;
-	u64 argv0_len = cstr_len(argv0) + 1;
-	u64 sp = (u64)(stack + size);
-	u64 string_addr;
-	u64 *words;
+	return ((table >> RISCV64_PAGE_SHIFT) << 10) | RISCV64_PTE_V;
+}
 
-	sp -= argv0_len;
-	string_addr = sp;
-	for (u64 i = 0; i < argv0_len; i++) {
-		((char *)string_addr)[i] = src[i];
-	}
-	sp &= ~15ULL;
-	sp -= 4 * sizeof(u64);
-	words = (u64 *)sp;
-	words[0] = 1;
-	words[1] = string_addr;
-	words[2] = 0;
-	words[3] = 0;
-	return sp;
+static u64 pte_leaf(u64 phys, u64 flags)
+{
+	return ((phys >> RISCV64_PAGE_SHIFT) << 10) | flags;
+}
+
+static u64 vpn_index(u64 vaddr, u32 level)
+{
+	return (vaddr >> (RISCV64_PAGE_SHIFT + level * 9)) & 0x1ffULL;
+}
+
+static void early_vm_map_page(u64 vaddr, u64 phys, u64 flags)
+{
+	const u64 l1_index = vpn_index(vaddr, 1);
+	const u64 l0_index = vpn_index(vaddr, 0);
+
+	early_user_l1[l1_index] = pte_table((u64)early_user_l0);
+	early_user_l0[l0_index] = pte_leaf(phys, flags);
+}
+
+static void early_vm_enable(void)
+{
+	const u64 identity_flags = RISCV64_PTE_V | RISCV64_PTE_R |
+				   RISCV64_PTE_W | RISCV64_PTE_X |
+				   RISCV64_PTE_A | RISCV64_PTE_D;
+	const u64 user_rx = RISCV64_PTE_V | RISCV64_PTE_R |
+			    RISCV64_PTE_X | RISCV64_PTE_U |
+			    RISCV64_PTE_A | RISCV64_PTE_D;
+	const u64 user_rw = RISCV64_PTE_V | RISCV64_PTE_R |
+			    RISCV64_PTE_W | RISCV64_PTE_U |
+			    RISCV64_PTE_A | RISCV64_PTE_D;
+	const u64 root_ppn = ((u64)early_root_table) >> RISCV64_PAGE_SHIFT;
+
+	memory_zero((u8 *)early_root_table, sizeof(early_root_table));
+	memory_zero((u8 *)early_user_l1, sizeof(early_user_l1));
+	memory_zero((u8 *)early_user_l0, sizeof(early_user_l0));
+
+	early_root_table[vpn_index(RISCV64_PHYS_MEM_BASE, 2)] =
+		pte_leaf(RISCV64_PHYS_MEM_BASE, identity_flags);
+	early_root_table[0] = pte_table((u64)early_user_l1);
+	early_vm_map_page(RISCV64_USER_BASE, (u64)mapped_user_text, user_rx);
+	early_vm_map_page(USER_STACK_PAGE, (u64)mapped_user_stack, user_rw);
+
+	__asm__ volatile ("sfence.vma" ::: "memory");
+	__asm__ volatile ("csrw satp, %0" : : "r"(SATP_MODE_SV39 | root_ppn) :
+			  "memory");
+	__asm__ volatile ("sfence.vma" ::: "memory");
+	__asm__ volatile ("fence.i" ::: "memory");
 }
 
 void riscv64_early_main(u64 hart_id, u64 fdt)
@@ -338,22 +407,25 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 		early_puts("bootpkg: riscv64 initrd\n");
 		if (bootpkg_find_module(boot_info.initrd_start,
 					boot_info.initrd_end,
-					riscv64_bootpkg_native_smoke,
+					riscv64_bootpkg_abi_smoke,
 					&module_start, &module_size) == 0 &&
 		    user_elf_is_riscv64(module_start, module_size)) {
 			early_puts("module: riscv64 user elf\n");
-			if (load_user_elf(module_start, module_size,
-					  &module_entry) == 0) {
-				module_stack = build_user_stack(
-					native_user_stack,
-					sizeof(native_user_stack),
-					"/bin/native-smoke.user");
+			if (load_user_elf_page(module_start, module_size,
+					       RISCV64_USER_BASE,
+					       mapped_user_text,
+					       sizeof(mapped_user_text),
+					       &module_entry) == 0) {
+				module_stack = build_user_stack_mapped(
+					mapped_user_stack, USER_STACK_PAGE,
+					"/bin/abi-smoke.user");
+				early_vm_enable();
 				if (riscv64_user_mode_self_test(
 					    module_entry, module_stack,
-					    (u64)(native_user_kernel_stack +
-						  sizeof(native_user_kernel_stack))) ==
+					    (u64)(mapped_user_kernel_stack +
+						  sizeof(mapped_user_kernel_stack))) ==
 				    1) {
-					early_puts("native: riscv64 user exit\n");
+					early_puts("vm: riscv64 user exit\n");
 				}
 			}
 		}

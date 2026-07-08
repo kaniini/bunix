@@ -28,26 +28,28 @@ The early boot gate currently verifies:
   value, and return through a test-only trap continuation on a kernel stack.
 - The riscv64 boot package is visible through the FDT initrd range and starts
   with the expected `BUNIX-RV64-BOOTPKG` header.
-- The packaged `native-smoke.user` payload can be located and validated as an
+- The packaged `abi-smoke.user` payload can be located and validated as an
   ELF64 little-endian RISC-V user image.
-- The packaged `native-smoke.user` payload can have its load segments copied
-  into RAM, run in U-mode through the riscv64 crt0, and return via the native
-  Bunix `exit` syscall.
+- The packaged `abi-smoke.user` payload can have its load segments copied into
+  backing pages, mapped at the real Bunix user base `0x400000` with an early
+  Sv39 page table, run in U-mode through the riscv64 crt0, and return via the
+  native Bunix `exit` syscall.
 - The guest exits through SBI poweroff.
 
 ## Boot package
 
 The first riscv64 module/rootfs carrier is a QEMU initrd image.  The host-side
 builder `tools/build-riscv64-bootpkg.sh` creates a text-header package with a
-module record and the current `native-smoke.user` payload.  The early kernel
+module record and the current `abi-smoke.user` payload.  The early kernel
 can validate the carrier magic, locate that module record, verify the payload
-is an ELF64 RISC-V image, copy loadable segments, build a crt0-compatible
-stack, enter U-mode, and observe native `exit`.
+is an ELF64 RISC-V image, copy loadable segments into backing pages, map them
+with a minimal Sv39 page table, build a crt0-compatible stack, enter U-mode at
+`0x400000`, and observe native `exit`.
 
-`native-smoke.user` is linked at `0x80400000` because the initial riscv64 path
-has no page tables yet.  The normal `test-riscv64-user-abi` artifact remains
-linked at the real Bunix user base `0x400000`; running that address requires
-the later user address-space activation work.
+The current Sv39 setup is intentionally an early harness: it identity-maps the
+supervisor RAM window and maps only the smoke program text page plus one user
+stack page.  It is enough to prove the real Bunix user base works, but not a
+general task address-space implementation.
 
 This gives riscv64 a firmware-neutral package handoff separate from
 Multiboot2.  Future rootfs images can ride in the same carrier or replace it
@@ -66,11 +68,11 @@ The build smoke target `make test-riscv64-user-abi` links a freestanding rv64
 user ELF with `user/crt0-riscv64.S` and the shared Bunix syscall wrappers.  It
 does not prove runtime U-mode task launch yet.
 
-The early QEMU smoke does prove that the trap path can enter U-mode and handle
-an `ecall` on a supervisor stack.  The boot-package smoke additionally proves
-one packaged crt0 payload can run and exit.  This is still an early harness,
-not a native server: there is no user address-space activation, copyin/copyout,
-or scheduler-owned user task lifetime in the riscv64 path yet.
+The early QEMU smoke proves that the trap path can enter U-mode, handle an
+`ecall` on a supervisor stack, and run one packaged crt0 payload at the real
+Bunix user base through an early Sv39 mapping.  This is still an early harness,
+not a native server: there is no general task VM object, copyin/copyout, or
+scheduler-owned user task lifetime in the riscv64 path yet.
 
 ## Linux personality slice
 
@@ -93,10 +95,11 @@ syscall ABI with the smallest executable that still uses libc startup:
 
 Dynamic linking, Alpine rootfs parity, and BusyBox are later riscv64 slices.
 
-The current host has riscv64 binutils and QEMU, but no riscv64 musl compiler
-wrapper or libc headers/libraries in the cross sysroot.  Until those inputs are
-installed or vendored, the tree should not add a pretend riscv64 musl binary
-target that cannot produce a real libc-linked ELF.
+The current host has riscv64 binutils and QEMU, but Alpine does not ship the
+needed riscv64 Linux musl cross compiler.  Use the external musl.cc
+`riscv64-linux-musl-cross.tgz` toolchain for the later static riscv64 musl
+slice; until that toolchain is installed or vendored, the tree should not add a
+pretend riscv64 musl binary target that cannot produce a real libc-linked ELF.
 
 ## Unsupported features
 
@@ -105,7 +108,8 @@ The initial riscv64 port intentionally does not support:
 - SMP or secondary hart startup.
 - FPU, vector, or signal context save/restore.
 - Native server task launch through proc/bootstrap.
-- User page-table activation, copyin/copyout, or VM server integration.
+- General user page-table management, copyin/copyout, or VM server
+  integration.
 - Linux signal frames or riscv64-specific Linux syscall parity.
 - Dynamic linking and `ld-musl-riscv64.so.1`.
 - VirtIO MMIO devices, block storage, networking, or Alpine rootfs boot.
