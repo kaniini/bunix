@@ -7,5 +7,6 @@ xhci: rings ready command=
 xhci: port reset port=
 xhci: enable slot slot=
 xhci: address device slot=
+xhci: device descriptor len=
 xhci: ready skeleton
 machine: poweroff

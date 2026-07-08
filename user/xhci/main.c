@@ -37,13 +37,22 @@ enum {
 				  (1 << 20) | (1 << 21) | (1 << 22) |
 				  (1 << 23),
 	XHCI_TRB_TYPE_LINK = 6,
+	XHCI_TRB_TYPE_SETUP_STAGE = 2,
+	XHCI_TRB_TYPE_DATA_STAGE = 3,
+	XHCI_TRB_TYPE_STATUS_STAGE = 4,
 	XHCI_TRB_TYPE_ENABLE_SLOT = 9,
 	XHCI_TRB_TYPE_ADDRESS_DEVICE = 11,
+	XHCI_TRB_TYPE_TRANSFER_EVENT = 32,
 	XHCI_TRB_TYPE_COMMAND_COMPLETION = 33,
 	XHCI_TRB_TYPE_PORT_STATUS_CHANGE = 34,
 	XHCI_TRB_CYCLE = 1 << 0,
+	XHCI_TRB_IOC = 1 << 5,
+	XHCI_TRB_IDT = 1 << 6,
 	XHCI_TRB_TOGGLE_CYCLE = 1 << 1,
+	XHCI_TRB_DIR_IN = 1 << 16,
+	XHCI_TRB_SETUP_TRT_IN = 3 << 16,
 	XHCI_COMPLETION_SUCCESS = 1,
+	XHCI_COMPLETION_SHORT_PACKET = 13,
 	XHCI_HCCPARAMS1_CONTEXT_SIZE = 1 << 2,
 	XHCI_SLOT_CONTEXT_ENTRIES_SHIFT = 27,
 	XHCI_SLOT_CONTEXT_ROOT_PORT_SHIFT = 16,
@@ -60,6 +69,10 @@ enum {
 	XHCI_TRB_SIZE = 16,
 	XHCI_CONTEXT_DWORD_SIZE = 4,
 	XHCI_CONTEXT_COUNT = 32,
+	XHCI_USB_DT_DEVICE = 1,
+	XHCI_USB_REQ_GET_DESCRIPTOR = 6,
+	XHCI_USB_DIR_IN = 0x80,
+	XHCI_USB_DEVICE_DESCRIPTOR_SIZE = 18,
 	XHCI_ERST_ENTRIES = 1,
 	XHCI_ERST_ENTRY_SIZE = 16,
 	XHCI_MAX_SCRATCHPADS = 16,
@@ -103,9 +116,12 @@ struct xhci_device {
 	struct xhci_dma_buffer device_context;
 	struct xhci_dma_buffer input_context;
 	struct xhci_dma_buffer ep0_ring;
+	struct xhci_dma_buffer control_buffer;
 	u64 slot_id;
 	u64 port;
 	u64 speed;
+	u64 ep0_producer;
+	u64 ep0_cycle;
 };
 
 static const unsigned char zeroes[64];
@@ -662,9 +678,39 @@ static int xhci_write_command_trb(struct xhci_rings *rings, u64 parameter,
 	return 0;
 }
 
+static int xhci_write_ep0_trb(struct xhci_device *device, u64 parameter,
+			      u64 status, u64 control)
+{
+	u64 index;
+	u64 offset;
+
+	if (device == 0 || device->ep0_producer >= XHCI_RING_TRBS - 1) {
+		return -1;
+	}
+	index = device->ep0_producer;
+	offset = device->ep0_ring.offset + index * XHCI_TRB_SIZE;
+	if (buffer_write64(device->ep0_ring.handle, offset, parameter) != 0 ||
+	    buffer_write32(device->ep0_ring.handle, offset + 8, status) != 0 ||
+	    buffer_write32(device->ep0_ring.handle, offset + 12,
+			   control | device->ep0_cycle) != 0) {
+		return -1;
+	}
+	device->ep0_producer++;
+	return 0;
+}
+
 static int xhci_ring_command_doorbell(const struct xhci_controller *controller)
 {
 	return mmio_write32(controller->mmio, controller->doorbell_offset, 0);
+}
+
+static int xhci_ring_ep0_doorbell(const struct xhci_controller *controller,
+				  const struct xhci_device *device)
+{
+	return mmio_write32(controller->mmio,
+			    controller->doorbell_offset +
+				    device->slot_id * XHCI_DOORBELL_STRIDE,
+			    1);
 }
 
 static int xhci_wait_command_completion(const struct xhci_controller *controller,
@@ -735,6 +781,67 @@ static int xhci_enable_slot(const struct xhci_controller *controller,
 									-1;
 }
 
+static int xhci_wait_transfer_completion(
+	const struct xhci_controller *controller, struct xhci_rings *rings,
+	const struct xhci_device *device, u64 *completion_code,
+	u64 *actual_length)
+{
+	for (u64 poll = 0; poll < XHCI_COMMAND_POLLS; poll++) {
+		const u64 offset = rings->event_ring.offset +
+				   rings->event_consumer * XHCI_TRB_SIZE;
+		u64 parameter = 0;
+		u64 status = 0;
+		u64 control = 0;
+		u64 type;
+
+		if (buffer_read64(rings->event_ring.handle, offset,
+				  &parameter) != 0 ||
+		    buffer_read32(rings->event_ring.handle, offset + 8,
+				  &status) != 0 ||
+		    buffer_read32(rings->event_ring.handle, offset + 12,
+				  &control) != 0) {
+			return -1;
+		}
+		if ((control & XHCI_TRB_CYCLE) != rings->event_cycle) {
+			bunix_sleep_ns(1000000ull);
+			continue;
+		}
+		rings->event_consumer++;
+		if (rings->event_consumer == XHCI_RING_TRBS) {
+			rings->event_consumer = 0;
+			rings->event_cycle ^= 1;
+		}
+		{
+			const u64 erdp = rings->event_ring.phys +
+					 rings->event_consumer * XHCI_TRB_SIZE;
+
+			(void)mmio_write64(controller->mmio,
+					   controller->runtime_offset +
+						   XHCI_RUNTIME_IR0 +
+						   XHCI_IR_ERDP,
+					   erdp | (1 << 3));
+		}
+		type = (control >> 10) & 0x3fu;
+		if (type == XHCI_TRB_TYPE_TRANSFER_EVENT) {
+			const u64 event_slot = (control >> 24) & 0xffu;
+			const u64 endpoint = (control >> 16) & 0x1fu;
+			const u64 residual = status & 0xffffffu;
+
+			if (event_slot != device->slot_id || endpoint != 1) {
+				return -1;
+			}
+			*completion_code = (status >> 24) & 0xffu;
+			*actual_length =
+				XHCI_USB_DEVICE_DESCRIPTOR_SIZE - residual;
+			return 0;
+		}
+		if (type != XHCI_TRB_TYPE_PORT_STATUS_CHANGE) {
+			return -1;
+		}
+	}
+	return -1;
+}
+
 static u64 xhci_context_size(const struct xhci_controller *controller)
 {
 	return (controller->hccparams1 & XHCI_HCCPARAMS1_CONTEXT_SIZE) != 0 ? 64 :
@@ -796,6 +903,8 @@ static int xhci_prepare_address_device(const struct xhci_controller *controller,
 	    dma_alloc(&device->input_context, context_bytes, 64) != 0 ||
 	    dma_alloc(&device->ep0_ring, XHCI_RING_TRBS * XHCI_TRB_SIZE,
 		      64) != 0 ||
+	    dma_alloc(&device->control_buffer, XHCI_PAGE_SIZE,
+		      XHCI_PAGE_SIZE) != 0 ||
 	    xhci_setup_ep0_transfer_ring(device) != 0 ||
 	    buffer_write64(rings->dcbaa.handle,
 			   rings->dcbaa.offset + device->slot_id * sizeof(u64),
@@ -822,6 +931,8 @@ static int xhci_prepare_address_device(const struct xhci_controller *controller,
 			   XHCI_EP0_MAX_PACKET_SIZE) != 0) {
 		return -1;
 	}
+	device->ep0_producer = 0;
+	device->ep0_cycle = 1;
 	return 0;
 }
 
@@ -844,6 +955,52 @@ static int xhci_address_device(const struct xhci_controller *controller,
 	}
 	return *completion_code == XHCI_COMPLETION_SUCCESS &&
 		       completion_slot == device->slot_id ?
+		       0 :
+		       -1;
+}
+
+static int xhci_get_device_descriptor(
+	const struct xhci_controller *controller, struct xhci_rings *rings,
+	struct xhci_device *device, unsigned char *descriptor, u64 descriptor_len,
+	u64 *actual_length, u64 *completion_code)
+{
+	const u64 setup = ((u64)XHCI_USB_DIR_IN) |
+			  ((u64)XHCI_USB_REQ_GET_DESCRIPTOR << 8) |
+			  ((u64)XHCI_USB_DT_DEVICE << 24) |
+			  ((u64)XHCI_USB_DEVICE_DESCRIPTOR_SIZE << 48);
+	const u64 setup_status = 8;
+	const u64 setup_control =
+		((u64)XHCI_TRB_TYPE_SETUP_STAGE << 10) | XHCI_TRB_IDT |
+		XHCI_TRB_SETUP_TRT_IN;
+	const u64 data_status = XHCI_USB_DEVICE_DESCRIPTOR_SIZE;
+	const u64 data_control =
+		((u64)XHCI_TRB_TYPE_DATA_STAGE << 10) | XHCI_TRB_DIR_IN;
+	const u64 status_control =
+		((u64)XHCI_TRB_TYPE_STATUS_STAGE << 10) | XHCI_TRB_IOC;
+
+	if (descriptor == 0 || descriptor_len < XHCI_USB_DEVICE_DESCRIPTOR_SIZE ||
+	    buffer_zero(device->control_buffer.handle,
+			device->control_buffer.offset,
+			XHCI_USB_DEVICE_DESCRIPTOR_SIZE) != 0 ||
+	    xhci_write_ep0_trb(device, setup, setup_status, setup_control) != 0 ||
+	    xhci_write_ep0_trb(device, device->control_buffer.phys,
+			       data_status, data_control) != 0 ||
+	    xhci_write_ep0_trb(device, 0, 0, status_control) != 0 ||
+	    xhci_ring_ep0_doorbell(controller, device) != 0 ||
+	    xhci_wait_transfer_completion(controller, rings, device,
+					  completion_code, actual_length) != 0) {
+		return -1;
+	}
+	if (*completion_code != XHCI_COMPLETION_SUCCESS &&
+	    *completion_code != XHCI_COMPLETION_SHORT_PACKET) {
+		return -1;
+	}
+	if (*actual_length > XHCI_USB_DEVICE_DESCRIPTOR_SIZE) {
+		*actual_length = XHCI_USB_DEVICE_DESCRIPTOR_SIZE;
+	}
+	return bunix_buffer_read(device->control_buffer.handle,
+				 device->control_buffer.offset, descriptor,
+				 XHCI_USB_DEVICE_DESCRIPTOR_SIZE) == 0 ?
 		       0 :
 		       -1;
 }
@@ -902,6 +1059,31 @@ static void log_address_device(u64 slot_id, u64 completion_code)
 	append_u64(line, sizeof(line), &offset, slot_id);
 	append_text(line, sizeof(line), &offset, " code=");
 	append_u64(line, sizeof(line), &offset, completion_code);
+	append_char(line, sizeof(line), &offset, '\n');
+	bunix_console_log(line, offset);
+}
+
+static void log_device_descriptor(const unsigned char *descriptor,
+				  u64 actual_length, u64 completion_code)
+{
+	char line[128];
+	u64 offset = 0;
+	u64 vendor = 0;
+	u64 product = 0;
+
+	if (descriptor != 0 && actual_length >= 12) {
+		vendor = (u64)descriptor[8] | ((u64)descriptor[9] << 8);
+		product = (u64)descriptor[10] | ((u64)descriptor[11] << 8);
+	}
+	line[0] = '\0';
+	append_text(line, sizeof(line), &offset, "xhci: device descriptor len=");
+	append_u64(line, sizeof(line), &offset, actual_length);
+	append_text(line, sizeof(line), &offset, " code=");
+	append_u64(line, sizeof(line), &offset, completion_code);
+	append_text(line, sizeof(line), &offset, " vendor=");
+	append_u64(line, sizeof(line), &offset, vendor);
+	append_text(line, sizeof(line), &offset, " product=");
+	append_u64(line, sizeof(line), &offset, product);
 	append_char(line, sizeof(line), &offset, '\n');
 	bunix_console_log(line, offset);
 }
@@ -1061,9 +1243,31 @@ int main(void)
 									    &rings,
 									    &device,
 									    &code) == 0) {
+									unsigned char
+										descriptor
+											[XHCI_USB_DEVICE_DESCRIPTOR_SIZE];
+									u64 actual = 0;
+
 									log_address_device(
 										slot_id,
 										code);
+									if (xhci_get_device_descriptor(
+										    &controller,
+										    &rings,
+										    &device,
+										    descriptor,
+										    sizeof(descriptor),
+										    &actual,
+										    &code) == 0) {
+										log_device_descriptor(
+											descriptor,
+											actual,
+											code);
+									} else {
+										log_command_debug(
+											&controller,
+											&rings);
+									}
 								} else {
 									log_command_debug(
 										&controller,
