@@ -234,7 +234,7 @@ static void generic_services_init(u64 fdt)
 	arch_smp_init(fdt);
 	kernel_runtime_memory_init();
 	kernel_runtime_services_init();
-	server_boot_modules_init();
+	kernel_runtime_boot_modules_init();
 	kernel_runtime_scheduler_init();
 }
 

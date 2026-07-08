@@ -41,6 +41,7 @@ void kernel_main(u32 magic, u64 multiboot_info)
 	arch_interrupts_init();
 	arch_smp_init(multiboot_info);
 	kernel_runtime_services_init();
+	kernel_runtime_boot_modules_init();
 	kernel_runtime_scheduler_init();
 	arch_smp_release_aps();
 	server_start_boot_modules(multiboot_info);

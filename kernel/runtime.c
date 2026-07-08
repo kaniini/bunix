@@ -3,6 +3,7 @@
 #include "name.h"
 #include "runtime.h"
 #include "sched.h"
+#include "server.h"
 #include "slab.h"
 #include "vm.h"
 #include "../servers/vm/vm_server.h"
@@ -21,6 +22,11 @@ void kernel_runtime_services_init(void)
 	ipc_init();
 	name_service_init();
 	vm_server_init();
+}
+
+void kernel_runtime_boot_modules_init(void)
+{
+	server_boot_modules_init();
 }
 
 void kernel_runtime_scheduler_init(void)

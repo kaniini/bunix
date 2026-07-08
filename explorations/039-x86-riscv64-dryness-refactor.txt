@@ -25,7 +25,7 @@ Tasks:
       rootfs image wiring, and QEMU test targets.
 - [x] Identify which differences are architectural contracts and which are
       accidental bringup duplication.
-- [ ] Create shared helpers for generic lifecycle and boot-module sequencing
+- [x] Create shared helpers for generic lifecycle and boot-module sequencing
       where both architectures already agree.
 - [x] Move Linux-personality syscall forwarding into a shared registry or
       dispatch layer with arch-specific ABI tables.
@@ -212,3 +212,16 @@ Progress notes:
     - `make ARCH=riscv64 all`
     - `make ARCH=x86_64 all`
     - `make test-boot-riscv64-alpine`
+- Runtime boot-module lifecycle slice:
+  - Added `kernel_runtime_boot_modules_init()` as the shared lifecycle hook for
+    boot-module registry setup after IPC/name services are online.
+  - x86_64 now initializes the boot-module registry through the generic
+    runtime path before scheduler startup; `server_start_boot_modules()` only
+    records Multiboot2 modules and launches the initial module graph.
+  - riscv64 uses the same runtime hook before scheduler startup, while still
+    preserving its FDT/bootpkg discovery and low-level self-test sequencing.
+  - Verification:
+    - `make ARCH=x86_64 all`
+    - `make ARCH=riscv64 all`
+    - `make test-smoke`
+    - `make test-boot-riscv64-early`
