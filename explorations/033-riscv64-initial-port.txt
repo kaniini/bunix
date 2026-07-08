@@ -44,7 +44,7 @@ Tasks:
       format, memory map, and firmware expectations.
 - [x] Add riscv64 toolchain variables, build rules, linker script, and
       `ARCH=riscv64` targets without disrupting the x86_64 defaults.
-- [ ] Add `arch/riscv64/` skeleton headers and implementations for early
+- [x] Add `arch/riscv64/` skeleton headers and implementations for early
       console, poweroff/reboot, interrupt enable/disable, timer source,
       thread context, page-table primitives, and user entry stubs.
 - [ ] Define the riscv64 kernel virtual-memory layout, page-table flags,
@@ -117,6 +117,27 @@ Progress notes:
 - `make ARCH=riscv64 all` now selects the riscv64 source/link path correctly
   and fails at the expected host prerequisite boundary because
   `riscv64-linux-gnu-gcc` is not installed.
+- Added riscv64 arch skeleton headers and implementations:
+  - `arch/riscv64/include/arch/sbi.h` centralizes the early SBI call ABI and
+    console putchar helper used by the early payload and power path.
+  - `interrupts.h`/`interrupts.c` define the riscv64 trap frame shape,
+    interrupt enable/disable hooks, timer counters, and placeholder IRQ
+    binding/mask/ack operations for later PLIC/AIA work.
+  - `power.h`/`power.c` provide SBI-backed poweroff/reboot stubs.
+  - `smp.h`/`smp.c` provide a single-hart implementation so scheduler-facing
+    calls have a riscv64 provider before SMP bringup.
+  - `thread.h`, `thread.c`, and `thread.S` define callee-saved riscv64 thread
+    context, context initialization, a trampoline, and save/restore switching
+    over `sp`, `ra`, and `s0`-`s11`.
+  - `user.h`/`user.c` define a riscv64 syscall/trap frame and placeholder user
+    entry/resume/syscall hooks for the later `ecall` ABI slice.
+  - `vm.h`/`vm.c` define initial user/direct-map constants, a page-table root
+    field, placeholder map/protect/unmap/translate/activate operations, and
+    riscv64 PTE flag construction.
+- The riscv64 skeleton intentionally keeps some x86-era generic function names
+  such as `arch_smp_lapic_*` alive as compatibility shims.  A later portability
+  cleanup should rename those generic contracts around CPU interrupt
+  controller behavior instead of APIC-specific terminology.
 
 Open design notes:
 
@@ -150,3 +171,7 @@ Verification so far:
   moving the kernel output under `build/x86_64/`.
 - `make ARCH=riscv64 all` failed at `riscv64-linux-gnu-gcc` missing from
   `PATH`, after selecting the expected riscv64 object path.
+- `make -n ARCH=riscv64 all` showed the expanded skeleton compile/link plan
+  with `interrupts.c`, `power.c`, `smp.c`, `thread.c`, `thread.S`, `user.c`,
+  and `vm.c`.
+- `make -n all` passed for the default x86_64 target.

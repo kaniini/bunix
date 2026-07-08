@@ -236,7 +236,14 @@ KERNEL_LD_EMULATION := elf64lriscv
 KERNEL_OBJDUMP_CHECK :=
 KERNEL_ARCH_SRCS := \
 	arch/riscv64/boot/start.S \
-	arch/riscv64/early.c
+	arch/riscv64/early.c \
+	arch/riscv64/interrupts.c \
+	arch/riscv64/power.c \
+	arch/riscv64/smp.c \
+	arch/riscv64/thread.c \
+	arch/riscv64/thread.S \
+	arch/riscv64/user.c \
+	arch/riscv64/vm.c
 ARCH_CFLAGS := -march=rv64gc -mabi=lp64 -mcmodel=medany
 ARCH_ASFLAGS := -march=rv64gc -mabi=lp64 -mcmodel=medany
 else
