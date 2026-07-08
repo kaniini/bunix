@@ -42,6 +42,20 @@ Problem:
 - Minimal `alarm(2)` and `setitimer(ITIMER_REAL)` support now feeds
   `SIGALRM` into interruptible socket receives, allowing BusyBox ping's
   timer-driven loop to continue.
+- A capture-backed repro with QEMU `filter-dump` showed exactly four ICMP echo
+  requests from `10.0.2.15` to `4.2.2.1` and four echo replies from
+  `4.2.2.1` to `10.0.2.15`.
+- The same retained guest run showed `/proc/net/dev` `eth0` counters advance
+  from `rx=4 tx=4` before `ping -c4 -W4 4.2.2.1` to `rx=8 tx=8` after it,
+  proving the virtio-net/net-server path received and transmitted the four
+  ping packets.
+- Completion verification:
+  - `make test-boot-virtio-net-external-ping` passed with a regression that
+    checks four replies from `4.2.2.1` and the source address text.
+  - `make test-boot-virtio-net-networking` passed, preserving OpenRC
+    networking, DHCP/default route setup, and one-shot external pings.
+  - `make test` passed with `test-parallel status=done`, 20 shards launched,
+    and 0 skipped.
 
 Intended outcome:
 
@@ -91,9 +105,9 @@ Tasks:
 - [x] Add or extend a deterministic IPv4 external ping regression that runs in
       QEMU and records enough packet-path logs to distinguish TX, RX, parse,
       socket delivery, and userspace reporting failures.
-- [ ] Verify with host-side or QEMU-side evidence that four echo replies are
+- [x] Verify with host-side or QEMU-side evidence that four echo replies are
       received by QEMU for `ping -c 4 4.2.2.1`.
-- [ ] Verify the virtio-net driver receives all four replies and hands them to
+- [x] Verify the virtio-net driver receives all four replies and hands them to
       the net server.
 - [x] Fix IPv4/ICMP parsing so inbound echo replies preserve the remote source
       address.
