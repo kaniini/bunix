@@ -106,9 +106,9 @@ Progress notes:
     `build/$(ARCH)/bunixos.kernel`.
   - x86_64 keeps its Multiboot2 source list, linker script, compiler flags,
     GRUB/EFI packaging, and test defaults.
-  - riscv64 has explicit `riscv64-linux-gnu-` tool variables, `rv64gc/lp64`
-    freestanding compile flags, `elf64lriscv` linker emulation, and a direct
-    early kernel source list.
+  - riscv64 has explicit tool variables, `rv64gc/lp64` freestanding compile
+    flags, `elf64lriscv` linker emulation, and a direct early kernel source
+    list.
   - Added `arch/riscv64/linker.ld`, `arch/riscv64/boot/start.S`, and
     `arch/riscv64/early.c` as a tiny OpenSBI payload that prints an early
     banner and requests poweroff through SBI.
@@ -117,6 +117,16 @@ Progress notes:
 - `make ARCH=riscv64 all` now selects the riscv64 source/link path correctly
   and fails at the expected host prerequisite boundary because
   `riscv64-linux-gnu-gcc` is not installed.
+- Updated the riscv64 build defaults for this Alpine host shape: compile and
+  assemble with installed Clang using
+  `--target=riscv64-alpine-linux-musl`, use `llvm-objdump`/`llvm-readelf` for
+  inspection, and expect `binutils-riscv64` to provide
+  `riscv64-alpine-linux-musl-ld` for final linking.  GNU cross toolchains can
+  still be selected by overriding `RISCV64_CC`, `RISCV64_CC_TARGET_FLAGS`,
+  `RISCV64_LD`, `RISCV64_OBJDUMP`, and `RISCV64_READELF`.
+- With the Clang path, `make ARCH=riscv64 all` compiles every riscv64 object
+  currently in the source list and now fails only at the missing linker
+  boundary because `riscv64-alpine-linux-musl-ld` is not installed.
 - Added riscv64 arch skeleton headers and implementations:
   - `arch/riscv64/include/arch/sbi.h` centralizes the early SBI call ABI and
     console putchar helper used by the early payload and power path.
@@ -207,3 +217,7 @@ Verification so far:
   the early payload and VM stubs.
 - `make -n ARCH=riscv64 all` showed `arch/riscv64/fdt.c` in the riscv64
   compile/link plan.
+- `make ARCH=riscv64 all` with Clang compiled the riscv64 assembly/C objects
+  and failed at missing `riscv64-alpine-linux-musl-ld`.
+- `make all` passed for the default x86_64 target after changing riscv64
+  tool defaults.

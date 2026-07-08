@@ -224,12 +224,16 @@ KERNEL_ARCH_SRCS := \
 ARCH_CFLAGS := -m64 -mno-red-zone -mno-sse -mno-sse2
 ARCH_ASFLAGS := -m64
 else ifeq ($(ARCH),riscv64)
-RISCV64_CROSS_COMPILE ?= riscv64-linux-gnu-
-CC := $(RISCV64_CROSS_COMPILE)gcc
+RISCV64_CC ?= clang
+RISCV64_CC_TARGET_FLAGS ?= --target=riscv64-alpine-linux-musl
+RISCV64_LD ?= riscv64-alpine-linux-musl-ld
+RISCV64_OBJDUMP ?= llvm-objdump
+RISCV64_READELF ?= llvm-readelf
+CC := $(RISCV64_CC)
 MUSL_CC ?= riscv64-alpine-linux-musl-gcc
-LD := $(RISCV64_CROSS_COMPILE)ld
-OBJDUMP := $(RISCV64_CROSS_COMPILE)objdump
-READELF := $(RISCV64_CROSS_COMPILE)readelf
+LD := $(RISCV64_LD)
+OBJDUMP := $(RISCV64_OBJDUMP)
+READELF := $(RISCV64_READELF)
 QEMU ?= qemu-system-riscv64
 KERNEL_LINKER := arch/riscv64/linker.ld
 KERNEL_LD_EMULATION := elf64lriscv
@@ -245,8 +249,8 @@ KERNEL_ARCH_SRCS := \
 	arch/riscv64/thread.S \
 	arch/riscv64/user.c \
 	arch/riscv64/vm.c
-ARCH_CFLAGS := -march=rv64gc -mabi=lp64 -mcmodel=medany
-ARCH_ASFLAGS := -march=rv64gc -mabi=lp64 -mcmodel=medany
+ARCH_CFLAGS := $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany
+ARCH_ASFLAGS := $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany
 else
 $(error unsupported ARCH=$(ARCH))
 endif
