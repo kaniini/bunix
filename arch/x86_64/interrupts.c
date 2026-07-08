@@ -107,6 +107,21 @@ struct linux_siginfo {
 	u8 pad[104];
 };
 
+u64 arch_interrupts_save(void)
+{
+	u64 flags;
+
+	__asm__ volatile ("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+	return flags;
+}
+
+void arch_interrupts_restore(u64 flags)
+{
+	if ((flags & (1 << 9)) != 0) {
+		__asm__ volatile ("sti" : : : "memory");
+	}
+}
+
 struct idt_entry {
 	u16 offset_low;
 	u16 selector;

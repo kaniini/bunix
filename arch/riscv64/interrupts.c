@@ -41,6 +41,22 @@ void arch_interrupts_load(void)
 {
 }
 
+u64 arch_interrupts_save(void)
+{
+	u64 status;
+
+	__asm__ volatile ("csrrci %0, sstatus, 2" : "=r"(status) : : "memory");
+	return status;
+}
+
+void arch_interrupts_restore(u64 flags)
+{
+	if ((flags & RISCV64_SSTATUS_SIE) != 0) {
+		__asm__ volatile ("csrs sstatus, %0" :
+				  : "r"(RISCV64_SSTATUS_SIE) : "memory");
+	}
+}
+
 void arch_interrupts_enable(void)
 {
 	__asm__ volatile ("csrs sstatus, %0" : : "r"(RISCV64_SSTATUS_SIE) :

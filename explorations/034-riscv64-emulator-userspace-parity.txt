@@ -148,3 +148,19 @@ Verification notes:
 - `make test-boot` passed after isolating the Multiboot2 PMM provider.
 - `make test-boot-riscv64-early` passed after isolating the Multiboot2 PMM
   provider.
+- Moved generic spinlocks off x86-only interrupt assembly:
+  - `kernel/spinlock.c` now calls `arch_interrupts_save()` and
+    `arch_interrupts_restore()` instead of embedding `pushfq`/`cli`/`sti`.
+  - x86_64 implements those hooks with the previous flags save/restore
+    semantics.
+  - riscv64 implements those hooks by saving `sstatus` and clearing/restoring
+    `SIE`, making the generic spinlock source compile for riscv64.
+  - The generic spin loop no longer emits the x86-only `pause` instruction.
+- `make all` passed after adding arch interrupt save/restore hooks.
+- `make ARCH=riscv64 all` passed after adding arch interrupt save/restore
+  hooks.
+- A manual riscv64 compile of `kernel/spinlock.c` passed:
+  `clang --target=riscv64-alpine-linux-musl ... -c kernel/spinlock.c`.
+- `make test-boot` passed after adding arch interrupt save/restore hooks.
+- `make test-boot-riscv64-early` passed after adding arch interrupt
+  save/restore hooks.

@@ -73,6 +73,9 @@ to feed FDT memory/initrd/kernel reservations into that API before page tables
 and user frames can come from PMM.
 The Multiboot2 collector now lives outside the PMM core, so riscv64 can link
 the generic allocator without pulling in x86 boot-protocol symbols.
+Generic spinlocks have also been moved onto architecture interrupt
+save/restore hooks; riscv64 provides `sstatus.SIE` save/restore semantics so
+generic locking code can compile for the emulator path.
 
 This gives riscv64 a firmware-neutral package handoff separate from
 Multiboot2.  Future rootfs images can ride in the same carrier or replace it

@@ -45,6 +45,8 @@ struct arch_interrupt_frame {
 
 void arch_interrupts_init(void);
 void arch_interrupts_load(void);
+u64 arch_interrupts_save(void);
+void arch_interrupts_restore(u64 flags);
 void arch_interrupts_enable(void);
 void arch_interrupts_disable(void);
 u64 arch_timer_ticks(void);
