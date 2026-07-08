@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,8 +12,13 @@
 
 enum {
 	WORKERS = 4,
+	CPU_WORKERS = 4,
+	SLEEPER_WORKERS = 2,
+	STARVATION_WORKERS = CPU_WORKERS + SLEEPER_WORKERS,
 	PROC_SCHED_BUF = 4096,
 	BENCH_DURATION_NS = 750000000,
+	SLEEP_INTERVAL_NS = 1000000,
+	MAX_SLEEPER_WAKE_NS = 250000000,
 	MAX_FAIRNESS_SKEW = 12,
 };
 
@@ -28,8 +34,12 @@ struct sched_snapshot {
 
 struct worker_result {
 	int worker;
+	int role;
 	unsigned long long iterations;
 	unsigned long long checksum;
+	unsigned long long samples;
+	unsigned long long total_latency_ns;
+	unsigned long long max_latency_ns;
 };
 
 static unsigned long long monotonic_ns(void)
@@ -202,10 +212,67 @@ static int worker_main(int worker, int start_fd, int result_fd)
 	}
 
 	result.worker = worker;
+	result.role = 1;
 	result.iterations = iterations;
 	result.checksum = checksum;
 	if (write_full(result_fd, &result, sizeof(result)) != 0) {
 		perror("schedbench worker result");
+		return 1;
+	}
+	return 0;
+}
+
+static int sleeper_worker_main(int worker, int start_fd, int result_fd)
+{
+	unsigned long long deadline;
+	unsigned long long now;
+	unsigned long long samples = 0;
+	unsigned long long total_latency = 0;
+	unsigned long long max_latency = 0;
+	unsigned long long checksum = (unsigned long long)(worker + 1);
+	struct worker_result result;
+	const struct timespec delay = {
+		.tv_sec = 0,
+		.tv_nsec = SLEEP_INTERVAL_NS,
+	};
+
+	if (read_full(start_fd, &deadline, sizeof(deadline)) != 0) {
+		perror("schedbench sleeper start");
+		return 1;
+	}
+
+	now = monotonic_ns();
+	while (now < deadline) {
+		const unsigned long long before = monotonic_ns();
+		if (nanosleep(&delay, 0) != 0 && errno != EINTR) {
+			perror("schedbench sleeper nanosleep");
+			return 1;
+		}
+		if ((samples % 4) == 0 && sched_yield() != 0) {
+			perror("schedbench sleeper sched_yield");
+			return 1;
+		}
+		const unsigned long long after = monotonic_ns();
+		const unsigned long long elapsed = after - before;
+
+		if (elapsed > max_latency) {
+			max_latency = elapsed;
+		}
+		total_latency += elapsed;
+		checksum = checksum * 1103515245ull + elapsed + samples;
+		samples++;
+		now = after;
+	}
+
+	result.worker = worker;
+	result.role = 2;
+	result.iterations = samples;
+	result.checksum = checksum;
+	result.samples = samples;
+	result.total_latency_ns = total_latency;
+	result.max_latency_ns = max_latency;
+	if (write_full(result_fd, &result, sizeof(result)) != 0) {
+		perror("schedbench sleeper result");
 		return 1;
 	}
 	return 0;
@@ -336,11 +403,159 @@ static int run_fairness(void)
 	return 0;
 }
 
+static int run_starvation(void)
+{
+	int start_pipe[2];
+	int result_pipe[2];
+	pid_t pids[STARVATION_WORKERS];
+	struct worker_result results[STARVATION_WORKERS];
+	struct sched_snapshot before;
+	struct sched_snapshot after;
+	unsigned long long deadline;
+	unsigned long long cpu_total = 0;
+	unsigned long long sleeper_samples = 0;
+	unsigned long long sleeper_max = 0;
+	unsigned long long sleeper_total = 0;
+	int status;
+
+	if (read_sched_snapshot(&before) != 0) {
+		return 1;
+	}
+	if (pipe(start_pipe) != 0 || pipe(result_pipe) != 0) {
+		perror("schedbench starvation pipe");
+		return 1;
+	}
+
+	for (int worker = 0; worker < STARVATION_WORKERS; worker++) {
+		pids[worker] = fork();
+		if (pids[worker] < 0) {
+			perror("schedbench starvation fork");
+			return 1;
+		}
+		if (pids[worker] == 0) {
+			close(start_pipe[1]);
+			close(result_pipe[0]);
+			if (worker < CPU_WORKERS) {
+				_exit(worker_main(worker, start_pipe[0],
+						  result_pipe[1]));
+			}
+			_exit(sleeper_worker_main(worker, start_pipe[0],
+						  result_pipe[1]));
+		}
+	}
+
+	close(start_pipe[0]);
+	close(result_pipe[1]);
+
+	deadline = monotonic_ns() + BENCH_DURATION_NS;
+	for (int worker = 0; worker < STARVATION_WORKERS; worker++) {
+		if (write_full(start_pipe[1], &deadline,
+			       sizeof(deadline)) != 0) {
+			perror("schedbench starvation start write");
+			return 1;
+		}
+	}
+	if (close(start_pipe[1]) != 0) {
+		perror("schedbench starvation close start");
+		return 1;
+	}
+
+	for (int worker = 0; worker < STARVATION_WORKERS; worker++) {
+		if (read_full(result_pipe[0], &results[worker],
+			      sizeof(results[worker])) != 0) {
+			perror("schedbench starvation result read");
+			return 1;
+		}
+	}
+	if (close(result_pipe[0]) != 0) {
+		perror("schedbench starvation close result");
+		return 1;
+	}
+
+	for (int worker = 0; worker < STARVATION_WORKERS; worker++) {
+		if (waitpid(pids[worker], &status, 0) != pids[worker]) {
+			perror("schedbench starvation waitpid");
+			return 1;
+		}
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+			fprintf(stderr,
+				"schedbench starvation worker status=%d\n",
+				status);
+			return 1;
+		}
+	}
+
+	for (int i = 0; i < STARVATION_WORKERS; i++) {
+		if (results[i].role == 1) {
+			if (results[i].iterations == 0 ||
+			    results[i].checksum == 0) {
+				fprintf(stderr,
+					"schedbench starvation empty cpu worker\n");
+				return 1;
+			}
+			cpu_total += results[i].iterations;
+		} else if (results[i].role == 2) {
+			if (results[i].samples < 4 ||
+			    results[i].checksum == 0) {
+				fprintf(stderr,
+					"schedbench starvation empty sleeper worker samples=%llu\n",
+					results[i].samples);
+				return 1;
+			}
+			if (results[i].max_latency_ns > sleeper_max) {
+				sleeper_max = results[i].max_latency_ns;
+			}
+			sleeper_samples += results[i].samples;
+			sleeper_total += results[i].total_latency_ns;
+		} else {
+			fprintf(stderr, "schedbench starvation bad role=%d\n",
+				results[i].role);
+			return 1;
+		}
+	}
+
+	if (sleeper_samples == 0 || sleeper_max > MAX_SLEEPER_WAKE_NS) {
+		fprintf(stderr,
+			"schedbench starvation sleeper latency too high samples=%llu max_ns=%llu limit_ns=%u\n",
+			sleeper_samples, sleeper_max, MAX_SLEEPER_WAKE_NS);
+		return 1;
+	}
+
+	if (read_sched_snapshot(&after) != 0) {
+		return 1;
+	}
+	if (after.switches <= before.switches ||
+	    after.runtime_ticks <= before.runtime_ticks ||
+	    after.wakeups <= before.wakeups) {
+		fprintf(stderr,
+			"schedbench starvation counters did not advance switches %lu->%lu runtime %lu->%lu wakeups %lu->%lu\n",
+			before.switches, after.switches,
+			before.runtime_ticks, after.runtime_ticks,
+			before.wakeups, after.wakeups);
+		return 1;
+	}
+
+	printf("schedbench starvation cpu_workers=%u sleepers=%u cpu_total=%llu sleeper_samples=%llu sleeper_avg_ns=%llu sleeper_max_ns=%llu\n",
+	       CPU_WORKERS, SLEEPER_WORKERS, cpu_total, sleeper_samples,
+	       sleeper_total / sleeper_samples, sleeper_max);
+	printf("schedbench starvation counters switches %lu -> %lu runtime %lu -> %lu wakeups %lu -> %lu preemptions %lu -> %lu max_wake_to_run %lu -> %lu\n",
+	       before.switches, after.switches,
+	       before.runtime_ticks, after.runtime_ticks,
+	       before.wakeups, after.wakeups,
+	       before.preemptions, after.preemptions,
+	       before.max_wake_to_run_ticks, after.max_wake_to_run_ticks);
+	printf("schedbench starvation ok\n");
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc == 1 || strcmp(argv[1], "fairness") == 0) {
 		return run_fairness();
 	}
-	fprintf(stderr, "usage: %s [fairness]\n", argv[0]);
+	if (strcmp(argv[1], "starvation") == 0) {
+		return run_starvation();
+	}
+	fprintf(stderr, "usage: %s [fairness|starvation]\n", argv[0]);
 	return 2;
 }

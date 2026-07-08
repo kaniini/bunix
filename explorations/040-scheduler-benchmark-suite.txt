@@ -45,7 +45,7 @@ Tasks:
       Linux PIDs through proc/linux server state.
 - [x] Add a CPU-bound fairness benchmark that runs equal-weight workers and
       verifies bounded runtime skew.
-- [ ] Add a starvation benchmark with mixed CPU-bound and sleeping/yielding
+- [x] Add a starvation benchmark with mixed CPU-bound and sleeping/yielding
       workers, verifying that interactive workers keep bounded wake-to-run
       latency.
 - [ ] Add an IPC/server latency benchmark that drives repeated RPCs while
@@ -93,4 +93,19 @@ Progress notes:
     - `make ARCH=x86_64 all`
     - `make build/modules/procfs.server`
     - `BUNIX_TEST_SET=rootfs-vfs-proc-dev make test-parallel`
+    - `git diff --check`
+- Starvation/interactive sleeper benchmark slice:
+  - Extended `/bin/schedbench` with `schedbench starvation`.
+  - The mode runs CPU-bound workers together with sleeper/yielder workers
+    under one guest monotonic deadline, verifies CPU workers keep making
+    progress, verifies sleepers keep taking wakeups, and fails if the maximum
+    observed sleeper wake interval exceeds a bounded threshold.
+  - The mode also checks scheduler switch/runtime/wakeup counters advance and
+    prints CPU work, sleeper sample count, average/max sleeper interval, and
+    scheduler counter deltas for future comparisons.
+  - The dedicated `scheduler-bench` shard now runs both fairness and
+    starvation modes.
+  - Verification:
+    - `make build/modules/schedbench.user`
+    - `BUNIX_TEST_SET=scheduler-bench make test-parallel`
     - `git diff --check`
