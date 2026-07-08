@@ -2,6 +2,7 @@
 
 enum {
 	XHCI_HANDLE_PCI = 4,
+	XHCI_HANDLE_USB = 5,
 	PCI_CLASS_SERIAL_USB_XHCI = 0x0c0330,
 	XHCI_PCI_BAR = 0,
 	XHCI_CAP_LENGTH_VERSION = 0x00,
@@ -77,6 +78,8 @@ enum {
 	XHCI_USB_DEVICE_DESCRIPTOR_SIZE = 18,
 	XHCI_USB_CONFIG_DESCRIPTOR_HEADER_SIZE = 9,
 	XHCI_USB_CONFIG_DESCRIPTOR_MAX_SIZE = 256,
+	XHCI_USB_DESCRIPTOR_BLOB_MAX = XHCI_USB_DEVICE_DESCRIPTOR_SIZE +
+				       XHCI_USB_CONFIG_DESCRIPTOR_MAX_SIZE,
 	XHCI_ERST_ENTRIES = 1,
 	XHCI_ERST_ENTRY_SIZE = 16,
 	XHCI_MAX_SCRATCHPADS = 16,
@@ -171,6 +174,16 @@ static u64 align_up(u64 value, u64 alignment)
 {
 	return alignment == 0 ? value : (value + alignment - 1) &
 				       ~(alignment - 1);
+}
+
+static void bytes_copy(unsigned char *dst, const unsigned char *src, u64 len)
+{
+	if (dst == 0 || src == 0) {
+		return;
+	}
+	for (u64 i = 0; i < len; i++) {
+		dst[i] = src[i];
+	}
 }
 
 static int pci_call(struct bunix_msg *request, struct bunix_msg *reply)
@@ -1078,6 +1091,53 @@ static int xhci_set_configuration(const struct xhci_controller *controller,
 				    configuration_value, 0, completion_code);
 }
 
+static int xhci_register_usb_device(const unsigned char *device_descriptor,
+				    u64 device_len,
+				    const unsigned char *config_descriptor,
+				    u64 config_len, u64 *device_index)
+{
+	unsigned char blob[XHCI_USB_DESCRIPTOR_BLOB_MAX];
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USB,
+		.type = BUNIX_USB_CONTROLLER_REGISTER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	long buffer;
+	u64 total;
+
+	if (device_index == 0 || device_descriptor == 0 ||
+	    config_descriptor == 0 ||
+	    device_len != XHCI_USB_DEVICE_DESCRIPTOR_SIZE ||
+	    config_len < XHCI_USB_CONFIG_DESCRIPTOR_HEADER_SIZE ||
+	    device_len + config_len > sizeof(blob)) {
+		return -1;
+	}
+	total = device_len + config_len;
+	bytes_copy(blob, device_descriptor, device_len);
+	bytes_copy(blob + device_len, config_descriptor, config_len);
+	buffer = bunix_buffer_create(total);
+	if (buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, blob, total) != 0) {
+		return -1;
+	}
+	request.cap = (u64)buffer;
+	request.words[0] = total;
+	if (bunix_ipc_call(XHCI_HANDLE_USB, &request, &reply) != 0 ||
+	    reply.protocol != BUNIX_PROTO_USB ||
+	    reply.words[0] != BUNIX_USB_OK) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	*device_index = reply.words[1];
+	return 0;
+}
+
 static void log_rings(const struct xhci_rings *rings)
 {
 	char line[160];
@@ -1200,6 +1260,18 @@ static void log_set_configuration(u64 configuration_value, u64 completion_code)
 	append_u64(line, sizeof(line), &offset, configuration_value);
 	append_text(line, sizeof(line), &offset, " code=");
 	append_u64(line, sizeof(line), &offset, completion_code);
+	append_char(line, sizeof(line), &offset, '\n');
+	bunix_console_log(line, offset);
+}
+
+static void log_usb_registered(u64 device_index)
+{
+	char line[96];
+	u64 offset = 0;
+
+	line[0] = '\0';
+	append_text(line, sizeof(line), &offset, "xhci: usb0 registered index=");
+	append_u64(line, sizeof(line), &offset, device_index);
 	append_char(line, sizeof(line), &offset, '\n');
 	bunix_console_log(line, offset);
 }
@@ -1429,9 +1501,25 @@ int main(void)
 													    &device,
 													    config_value,
 													    &code) == 0) {
+													u64 usb_index =
+														0;
+
 													log_set_configuration(
 														config_value,
 														code);
+													if (xhci_register_usb_device(
+														    descriptor,
+														    actual,
+														    config,
+														    config_actual,
+														    &usb_index) == 0) {
+														log_usb_registered(
+															usb_index);
+													} else {
+														log_command_debug(
+															&controller,
+															&rings);
+													}
 												} else {
 													log_command_debug(
 														&controller,

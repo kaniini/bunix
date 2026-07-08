@@ -3384,13 +3384,25 @@ int main(void)
 		}
 	}
 	if (bunix_cmdline_has("xhci-test") > 0) {
-		const struct bunix_launch_cap xhci_caps[] = {
+		struct bunix_launch_cap xhci_caps[] = {
 			{ console, BUNIX_RIGHT_SEND, 0 },
 			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
 			{ pci, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
+			{ 0, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
 		};
 
 		bunix_console_log(xhci_test, sizeof(xhci_test) - 1);
+		bunix_launch_module_with_caps("usb-bus", fs_caps,
+					      sizeof(fs_caps) /
+						      sizeof(fs_caps[0]));
+		usb = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						 BUNIX_SERVICE_USB,
+						 BUNIX_RIGHT_SEND |
+							 BUNIX_RIGHT_DUP);
+		if (usb == 0) {
+			return 1;
+		}
+		xhci_caps[3].handle = usb;
 		bunix_launch_module_with_caps(
 			"xhci", xhci_caps,
 			sizeof(xhci_caps) / sizeof(xhci_caps[0]));

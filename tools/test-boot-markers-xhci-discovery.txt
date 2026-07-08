@@ -1,4 +1,6 @@
 bootstrap: xhci test
+usb-bus: online
+usb-bus: ready
 xhci: online
 xhci: pci controllers=1 dma=deferred
 xhci: regs version=
@@ -10,5 +12,7 @@ xhci: address device slot=
 xhci: device descriptor len=
 xhci: config descriptor len=
 xhci: set configuration value=
+usb-bus: device index=0 vendor=1575 product=1 interfaces=1 endpoints=1
+xhci: usb0 registered index=0
 xhci: ready skeleton
 machine: poweroff

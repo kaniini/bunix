@@ -93,7 +93,7 @@ Tasks:
 - [x] Implement the first real xHCI milestone: controller reset, capability/
       operational/runtime register mapping, command ring/event ring setup,
       port status read, and clean shutdown under QEMU.
-- [ ] Implement xHCI device enumeration for one deterministic QEMU USB device:
+- [x] Implement xHCI device enumeration for one deterministic QEMU USB device:
       port reset, slot enable, address device, descriptor read, configuration
       set, and descriptor publication through `USB0`.
 - [ ] Add a USB smoke test that boots with the synthetic backend first, then a
@@ -153,6 +153,10 @@ Progress notes:
   fetches the full configuration descriptor, logs total length/interface count/
   configuration value, issues `SET_CONFIGURATION`, and observes successful
   transfer completion in `test-boot-xhci-discovery`.
+- `xhci.server` now publishes the real xHCI-discovered QEMU keyboard
+  descriptor blob through `USB0`.  The xHCI smoke launches `usb-bus.server`,
+  passes its capability to `xhci.server`, and verifies `usb-bus.server` parses
+  vendor/product/interface/endpoint metadata from the real descriptor set.
 - Default boot behavior is unchanged: the USB modules are packaged but not
   launched unless a USB command-line test flag is present.
 
@@ -163,9 +167,8 @@ Open design notes:
 - The upper `USB0` constants now name the intended class-driver operations, but
   endpoint capabilities and transfer-completion objects still need full OCAP
   modeling.
-- The next xHCI enumeration step is publishing the real xHCI-discovered
-  descriptor set through `USB0`, replacing the current xHCI-only logging path
-  with a controller registration path that `usb-bus.server` can consume.
+- The next USB stack step is to consolidate synthetic and xHCI boot smoke
+  coverage, then split class-driver follow-up work for HID input and storage.
 
 USB DMA model:
 
