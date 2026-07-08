@@ -170,6 +170,9 @@ static void platform_discovery_smoke(u64 fdt)
 	if (platform.stdout_path[0] != '\0') {
 		early_puts("fdt: riscv64 stdout\n");
 	}
+	if (platform.stdout_uart_valid != 0) {
+		early_puts("fdt: riscv64 stdout-uart\n");
+	}
 	if (platform.uart_count != 0) {
 		early_puts("fdt: riscv64 uart\n");
 	}

@@ -191,3 +191,23 @@ Verification notes:
 - `sh -n tools/bpi-f3-smoke.sh` passed after adding SBI System Reset support.
 - `tools/bpi-f3-smoke.sh --artifact-dir build/riscv64/bpi-f3 --check-log
   build/riscv64-serial.log` passed after adding SBI System Reset support.
+- Added firmware stdout-path UART resolution:
+  - `riscv64_fdt_scan_platform()` now records `/aliases`, strips serial
+    options from `/chosen/stdout-path`, resolves alias names such as
+    `serial0` to full node paths, and marks which discovered UART is the
+    firmware-selected stdout device.
+  - The riscv64 QEMU smoke and BPI-F3 smoke-log checker now require the
+    `fdt: riscv64 stdout-uart` marker.
+  - This prepares the native UART bringup path by proving the firmware can
+    identify the target console device, but the early-serial task remains open
+    until the real BPI-F3 stdout binding is captured and native UART output is
+    proven on hardware.
+- `make ARCH=riscv64 all` passed after adding firmware stdout UART
+  resolution.
+- `make test-boot-riscv64-early` passed after adding firmware stdout UART
+  resolution.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding firmware stdout
+  UART resolution.
+- `tools/bpi-f3-smoke.sh --artifact-dir build/riscv64/bpi-f3 --check-log
+  build/riscv64-serial.log` passed after adding firmware stdout UART
+  resolution.

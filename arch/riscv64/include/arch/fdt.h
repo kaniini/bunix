@@ -17,6 +17,7 @@ struct riscv64_fdt_initrd {
 #define RISCV64_FDT_MAX_COMPATIBLE 64
 #define RISCV64_FDT_MAX_CPUS 16
 #define RISCV64_FDT_MAX_DEVICES 8
+#define RISCV64_FDT_MAX_ALIASES 16
 
 struct riscv64_fdt_cpu {
 	u64 hart_id;
@@ -29,13 +30,22 @@ struct riscv64_fdt_device {
 	u64 reg_size;
 };
 
+struct riscv64_fdt_alias {
+	char name[32];
+	char path[RISCV64_FDT_MAX_PATH];
+};
+
 struct riscv64_fdt_platform {
 	u32 cpu_count;
 	u32 timebase_frequency;
 	char stdout_path[RISCV64_FDT_MAX_PATH];
+	char stdout_resolved_path[RISCV64_FDT_MAX_PATH];
+	u32 stdout_uart_index;
+	u32 stdout_uart_valid;
 	u32 uart_count;
 	u32 interrupt_controller_count;
 	struct riscv64_fdt_cpu cpus[RISCV64_FDT_MAX_CPUS];
+	struct riscv64_fdt_alias aliases[RISCV64_FDT_MAX_ALIASES];
 	struct riscv64_fdt_device uarts[RISCV64_FDT_MAX_DEVICES];
 	struct riscv64_fdt_device interrupt_controllers[RISCV64_FDT_MAX_DEVICES];
 };

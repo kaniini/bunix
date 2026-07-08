@@ -132,6 +132,7 @@ Expected first milestone serial markers:
 - `fdt: riscv64 cpus`
 - `fdt: riscv64 timer`
 - `fdt: riscv64 stdout`
+- `fdt: riscv64 stdout-uart`
 - `fdt: riscv64 uart`
 - `fdt: riscv64 interrupt-controller`
 - `timer: riscv64 tick`
@@ -155,7 +156,10 @@ After the first serial/poweroff smoke, bring up hardware in this order:
   `/chosen/stdout-path`, UART-compatible nodes, interrupt-controller nodes,
   memory ranges, and `/chosen/linux,initrd-*`.
 - Confirm the K1 UART binding and then add an early native UART backend under
-  the riscv64 board layer.
+  the riscv64 board layer.  The generic riscv64 FDT scanner now resolves
+  `/chosen/stdout-path`, including `/aliases` entries such as `serial0`, to a
+  discovered UART node so the board run can identify the intended console
+  device before native MMIO output is enabled.
 - Confirm SBI timer and poweroff/reboot behavior on the vendor OpenSBI.  The
   riscv64 power path now prefers the SBI System Reset extension and falls back
   to legacy shutdown if that extension returns.

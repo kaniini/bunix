@@ -184,6 +184,66 @@ static void platform_record_device(struct riscv64_fdt_device *devices,
 	(*count)++;
 }
 
+static void platform_record_alias(struct riscv64_fdt_platform *platform,
+				  const char *name, const char *path,
+				  u32 path_len)
+{
+	u32 count = 0;
+	struct riscv64_fdt_alias *alias;
+
+	while (count < RISCV64_FDT_MAX_ALIASES &&
+	       platform->aliases[count].name[0] != '\0') {
+		count++;
+	}
+	if (count >= RISCV64_FDT_MAX_ALIASES) {
+		return;
+	}
+	alias = &platform->aliases[count];
+	str_copy_cstr(alias->name, sizeof(alias->name), name);
+	str_copy_len(alias->path, sizeof(alias->path), path, path_len);
+}
+
+static void strip_stdout_options(char *dst, u32 capacity, const char *src)
+{
+	u32 len = 0;
+
+	while (src[len] != '\0' && src[len] != ':') {
+		len++;
+	}
+	str_copy_len(dst, capacity, src, len);
+}
+
+static void platform_resolve_stdout(struct riscv64_fdt_platform *platform)
+{
+	char target[RISCV64_FDT_MAX_PATH];
+
+	strip_stdout_options(target, sizeof(target), platform->stdout_path);
+	if (target[0] == '/') {
+		str_copy_cstr(platform->stdout_resolved_path,
+			      sizeof(platform->stdout_resolved_path), target);
+	} else {
+		for (u32 i = 0; i < RISCV64_FDT_MAX_ALIASES &&
+		     platform->aliases[i].name[0] != '\0'; i++) {
+			if (str_eq(platform->aliases[i].name, target)) {
+				str_copy_cstr(
+					platform->stdout_resolved_path,
+					sizeof(platform->stdout_resolved_path),
+					platform->aliases[i].path);
+				break;
+			}
+		}
+	}
+
+	for (u32 i = 0; i < platform->uart_count; i++) {
+		if (str_eq(platform->uarts[i].path,
+			   platform->stdout_resolved_path)) {
+			platform->stdout_uart_index = i;
+			platform->stdout_uart_valid = 1;
+			return;
+		}
+	}
+}
+
 int riscv64_fdt_scan_memory(const void *fdt,
 			    struct riscv64_fdt_memory_range *ranges,
 			    u32 capacity)
@@ -546,6 +606,10 @@ int riscv64_fdt_scan_platform(const void *fdt,
 				str_copy_len(platform->stdout_path,
 					     sizeof(platform->stdout_path),
 					     (const char *)data, len);
+			} else if (str_eq(paths[depth], "/aliases") &&
+				   len != 0) {
+				platform_record_alias(platform, name,
+						      (const char *)data, len);
 			} else if (str_eq(name, "device_type")) {
 				str_copy_len(device_type[depth],
 					     sizeof(device_type[depth]),
@@ -586,6 +650,7 @@ int riscv64_fdt_scan_platform(const void *fdt,
 		}
 
 		if (token == FDT_END) {
+			platform_resolve_stdout(platform);
 			return 0;
 		}
 

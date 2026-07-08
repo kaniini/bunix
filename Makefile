@@ -1156,6 +1156,7 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "fdt: riscv64 cpus" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 timer" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 stdout" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "fdt: riscv64 stdout-uart" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 uart" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 interrupt-controller" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "sched: riscv64 thread" $(RISCV64_SERIAL_LOG) >/dev/null

@@ -69,6 +69,7 @@ check_log() {
 	require_marker "$log" "fdt: riscv64 cpus"
 	require_marker "$log" "fdt: riscv64 timer"
 	require_marker "$log" "fdt: riscv64 stdout"
+	require_marker "$log" "fdt: riscv64 stdout-uart"
 	require_marker "$log" "fdt: riscv64 uart"
 	require_marker "$log" "fdt: riscv64 interrupt-controller"
 	require_marker "$log" "timer: riscv64 tick"
@@ -92,6 +93,7 @@ pmm: riscv64 ranges
 fdt: riscv64 cpus
 fdt: riscv64 timer
 fdt: riscv64 stdout
+fdt: riscv64 stdout-uart
 fdt: riscv64 uart
 fdt: riscv64 interrupt-controller
 timer: riscv64 tick
