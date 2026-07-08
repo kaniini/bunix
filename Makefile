@@ -60,6 +60,12 @@ BLOCK_MODULE := $(BUILD_DIR)/modules/block.server
 BLOCK_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/block/main.c.o
 PCI_MODULE := $(BUILD_DIR)/modules/pci.server
 PCI_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/pci/main.c.o
+USB_BUS_MODULE := $(BUILD_DIR)/modules/usb-bus.server
+USB_BUS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/usb-bus/main.c.o
+USB_SYNTH_MODULE := $(BUILD_DIR)/modules/usb-synth.server
+USB_SYNTH_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/usb-synth/main.c.o
+XHCI_MODULE := $(BUILD_DIR)/modules/xhci.server
+XHCI_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/xhci/main.c.o
 VIRTIO_BUS_MODULE := $(BUILD_DIR)/modules/virtio-bus.server
 VIRTIO_BUS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/virtio-bus/main.c.o
 NET_MODULE := $(BUILD_DIR)/modules/net.server
@@ -199,7 +205,7 @@ GRUB_MKRESCUE ?= grub-mkrescue
 GRUB_MKSTANDALONE ?= grub-mkstandalone
 OVMF_CODE ?= /usr/share/OVMF/OVMF_CODE.fd
 KERNEL_CMDLINE ?= log=info
-EFFECTIVE_KERNEL_CMDLINE := $(KERNEL_CMDLINE)$(if $(filter squashfs alpine-squashfs,$(ROOTFS_FLAVOR)), squashfs-root)
+EFFECTIVE_KERNEL_CMDLINE = $(KERNEL_CMDLINE)$(if $(filter squashfs alpine-squashfs,$(ROOTFS_FLAVOR)), squashfs-root)
 
 CFLAGS := -m64 -std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 	-fno-pic -fno-pie -fno-builtin -mno-red-zone \
@@ -261,6 +267,9 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/squashfs/main.c.o \
 	$(BUILD_DIR)/user/block/main.c.o \
 	$(BUILD_DIR)/user/pci/main.c.o \
+	$(BUILD_DIR)/user/usb-bus/main.c.o \
+	$(BUILD_DIR)/user/usb-synth/main.c.o \
+	$(BUILD_DIR)/user/xhci/main.c.o \
 	$(BUILD_DIR)/user/virtio-bus/main.c.o \
 	$(BUILD_DIR)/user/net/main.c.o \
 	$(BUILD_DIR)/user/netcfg/main.c.o \
@@ -281,7 +290,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso test test-alpine-rootfs test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso test test-alpine-rootfs test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-usb-synth test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -385,6 +394,18 @@ $(BLOCK_MODULE): $(BLOCK_MODULE_OBJS) user/user.ld Makefile
 $(PCI_MODULE): $(PCI_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PCI_MODULE_OBJS)
+
+$(USB_BUS_MODULE): $(USB_BUS_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(USB_BUS_MODULE_OBJS)
+
+$(USB_SYNTH_MODULE): $(USB_SYNTH_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(USB_SYNTH_MODULE_OBJS)
+
+$(XHCI_MODULE): $(XHCI_MODULE_OBJS) user/user.ld Makefile
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(XHCI_MODULE_OBJS)
 
 $(VIRTIO_BUS_MODULE): $(VIRTIO_BUS_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
@@ -608,7 +629,7 @@ $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 		$< > $@.tmp
 	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
 
-$(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(USB_BUS_MODULE) $(USB_SYNTH_MODULE) $(XHCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -633,6 +654,9 @@ $(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTS
 		"modules/unionfs.server=$(UNIONFS_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/pci.server=$(PCI_MODULE)" \
+		"modules/usb-bus.server=$(USB_BUS_MODULE)" \
+		"modules/usb-synth.server=$(USB_SYNTH_MODULE)" \
+		"modules/xhci.server=$(XHCI_MODULE)" \
 		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
 		"modules/net.server=$(NET_MODULE)" \
 		"modules/netcfg.server=$(NETCFG_MODULE)" \
@@ -641,7 +665,7 @@ $(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTS
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(VIRTIO_BLK_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VIRTIO_BLK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(VIRTIO_BLK_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(USB_BUS_MODULE) $(USB_SYNTH_MODULE) $(XHCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VIRTIO_BLK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -666,6 +690,9 @@ $(VIRTIO_BLK_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG
 		"modules/unionfs.server=$(UNIONFS_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/pci.server=$(PCI_MODULE)" \
+		"modules/usb-bus.server=$(USB_BUS_MODULE)" \
+		"modules/usb-synth.server=$(USB_SYNTH_MODULE)" \
+		"modules/xhci.server=$(XHCI_MODULE)" \
 		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
 		"modules/net.server=$(NET_MODULE)" \
 		"modules/netcfg.server=$(NETCFG_MODULE)" \
@@ -675,7 +702,7 @@ $(VIRTIO_BLK_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_BLK_TEST_GRUB_STANDALONE_CFG
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(VIRTIO_NET_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_NET_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VIRTIO_NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(VIRTIO_NET_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_NET_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(USB_BUS_MODULE) $(USB_SYNTH_MODULE) $(XHCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VIRTIO_NET_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -700,6 +727,9 @@ $(VIRTIO_NET_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_NET_TEST_GRUB_STANDALONE_CFG
 		"modules/unionfs.server=$(UNIONFS_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/pci.server=$(PCI_MODULE)" \
+		"modules/usb-bus.server=$(USB_BUS_MODULE)" \
+		"modules/usb-synth.server=$(USB_SYNTH_MODULE)" \
+		"modules/xhci.server=$(XHCI_MODULE)" \
 		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
 		"modules/net.server=$(NET_MODULE)" \
 		"modules/netcfg.server=$(NETCFG_MODULE)" \
@@ -709,7 +739,7 @@ $(VIRTIO_NET_TEST_EFI_BOOT_APP): $(KERNEL) $(VIRTIO_NET_TEST_GRUB_STANDALONE_CFG
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EXT2_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(EXT2_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE) $(EXT2_TEST_IMAGE)
+$(EXT2_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(EXT2_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(USB_BUS_MODULE) $(USB_SYNTH_MODULE) $(XHCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE) $(EXT2_TEST_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -735,6 +765,9 @@ $(EXT2_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_F
 		"modules/ext2.server=$(EXT2_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/pci.server=$(PCI_MODULE)" \
+		"modules/usb-bus.server=$(USB_BUS_MODULE)" \
+		"modules/usb-synth.server=$(USB_SYNTH_MODULE)" \
+		"modules/xhci.server=$(XHCI_MODULE)" \
 		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
 		"modules/net.server=$(NET_MODULE)" \
 		"modules/netcfg.server=$(NETCFG_MODULE)" \
@@ -744,7 +777,7 @@ $(EXT2_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_F
 		"modules/ext2-test.img=$(EXT2_TEST_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EXT2_FSCK_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(EXT2_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VIRTIO_BLK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EXT2_FSCK_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(EXT2_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(USB_BUS_MODULE) $(USB_SYNTH_MODULE) $(XHCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VIRTIO_BLK_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -770,6 +803,9 @@ $(EXT2_FSCK_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG) 
 		"modules/ext2.server=$(EXT2_MODULE)" \
 		"modules/block.server=$(BLOCK_MODULE)" \
 		"modules/pci.server=$(PCI_MODULE)" \
+		"modules/usb-bus.server=$(USB_BUS_MODULE)" \
+		"modules/usb-synth.server=$(USB_SYNTH_MODULE)" \
+		"modules/xhci.server=$(XHCI_MODULE)" \
 		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
 		"modules/net.server=$(NET_MODULE)" \
 		"modules/netcfg.server=$(NETCFG_MODULE)" \
@@ -779,7 +815,7 @@ $(EXT2_FSCK_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG) 
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(USB_BUS_MODULE) $(USB_SYNTH_MODULE) $(XHCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -806,6 +842,9 @@ $(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE
 	cp $(UNIONFS_MODULE) $(ISO_ROOT)/modules/unionfs.server
 	cp $(BLOCK_MODULE) $(ISO_ROOT)/modules/block.server
 	cp $(PCI_MODULE) $(ISO_ROOT)/modules/pci.server
+	cp $(USB_BUS_MODULE) $(ISO_ROOT)/modules/usb-bus.server
+	cp $(USB_SYNTH_MODULE) $(ISO_ROOT)/modules/usb-synth.server
+	cp $(XHCI_MODULE) $(ISO_ROOT)/modules/xhci.server
 	cp $(VIRTIO_BUS_MODULE) $(ISO_ROOT)/modules/virtio-bus.server
 	cp $(NET_MODULE) $(ISO_ROOT)/modules/net.server
 	cp $(NETCFG_MODULE) $(ISO_ROOT)/modules/netcfg.server
@@ -880,6 +919,14 @@ test-boot-ext2-root: $(EXT2_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test
 		BUNIX_BOOT_PHASE=marker-poweroff BUNIX_BOOT_MARKER="machine: poweroff" \
 		sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log tools/test-boot-markers-ext2-root.txt
+
+test-boot-usb-synth: KERNEL_CMDLINE=log=info usb-synth-test
+test-boot-usb-synth: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-usb-synth.txt
+	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log \
+		BUNIX_BOOT_PHASE=marker-poweroff BUNIX_BOOT_MARKER="machine: poweroff" \
+		sh tools/test-boot.sh
+	sh tools/check-markers.sh $(BUILD_DIR)/serial.log tools/test-boot-markers-usb-synth.txt
 
 test-boot-ext2-fsck: $(EXT2_FSCK_TEST_EFI_BOOT_APP) $(EXT2_FSCK_TEST_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-ext2-fsck.txt
 	ESP_DIR=$(EXT2_FSCK_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

@@ -64,30 +64,30 @@ Constraints:
 
 Tasks:
 
-- [ ] Inventory existing hardware-resource grants, IRQ delivery plans, DMA/page
+- [x] Inventory existing hardware-resource grants, IRQ delivery plans, DMA/page
       ownership primitives, `DEV0`/device-driver protocols, PCI server plans,
       and QEMU USB test options.
-- [ ] Define the lower host-controller protocol between `usb-bus.server` and
+- [x] Define the lower host-controller protocol between `usb-bus.server` and
       controller servers: register controller, enumerate root ports, reset
       port, allocate device slot/address, submit control/bulk/interrupt/isochronous
       transfer, cancel transfer, and receive completion events.
-- [ ] Define the upper `USB0` bus protocol: list devices, read device/config/
+- [x] Define the upper `USB0` bus protocol: list devices, read device/config/
       interface/endpoint descriptors, claim/release interface, set
       configuration/alternate setting, open endpoint, submit transfer, cancel
       transfer, and wait for completions.
-- [ ] Add a buildable `usb-bus.server` skeleton that registers `USB0` and can
+- [x] Add a buildable `usb-bus.server` skeleton that registers `USB0` and can
       accept a synthetic controller registration without changing default boot
       behavior.
-- [ ] Add a buildable `xhci.server` skeleton that can consume PCI/PCIe
+- [x] Add a buildable `xhci.server` skeleton that can consume PCI/PCIe
       resources from the future `PCI0` server, but keep it disabled until the
       PCI server exposes the needed BAR/IRQ/DMA capabilities.
 - [ ] Design the DMA model for USB transfers: pinned pages or bounded shared
       buffers, ownership transfer rules, bounce-buffer fallback, cache
       coherency notes for non-x86, and IOMMU/security follow-up needs.
-- [ ] Implement minimal USB descriptor parsing in `usb-bus.server`: device,
+- [x] Implement minimal USB descriptor parsing in `usb-bus.server`: device,
       configuration, interface, endpoint, string descriptor metadata, class/
       subclass/protocol fields, and robust bounds checks.
-- [ ] Implement a synthetic USB controller test backend so descriptor parsing,
+- [x] Implement a synthetic USB controller test backend so descriptor parsing,
       interface claiming, endpoint scoping, and transfer-completion plumbing can
       be tested without real xHCI hardware.
 - [ ] Implement the first real xHCI milestone: controller reset, capability/
@@ -108,3 +108,37 @@ Tasks:
       reset/retry, CDC ACM, USB networking, isochronous transfers, suspend/
       resume, power management, xHCI streams, MSI/MSI-X, IOMMU, and
       platform-host controllers for riscv64/ARM.
+
+Progress notes:
+
+- Added shared FourCC protocols `USB0` and `UHC0`.
+- Added `usb-bus.server`, registered as `USB0`, with descriptor parsing for
+  device, configuration, interface, and endpoint descriptors.  It supports
+  controller registration, device count/info, descriptor readback, and
+  claim/release interface scaffolding.
+- Added `usb-synth.server`, a synthetic controller backend that publishes a
+  deterministic HID boot-keyboard descriptor set through `USB0`.
+- Added `xhci.server` as a disabled-by-default PCI0-consuming skeleton.  It
+  scans PCI class codes for xHCI controllers and logs that DMA/ring setup is
+  deferred.
+- Added `test-boot-usb-synth`, which boots with `usb-synth-test`, validates
+  descriptor parsing and interface claim/release from bootstrap, checks USB
+  log markers, and ends in guest poweroff.
+- Default boot behavior is unchanged: the USB modules are packaged but not
+  launched unless a USB command-line test flag is present.
+
+Open design notes:
+
+- The lower `UHC0` constants now name the intended operations, but real
+  asynchronous transfer queues and completion ports still need implementation.
+- The upper `USB0` constants now name the intended class-driver operations, but
+  endpoint capabilities and transfer-completion objects still need full OCAP
+  modeling.
+- DMA remains the next major design item before real xHCI ring setup.  The
+  current synthetic backend intentionally uses shared buffers only.
+
+Verification so far:
+
+- `make build/modules/usb-bus.server build/modules/usb-synth.server build/modules/xhci.server build/modules/bootstrap.server`
+- `make test-boot-usb-synth`
+- `make test-boot`

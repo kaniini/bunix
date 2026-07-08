@@ -1,0 +1,8 @@
+bootstrap: usb synth test
+usb-bus: online
+usb-bus: ready
+usb-synth: online
+usb-bus: device index=0 vendor=4660 product=22136 interfaces=1 endpoints=1
+usb-synth: registered keyboard
+bootstrap: usb synth ok
+machine: poweroff

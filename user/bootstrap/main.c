@@ -3194,6 +3194,62 @@ static long net_packet_interface_selftest(u64 net)
 	return 0;
 }
 
+static long usb_call(u64 usb, u64 type, u64 word0, u64 word1, u64 word2,
+		     struct bunix_msg *reply)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USB,
+		.type = type,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { word0, word1, word2, 0 },
+	};
+
+	if (reply == 0 ||
+	    bunix_ipc_call(usb, &request, reply) != 0 ||
+	    reply->protocol != BUNIX_PROTO_USB ||
+	    reply->words[0] != BUNIX_USB_OK) {
+		return -1;
+	}
+	return 0;
+}
+
+static long usb_synth_selftest(u64 usb)
+{
+	struct bunix_msg reply;
+	u64 count = 0;
+
+	for (u64 i = 0; i < 100; i++) {
+		if (usb_call(usb, BUNIX_USB_DEVICE_COUNT, 0, 0, 0,
+			     &reply) == 0 && reply.words[1] != 0) {
+			count = reply.words[1];
+			break;
+		}
+		bunix_sleep_ns(10000000ull);
+	}
+	if (count == 0 ||
+	    usb_call(usb, BUNIX_USB_DEVICE_INFO, 0, 0, 0, &reply) != 0) {
+		return -1;
+	}
+	if ((reply.words[1] & 0xffffu) != 0x1234u ||
+	    ((reply.words[1] >> 16) & 0xffffu) != 0x5678u ||
+	    (reply.words[3] & 0xffffu) != 1 ||
+	    ((reply.words[3] >> 16) & 0xffffu) != 1) {
+		return -1;
+	}
+	if (usb_call(usb, BUNIX_USB_CLAIM_INTERFACE, 0, 0, 0, &reply) != 0 ||
+	    (reply.words[1] & 0xffu) != 3 ||
+	    ((reply.words[1] >> 8) & 0xffu) != 1 ||
+	    ((reply.words[1] >> 16) & 0xffu) != 1 ||
+	    usb_call(usb, BUNIX_USB_RELEASE_INTERFACE, 0, 0, 0,
+		     &reply) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
 int main(void)
 {
 	const char launching[] = "bootstrap: launching servers\n";
@@ -3202,6 +3258,8 @@ int main(void)
 	const char fs_namespace_ready[] = "bootstrap: fs namespace\n";
 	const char fs_ready[] = "bootstrap: fs ready\n";
 	const char virtio_blk_test[] = "bootstrap: virtio-blk test\n";
+	const char usb_synth_test[] = "bootstrap: usb synth test\n";
+	const char usb_synth_ok[] = "bootstrap: usb synth ok\n";
 	const char net_loopback_ok[] = "bootstrap: net loopback ok\n";
 	const char net_udp_ok[] = "bootstrap: net udp ok\n";
 	const char net_tcp_ok[] = "bootstrap: net tcp ok\n";
@@ -3219,6 +3277,7 @@ int main(void)
 	u64 proc = 0;
 	u64 linux = 0;
 	u64 net = 0;
+	u64 usb = 0;
 	u64 vfs = 0;
 	u64 vfs_launch = 0;
 	u64 fs_namespace = 0;
@@ -3290,6 +3349,49 @@ int main(void)
 	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_DEVICE,
 				      BUNIX_RIGHT_SEND) == 0) {
 		return 1;
+	}
+	if (bunix_cmdline_has("usb-synth-test") > 0) {
+		struct bunix_launch_cap usb_synth_caps[] = {
+			{ console, BUNIX_RIGHT_SEND, 0 },
+			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+			{ 0, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
+		};
+
+		bunix_console_log(usb_synth_test,
+				  sizeof(usb_synth_test) - 1);
+		bunix_launch_module_with_caps("usb-bus", fs_caps,
+					      sizeof(fs_caps) /
+						      sizeof(fs_caps[0]));
+		usb = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						 BUNIX_SERVICE_USB,
+						 BUNIX_RIGHT_SEND |
+							 BUNIX_RIGHT_DUP);
+		if (usb == 0) {
+			return 1;
+		}
+		usb_synth_caps[2].handle = usb;
+		bunix_launch_module_with_caps(
+			"usb-synth", usb_synth_caps,
+			sizeof(usb_synth_caps) / sizeof(usb_synth_caps[0]));
+		if (usb_synth_selftest(usb) != 0) {
+			return 1;
+		}
+		bunix_console_log(usb_synth_ok, sizeof(usb_synth_ok) - 1);
+		bunix_sleep_ns(100000000ull);
+		(void)bunix_machine_poweroff(0);
+		for (;;) {
+		}
+	}
+	if (bunix_cmdline_has("xhci-test") > 0) {
+		const struct bunix_launch_cap xhci_caps[] = {
+			{ console, BUNIX_RIGHT_SEND, 0 },
+			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+			{ pci, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
+		};
+
+		bunix_launch_module_with_caps(
+			"xhci", xhci_caps,
+			sizeof(xhci_caps) / sizeof(xhci_caps[0]));
 	}
 	bunix_launch_module_with_caps("net", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
