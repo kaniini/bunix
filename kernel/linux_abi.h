@@ -31,6 +31,41 @@ enum {
 	LINUX_MSG_REGISTER_PROCESS = 1000,
 };
 
+enum linux_forward_op {
+	LINUX_FORWARD_OPENAT,
+	LINUX_FORWARD_CLOSE,
+	LINUX_FORWARD_READ,
+	LINUX_FORWARD_WRITE,
+	LINUX_FORWARD_READLINKAT,
+	LINUX_FORWARD_NEWFSTATAT,
+	LINUX_FORWARD_FSTAT,
+	LINUX_FORWARD_EXIT,
+	LINUX_FORWARD_SET_TID_ADDRESS,
+	LINUX_FORWARD_SCALAR,
+	LINUX_FORWARD_BRK,
+	LINUX_FORWARD_MUNMAP,
+	LINUX_FORWARD_MMAP,
+	LINUX_FORWARD_MPROTECT,
+};
+
+struct linux_syscall_forward_entry {
+	u64 number;
+	enum linux_forward_op op;
+	u32 message_type;
+};
+
+static inline const struct linux_syscall_forward_entry *
+linux_syscall_forward_lookup(const struct linux_syscall_forward_entry *entries,
+			     u64 count, u64 number)
+{
+	for (u64 i = 0; i < count; i++) {
+		if (entries[i].number == number) {
+			return &entries[i];
+		}
+	}
+	return 0;
+}
+
 static inline u32 linux_prot_to_task(u64 prot)
 {
 	u32 task_prot = 0;

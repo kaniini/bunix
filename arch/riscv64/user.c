@@ -1497,89 +1497,52 @@ static u64 linux_exit_current(struct ipc_port *linux, struct ipc_port *reply_por
 	thread_exit();
 }
 
-enum riscv64_linux_op {
-	RISCV64_LINUX_OP_OPENAT,
-	RISCV64_LINUX_OP_CLOSE,
-	RISCV64_LINUX_OP_READ,
-	RISCV64_LINUX_OP_WRITE,
-	RISCV64_LINUX_OP_READLINKAT,
-	RISCV64_LINUX_OP_NEWFSTATAT,
-	RISCV64_LINUX_OP_FSTAT,
-	RISCV64_LINUX_OP_EXIT,
-	RISCV64_LINUX_OP_SET_TID_ADDRESS,
-	RISCV64_LINUX_OP_SCALAR,
-	RISCV64_LINUX_OP_BRK,
-	RISCV64_LINUX_OP_MUNMAP,
-	RISCV64_LINUX_OP_MMAP,
-	RISCV64_LINUX_OP_MPROTECT,
-};
-
-struct riscv64_linux_syscall {
-	u64 number;
-	enum riscv64_linux_op op;
-	u32 shared_type;
-};
-
-static const struct riscv64_linux_syscall riscv64_linux_syscalls[] = {
-	{ LINUX_RISCV64_OPENAT, RISCV64_LINUX_OP_OPENAT,
+static const struct linux_syscall_forward_entry riscv64_linux_syscalls[] = {
+	{ LINUX_RISCV64_OPENAT, LINUX_FORWARD_OPENAT,
 	  LINUX_MSG_OPENAT },
-	{ LINUX_RISCV64_CLOSE, RISCV64_LINUX_OP_CLOSE,
+	{ LINUX_RISCV64_CLOSE, LINUX_FORWARD_CLOSE,
 	  LINUX_MSG_CLOSE },
-	{ LINUX_RISCV64_READ, RISCV64_LINUX_OP_READ,
+	{ LINUX_RISCV64_READ, LINUX_FORWARD_READ,
 	  LINUX_MSG_READ },
-	{ LINUX_RISCV64_WRITE, RISCV64_LINUX_OP_WRITE,
+	{ LINUX_RISCV64_WRITE, LINUX_FORWARD_WRITE,
 	  LINUX_MSG_WRITE },
-	{ LINUX_RISCV64_READLINKAT, RISCV64_LINUX_OP_READLINKAT,
+	{ LINUX_RISCV64_READLINKAT, LINUX_FORWARD_READLINKAT,
 	  LINUX_MSG_READLINKAT },
-	{ LINUX_RISCV64_NEWFSTATAT, RISCV64_LINUX_OP_NEWFSTATAT,
+	{ LINUX_RISCV64_NEWFSTATAT, LINUX_FORWARD_NEWFSTATAT,
 	  LINUX_MSG_NEWFSTATAT },
-	{ LINUX_RISCV64_FSTAT, RISCV64_LINUX_OP_FSTAT,
+	{ LINUX_RISCV64_FSTAT, LINUX_FORWARD_FSTAT,
 	  LINUX_MSG_FSTAT },
-	{ LINUX_RISCV64_EXIT, RISCV64_LINUX_OP_EXIT,
+	{ LINUX_RISCV64_EXIT, LINUX_FORWARD_EXIT,
 	  LINUX_MSG_EXIT_GROUP },
-	{ LINUX_RISCV64_EXIT_GROUP, RISCV64_LINUX_OP_EXIT,
+	{ LINUX_RISCV64_EXIT_GROUP, LINUX_FORWARD_EXIT,
 	  LINUX_MSG_EXIT_GROUP },
-	{ LINUX_RISCV64_SET_TID_ADDRESS, RISCV64_LINUX_OP_SET_TID_ADDRESS,
+	{ LINUX_RISCV64_SET_TID_ADDRESS, LINUX_FORWARD_SET_TID_ADDRESS,
 	  0 },
-	{ LINUX_RISCV64_GETPID, RISCV64_LINUX_OP_SCALAR,
+	{ LINUX_RISCV64_GETPID, LINUX_FORWARD_SCALAR,
 	  LINUX_MSG_GETPID },
-	{ LINUX_RISCV64_GETPPID, RISCV64_LINUX_OP_SCALAR,
+	{ LINUX_RISCV64_GETPPID, LINUX_FORWARD_SCALAR,
 	  LINUX_MSG_GETPPID },
-	{ LINUX_RISCV64_GETUID, RISCV64_LINUX_OP_SCALAR,
+	{ LINUX_RISCV64_GETUID, LINUX_FORWARD_SCALAR,
 	  LINUX_MSG_GETUID },
-	{ LINUX_RISCV64_GETEUID, RISCV64_LINUX_OP_SCALAR,
+	{ LINUX_RISCV64_GETEUID, LINUX_FORWARD_SCALAR,
 	  LINUX_MSG_GETEUID },
-	{ LINUX_RISCV64_GETGID, RISCV64_LINUX_OP_SCALAR,
+	{ LINUX_RISCV64_GETGID, LINUX_FORWARD_SCALAR,
 	  LINUX_MSG_GETGID },
-	{ LINUX_RISCV64_GETEGID, RISCV64_LINUX_OP_SCALAR,
+	{ LINUX_RISCV64_GETEGID, LINUX_FORWARD_SCALAR,
 	  LINUX_MSG_GETEGID },
-	{ LINUX_RISCV64_GETTID, RISCV64_LINUX_OP_SCALAR,
+	{ LINUX_RISCV64_GETTID, LINUX_FORWARD_SCALAR,
 	  LINUX_MSG_GETTID },
-	{ LINUX_RISCV64_BRK, RISCV64_LINUX_OP_BRK, 0 },
-	{ LINUX_RISCV64_MUNMAP, RISCV64_LINUX_OP_MUNMAP, 0 },
-	{ LINUX_RISCV64_MMAP, RISCV64_LINUX_OP_MMAP, 0 },
-	{ LINUX_RISCV64_MPROTECT, RISCV64_LINUX_OP_MPROTECT, 0 },
+	{ LINUX_RISCV64_BRK, LINUX_FORWARD_BRK, 0 },
+	{ LINUX_RISCV64_MUNMAP, LINUX_FORWARD_MUNMAP, 0 },
+	{ LINUX_RISCV64_MMAP, LINUX_FORWARD_MMAP, 0 },
+	{ LINUX_RISCV64_MPROTECT, LINUX_FORWARD_MPROTECT, 0 },
 };
-
-static const struct riscv64_linux_syscall *riscv64_linux_syscall_lookup(
-	u64 number)
-{
-	for (u64 i = 0;
-	     i < sizeof(riscv64_linux_syscalls) /
-		     sizeof(riscv64_linux_syscalls[0]);
-	     i++) {
-		if (riscv64_linux_syscalls[i].number == number) {
-			return &riscv64_linux_syscalls[i];
-		}
-	}
-	return 0;
-}
 
 static u64 linux_riscv64_syscall_dispatch(struct arch_syscall_frame *frame)
 {
 	struct ipc_port *linux = ipc_port_find("linux");
 	struct ipc_port *reply_port = task_reply_port(task_current());
-	const struct riscv64_linux_syscall *entry;
+	const struct linux_syscall_forward_entry *entry;
 	u64 registered;
 
 	if (linux == 0 || reply_port == 0) {
@@ -1595,7 +1558,11 @@ static u64 linux_riscv64_syscall_dispatch(struct arch_syscall_frame *frame)
 		return registered;
 	}
 
-	entry = riscv64_linux_syscall_lookup(frame->number);
+	entry = linux_syscall_forward_lookup(
+		riscv64_linux_syscalls,
+		sizeof(riscv64_linux_syscalls) /
+			sizeof(riscv64_linux_syscalls[0]),
+		frame->number);
 	if (entry == 0) {
 		console_printf("linux-riscv64: unknown syscall=%u pc=%p arg0=%p arg1=%p arg2=%p arg3=%p\n",
 			       (u32)frame->number,
@@ -1608,58 +1575,58 @@ static u64 linux_riscv64_syscall_dispatch(struct arch_syscall_frame *frame)
 	}
 
 	switch (entry->op) {
-	case RISCV64_LINUX_OP_OPENAT: {
+	case LINUX_FORWARD_OPENAT: {
 		const u64 path_len = user_cstr_len_limited(
 			frame->arg1, LINUX_MAX_SYSCALL_BUFFER);
 
 		if (path_len > LINUX_MAX_SYSCALL_BUFFER) {
 			return (u64)-LINUX_EFAULT;
 		}
-		return linux_forward_user_buffer(
-			linux, reply_port, entry->shared_type,
+			return linux_forward_user_buffer(
+			linux, reply_port, entry->message_type,
 			TASK_RIGHT_RECV | TASK_RIGHT_DUP,
 			frame->arg1, path_len + 1,
 			frame->arg0, path_len + 1,
 			frame->arg2, frame->arg3, 1, 0);
 	}
-	case RISCV64_LINUX_OP_CLOSE:
-		return linux_forward_words(linux, reply_port, entry->shared_type,
+	case LINUX_FORWARD_CLOSE:
+		return linux_forward_words(linux, reply_port, entry->message_type,
 					   frame->arg0, 0, 0, 0);
-	case RISCV64_LINUX_OP_READ:
+	case LINUX_FORWARD_READ:
 		return linux_forward_user_buffer(
-			linux, reply_port, entry->shared_type,
+			linux, reply_port, entry->message_type,
 			TASK_RIGHT_SEND | TASK_RIGHT_DUP,
 			frame->arg1, frame->arg2,
 			frame->arg0, frame->arg2, 0, 0, 0, 1);
-	case RISCV64_LINUX_OP_WRITE:
+	case LINUX_FORWARD_WRITE:
 		return linux_write_chunked(linux, reply_port, frame->arg0,
 					   frame->arg1, frame->arg2);
-	case RISCV64_LINUX_OP_READLINKAT:
+	case LINUX_FORWARD_READLINKAT:
 		return linux_forward_path_output(
-			linux, reply_port, entry->shared_type,
+			linux, reply_port, entry->message_type,
 			frame->arg1, frame->arg2, frame->arg3,
 			frame->arg0, frame->arg3, 0);
-	case RISCV64_LINUX_OP_NEWFSTATAT:
+	case LINUX_FORWARD_NEWFSTATAT:
 		return linux_forward_path_output(
-			linux, reply_port, entry->shared_type,
+			linux, reply_port, entry->message_type,
 			frame->arg1, frame->arg2, LINUX_STAT_SIZE,
 			frame->arg0, frame->arg3, 0);
-	case RISCV64_LINUX_OP_FSTAT:
+	case LINUX_FORWARD_FSTAT:
 		return linux_forward_user_buffer(
-			linux, reply_port, entry->shared_type,
+			linux, reply_port, entry->message_type,
 			TASK_RIGHT_SEND | TASK_RIGHT_DUP,
 			frame->arg1, LINUX_STAT_SIZE,
 			frame->arg0, 0, 0, 0, 0, 1);
-	case RISCV64_LINUX_OP_EXIT:
+	case LINUX_FORWARD_EXIT:
 		return linux_exit_current(linux, reply_port, frame->arg0);
-	case RISCV64_LINUX_OP_SET_TID_ADDRESS:
+	case LINUX_FORWARD_SET_TID_ADDRESS:
 		return thread_id(thread_current());
-	case RISCV64_LINUX_OP_SCALAR:
+	case LINUX_FORWARD_SCALAR:
 		return linux_forward_scalar(linux, reply_port,
-					    entry->shared_type);
-	case RISCV64_LINUX_OP_BRK:
+					    entry->message_type);
+	case LINUX_FORWARD_BRK:
 		return linux_brk_current(frame->arg0);
-	case RISCV64_LINUX_OP_MUNMAP:
+	case LINUX_FORWARD_MUNMAP:
 		if (frame->arg0 == 0 ||
 		    (frame->arg0 & (VM_PAGE_SIZE - 1)) != 0 ||
 		    frame->arg1 == 0 ||
@@ -1670,9 +1637,9 @@ static u64 linux_riscv64_syscall_dispatch(struct arch_syscall_frame *frame)
 					      align_up(frame->arg1,
 						       VM_PAGE_SIZE)) == 0 ?
 			0 : (u64)-LINUX_EINVAL;
-	case RISCV64_LINUX_OP_MMAP:
+	case LINUX_FORWARD_MMAP:
 		return linux_mmap_current(linux, reply_port, frame);
-	case RISCV64_LINUX_OP_MPROTECT:
+	case LINUX_FORWARD_MPROTECT:
 		return linux_mprotect_current(frame->arg0, frame->arg1,
 					      frame->arg2);
 	default:

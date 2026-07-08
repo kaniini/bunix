@@ -27,7 +27,7 @@ Tasks:
       accidental bringup duplication.
 - [ ] Create shared helpers for generic lifecycle and boot-module sequencing
       where both architectures already agree.
-- [ ] Move Linux-personality syscall forwarding into a shared registry or
+- [x] Move Linux-personality syscall forwarding into a shared registry or
       dispatch layer with arch-specific ABI tables.
 - [x] Replace the riscv64 dynamic-loader smoke's temporary `mprotect(2)`
       success stub with real VM permission updates shared with the x86_64
@@ -193,6 +193,21 @@ Progress notes:
     its syscall table names the shared `LINX` protocol operation directly.
   - This is incremental progress toward a shared Linux syscall registry; the
     architecture-local dispatch and marshalling code still remains.
+  - Verification:
+    - `make ARCH=riscv64 all`
+    - `make ARCH=x86_64 all`
+    - `make test-boot-riscv64-alpine`
+- Shared Linux forwarding registry slice:
+  - Added `enum linux_forward_op`, `struct linux_syscall_forward_entry`, and
+    `linux_syscall_forward_lookup()` to `kernel/linux_abi.h`.
+  - Converted the riscv64 Linux syscall table to use the shared forwarding
+    entry shape and lookup helper while keeping the riscv64 syscall-number ABI
+    table in `arch/riscv64/user.c`.
+  - The mature x86_64 path still has its large switch-based frontend because
+    it covers many more Linux operations, signal delivery, exec, and networking
+    marshalling.  The shared registry boundary now exists for new architecture
+    tables and future x86_64 migration without mixing those policies into this
+    slice.
   - Verification:
     - `make ARCH=riscv64 all`
     - `make ARCH=x86_64 all`
