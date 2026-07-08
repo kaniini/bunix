@@ -36,7 +36,7 @@ Tasks:
       `BUNIX_LINUX_REGISTER_PROCESS` before forwarded scalar syscalls with
       per-task Linux frontend state.  This must support concurrent riscv64
       Linux tasks without a fixed single-task cache.
-- [ ] Unify server module build/package rules where the only difference is
+- [x] Unify server module build/package rules where the only difference is
       target triple, crt0, or linker mode.
 - [x] Factor freestanding userspace runtime support such as `memcpy`,
       `memset`, and future compiler-emitted helper symbols into a shared user
@@ -225,3 +225,14 @@ Progress notes:
     - `make ARCH=riscv64 all`
     - `make test-smoke`
     - `make test-boot-riscv64-early`
+- X86 freestanding module link-rule slice:
+  - Replaced the repeated x86_64 `user/user.ld` target rules with one
+    `X86_USER_LD_MODULES` list and generated Make template.
+  - Promoted the udhcpc helper and fault test to normal `_MODULE_OBJS`
+    variables so they participate in the shared rule shape.
+  - Left `phdrstress`, `execbig`, musl-linked test programs, and generated
+    rootfs/package rules explicit because they have distinct linker scripts,
+    validation steps, libc linkage, or image-building semantics.
+  - Verification:
+    - `make build/modules/bootstrap.server build/modules/netcfg.server build/modules/bunix-udhcpc-script.user build/modules/faulttest.user build/modules/ping.server build/modules/lxtest.user`
+    - `git diff --check`

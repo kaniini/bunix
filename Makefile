@@ -187,12 +187,13 @@ STATIDTEST_MODULE := $(BUILD_DIR)/modules/statidtest.user
 FCNTLLOCKTEST_MODULE := $(BUILD_DIR)/modules/fcntllocktest.user
 SIGNALTEST_MODULE := $(BUILD_DIR)/modules/signaltest.user
 FAULTTEST_MODULE := $(BUILD_DIR)/modules/faulttest.user
-FAULTTEST_MODULE_OBJ := $(BUILD_DIR)/user/faulttest/main.S.o
+FAULTTEST_MODULE_OBJS := $(BUILD_DIR)/user/faulttest/main.S.o
 SYSRACETEST_MODULE := $(BUILD_DIR)/modules/sysracetest.user
 SCHEDSTRESS_MODULE := $(BUILD_DIR)/modules/schedstress.user
 UPTIMETEST_MODULE := $(BUILD_DIR)/modules/uptimetest.user
 NETTEST_MODULE := $(BUILD_DIR)/modules/nettest.user
 NETDHCP_MODULE := $(BUILD_DIR)/modules/bunix-udhcpc-script.user
+NETDHCP_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/netdhcp/main.c.o
 DYN_HELLO_MODULE := $(BUILD_DIR)/modules/dyn-hello.user
 BUSYBOX_DYNAMIC ?= /bin/busybox
 BUSYBOX_STATIC ?= /usr/bin/busybox.static
@@ -200,6 +201,47 @@ BUSYBOX ?= $(BUSYBOX_DYNAMIC)
 MUSL_LDSO ?= /lib/ld-musl-x86_64.so.1
 PING_MODULE := $(BUILD_DIR)/modules/ping.server
 PING_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/ping/main.c.o
+X86_USER_LD_MODULES := \
+	BOOTSTRAP_MODULE \
+	ALLOCTEST_MODULE \
+	CONSOLE_MODULE \
+	NAMES_MODULE \
+	TIME_MODULE \
+	USER_MODULE \
+	LINUX_SERVER_MODULE \
+	PROC_MODULE \
+	PROCFS_MODULE \
+	TMPFS_MODULE \
+	DEVFS_MODULE \
+	SYSFS_MODULE \
+	UTMPFS_MODULE \
+	UNIONFS_MODULE \
+	EXT2_MODULE \
+	SQUASHFS_MODULE \
+	BLOCK_MODULE \
+	PCI_MODULE \
+	USB_BUS_MODULE \
+	USB_SYNTH_MODULE \
+	XHCI_MODULE \
+	VIRTIO_BUS_MODULE \
+	NET_MODULE \
+	NETCFG_MODULE \
+	VIRTIO_BLK_MODULE \
+	VIRTIO_NET_MODULE \
+	VFS_MODULE \
+	FIRST_MODULE \
+	IPCSTRESS_MODULE \
+	LOGIN_MODULE \
+	NETDHCP_MODULE \
+	LXTEST_MODULE \
+	GETDENTSTEST_MODULE \
+	VFORKSTRESS_MODULE \
+	EXECOK_MODULE \
+	READBIG_MODULE \
+	MMAPBIG_MODULE \
+	MMAPHUGE_MODULE \
+	FAULTTEST_MODULE \
+	PING_MODULE
 SYNTHETIC_SQUASHFS_IMAGE := $(BUILD_DIR)/modules/disk0.sqfs
 ALPINE_SQUASHFS_IMAGE := $(BUILD_DIR)/modules/alpine-disk0.sqfs
 ROOTFS_FLAVOR ?= squashfs
@@ -813,153 +855,13 @@ test-riscv64-bpi-f3-emulator-gate: test-boot-riscv64-early test-riscv64-bpi-f3-s
 	sh tools/bpi-f3-smoke.sh --artifact-dir $(RISCV64_BPI_F3_DIR) --classify-log $(RISCV64_SERIAL_LOG)
 	sh tools/bpi-f3-smoke.sh --artifact-dir $(RISCV64_BPI_F3_DIR) --summarize-log $(RISCV64_SERIAL_LOG)
 
-$(BOOTSTRAP_MODULE): $(BOOTSTRAP_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(BOOTSTRAP_MODULE_OBJS)
+define X86_USER_LD_MODULE_template
+$$($(1)): $$($(1)_OBJS) user/user.ld Makefile
+	mkdir -p $$(dir $$@)
+	$$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $$@ $$($(1)_OBJS)
+endef
 
-$(ALLOCTEST_MODULE): $(ALLOCTEST_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(ALLOCTEST_MODULE_OBJS)
-
-$(CONSOLE_MODULE): $(CONSOLE_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(CONSOLE_MODULE_OBJS)
-
-$(NAMES_MODULE): $(NAMES_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(NAMES_MODULE_OBJS)
-
-$(TIME_MODULE): $(TIME_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(TIME_MODULE_OBJS)
-
-$(USER_MODULE): $(USER_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(USER_MODULE_OBJS)
-
-$(LINUX_SERVER_MODULE): $(LINUX_SERVER_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(LINUX_SERVER_MODULE_OBJS)
-
-$(PROC_MODULE): $(PROC_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PROC_MODULE_OBJS)
-
-$(PROCFS_MODULE): $(PROCFS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PROCFS_MODULE_OBJS)
-
-$(TMPFS_MODULE): $(TMPFS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(TMPFS_MODULE_OBJS)
-
-$(DEVFS_MODULE): $(DEVFS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(DEVFS_MODULE_OBJS)
-
-$(SYSFS_MODULE): $(SYSFS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(SYSFS_MODULE_OBJS)
-
-$(UTMPFS_MODULE): $(UTMPFS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(UTMPFS_MODULE_OBJS)
-
-$(UNIONFS_MODULE): $(UNIONFS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(UNIONFS_MODULE_OBJS)
-
-$(EXT2_MODULE): $(EXT2_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(EXT2_MODULE_OBJS)
-
-$(SQUASHFS_MODULE): $(SQUASHFS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(SQUASHFS_MODULE_OBJS)
-
-$(BLOCK_MODULE): $(BLOCK_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(BLOCK_MODULE_OBJS)
-
-$(PCI_MODULE): $(PCI_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PCI_MODULE_OBJS)
-
-$(USB_BUS_MODULE): $(USB_BUS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(USB_BUS_MODULE_OBJS)
-
-$(USB_SYNTH_MODULE): $(USB_SYNTH_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(USB_SYNTH_MODULE_OBJS)
-
-$(XHCI_MODULE): $(XHCI_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(XHCI_MODULE_OBJS)
-
-$(VIRTIO_BUS_MODULE): $(VIRTIO_BUS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(VIRTIO_BUS_MODULE_OBJS)
-
-$(NET_MODULE): $(NET_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(NET_MODULE_OBJS)
-
-$(VIRTIO_BLK_MODULE): $(VIRTIO_BLK_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(VIRTIO_BLK_MODULE_OBJS)
-
-$(VIRTIO_NET_MODULE): $(VIRTIO_NET_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(VIRTIO_NET_MODULE_OBJS)
-
-$(VFS_MODULE): $(VFS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(VFS_MODULE_OBJS)
-
-$(FIRST_MODULE): $(FIRST_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(FIRST_MODULE_OBJS)
-
-$(IPCSTRESS_MODULE): $(IPCSTRESS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(IPCSTRESS_MODULE_OBJS)
-
-$(LOGIN_MODULE): $(LOGIN_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(LOGIN_MODULE_OBJS)
-
-$(NETDHCP_MODULE): $(USER_CRT0_OBJ) $(BUILD_DIR)/user/netdhcp/main.c.o user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(USER_CRT0_OBJ) $(BUILD_DIR)/user/netdhcp/main.c.o
-
-$(LXTEST_MODULE): $(LXTEST_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(LXTEST_MODULE_OBJS)
-
-$(GETDENTSTEST_MODULE): $(GETDENTSTEST_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(GETDENTSTEST_MODULE_OBJS)
-
-$(VFORKSTRESS_MODULE): $(VFORKSTRESS_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(VFORKSTRESS_MODULE_OBJS)
-
-$(EXECOK_MODULE): $(EXECOK_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(EXECOK_MODULE_OBJS)
-
-$(READBIG_MODULE): $(READBIG_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(READBIG_MODULE_OBJS)
-
-$(MMAPBIG_MODULE): $(MMAPBIG_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(MMAPBIG_MODULE_OBJS)
-
-$(MMAPHUGE_MODULE): $(MMAPHUGE_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(MMAPHUGE_MODULE_OBJS)
+$(foreach module,$(X86_USER_LD_MODULES),$(eval $(call X86_USER_LD_MODULE_template,$(module))))
 
 $(PHDRSTRESS_MODULE): $(PHDRSTRESS_MODULE_OBJS) user/phdrstress/phdrstress.ld Makefile
 	mkdir -p $(dir $@)
@@ -1026,10 +928,6 @@ $(SIGNALTEST_MODULE): user/signaltest/main.c Makefile
 	mkdir -p $(dir $@)
 	$(MUSL_CC) -static -no-pie -O2 -g $< -o $@
 
-$(FAULTTEST_MODULE): $(FAULTTEST_MODULE_OBJ) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(FAULTTEST_MODULE_OBJ)
-
 $(SYSRACETEST_MODULE): user/sysracetest/main.c Makefile
 	mkdir -p $(dir $@)
 	$(MUSL_CC) -static -no-pie -O2 -g $< -o $@
@@ -1045,14 +943,6 @@ $(UPTIMETEST_MODULE): user/uptimetest/main.c Makefile
 $(NETTEST_MODULE): user/nettest/main.c Makefile
 	mkdir -p $(dir $@)
 	$(MUSL_CC) -static -no-pie -O2 -g $< -o $@
-
-$(PING_MODULE): $(PING_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(PING_MODULE_OBJS)
-
-$(NETCFG_MODULE): $(NETCFG_MODULE_OBJS) user/user.ld Makefile
-	mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -nostdlib -T user/user.ld -o $@ $(NETCFG_MODULE_OBJS)
 
 $(SYNTHETIC_SQUASHFS_IMAGE): tools/build-synthetic-squashfs-rootfs.sh $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(ROOTFS_SHEBANGTEST) $(ROOTFS_SHEBANGLOOP_A) $(ROOTFS_SHEBANGLOOP_B) $(ROOTFS_SHEBANGBAD) $(FIRST_MODULE) $(ALLOCTEST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(VFORKSTRESS_MODULE) $(EXECOK_MODULE) $(READBIG_MODULE) $(MMAPBIG_MODULE) $(MMAPHUGE_MODULE) $(EXECBIG_MODULE) $(PHDRSTRESS_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(IOVTEST_MODULE) $(FCHMODATTEST_MODULE) $(WAITPGIDTEST_MODULE) $(EXECLONGTEST_MODULE) $(AUXIDTEST_MODULE) $(PATHMAXTEST_MODULE) $(PATHERRTEST_MODULE) $(STATIDTEST_MODULE) $(FCNTLLOCKTEST_MODULE) $(SIGNALTEST_MODULE) $(FAULTTEST_MODULE) $(SYSRACETEST_MODULE) $(SCHEDSTRESS_MODULE) $(UPTIMETEST_MODULE) $(NETTEST_MODULE) $(NETDHCP_MODULE) $(BUSYBOX) $(MUSL_LDSO)
 	BUSYBOX=$(BUSYBOX) MUSL_LDSO=$(MUSL_LDSO) MODULE_DIR=$(BUILD_DIR)/modules sh tools/build-synthetic-squashfs-rootfs.sh $@
