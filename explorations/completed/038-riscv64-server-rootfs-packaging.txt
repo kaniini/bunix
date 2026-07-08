@@ -20,7 +20,7 @@ Problem:
 
 Tasks:
 
-- [ ] Define the riscv64 Alpine boot artifact shape: boot package modules,
+- [x] Define the riscv64 Alpine boot artifact shape: boot package modules,
       block/rootfs image, or another carrier consistent with current Bunix
       rootfs conventions.
 - [x] Build riscv64 variants of the normal server graph needed for an Alpine
@@ -28,23 +28,24 @@ Tasks:
 - [x] Launch riscv64 `time` and `proc` with the same handle layout expected by
       the shared x86_64 bootstrap before attempting proc-managed exec or
       dynamic-loader smoke.
-- [ ] Wire the existing riscv64 Alpine squashfs artifact from exploration 035
+- [x] Wire the existing riscv64 Alpine squashfs artifact from exploration 035
       into the chosen QEMU boot path.
-- [ ] Wire the existing riscv64 dynamic-linker artifacts into the runtime
+- [x] Wire the existing riscv64 dynamic-linker artifacts into the runtime
       image once the shared Linux personality can execute them.
-- [ ] Add a riscv64 QEMU boot target that uses the new artifact and powers off
+- [x] Add a riscv64 QEMU boot target that uses the new artifact and powers off
       cleanly after a deterministic init/shell smoke.
-- [ ] Keep BPI-F3 artifact generation compatible with the chosen carrier.
-- [ ] Update `docs/riscv64-port.md` with exact artifact paths and operator
+- [x] Keep BPI-F3 artifact generation compatible with the chosen carrier.
+- [x] Update `docs/riscv64-port.md` with exact artifact paths and operator
       commands.
 
 Verification:
 
-- [ ] `make ARCH=riscv64 all`
-- [ ] New riscv64 Alpine artifact test
-- [ ] New riscv64 Alpine QEMU boot target
-- [ ] Existing BPI-F3 artifact/smoke helper target
-- [ ] `git diff --check`
+- [x] `make ARCH=riscv64 all`
+- [x] New riscv64 Alpine artifact test
+- [x] New riscv64 Alpine QEMU boot target
+- [x] Existing BPI-F3 artifact/smoke helper target
+- [x] `git diff --check`
+- [x] Full completion gate: `make test`
 
 Progress notes:
 
@@ -67,3 +68,27 @@ Progress notes:
   is reusable Alpine-image selection, full union/tmpfs root conventions if
   needed by Alpine, and the deterministic dynamic-loader or Alpine userspace
   boot target.
+- Exploration 035-037 completed the remaining packaging work:
+  - The default smoke boot package carries a `disk0` squashfs image plus
+    `names`, `time`, `user`, `proc`, `block`, `vfs`, `squashfs`,
+    `bootstrap`, `abi-smoke.user`, and the shared `linux` server.
+  - `build/riscv64/bootpkg-alpine.img` carries
+    `build/riscv64/alpine-rootfs.sqfs` as `disk0` with the same server graph.
+  - `build-riscv64-alpine-rootfs.sh` overlays `/bin/dyn-hello` and
+    `/lib/ld-musl-riscv64.so.1` when the dynamic-linker artifacts are present.
+  - `make test-boot-riscv64-alpine` boots QEMU `virt`, mounts the Alpine
+    squashfs, runs `/bin/dyn-hello`, spawns Alpine `/bin/sh -c 'echo
+    BUNIX_RISCV64_ALPINE_SH_OK'` through proc/Linux, and powers off through
+    the native machine poweroff path.
+  - BPI-F3 artifacts now copy the same default and UART boot packages into
+    `build/riscv64/bpi-f3/` and keep the U-Boot recipes in sync with the
+    chosen carrier.
+- Verification for closing this exploration:
+  - `make ARCH=riscv64 all`
+  - `make test-riscv64-alpine-rootfs`
+  - `make test-riscv64-dynamic-linker-artifacts`
+  - `make test-boot-riscv64-alpine`
+  - `make test-riscv64-bpi-f3-emulator-gate`
+  - `git diff --check`
+  - Full completion gate from the immediately preceding completed boundary:
+    `make test` launched 20 shards with 0 skipped and all shards passing.
