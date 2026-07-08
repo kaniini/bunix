@@ -7,6 +7,7 @@
 #include "timer.h"
 #include "tree.h"
 #include "vm.h"
+#include <arch/interrupts.h>
 #include <arch/smp.h>
 #include <arch/thread.h>
 #include <arch/user.h>
@@ -712,7 +713,8 @@ void sched_secondary_start(u32 cpu_id)
 	if (cpu_id == 0 || cpu_id >= sched_cpu_count) {
 		console_printf("sched: invalid secondary cpu=%u\n", cpu_id);
 		for (;;) {
-			__asm__ volatile ("cli; hlt");
+			arch_interrupts_disable();
+			arch_cpu_wait_for_interrupt();
 		}
 	}
 
@@ -1665,19 +1667,20 @@ void sched_run(void)
 
 static void sched_idle_wait(struct cpu_sched *cpu)
 {
-	__asm__ volatile ("cli" ::: "memory");
+	arch_interrupts_disable();
 
 	const u64 flags = spin_lock_irqsave(&cpu->runq.lock);
 	if (cpu->runq.count == 0) {
 		cpu->runq.idle = 1;
 		spin_unlock_irqrestore(&cpu->runq.lock, flags);
-		__asm__ volatile ("sti; hlt" ::: "memory");
+		arch_interrupts_enable();
+		arch_cpu_wait_for_interrupt();
 		return;
 	}
 
 	cpu->runq.idle = 0;
 	spin_unlock_irqrestore(&cpu->runq.lock, flags);
-	__asm__ volatile ("sti" ::: "memory");
+	arch_interrupts_enable();
 }
 
 void sched_idle_loop(void)
@@ -2066,7 +2069,7 @@ void thread_exit(void)
 	arch_thread_switch(&prev->context, &cpu->scheduler_thread.context);
 
 	for (;;) {
-		__asm__ volatile ("hlt");
+		arch_cpu_wait_for_interrupt();
 	}
 }
 

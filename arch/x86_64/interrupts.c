@@ -122,6 +122,21 @@ void arch_interrupts_restore(u64 flags)
 	}
 }
 
+void arch_interrupts_enable(void)
+{
+	__asm__ volatile ("sti" : : : "memory");
+}
+
+void arch_interrupts_disable(void)
+{
+	__asm__ volatile ("cli" : : : "memory");
+}
+
+void arch_cpu_wait_for_interrupt(void)
+{
+	__asm__ volatile ("hlt" : : : "memory");
+}
+
 struct idt_entry {
 	u16 offset_low;
 	u16 selector;

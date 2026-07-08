@@ -62,8 +62,9 @@ struct vm_space *vm_rpc_create_space(const char *owner)
 		console_printf("vm: space registry failed for %s\n", owner);
 		return 0;
 	}
-	console_printf("vm: create space id=%u owner=%s cr3=%p\n",
-		       space->id, owner, (const void *)space->arch.cr3);
+	console_printf("vm: create space id=%u owner=%s root=%p\n",
+		       space->id, owner,
+		       (const void *)arch_vm_root(&space->arch));
 	spin_unlock_irqrestore(&vm_spaces_lock, flags);
 	return space;
 }

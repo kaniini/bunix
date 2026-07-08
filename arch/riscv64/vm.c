@@ -304,3 +304,8 @@ void arch_vm_activate(const struct arch_vm_space *space)
 	flush_vma();
 	__asm__ volatile ("fence.i" ::: "memory");
 }
+
+u64 arch_vm_root(const struct arch_vm_space *space)
+{
+	return space != 0 ? space->root_table : 0;
+}

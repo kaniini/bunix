@@ -349,3 +349,8 @@ void arch_vm_activate(const struct arch_vm_space *space)
 {
 	__asm__ volatile ("movq %0, %%cr3" : : "r"(space->cr3) : "memory");
 }
+
+u64 arch_vm_root(const struct arch_vm_space *space)
+{
+	return space != 0 ? space->cr3 : 0;
+}

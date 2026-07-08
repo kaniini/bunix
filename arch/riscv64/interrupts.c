@@ -69,6 +69,11 @@ void arch_interrupts_disable(void)
 			  "memory");
 }
 
+void arch_cpu_wait_for_interrupt(void)
+{
+	__asm__ volatile ("wfi" ::: "memory");
+}
+
 u64 arch_timer_ticks(void)
 {
 	return ticks;

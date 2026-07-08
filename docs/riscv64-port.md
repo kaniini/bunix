@@ -87,6 +87,12 @@ formatting over legacy SBI putchar so generic scheduler/server code can link
 without the x86 COM/VGA console.  Input and dmesg-ring reads are stubbed empty
 until the real console server and TTY stack are brought up on riscv64.
 
+Some generic kernel code on the scheduler/proc path is now architecture-neutral
+enough to compile for riscv64: `kernel/sched.c` uses arch interrupt/idle hooks
+instead of x86 `cli`/`sti`/`hlt`, and `kernel/vm.c` logs `arch_vm_root()`
+instead of naming x86 `cr3`.  These are compile gates only; the normal
+scheduler/proc/bootstrap path is not linked into the riscv64 kernel yet.
+
 The PMM has been split enough to support multiple boot protocols:
 `pmm_init_from_ranges()` initializes the generic page allocator from
 available/reserved physical ranges, the x86_64 Multiboot2 path collects its

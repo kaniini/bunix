@@ -256,3 +256,19 @@ Verification notes:
 - `make ARCH=riscv64 all` passed after adding the SBI console shim.
 - `make test-boot-riscv64-early` passed after adding the SBI console shim.
 - `make all` passed after adding the SBI console shim.
+- Removed x86-specific assumptions from two generic kernel sources on the
+  riscv64 task-launch path:
+  - Added `arch_interrupts_enable()`, `arch_interrupts_disable()`, and
+    `arch_cpu_wait_for_interrupt()` hooks for x86_64 and riscv64.
+  - `kernel/sched.c` now uses those hooks instead of embedding
+    `cli`/`sti`/`hlt`, so the scheduler source compiles for riscv64.
+  - Added `arch_vm_root()` for x86_64 and riscv64; `kernel/vm.c` logs an
+    architecture-neutral VM root instead of assuming `space->arch.cr3`.
+  - Manual riscv64 compiles of `kernel/sched.c` and `kernel/vm.c` now pass.
+    These objects are still not linked into the riscv64 kernel until the
+    remaining scheduler/proc/bootstrap dependencies are ready.
+- `make ARCH=riscv64 all` passed after the scheduler/VM portability hooks.
+- `make all` passed after the scheduler/VM portability hooks.
+- `make test-boot-riscv64-early` passed after the scheduler/VM portability
+  hooks.
+- `make test-boot` passed after the scheduler/VM portability hooks.
