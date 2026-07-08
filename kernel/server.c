@@ -69,6 +69,16 @@ static struct tree module_starts_by_name;
 static struct boot_data_module disk0_module;
 static struct boot_data_module ext2disk_module;
 
+#define SERVER_FOURCC(a, b, c, d) \
+	((u32)(a) | ((u32)(b) << 8) | ((u32)(c) << 16) | ((u32)(d) << 24))
+
+enum {
+	SERVER_CAP_CONS = SERVER_FOURCC('C', 'O', 'N', 'S'),
+	SERVER_CAP_NAME = SERVER_FOURCC('N', 'A', 'M', 'E'),
+	SERVER_CAP_PCFG = SERVER_FOURCC('P', 'C', 'F', 'G'),
+	SERVER_CAP_PAUT = SERVER_FOURCC('P', 'A', 'U', 'T'),
+};
+
 struct task_start {
 	u64 entry;
 	u64 stack;
@@ -136,7 +146,7 @@ static int validate_inherited_caps(const char *name, struct task *parent,
 
 	for (u64 cap = 0; cap < cap_count; cap++) {
 		if (caps == 0 ||
-		    caps[cap].reserved != 0 ||
+		    caps[cap].tag == 0 ||
 		    task_can_inherit_handle(parent, caps[cap].handle,
 					    caps[cap].rights) != 0) {
 			console_printf("kernel: invalid inherited cap handle=%u rights=0x%x for %s\n",
@@ -180,9 +190,14 @@ static u64 launch_user_image(const char *name, struct task *parent,
 	}
 
 	for (u64 cap = 0; cap < cap_count; cap++) {
-		if (task_grant_inherited_handle(task, parent,
-						caps[cap].handle,
-						caps[cap].rights) == 0) {
+		const u64 child_handle =
+			task_grant_inherited_handle(task, parent,
+						   caps[cap].handle,
+						   caps[cap].rights);
+
+		if (child_handle == 0 ||
+		    task_set_handle_tag(task, child_handle,
+					caps[cap].tag) != 0) {
 			console_printf("kernel: invalid inherited cap handle=%u rights=0x%x for %s\n",
 				       (u32)caps[cap].handle,
 				       caps[cap].rights, name);
@@ -413,24 +428,39 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 	};
 
 	if (str_eq(server_name, "names")) {
-		task_grant_port(task, ipc_port_find("console"),
-				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+		const u64 console =
+			task_grant_port(task, ipc_port_find("console"),
+					TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+
+		(void)task_set_handle_tag(task, console, SERVER_CAP_CONS);
 		return;
 	}
 
 	if (str_eq(server_name, "consoled")) {
-		task_grant_port(task, ipc_port_find("console"),
-				TASK_RIGHT_SEND | TASK_RIGHT_RECV |
-				TASK_RIGHT_DUP);
-		task_grant_port(task, ipc_port_find("names"),
-				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+		const u64 console =
+			task_grant_port(task, ipc_port_find("console"),
+					TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+					TASK_RIGHT_DUP);
+		const u64 names =
+			task_grant_port(task, ipc_port_find("names"),
+					TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+
+		(void)task_set_handle_tag(task, console, SERVER_CAP_CONS);
+		(void)task_set_handle_tag(task, names, SERVER_CAP_NAME);
 		task_grant_hw_resource(task, &com1_port, TASK_RIGHT_SEND);
 		return;
 	}
 
 	if (str_eq(server_name, "pci")) {
-		task_grant_hw_resource(task, &pci_config_ports, TASK_RIGHT_SEND);
-		task_grant_hw_resource(task, &pci_authority, TASK_RIGHT_SEND);
+		const u64 config =
+			task_grant_hw_resource(task, &pci_config_ports,
+					       TASK_RIGHT_SEND);
+		const u64 authority =
+			task_grant_hw_resource(task, &pci_authority,
+					       TASK_RIGHT_SEND);
+
+		(void)task_set_handle_tag(task, config, SERVER_CAP_PCFG);
+		(void)task_set_handle_tag(task, authority, SERVER_CAP_PAUT);
 		return;
 	}
 

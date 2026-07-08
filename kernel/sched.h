@@ -209,6 +209,8 @@ struct task *task_from_handle(struct task *owner, u64 handle, u32 rights);
 int task_can_inherit_handle(struct task *src, u64 handle, u32 rights);
 u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
 				u32 rights);
+int task_set_handle_tag(struct task *task, u64 handle, u32 tag);
+u64 task_handle_find(struct task *task, u32 tag);
 int task_export_cap(struct task *task, u64 handle, u32 rights,
 		    enum task_cap_type *type, void **object);
 int task_retain(struct task *task);

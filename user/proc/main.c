@@ -170,22 +170,9 @@ static u64 str_len(const char *text);
 
 static long register_service(u64 service, u64 handle)
 {
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_NAMES,
-		.type = BUNIX_NAMES_REGISTER,
-		.sender = 0,
-		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
-		.reply = 0,
-		.cap = handle,
-		.words = { BUNIX_NAMES_ROOT, service, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	if (bunix_ipc_call(PROC_HANDLE_NAMES, &request, &reply) != 0) {
-		return -1;
-	}
-
-	return reply.words[0] == 0 ? 0 : -1;
+	(void)service;
+	return bunix_names_register_claim(bunix_handle_find(BUNIX_CAP_CLAM),
+					  handle);
 }
 
 static u64 resolve_service(u64 service, unsigned int rights)
@@ -1496,10 +1483,10 @@ static long exec_path(u64 vfs, struct process *process,
 		      const struct exec_strings *strings, u64 *linux_pid)
 {
 	const struct bunix_launch_cap caps[] = {
-		{ PROC_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
-		{ PROC_HANDLE_TIME, BUNIX_RIGHT_SEND, 0 },
-		{ BUNIX_HANDLE_SELF, BUNIX_RIGHT_SEND, 0 },
-		{ PROC_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+		{ PROC_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		{ PROC_HANDLE_TIME, BUNIX_RIGHT_SEND, BUNIX_CAP_TIME },
+		{ BUNIX_HANDLE_SELF, BUNIX_RIGHT_SEND, BUNIX_CAP_PROC },
+		{ PROC_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
 	};
 	long task;
 	u64 stack = 0;

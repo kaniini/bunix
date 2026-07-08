@@ -3,8 +3,6 @@
 
 enum {
 	PCI_HANDLE_NAMES = 3,
-	PCI_HANDLE_CONFIG = 4,
-	PCI_HANDLE_AUTH = BUNIX_HANDLE_PCI_AUTH,
 	PCI_CONFIG_ADDRESS = 0,
 	PCI_CONFIG_DATA = 4,
 	PCI_VENDOR_NONE = 0xffff,
@@ -124,21 +122,9 @@ static void log_function(const struct pci_function *func, u64 index)
 
 static long register_service(u64 service, u64 handle)
 {
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_NAMES,
-		.type = BUNIX_NAMES_REGISTER,
-		.sender = 0,
-		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
-		.reply = 0,
-		.cap = handle,
-		.words = { BUNIX_NAMES_ROOT, service, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	if (bunix_ipc_call(PCI_HANDLE_NAMES, &request, &reply) != 0) {
-		return -1;
-	}
-	return reply.words[0] == BUNIX_DEV_OK ? 0 : -1;
+	(void)service;
+	return bunix_names_register_claim(bunix_handle_find(BUNIX_CAP_CLAM),
+					  handle);
 }
 
 static long pci_config_read32_raw(u64 bus, u64 slot, u64 function, u64 offset)
@@ -149,11 +135,13 @@ static long pci_config_read32_raw(u64 bus, u64 slot, u64 function, u64 offset)
 			    ((function & 0x7) << 8) |
 			    (offset & 0xfc);
 
-	if (bunix_hw_port_out32(PCI_HANDLE_CONFIG, PCI_CONFIG_ADDRESS,
+	if (bunix_hw_port_out32(bunix_handle_find(BUNIX_CAP_PCFG),
+				PCI_CONFIG_ADDRESS,
 				address) != 0) {
 		return -1;
 	}
-	return bunix_hw_port_in32(PCI_HANDLE_CONFIG, PCI_CONFIG_DATA);
+	return bunix_hw_port_in32(bunix_handle_find(BUNIX_CAP_PCFG),
+				  PCI_CONFIG_DATA);
 }
 
 static long pci_config_write32_raw(u64 bus, u64 slot, u64 function, u64 offset,
@@ -165,11 +153,13 @@ static long pci_config_write32_raw(u64 bus, u64 slot, u64 function, u64 offset,
 			    ((function & 0x7) << 8) |
 			    (offset & 0xfc);
 
-	if (bunix_hw_port_out32(PCI_HANDLE_CONFIG, PCI_CONFIG_ADDRESS,
+	if (bunix_hw_port_out32(bunix_handle_find(BUNIX_CAP_PCFG),
+				PCI_CONFIG_ADDRESS,
 				address) != 0) {
 		return -1;
 	}
-	return bunix_hw_port_out32(PCI_HANDLE_CONFIG, PCI_CONFIG_DATA, value);
+	return bunix_hw_port_out32(bunix_handle_find(BUNIX_CAP_PCFG),
+				   PCI_CONFIG_DATA, value);
 }
 
 static long pci_config_read(u64 bus, u64 slot, u64 function, u64 offset,
@@ -217,7 +207,7 @@ static u64 pci_device_pack(const struct pci_function *func, u64 bar)
 static u64 grant_bar(const struct pci_function *func, u64 bar, u64 offset,
 		     u64 len, u64 ops)
 {
-	const long handle = bunix_hw_pci_bar_grant(PCI_HANDLE_AUTH,
+	const long handle = bunix_hw_pci_bar_grant(bunix_handle_find(BUNIX_CAP_PAUT),
 						   pci_device_pack(func, bar),
 						   offset, len, ops);
 
@@ -226,7 +216,7 @@ static u64 grant_bar(const struct pci_function *func, u64 bar, u64 offset,
 
 static u64 grant_irq(const struct pci_function *func)
 {
-	const long handle = bunix_hw_pci_irq_grant(PCI_HANDLE_AUTH,
+	const long handle = bunix_hw_pci_irq_grant(bunix_handle_find(BUNIX_CAP_PAUT),
 						   pci_device_pack(func, 0),
 						   func->interrupt_line);
 

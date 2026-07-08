@@ -585,22 +585,9 @@ static void linux_child_unlink(struct linux_process *child)
 
 static long register_service(u64 service)
 {
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_NAMES,
-		.type = BUNIX_NAMES_REGISTER,
-		.sender = 0,
-		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
-		.reply = 0,
-		.cap = BUNIX_HANDLE_SELF,
-		.words = { BUNIX_NAMES_ROOT, service, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	if (bunix_ipc_call(LINUX_HANDLE_NAMES, &request, &reply) != 0) {
-		return -1;
-	}
-
-	return reply.words[0] == 0 ? 0 : -1;
+	(void)service;
+	return bunix_names_register_claim(bunix_handle_find(BUNIX_CAP_CLAM),
+					  BUNIX_HANDLE_SELF);
 }
 
 static u64 resolve_service_type(u64 service, unsigned int rights,

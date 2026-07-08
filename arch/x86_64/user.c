@@ -86,6 +86,7 @@ enum {
 	SYSCALL_HW_IRQ_ACK = -106,
 	SYSCALL_HW_IRQ_MASK = -108,
 	SYSCALL_SCHED_THREAD_INFO = -110,
+	SYSCALL_HANDLE_FIND = -112,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -5932,6 +5933,13 @@ static u64 native_sys_handle_close(const struct native_syscall_args *args)
 	return (u64)task_close_handle(task_current(), args->arg0);
 }
 
+static u64 native_sys_handle_find(const struct native_syscall_args *args)
+{
+	const u64 handle = task_handle_find(task_current(), (u32)args->arg0);
+
+	return handle != 0 ? handle : (u64)-1;
+}
+
 static u64 native_sys_boot_module_read(const struct native_syscall_args *args)
 {
 	u64 done = 0;
@@ -6744,6 +6752,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_IPC_TRY_RECV, "ipc_try_recv", native_sys_ipc_try_recv },
 	{ SYSCALL_IPC_CALL, "ipc_call", native_sys_ipc_call },
 	{ SYSCALL_HANDLE_CLOSE, "handle_close", native_sys_handle_close },
+	{ SYSCALL_HANDLE_FIND, "handle_find", native_sys_handle_find },
 	{ SYSCALL_BOOT_MODULE_READ, "boot_module_read",
 	  native_sys_boot_module_read },
 	{ SYSCALL_CLOCK_MONOTONIC_NS, "clock_monotonic_ns",

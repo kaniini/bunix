@@ -1,0 +1,38 @@
+Complete named-capability discovery for launched servers.
+
+Parent exploration: `044a-names-registration-preauthorization-refactor.txt`
+
+Problem:
+
+- Exploration 044a introduced tagged launch capabilities and a
+  `handle_find` primitive so servers do not need to know inherited slot
+  numbers.
+- The registration claim and PCI hardware capabilities now use named lookup,
+  but many existing server paths still refer to historical fixed slots for
+  `NAME`, `CONS`, `TIME`, `PROC`, `VFS`, and related capabilities.
+- This leaves the launch ABI only partially refactored: future launch-cap
+  reordering can still break servers that have not been moved to discovery.
+
+Desired design:
+
+- Every launched server should discover inherited capabilities by FourCC tag.
+- Fixed well-known handles should remain only for kernel-created primordial
+  handles where the ABI explicitly guarantees them.
+- Kernel-granted bootstrap capabilities should be tagged when user code needs
+  to discover them.
+- Tests should prove that at least one launch path survives reordered inherited
+  caps.
+
+Tasks:
+
+- [ ] Convert remaining user servers from inherited slot constants to
+      `bunix_handle_find()` for `NAME`, `CONS`, `TIME`, `PROC`, `VFS`, `USB`,
+      and related launch-provided capabilities.
+- [ ] Tag any remaining kernel-granted capabilities that user servers must
+      discover by name.
+- [ ] Audit launch descriptors for ambiguous duplicate object+rights pairs and
+      either remove them or document why one tag is sufficient.
+- [ ] Add a focused regression that reorders launch caps for a test server and
+      verifies it still boots and resolves its required handles.
+- [ ] Run the focused launch-cap regression, names authority test, and full
+      `make test`.

@@ -3,6 +3,8 @@
 
 enum {
 	NAMES_TEST_SERVICE = ('N') | ('T' << 8) | ('S' << 16) | ('T' << 24),
+	NAMES_TEST_OWNED_SERVICE =
+		('N') | ('O' << 8) | ('W' << 16) | ('N' << 24),
 };
 
 static long claim_names_admin(void)
@@ -44,9 +46,53 @@ static long register_service_in_namespace(u64 namespace, u64 service, u64 handle
 	return reply.words[0] == 0 ? 0 : -1;
 }
 
+static u64 create_registration_claim(u64 namespace, u64 service)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_CREATE_CLAIM,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { namespace, service, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(BUNIX_HANDLE_NAMES, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return 0;
+	}
+	return reply.cap;
+}
+
 static long register_service(u64 service, u64 handle)
 {
 	return register_service_in_namespace(BUNIX_NAMES_ROOT, service, handle);
+}
+
+static long launch_claimed_module(const char *name, u64 namespace, u64 service,
+				  const struct bunix_launch_cap *caps,
+				  u64 cap_count)
+{
+	struct bunix_launch_cap claimed_caps[8];
+	u64 claim;
+
+	if (name == 0 || service == 0 ||
+	    cap_count + 1 > sizeof(claimed_caps) / sizeof(claimed_caps[0])) {
+		return -1;
+	}
+	claim = create_registration_claim(namespace, service);
+	if (claim == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < cap_count; i++) {
+		claimed_caps[i] = caps[i];
+	}
+	claimed_caps[cap_count].handle = claim;
+	claimed_caps[cap_count].rights = BUNIX_RIGHT_SEND;
+	claimed_caps[cap_count].tag = BUNIX_CAP_CLAM;
+	return bunix_launch_module_with_caps(name, claimed_caps, cap_count + 1);
 }
 
 static u64 create_namespace(void)
@@ -3307,7 +3353,8 @@ int main(void)
 	u64 fs_namespace = 0;
 	const int ext2_root_mode = bunix_cmdline_has("ext2-root-test") > 0;
 	const struct bunix_launch_cap bad_caps[] = {
-		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND | BUNIX_RIGHT_RECV, 0 },
+		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND | BUNIX_RIGHT_RECV,
+		  BUNIX_CAP_CONS },
 	};
 
 	bunix_console_log(launching, sizeof(launching) - 1);
@@ -3325,39 +3372,41 @@ int main(void)
 	bunix_console_log(names_ready, sizeof(names_ready) - 1);
 
 	const struct bunix_launch_cap fs_caps[] = {
-		{ console, BUNIX_RIGHT_SEND, 0 },
-		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+		{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
 	};
 
-	bunix_launch_module_with_caps("time", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	launch_claimed_module("time", BUNIX_NAMES_ROOT, BUNIX_SERVICE_TIME,
+			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	time = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_TIME,
 					 BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	if (time == 0) {
 		return 1;
 	}
-	bunix_launch_module_with_caps("user", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	launch_claimed_module("user", BUNIX_NAMES_ROOT, BUNIX_SERVICE_USER,
+			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_USER,
 				      BUNIX_RIGHT_SEND) == 0) {
 		return 1;
 	}
 
 	const struct bunix_launch_cap proc_caps[] = {
-		{ console, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
-		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
-		{ time, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
+		{ console, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, BUNIX_CAP_CONS },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		  BUNIX_CAP_NAME },
+		{ time, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, BUNIX_CAP_TIME },
 	};
-	bunix_launch_module_with_caps("proc", proc_caps,
-				      sizeof(proc_caps) / sizeof(proc_caps[0]));
+	launch_claimed_module("proc", BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROC,
+			      proc_caps,
+			      sizeof(proc_caps) / sizeof(proc_caps[0]));
 	proc = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROC,
 					 BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	if (proc == 0) {
 		return 1;
 	}
 
-	bunix_launch_module_with_caps("pci", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	launch_claimed_module("pci", BUNIX_NAMES_ROOT, BUNIX_SERVICE_PCI,
+			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	const u64 pci = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						  BUNIX_SERVICE_PCI,
 						  BUNIX_RIGHT_SEND |
@@ -3366,12 +3415,13 @@ int main(void)
 		return 1;
 	}
 	const struct bunix_launch_cap virtio_bus_caps[] = {
-		{ console, BUNIX_RIGHT_SEND, 0 },
-		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
-		{ pci, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
+		{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
+		{ pci, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, BUNIX_CAP_PCI },
 	};
-	bunix_launch_module_with_caps(
-		"virtio-bus", virtio_bus_caps,
+	launch_claimed_module(
+		"virtio-bus", BUNIX_NAMES_ROOT, BUNIX_SERVICE_DEVICE,
+		virtio_bus_caps,
 		sizeof(virtio_bus_caps) / sizeof(virtio_bus_caps[0]));
 	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_DEVICE,
 				      BUNIX_RIGHT_SEND) == 0) {
@@ -3379,16 +3429,18 @@ int main(void)
 	}
 	if (bunix_cmdline_has("usb-synth-test") > 0) {
 		struct bunix_launch_cap usb_synth_caps[] = {
-			{ console, BUNIX_RIGHT_SEND, 0 },
-			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
-			{ 0, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
+			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND,
+			  BUNIX_CAP_NAME },
+			{ 0, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+			  BUNIX_CAP_USB },
 		};
 
 		bunix_console_log(usb_synth_test,
 				  sizeof(usb_synth_test) - 1);
-		bunix_launch_module_with_caps("usb-bus", fs_caps,
-					      sizeof(fs_caps) /
-						      sizeof(fs_caps[0]));
+		launch_claimed_module("usb-bus", BUNIX_NAMES_ROOT,
+				      BUNIX_SERVICE_USB, fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 		usb = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						 BUNIX_SERVICE_USB,
 						 BUNIX_RIGHT_SEND |
@@ -3411,16 +3463,19 @@ int main(void)
 	}
 	if (bunix_cmdline_has("xhci-test") > 0) {
 		struct bunix_launch_cap xhci_caps[] = {
-			{ console, BUNIX_RIGHT_SEND, 0 },
-			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
-			{ pci, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
-			{ 0, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
+			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND,
+			  BUNIX_CAP_NAME },
+			{ pci, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+			  BUNIX_CAP_PCI },
+			{ 0, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+			  BUNIX_CAP_USB },
 		};
 
 		bunix_console_log(xhci_test, sizeof(xhci_test) - 1);
-		bunix_launch_module_with_caps("usb-bus", fs_caps,
-					      sizeof(fs_caps) /
-						      sizeof(fs_caps[0]));
+		launch_claimed_module("usb-bus", BUNIX_NAMES_ROOT,
+				      BUNIX_SERVICE_USB, fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 		usb = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						 BUNIX_SERVICE_USB,
 						 BUNIX_RIGHT_SEND |
@@ -3437,8 +3492,8 @@ int main(void)
 		for (;;) {
 		}
 	}
-	bunix_launch_module_with_caps("net", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	launch_claimed_module("net", BUNIX_NAMES_ROOT, BUNIX_SERVICE_NET,
+			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	net = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_NET,
 					BUNIX_RIGHT_SEND);
 	if (net == 0 || net_loopback_selftest(net) != 0 ||
@@ -3455,32 +3510,32 @@ int main(void)
 	bunix_console_log(net_packet_ok, sizeof(net_packet_ok) - 1);
 	bunix_console_log(net_route_ok, sizeof(net_route_ok) - 1);
 	if (bunix_cmdline_has("virtio-blk-block-test") <= 0) {
-		bunix_launch_module_with_caps("block", fs_caps,
-					      sizeof(fs_caps) /
-						      sizeof(fs_caps[0]));
+		launch_claimed_module("block", BUNIX_NAMES_ROOT,
+				      BUNIX_SERVICE_BLOCK, fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	}
 	if (bunix_cmdline_has("virtio-blk-test") > 0) {
 		bunix_console_log(virtio_blk_test,
 				  sizeof(virtio_blk_test) - 1);
-		bunix_launch_module_with_caps("virtio-blk", fs_caps,
-					      sizeof(fs_caps) /
-						      sizeof(fs_caps[0]));
+		launch_claimed_module("virtio-blk", BUNIX_NAMES_ROOT,
+				      BUNIX_SERVICE_BLOCK, fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	}
 	if (bunix_cmdline_has("virtio-net-test") > 0) {
 		bunix_launch_module_with_caps("virtio-net", fs_caps,
 					      sizeof(fs_caps) /
 						      sizeof(fs_caps[0]));
 	}
-	bunix_launch_module_with_caps("vfs", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	launch_claimed_module("vfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS,
+			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	vfs = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS,
 					BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	if (vfs == 0) {
 		return 1;
 	}
 	vfs_launch = vfs;
-	bunix_launch_module_with_caps("procfs", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	launch_claimed_module("procfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROCFS,
+			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	{
 		u64 procfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						       BUNIX_SERVICE_PROCFS,
@@ -3492,8 +3547,8 @@ int main(void)
 			return 1;
 		}
 	}
-	bunix_launch_module_with_caps("tmpfs", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	launch_claimed_module("tmpfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_TMPFS,
+			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	{
 		u64 tmpfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						      BUNIX_SERVICE_TMPFS,
@@ -3503,8 +3558,8 @@ int main(void)
 			return 1;
 		}
 	}
-	bunix_launch_module_with_caps("devfs", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	launch_claimed_module("devfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_DEVFS,
+			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	{
 		u64 devfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						      BUNIX_SERVICE_DEVFS,
@@ -3516,8 +3571,8 @@ int main(void)
 			return 1;
 		}
 	}
-	bunix_launch_module_with_caps("sysfs", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	launch_claimed_module("sysfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_SYSFS,
+			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	{
 		u64 sysfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						      BUNIX_SERVICE_SYSFS,
@@ -3529,8 +3584,8 @@ int main(void)
 			return 1;
 		}
 	}
-	bunix_launch_module_with_caps("utmpfs", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	launch_claimed_module("utmpfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_UTMPFS,
+			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	{
 		u64 utmpfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						       BUNIX_SERVICE_UTMPFS,
@@ -3557,9 +3612,9 @@ int main(void)
 				      BUNIX_TMPFS_MOUNT_ROOT, "/") != 0) {
 			return 1;
 		}
-		bunix_launch_module_with_caps("ext2", fs_caps,
-					      sizeof(fs_caps) /
-						      sizeof(fs_caps[0]));
+		launch_claimed_module("ext2", BUNIX_NAMES_ROOT,
+				      BUNIX_SERVICE_EXT2, fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 		ext2 = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						  BUNIX_SERVICE_EXT2,
 						  BUNIX_RIGHT_SEND);
@@ -3577,9 +3632,9 @@ int main(void)
 	if (ext2_root_mode) {
 		u64 ext2;
 
-		bunix_launch_module_with_caps("ext2", fs_caps,
-					      sizeof(fs_caps) /
-						      sizeof(fs_caps[0]));
+		launch_claimed_module("ext2", BUNIX_NAMES_ROOT,
+				      BUNIX_SERVICE_EXT2, fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 		ext2 = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						  BUNIX_SERVICE_EXT2,
 						  BUNIX_RIGHT_SEND);
@@ -3600,9 +3655,9 @@ int main(void)
 		u64 squashfs;
 
 		bunix_console_log(squashfs_root, sizeof(squashfs_root) - 1);
-		bunix_launch_module_with_caps("squashfs", fs_caps,
-					      sizeof(fs_caps) /
-						      sizeof(fs_caps[0]));
+		launch_claimed_module("squashfs", BUNIX_NAMES_ROOT,
+				      BUNIX_SERVICE_SQUASHFS, fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 		squashfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						      BUNIX_SERVICE_SQUASHFS,
 						      BUNIX_RIGHT_SEND);
@@ -3615,8 +3670,9 @@ int main(void)
 			return 1;
 		}
 	}
-	bunix_launch_module_with_caps("unionfs", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	launch_claimed_module("unionfs", BUNIX_NAMES_ROOT,
+			      BUNIX_SERVICE_UNIONFS, fs_caps,
+			      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	{
 		u64 unionfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 							BUNIX_SERVICE_UNIONFS,
@@ -3630,8 +3686,9 @@ int main(void)
 			return 1;
 		}
 	}
-	bunix_launch_module_with_caps("netcfg", fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	launch_claimed_module("netcfg", BUNIX_NAMES_ROOT,
+			      BUNIX_SERVICE_NETCFG, fs_caps,
+			      sizeof(fs_caps) / sizeof(fs_caps[0]));
 	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_NETCFG,
 				      BUNIX_RIGHT_SEND) == 0) {
 		return 1;
@@ -3647,9 +3704,9 @@ int main(void)
 					      BUNIX_RIGHT_SEND) == 0) {
 			return 1;
 		}
-		bunix_launch_module_with_caps("ext2", fs_caps,
-					      sizeof(fs_caps) /
-						      sizeof(fs_caps[0]));
+		launch_claimed_module("ext2", BUNIX_NAMES_ROOT,
+				      BUNIX_SERVICE_EXT2, fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
 		ext2 = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						  BUNIX_SERVICE_EXT2,
 						  BUNIX_RIGHT_SEND);
@@ -3682,12 +3739,20 @@ int main(void)
 		bunix_console_log(file, str_len(file));
 	}
 	if (bunix_cmdline_has("names-auth-test") > 0) {
+		const u64 claim = create_registration_claim(
+			BUNIX_NAMES_ROOT, NAMES_TEST_OWNED_SERVICE);
+
 		if (register_service(NAMES_TEST_SERVICE, console) != 0) {
 			return 1;
 		}
+		if (claim == 0) {
+			return 1;
+		}
 		const struct bunix_launch_cap names_test_caps[] = {
-			{ console, BUNIX_RIGHT_SEND, 0 },
-			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND,
+			  BUNIX_CAP_NAME },
+			{ claim, BUNIX_RIGHT_SEND, BUNIX_CAP_CLAM },
 		};
 		if (bunix_launch_module_with_caps(
 			    "names-test", names_test_caps,
@@ -3709,21 +3774,22 @@ int main(void)
 		bunix_console_log(attenuated, sizeof(attenuated) - 1);
 	}
 	const struct bunix_launch_cap ping_caps[] = {
-		{ console, BUNIX_RIGHT_SEND, 0 },
-		{ vm, BUNIX_RIGHT_SEND, 0 },
-		{ time, BUNIX_RIGHT_SEND, 0 },
+		{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		{ vm, BUNIX_RIGHT_SEND, BUNIX_CAP_VM },
+		{ time, BUNIX_RIGHT_SEND, BUNIX_CAP_TIME },
 	};
 	bunix_launch_module_with_caps("ping", ping_caps,
 				      sizeof(ping_caps) / sizeof(ping_caps[0]));
 
 	const struct bunix_launch_cap linux_caps[] = {
-		{ console, BUNIX_RIGHT_SEND, 0 },
-		{ vfs_launch, BUNIX_RIGHT_SEND, 0 },
-		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
-		{ BUNIX_HANDLE_POWER_AUTH, BUNIX_RIGHT_SEND, 0 },
+		{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		{ vfs_launch, BUNIX_RIGHT_SEND, BUNIX_CAP_VFS },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
+		{ BUNIX_HANDLE_POWER_AUTH, BUNIX_RIGHT_SEND, BUNIX_CAP_POWR },
 	};
-	bunix_launch_module_with_caps("linux", linux_caps,
-				      sizeof(linux_caps) / sizeof(linux_caps[0]));
+	launch_claimed_module("linux", BUNIX_NAMES_ROOT, BUNIX_SERVICE_LINUX,
+			      linux_caps,
+			      sizeof(linux_caps) / sizeof(linux_caps[0]));
 	linux = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_LINUX,
 					  BUNIX_RIGHT_SEND);
 	if (linux == 0) {

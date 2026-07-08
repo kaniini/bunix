@@ -97,21 +97,9 @@ static u64 resolve_service(u64 service, unsigned int rights)
 
 static long register_service(u64 service, u64 handle)
 {
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_NAMES,
-		.type = BUNIX_NAMES_REGISTER,
-		.sender = 0,
-		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
-		.reply = 0,
-		.cap = handle,
-		.words = { BUNIX_NAMES_ROOT, service, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	if (bunix_ipc_call(PROCFS_HANDLE_NAMES, &request, &reply) != 0) {
-		return -1;
-	}
-	return reply.words[0] == 0 ? 0 : -1;
+	(void)service;
+	return bunix_names_register_claim(bunix_handle_find(BUNIX_CAP_CLAM),
+					  handle);
 }
 
 static int str_eq(const char *left, const char *right)

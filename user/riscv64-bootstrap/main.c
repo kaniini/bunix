@@ -236,8 +236,8 @@ int main(void)
 		return 0;
 	}
 	const struct bunix_launch_cap fs_caps[] = {
-		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
-		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
 	};
 	launch_with_caps_or_log("time", fs_caps,
 				sizeof(fs_caps) / sizeof(fs_caps[0]),
@@ -255,9 +255,11 @@ int main(void)
 				user_ok, sizeof(user_ok) - 1,
 				user_fail, sizeof(user_fail) - 1);
 	const struct bunix_launch_cap proc_caps[] = {
-		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
-		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
-		{ time, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
+		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		  BUNIX_CAP_CONS },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		  BUNIX_CAP_NAME },
+		{ time, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, BUNIX_CAP_TIME },
 	};
 	if (time != 0) {
 		launch_with_caps_or_log("proc", proc_caps,
@@ -310,9 +312,9 @@ int main(void)
 		log_line(root_fail, sizeof(root_fail) - 1);
 	}
 	const struct bunix_launch_cap linux_caps[] = {
-		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
-		{ vfs, BUNIX_RIGHT_SEND, 0 },
-		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		{ vfs, BUNIX_RIGHT_SEND, BUNIX_CAP_VFS },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
 	};
 	launch_with_caps_or_log("linux", linux_caps,
 				sizeof(linux_caps) / sizeof(linux_caps[0]),

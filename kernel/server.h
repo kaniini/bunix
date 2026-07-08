@@ -11,7 +11,7 @@ struct arch_syscall_frame;
 struct task_launch_cap {
 	u64 handle;
 	u32 rights;
-	u32 reserved;
+	u32 tag;
 };
 
 struct server {

@@ -1,10 +1,11 @@
 #include <bunix/libbunix.h>
 
 enum {
-	NAMES_TEST_HANDLE_NAMES = 3,
 	NAMES_TEST_SERVICE = ('N') | ('T' << 8) | ('S' << 16) | ('T' << 24),
 	NAMES_TEST_OWNED_SERVICE =
 		('N') | ('O' << 8) | ('W' << 16) | ('N' << 24),
+	NAMES_TEST_UNCLAIMED_SERVICE =
+		('N') | ('U' << 8) | ('N' << 16) | ('C' << 24),
 };
 
 static long names_register(u64 service)
@@ -20,7 +21,8 @@ static long names_register(u64 service)
 	};
 	struct bunix_msg reply;
 
-	if (bunix_ipc_call(NAMES_TEST_HANDLE_NAMES, &request, &reply) != 0) {
+	if (bunix_ipc_call(bunix_handle_find(BUNIX_CAP_NAME),
+			   &request, &reply) != 0) {
 		return -1;
 	}
 	return reply.words[0] == 0 ? 0 : -1;
@@ -39,7 +41,8 @@ static long names_create_namespace(void)
 	};
 	struct bunix_msg reply;
 
-	if (bunix_ipc_call(NAMES_TEST_HANDLE_NAMES, &request, &reply) != 0) {
+	if (bunix_ipc_call(bunix_handle_find(BUNIX_CAP_NAME),
+			   &request, &reply) != 0) {
 		return -1;
 	}
 	return reply.words[0] == 0 ? 0 : -1;
@@ -48,6 +51,8 @@ static long names_create_namespace(void)
 int main(void)
 {
 	const char spoof_denied[] = "names-test: spoof denied\n";
+	const char claimed_ok[] = "names-test: claimed register ok\n";
+	const char unclaimed_denied[] = "names-test: unclaimed denied\n";
 	const char owner_refresh_ok[] = "names-test: owner refresh ok\n";
 	const char namespace_denied[] = "names-test: namespace denied\n";
 	const char ok[] = "names-test: ok\n";
@@ -57,8 +62,18 @@ int main(void)
 	}
 	bunix_console_log(spoof_denied, sizeof(spoof_denied) - 1);
 
-	if (names_register(NAMES_TEST_OWNED_SERVICE) != 0 ||
-	    names_register(NAMES_TEST_OWNED_SERVICE) != 0) {
+	if (names_register(NAMES_TEST_UNCLAIMED_SERVICE) == 0) {
+		return 1;
+	}
+	bunix_console_log(unclaimed_denied, sizeof(unclaimed_denied) - 1);
+
+	if (bunix_names_register_claim(bunix_handle_find(BUNIX_CAP_CLAM),
+				       BUNIX_HANDLE_SELF) != 0) {
+		return 1;
+	}
+	bunix_console_log(claimed_ok, sizeof(claimed_ok) - 1);
+
+	if (names_register(NAMES_TEST_OWNED_SERVICE) != 0) {
 		return 1;
 	}
 	bunix_console_log(owner_refresh_ok, sizeof(owner_refresh_ok) - 1);

@@ -35,6 +35,7 @@ enum task_handle_type {
 struct task_handle {
 	enum task_handle_type type;
 	u32 rights;
+	u32 tag;
 	void *object;
 };
 
@@ -1113,6 +1114,7 @@ u64 task_grant_task(struct task *owner, struct task *target, u32 rights)
 					owner->handles[i].type =
 						TASK_HANDLE_EMPTY;
 					owner->handles[i].rights = 0;
+					owner->handles[i].tag = 0;
 					owner->handles[i].object = 0;
 					spin_unlock_irqrestore(&owner->lock,
 							       flags);
@@ -1129,6 +1131,7 @@ u64 task_grant_task(struct task *owner, struct task *target, u32 rights)
 			if (target->dead) {
 				owner->handles[i].type = TASK_HANDLE_EMPTY;
 				owner->handles[i].rights = 0;
+				owner->handles[i].tag = 0;
 				owner->handles[i].object = 0;
 				spin_unlock_irqrestore(&target->lock,
 						       target_flags);
@@ -1364,6 +1367,46 @@ u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
 	return granted;
 }
 
+int task_set_handle_tag(struct task *task, u64 handle, u32 tag)
+{
+	if (task == 0 || handle == 0 || handle > task->handle_capacity) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	struct task_handle *task_handle = &task->handles[handle - 1];
+
+	if (task_handle->type == TASK_HANDLE_EMPTY) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		return -1;
+	}
+	task_handle->tag = tag;
+	spin_unlock_irqrestore(&task->lock, flags);
+	return 0;
+}
+
+u64 task_handle_find(struct task *task, u32 tag)
+{
+	if (task == 0 || tag == 0) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
+	for (u32 i = 0; i < task->handle_capacity; i++) {
+		if (task->handles[i].type != TASK_HANDLE_EMPTY &&
+		    task->handles[i].tag == tag) {
+			const u64 handle = i + 1;
+
+			spin_unlock_irqrestore(&task->lock, flags);
+			return handle;
+		}
+	}
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	return 0;
+}
+
 int task_export_cap(struct task *task, u64 handle, u32 rights,
 		    enum task_cap_type *type, void **object)
 {
@@ -1518,6 +1561,7 @@ int task_close_handle(struct task *task, u64 handle)
 
 	task_handle->type = TASK_HANDLE_EMPTY;
 	task_handle->rights = 0;
+	task_handle->tag = 0;
 	task_handle->object = 0;
 	spin_unlock_irqrestore(&task->lock, flags);
 

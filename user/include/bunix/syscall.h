@@ -61,6 +61,7 @@ enum {
 	BUNIX_SYSCALL_HW_IRQ_ACK = -106,
 	BUNIX_SYSCALL_HW_IRQ_MASK = -108,
 	BUNIX_SYSCALL_SCHED_THREAD_INFO = -110,
+	BUNIX_SYSCALL_HANDLE_FIND = -112,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_SCHED_STATS_CPUS = 8,
@@ -101,6 +102,7 @@ enum {
 	BUNIX_NAMES_CREATE_NS = 3,
 	BUNIX_NAMES_WAIT = 4,
 	BUNIX_NAMES_CLAIM_ADMIN = 5,
+	BUNIX_NAMES_CREATE_CLAIM = 6,
 	BUNIX_NAMES_ROOT = 1,
 	BUNIX_BLOCK_GET_INFO = 1,
 	BUNIX_BLOCK_READ = 2,
@@ -601,7 +603,26 @@ struct bunix_task_fault_event {
 struct bunix_launch_cap {
 	u64 handle;
 	unsigned int rights;
-	unsigned int reserved;
+	unsigned int tag;
+};
+
+#define BUNIX_FOURCC(a, b, c, d) \
+	((unsigned int)(a) | ((unsigned int)(b) << 8) | \
+	 ((unsigned int)(c) << 16) | ((unsigned int)(d) << 24))
+
+enum {
+	BUNIX_CAP_CONS = BUNIX_FOURCC('C', 'O', 'N', 'S'),
+	BUNIX_CAP_VM = BUNIX_FOURCC('V', 'M', ' ', ' '),
+	BUNIX_CAP_NAME = BUNIX_FOURCC('N', 'A', 'M', 'E'),
+	BUNIX_CAP_CLAM = BUNIX_FOURCC('C', 'L', 'A', 'M'),
+	BUNIX_CAP_TIME = BUNIX_FOURCC('T', 'I', 'M', 'E'),
+	BUNIX_CAP_PROC = BUNIX_FOURCC('P', 'R', 'O', 'C'),
+	BUNIX_CAP_VFS = BUNIX_FOURCC('V', 'F', 'S', ' '),
+	BUNIX_CAP_POWR = BUNIX_FOURCC('P', 'O', 'W', 'R'),
+	BUNIX_CAP_PCI = BUNIX_FOURCC('P', 'C', 'I', ' '),
+	BUNIX_CAP_PCFG = BUNIX_FOURCC('P', 'C', 'F', 'G'),
+	BUNIX_CAP_PAUT = BUNIX_FOURCC('P', 'A', 'U', 'T'),
+	BUNIX_CAP_USB = BUNIX_FOURCC('U', 'S', 'B', ' '),
 };
 
 struct bunix_ipc_stats {
@@ -1008,9 +1029,36 @@ static inline long bunix_ipc_call(u64 port, const struct bunix_msg *request,
 			      (u64)reply);
 }
 
+static inline long bunix_names_register_claim(u64 claim_handle,
+					      u64 service_handle)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_REGISTER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = service_handle,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(claim_handle, &request, &reply) != 0) {
+		return -1;
+	}
+	return reply.words[0] == 0 ? 0 : -1;
+}
+
 static inline long bunix_handle_close(u64 handle)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_HANDLE_CLOSE, handle);
+}
+
+static inline u64 bunix_handle_find(unsigned int tag)
+{
+	const long handle = bunix_syscall1(BUNIX_SYSCALL_HANDLE_FIND, tag);
+
+	return handle > 0 ? (u64)handle : 0;
 }
 
 static inline long bunix_task_create(const char *name)

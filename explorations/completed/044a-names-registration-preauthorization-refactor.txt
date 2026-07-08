@@ -23,12 +23,12 @@ Desired design:
 
 Tasks:
 
-- [ ] Add an explicit service-registration claim object/protocol.
-- [ ] Have bootstrap preauthorize expected root services before launch.
-- [ ] Pass per-service claims to launched servers instead of ambient root
+- [x] Add an explicit service-registration claim object/protocol.
+- [x] Have bootstrap preauthorize expected root services before launch.
+- [x] Pass per-service claims to launched servers instead of ambient root
       registration authority.
-- [ ] Deny first registration for unclaimed root service names.
-- [ ] Add regression coverage for denied unclaimed first registration, allowed
+- [x] Deny first registration for unclaimed root service names.
+- [x] Add regression coverage for denied unclaimed first registration, allowed
       claimed first registration, denied non-owner replacement, and allowed
       owner refresh.
-- [ ] Run focused names/service boot tests, then full `make test`.
+- [x] Run focused names/service boot tests, then full `make test`.
