@@ -22,6 +22,9 @@ The early boot gate currently verifies:
 - FDT memory discovery can read the first memory range.
 - Supervisor timer interrupts fire through the riscv64 trap entry.
 - The riscv64 kernel-thread context switch primitive can switch away and back.
+- The riscv64 generic VM hooks can create an Sv39 page-table root, map a
+  user page, translate it for read/write, remove write permission, unmap it,
+  and tear down the root through an early arena-backed implementation.
 - The native Bunix `ecall` entry contract can decode a synthetic user syscall
   frame, place the return value in `a0`, and advance `sepc`.
 - A minimal U-mode probe can execute an `ecall`, receive the expected return
@@ -49,10 +52,18 @@ is an ELF64 RISC-V image, copy loadable segments into backing pages, map them
 with a minimal Sv39 page table, build a crt0-compatible stack, enter U-mode at
 `0x400000`, and observe native `exit`.
 
-The current Sv39 setup is intentionally an early harness: it identity-maps the
-supervisor RAM window and maps only a small smoke-program image window plus one
-user stack page.  It is enough to prove the real Bunix user base works, but not
-a general task address-space implementation.
+The current payload Sv39 setup is intentionally an early harness: it
+identity-maps the supervisor RAM window and maps only a small smoke-program
+image window plus one user stack page.  It is enough to prove the real Bunix
+user base works, but not a general task address-space implementation.
+
+Riscv64 now also has initial implementations of the generic `arch_vm_*` hooks
+for Sv39 page-table roots, map/protect/unmap/translate, and `satp`
+activation.  These hooks are backed by a fixed early page-table arena because
+the riscv64 path does not yet initialize the generic PMM from FDT memory data.
+They are suitable for emulator bringup tests, but scheduler-owned userspace
+still needs PMM-backed table allocation, task lifetime integration, and
+copyin/copyout before the early payload harness can be removed.
 
 This gives riscv64 a firmware-neutral package handoff separate from
 Multiboot2.  Future rootfs images can ride in the same carrier or replace it
@@ -121,7 +132,7 @@ The initial riscv64 port intentionally does not support:
 - SMP or secondary hart startup.
 - FPU, vector, or signal context save/restore.
 - Native server task launch through proc/bootstrap.
-- General user page-table management, copyin/copyout, or VM server
+- PMM-backed user page-table management, copyin/copyout, or VM server
   integration.
 - Linux signal frames or riscv64-specific Linux syscall parity.
 - Dynamic linking and `ld-musl-riscv64.so.1`.

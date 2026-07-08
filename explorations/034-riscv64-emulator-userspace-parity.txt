@@ -81,3 +81,31 @@ Verification:
   target
 - `make all`
 - Full `make test` before completing the exploration
+
+Progress notes:
+
+- Added the first riscv64 generic VM hook implementation:
+  - `arch/riscv64/vm.c` now implements Sv39 page-table root creation,
+    map/protect/unmap/translate, teardown, and `satp` activation for the
+    existing generic `arch_vm_*` contract.
+  - Because riscv64 does not yet initialize the generic PMM from firmware/FDT
+    memory data, page-table pages currently come from a fixed early
+    architecture-local arena.  This is enough to exercise the hook semantics
+    in the emulator, but not enough to close the full task-address-space item.
+  - The current generic VM API has no execute permission bit, matching the
+    x86_64 path, so riscv64 maps pages executable for now.  A later shared VM
+    permission refactor should add explicit execute policy.
+  - The early QEMU boot path now runs `vm_hook_self_test()`, which creates an
+    address space, maps a user page, verifies read/write translation, removes
+    write permission, verifies read-only translation, unmaps the page, and
+    destroys the space.
+  - `test-boot-riscv64-early` now requires the `vm: riscv64 hooks` marker.
+
+Verification notes:
+
+- `make ARCH=riscv64 all` passed after adding the VM hooks.
+- `make all` passed after adding the VM hooks.
+- `make test-boot-riscv64-early` passed and now requires
+  `vm: riscv64 hooks`.
+- `make test-riscv64-user-abi` passed after adding the VM hooks.
+- `make test-riscv64-bootpkg` passed after adding the VM hooks.

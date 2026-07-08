@@ -4,6 +4,7 @@
 #include <arch/sbi.h>
 #include <arch/thread.h>
 #include <arch/user.h>
+#include <arch/vm.h>
 
 static struct riscv64_boot_info boot_info;
 static struct arch_thread_context boot_context;
@@ -15,6 +16,7 @@ static u8 user_probe_kernel_stack[4096] __attribute__((aligned(16)));
 static u8 mapped_user_kernel_stack[4096] __attribute__((aligned(16)));
 static u8 mapped_user_image[4 * 4096] __attribute__((aligned(4096)));
 static u8 mapped_user_stack[4096] __attribute__((aligned(4096)));
+static u8 vm_hook_test_page[4096] __attribute__((aligned(4096)));
 static u64 early_root_table[512] __attribute__((aligned(4096)));
 static u64 early_user_l1[512] __attribute__((aligned(4096)));
 static u64 early_user_l0[512] __attribute__((aligned(4096)));
@@ -67,6 +69,39 @@ static int context_switch_self_test(void)
 				 worker_thread_main);
 	arch_thread_switch(&boot_context, &worker_context);
 	return worker_switched == 1 ? 0 : -1;
+}
+
+static int vm_hook_self_test(void)
+{
+	struct arch_vm_space space;
+	const u64 vaddr = RISCV64_USER_BASE + 0x20000;
+	const u64 phys = (u64)vm_hook_test_page;
+	const u64 offset = 123;
+
+	if (arch_vm_space_init(&space) != 0) {
+		return -1;
+	}
+	if (arch_vm_map_page(&space, vaddr, phys, 1, 1) != 0) {
+		arch_vm_space_destroy(&space);
+		return -1;
+	}
+	if (arch_vm_translate(&space, vaddr + offset, 1) != phys + offset) {
+		arch_vm_space_destroy(&space);
+		return -1;
+	}
+	if (arch_vm_protect_page(&space, vaddr, 0) != 0 ||
+	    arch_vm_translate(&space, vaddr + offset, 1) != 0 ||
+	    arch_vm_translate(&space, vaddr + offset, 0) != phys + offset) {
+		arch_vm_space_destroy(&space);
+		return -1;
+	}
+	if (arch_vm_unmap_page(&space, vaddr) != phys ||
+	    arch_vm_translate(&space, vaddr + offset, 0) != 0) {
+		arch_vm_space_destroy(&space);
+		return -1;
+	}
+	arch_vm_space_destroy(&space);
+	return 0;
 }
 
 static int bootpkg_magic_ok(u64 start, u64 end)
@@ -396,6 +431,9 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	early_puts("timer: riscv64 tick\n");
 	if (context_switch_self_test() == 0) {
 		early_puts("thread: riscv64 switch\n");
+	}
+	if (vm_hook_self_test() == 0) {
+		early_puts("vm: riscv64 hooks\n");
 	}
 	if (riscv64_syscall_entry_self_test() == 0) {
 		early_puts("syscall: riscv64 ecall\n");
