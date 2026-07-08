@@ -1,0 +1,34 @@
+Implement scheduler idle balancing and migration tests.
+
+Problem:
+
+- Exploration 040 added scheduler benchmarks and per-thread observability, but
+  the scheduler still does not have a deliberate idle-pull migration policy.
+- Existing migration counters mostly cover placement on a non-current CPU, not
+  a policy where idle CPUs pull runnable work from busy CPUs while preserving
+  virtual runtime/deadline fairness.
+- SMP migration tests should only be added once migration is an explicit
+  scheduler policy rather than an accidental side effect of task placement.
+
+Tasks:
+
+- [ ] Define idle-balancing invariants: when an idle CPU may pull work, which
+      source CPU can be stolen from, and how virtual runtime/deadline state is
+      preserved.
+- [ ] Implement a bounded idle-pull path that avoids eager load chasing and
+      preserves interactivity.
+- [ ] Count policy-driven migrations separately enough that tests can
+      distinguish idle balancing from initial placement.
+- [ ] Extend `/proc/sched` and `/proc/sched_threads` if additional migration
+      reason counters are needed for stable tests.
+- [ ] Add scheduler benchmarks that create a temporary imbalance, prove an
+      idle CPU pulls work, prove migrations are counted, and prove virtual
+      runtime/deadline state remains bounded after migration.
+- [ ] Verify idle balancing does not regress the fairness, starvation, IPC, or
+      shell-latency modes from `schedbench`.
+
+Verification:
+
+- [ ] `BUNIX_TEST_SET=scheduler-bench make test-parallel`
+- [ ] SMP-specific migration benchmark target.
+- [ ] `make test`

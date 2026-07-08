@@ -1,0 +1,35 @@
+Implement the scheduler-policy server and capability-scoped CPU affinity.
+
+Problem:
+
+- Exploration 040 defined the scheduler-policy authority model and built the
+  benchmark surface, but Bunix still lacks a userspace `SCHD` policy server and
+  kernel primitives for capability-scoped class, priority, weight, and CPU
+  affinity changes.
+- Hard affinity tests are not meaningful until callers can pin Bunix
+  task/thread scheduler entities through explicit scheduler-policy authority.
+
+Tasks:
+
+- [ ] Implement the userspace scheduler-policy server using FourCC protocol
+      `SCHD` as defined in `docs/scheduler-policy.md`.
+- [ ] Add kernel primitives that accept scheduler-policy capabilities and
+      mutate Bunix task/thread class, priority, weight, and affinity masks.
+- [ ] Represent CPU affinity as a Bunix scheduler CPU mask, not a Linux PID
+      property.
+- [ ] Reject empty masks, masks with offline CPUs, and requests outside the
+      caller's attenuated policy capability.
+- [ ] Add Linux server translations for CPU-affinity and scheduler-priority
+      APIs by mapping Linux PID/TID semantics to Bunix task/thread targets
+      through proc/Linux server state.
+- [ ] Add scheduler benchmark/tests that pin workers, verify they run only on
+      allowed CPUs through `/proc/sched_threads`, and verify invalid masks are
+      rejected.
+- [ ] Verify ordinary tasks cannot self-promote class, priority, weight, or
+      affinity without an explicit scheduler-policy capability.
+
+Verification:
+
+- [ ] Focused scheduler-policy capability tests.
+- [ ] `BUNIX_TEST_SET=scheduler-bench make test-parallel`
+- [ ] `make test`

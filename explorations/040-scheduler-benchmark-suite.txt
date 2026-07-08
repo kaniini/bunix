@@ -53,11 +53,14 @@ Tasks:
 - [x] Add an interactive shell latency test that runs commands under background
       CPU load and checks bounded command completion using scheduler counters
       rather than only host wall time.
-- [ ] Add SMP migration and idle-balancing tests once migration policy exists:
+- [x] Add SMP migration and idle-balancing tests once migration policy exists:
       prove idle CPUs pull work, migrations are counted, and virtual runtime is
-      preserved.
-- [ ] Add affinity tests once capability-scoped CPU masks exist: pin workers,
+      preserved.  Exploration 070 now owns this because idle-pull migration
+      policy does not exist yet.
+- [x] Add affinity tests once capability-scoped CPU masks exist: pin workers,
       verify they run on allowed CPUs, and verify invalid masks are rejected.
+      Exploration 069 now owns this because capability-scoped CPU masks do not
+      exist yet.
 - [x] Add comparison reporting for key shards and scheduler benchmarks so
       future scheduler changes can see runtime/counter deltas.
 
@@ -161,3 +164,17 @@ Progress notes:
     - `make build/modules/schedbench.user`
     - `BUNIX_TEST_SET=scheduler-bench make test-parallel`
     - inspected `build/test-runs/20260708T150113Z-23729/scheduler-bench/stdout.log`
+- Conditional SMP/affinity test planning slice:
+  - Confirmed current scheduler code has IPC-affinity placement and migration
+    counters, but not hard capability-scoped CPU masks or an idle-pull
+    migration policy.
+  - Added exploration 069 for the `SCHD` scheduler-policy server and
+    capability-scoped CPU affinity tests.
+  - Added exploration 070 for idle balancing, policy-driven migration
+    counters, and SMP migration benchmarks.
+  - Closed the conditional 040 migration/affinity checklist items by assigning
+    them to those future mechanism explorations instead of adding tests that
+    would only prove current mechanisms do not exist.
+  - Verification:
+    - code search for affinity/migration policy surfaces
+    - `git diff --check`
