@@ -33,14 +33,16 @@ Progress notes:
 - The kernel fault path uses interrupt-safe, cap-free IPC delivery so a page
   fault does not allocate or scheduler-handoff from the exception handler.
 - The Linux server currently implements default termination only: page faults
-  and general-protection faults become SIGSEGV-style wait status, while task
-  fault events classified as bus faults are reserved for SIGBUS handling.
-- The focused default SIGSEGV regression is:
+  and general-protection faults become SIGSEGV-style wait status, while x86
+  alignment-check faults become SIGBUS-style wait status.
+- File-backed mmap-hole SIGBUS remains open until the VFS mmap path can report
+  that condition distinctly.
+- The focused default SIGSEGV/SIGBUS regression is:
 
   ```
   make BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
     BUNIX_CMD=/bin/faulttest \
-    BUNIX_MARKER='faulttest sigsegv wait status ok' test-command
+    BUNIX_MARKER='faulttest sigsegv sigbus wait status ok' test-command
   ```
 
 Tasks:

@@ -27,6 +27,8 @@ enum {
 	MSR_FMASK = 0xc0000084,
 	MSR_FS_BASE = 0xc0000100,
 	EFER_SCE = 1,
+	RFLAGS_IF = 1u << 9,
+	RFLAGS_AC = 1u << 18,
 	SYSCALL_EXIT = -2,
 	SYSCALL_TIMER_TICKS = -4,
 	SYSCALL_LAUNCH_MODULE = -8,
@@ -5366,6 +5368,7 @@ static void gdt_set_tss(struct arch_user_cpu *cpu, u32 index, u64 base,
 static void arch_enable_sse(void)
 {
 	enum {
+		CR0_AM = 1u << 18,
 		CR4_OSFXSR = 1u << 9,
 		CR4_OSXMMEXCPT = 1u << 10,
 		CR4_OSXSAVE = 1u << 18,
@@ -5387,6 +5390,7 @@ static void arch_enable_sse(void)
 	__asm__ volatile ("movq %%cr0, %0" : "=r"(cr0));
 	cr0 |= 1u << 1;
 	cr0 |= 1u << 5;
+	cr0 |= CR0_AM;
 	cr0 &= ~(1u << 2);
 	cr0 &= ~(1u << 3);
 	__asm__ volatile ("movq %0, %%cr0" : : "r"(cr0) : "memory");
@@ -5462,7 +5466,7 @@ void arch_user_init_cpu(u32 cpu_id)
 
 	arch_wrmsr(MSR_STAR, ((u64)0x13 << 48) | ((u64)GDT_KERNEL_CODE << 32));
 	arch_wrmsr(MSR_LSTAR, (u64)arch_syscall_entry);
-	arch_wrmsr(MSR_FMASK, 0x200);
+	arch_wrmsr(MSR_FMASK, RFLAGS_IF | RFLAGS_AC);
 	arch_wrmsr(MSR_EFER, arch_rdmsr(MSR_EFER) | EFER_SCE);
 
 	if (cpu_id == 0) {
