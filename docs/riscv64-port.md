@@ -22,9 +22,11 @@ The early boot gate currently verifies:
 - FDT memory discovery can read the first memory range.
 - Supervisor timer interrupts fire through the riscv64 trap entry.
 - The riscv64 kernel-thread context switch primitive can switch away and back.
+- The riscv64 PMM can initialize from QEMU FDT memory data while reserving
+  the low firmware window, kernel image, boot package/initrd, and FDT blob.
 - The riscv64 generic VM hooks can create an Sv39 page-table root, map a
   user page, translate it for read/write, remove write permission, unmap it,
-  and tear down the root through an early arena-backed implementation.
+  and recursively tear down PMM-backed page-table pages.
 - The native Bunix `ecall` entry contract can decode a synthetic user syscall
   frame, place the return value in `a0`, and advance `sepc`.
 - A minimal U-mode probe can execute an `ecall`, receive the expected return
@@ -59,27 +61,25 @@ user base works, but not a general task address-space implementation.
 
 Riscv64 now also has initial implementations of the generic `arch_vm_*` hooks
 for Sv39 page-table roots, map/protect/unmap/translate, and `satp`
-activation.  These hooks are backed by a fixed early page-table arena because
-the riscv64 path does not yet initialize the generic PMM from FDT memory data.
+activation.  These hooks allocate and free page-table pages through the
+generic PMM after the emulator kernel initializes PMM from FDT memory data.
 They are suitable for emulator bringup tests, but scheduler-owned userspace
-still needs PMM-backed table allocation, task lifetime integration, and
-copyin/copyout before the early payload harness can be removed.
+still needs task lifetime integration and copyin/copyout before the early
+payload harness can be removed.
 
-The PMM has been split enough to support a future riscv64 memory provider:
-`pmm_init_from_ranges()` can initialize the generic page allocator from
-available/reserved physical ranges, while the existing x86_64 Multiboot2 path
-collects its boot data and calls that shared initializer.  Riscv64 still needs
-to feed FDT memory/initrd/kernel reservations into that API before page tables
-and user frames can come from PMM.
+The PMM has been split enough to support multiple boot protocols:
+`pmm_init_from_ranges()` initializes the generic page allocator from
+available/reserved physical ranges, the x86_64 Multiboot2 path collects its
+boot data and calls that shared initializer, and the riscv64 QEMU `virt` path
+now feeds FDT memory plus firmware/kernel/initrd/FDT reservations into the
+same API.
 The Multiboot2 collector now lives outside the PMM core, so riscv64 can link
 the generic allocator without pulling in x86 boot-protocol symbols.
 Generic spinlocks have also been moved onto architecture interrupt
 save/restore hooks; riscv64 provides `sstatus.SIE` save/restore semantics so
 generic locking code can compile for the emulator path.
 The PMM core is also console-independent now, so linking it for riscv64 does
-not require the current x86-specific console implementation.  Riscv64 still
-needs an FDT-backed memory/reservation provider and build wiring before the
-generic PMM can allocate real page-table and user-frame pages.
+not require the current x86-specific console implementation.
 
 This gives riscv64 a firmware-neutral package handoff separate from
 Multiboot2.  Future rootfs images can ride in the same carrier or replace it
@@ -148,8 +148,8 @@ The initial riscv64 port intentionally does not support:
 - SMP or secondary hart startup.
 - FPU, vector, or signal context save/restore.
 - Native server task launch through proc/bootstrap.
-- PMM-backed user page-table management, copyin/copyout, or VM server
-  integration.
+- Copyin/copyout, VM server integration, and normal task address-space
+  lifetime wiring.
 - Linux signal frames or riscv64-specific Linux syscall parity.
 - Dynamic linking and `ld-musl-riscv64.so.1`.
 - VirtIO MMIO devices, block storage, networking, or Alpine rootfs boot.

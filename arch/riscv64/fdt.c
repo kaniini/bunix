@@ -290,3 +290,13 @@ int riscv64_fdt_scan_initrd(const void *fdt,
 
 	return -1;
 }
+
+u64 riscv64_fdt_total_size(const void *fdt)
+{
+	const struct fdt_header *header = (const struct fdt_header *)fdt;
+
+	if (fdt == 0 || be32(&header->magic) != FDT_MAGIC) {
+		return 0;
+	}
+	return be32(&header->totalsize);
+}

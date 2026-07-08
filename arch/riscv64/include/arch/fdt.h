@@ -18,5 +18,6 @@ int riscv64_fdt_scan_memory(const void *fdt,
 			    u32 capacity);
 int riscv64_fdt_scan_initrd(const void *fdt,
 			    struct riscv64_fdt_initrd *initrd);
+u64 riscv64_fdt_total_size(const void *fdt);
 
 #endif

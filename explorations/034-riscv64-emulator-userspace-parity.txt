@@ -177,3 +177,31 @@ Verification notes:
 - `make test-boot` passed after removing the PMM console dependency.
 - `make test-boot-riscv64-early` passed after removing the PMM console
   dependency.
+- Wired the generic PMM core into the riscv64 emulator kernel:
+  - Kernel objects now build under `build/$(ARCH)/...`, preventing x86_64
+    and riscv64 generic kernel objects from sharing incompatible object paths.
+  - The riscv64 source list now links `kernel/pmm.c` and
+    `kernel/spinlock.c`.
+  - `arch/riscv64/fdt.c` exposes the FDT total size so the boot FDT blob can
+    be reserved.
+  - `riscv64_early_main()` now initializes PMM from FDT memory ranges and
+    reserves the low firmware window, kernel image, boot package/initrd, and
+    FDT blob before allocator use.
+  - `test-boot-riscv64-early` now requires the `pmm: riscv64 ranges` marker.
+- Moved riscv64 generic VM hook page-table allocation from the fixed early
+  arena to PMM-backed pages:
+  - `arch/riscv64/vm.c` now allocates Sv39 page-table pages through
+    `pmm_page_alloc()`.
+  - `arch_vm_space_destroy()` recursively frees page-table pages with
+    `pmm_page_free_addr()`.
+  - The current packaged `abi-smoke.user` loader still has its own one-off
+    early Sv39 setup, so the first task remains open until that payload moves
+    to normal task/server launch or the harness is deleted.
+- `make all` passed after arch-scoping kernel object paths and linking riscv64
+  PMM.
+- `make ARCH=riscv64 all` passed after linking PMM into riscv64.
+- `make test-riscv64-user-abi` passed after linking PMM into riscv64.
+- `make test-riscv64-bootpkg` passed after linking PMM into riscv64.
+- `make test-boot` passed after arch-scoping kernel object paths.
+- `make test-boot-riscv64-early` passed with FDT-backed PMM initialization and
+  PMM-backed generic VM page tables.

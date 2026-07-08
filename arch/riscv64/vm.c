@@ -1,16 +1,15 @@
 #include <arch/vm.h>
+#include "pmm.h"
 
 enum {
 	RISCV64_SATP_MODE_SV39 = 8ULL << 60,
 	RISCV64_PAGE_ENTRIES = 512,
-	RISCV64_EARLY_VM_TABLES = 64,
 	RISCV64_PTE_TABLE_MASK = RISCV64_PTE_V,
 	RISCV64_PTE_LEAF_MASK = RISCV64_PTE_R | RISCV64_PTE_W | RISCV64_PTE_X,
 };
 
-static u64 early_vm_tables[RISCV64_EARLY_VM_TABLES][RISCV64_PAGE_ENTRIES]
-	__attribute__((aligned(RISCV64_PAGE_SIZE)));
-static u32 early_vm_next_table;
+static u64 pte_phys(u64 pte);
+static int pte_table_valid(u64 pte);
 
 static void zero_table(u64 *table)
 {
@@ -21,13 +20,35 @@ static void zero_table(u64 *table)
 
 static u64 *alloc_table(void)
 {
-	if (early_vm_next_table >= RISCV64_EARLY_VM_TABLES) {
+	struct pmm_page *page = pmm_page_alloc();
+	u64 *table;
+
+	if (page == 0) {
 		return 0;
 	}
 
-	u64 *table = early_vm_tables[early_vm_next_table++];
+	table = (u64 *)pmm_page_addr(page);
 	zero_table(table);
 	return table;
+}
+
+static void free_table(u64 *table, u32 level)
+{
+	if (table == 0) {
+		return;
+	}
+
+	if (level > 0) {
+		for (u32 i = 0; i < RISCV64_PAGE_ENTRIES; i++) {
+			const u64 entry = table[i];
+
+			if (pte_table_valid(entry)) {
+				free_table((u64 *)pte_phys(entry), level - 1);
+			}
+		}
+	}
+	zero_table(table);
+	pmm_page_free_addr((u64)table);
 }
 
 static u64 pte_phys(u64 pte)
@@ -175,7 +196,7 @@ void arch_vm_space_destroy(struct arch_vm_space *space)
 		return;
 	}
 
-	zero_table((u64 *)space->root_table);
+	free_table((u64 *)space->root_table, 2);
 	space->root_table = 0;
 	flush_vma();
 }

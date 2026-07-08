@@ -294,13 +294,15 @@ KERNEL_GENERIC_SRCS_x86_64 := \
 	kernel/timer.c \
 	kernel/vm.c \
 	servers/vm/vm.c
-KERNEL_GENERIC_SRCS_riscv64 :=
+KERNEL_GENERIC_SRCS_riscv64 := \
+	kernel/pmm.c \
+	kernel/spinlock.c
 KERNEL_GENERIC_SRCS := $(KERNEL_GENERIC_SRCS_$(ARCH))
 KERNEL_SRCS := \
 	$(KERNEL_ARCH_SRCS) \
 	$(KERNEL_GENERIC_SRCS)
 
-KERNEL_OBJS := $(KERNEL_SRCS:%=$(BUILD_DIR)/%.o)
+KERNEL_OBJS := $(KERNEL_SRCS:%=$(BUILD_DIR)/$(ARCH)/%.o)
 USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/console/main.c.o \
 	$(BUILD_DIR)/user/names/main.c.o \
@@ -351,6 +353,14 @@ $(KERNEL): $(KERNEL_OBJS) $(KERNEL_LINKER)
 ifneq ($(KERNEL_OBJDUMP_CHECK),)
 	$(OBJDUMP) -h $@ | awk '/multiboot/ { if (strtonum("0x" $$6) >= 0x8000) exit 1 }'
 endif
+
+$(BUILD_DIR)/$(ARCH)/%.c.o: %.c
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/$(ARCH)/%.S.o: %.S
+	mkdir -p $(dir $@)
+	$(CC) $(ASFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/%.c.o: %.c
 	mkdir -p $(dir $@)
@@ -1000,6 +1010,7 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "bunixos: riscv64 early bootstrap" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "timer: riscv64 tick" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "thread: riscv64 switch" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "pmm: riscv64 ranges" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "vm: riscv64 hooks" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "syscall: riscv64 ecall" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "user: riscv64 mode" $(RISCV64_SERIAL_LOG) >/dev/null

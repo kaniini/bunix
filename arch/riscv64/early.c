@@ -5,6 +5,7 @@
 #include <arch/thread.h>
 #include <arch/user.h>
 #include <arch/vm.h>
+#include "pmm.h"
 
 static struct riscv64_boot_info boot_info;
 static struct arch_thread_context boot_context;
@@ -20,6 +21,8 @@ static u8 vm_hook_test_page[4096] __attribute__((aligned(4096)));
 static u64 early_root_table[512] __attribute__((aligned(4096)));
 static u64 early_user_l1[512] __attribute__((aligned(4096)));
 static u64 early_user_l0[512] __attribute__((aligned(4096)));
+extern u8 __kernel_start[];
+extern u8 __kernel_end[];
 
 static const char riscv64_bootpkg_magic[] = "BUNIX-RV64-BOOTPKG\n";
 static const char riscv64_bootpkg_module_prefix[] = "module ";
@@ -49,6 +52,49 @@ static void early_puts(const char *text)
 		}
 		sbi_putchar(*text++);
 	}
+}
+
+static void pmm_bootstrap_from_fdt(u64 fdt)
+{
+	struct riscv64_fdt_memory_range memory_ranges[8];
+	struct pmm_memory_range available[8];
+	struct pmm_reserved_range reserved[5];
+	const int memory_count = riscv64_fdt_scan_memory(
+		(const void *)fdt, memory_ranges,
+		sizeof(memory_ranges) / sizeof(memory_ranges[0]));
+	const u64 fdt_size = riscv64_fdt_total_size((const void *)fdt);
+	u64 available_count = 0;
+	u64 reserved_count = 0;
+
+	if (memory_count <= 0) {
+		return;
+	}
+	for (int i = 0; i < memory_count; i++) {
+		available[available_count].base = memory_ranges[i].base;
+		available[available_count].length = memory_ranges[i].size;
+		available_count++;
+	}
+
+	if (boot_info.phys_base < (u64)__kernel_start) {
+		reserved[reserved_count].start = boot_info.phys_base;
+		reserved[reserved_count].end = (u64)__kernel_start;
+		reserved_count++;
+	}
+	reserved[reserved_count].start = (u64)__kernel_start;
+	reserved[reserved_count].end = (u64)__kernel_end;
+	reserved_count++;
+	if (boot_info.initrd_end > boot_info.initrd_start) {
+		reserved[reserved_count].start = boot_info.initrd_start;
+		reserved[reserved_count].end = boot_info.initrd_end;
+		reserved_count++;
+	}
+	if (fdt_size != 0) {
+		reserved[reserved_count].start = fdt;
+		reserved[reserved_count].end = fdt + fdt_size;
+		reserved_count++;
+	}
+
+	pmm_init_from_ranges(available, available_count, reserved, reserved_count);
 }
 
 static void worker_thread_main(void)
@@ -421,6 +467,10 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	}
 
 	early_puts("bunixos: riscv64 early bootstrap\n");
+	pmm_bootstrap_from_fdt(fdt);
+	if (pmm_total_page_count() != 0 && pmm_free_page_count() != 0) {
+		early_puts("pmm: riscv64 ranges\n");
+	}
 	arch_interrupts_init();
 	riscv64_timer_set_relative(arch_timer_hz() / 100);
 	arch_interrupts_enable();
