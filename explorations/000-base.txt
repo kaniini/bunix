@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 036-shared-linux-personality-riscv64.txt
+The current exploration is: 037-riscv64-boot-test-split.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.
