@@ -1396,6 +1396,33 @@ static u64 linux_brk_current(u64 requested)
 	return task_linux_brk(task);
 }
 
+static u64 linux_mprotect_current(u64 addr, u64 size, u64 linux_prot)
+{
+	struct task *task = task_current();
+	const u64 len = align_up(size, VM_PAGE_SIZE);
+	const u32 prot = linux_prot_to_task(linux_prot);
+	const u32 writable = (prot & TASK_VM_PROT_WRITE) != 0;
+	int vm_rc;
+	int task_rc;
+
+	if (addr == 0 || (addr & (VM_PAGE_SIZE - 1)) != 0 ||
+	    size == 0 || size + VM_PAGE_SIZE - 1 < size ||
+	    addr + len < addr) {
+		return (u64)-LINUX_EINVAL;
+	}
+
+	vm_rc = vm_protect_user_range(task_vm_space(task), addr, len, writable);
+	task_rc = vm_rc != 0 ? -1 :
+		task_protect_vm_region(task, addr, len, prot);
+	if (vm_rc != 0 || task_rc != 0) {
+		return (u64)-LINUX_EINVAL;
+	}
+	console_printf("linux-riscv64: mprotect task=%u addr=%p len=%u prot=0x%x\n",
+		       task_id(task), (const void *)addr, (u32)len,
+		       (u32)linux_prot);
+	return 0;
+}
+
 static u64 linux_exit_current(struct ipc_port *linux, struct ipc_port *reply_port,
 			      u64 status)
 {
@@ -1594,7 +1621,8 @@ static u64 linux_riscv64_syscall_dispatch(struct arch_syscall_frame *frame)
 	case RISCV64_LINUX_OP_MMAP:
 		return linux_mmap_current(linux, reply_port, frame);
 	case RISCV64_LINUX_OP_MPROTECT:
-		return 0;
+		return linux_mprotect_current(frame->arg0, frame->arg1,
+					      frame->arg2);
 	default:
 		return (u64)-LINUX_ENOSYS;
 	}

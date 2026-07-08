@@ -29,7 +29,7 @@ Tasks:
       where both architectures already agree.
 - [ ] Move Linux-personality syscall forwarding into a shared registry or
       dispatch layer with arch-specific ABI tables.
-- [ ] Replace the riscv64 dynamic-loader smoke's temporary `mprotect(2)`
+- [x] Replace the riscv64 dynamic-loader smoke's temporary `mprotect(2)`
       success stub with real VM permission updates shared with the x86_64
       Linux mmap/mprotect semantics.
 - [ ] Replace the temporary riscv64 frontend behavior that re-sends
@@ -83,5 +83,16 @@ Progress notes:
     object already used by the riscv64 filesystem-server builds.
   - Verification:
     - `make test-riscv64-proc-server-build`
+    - `make test-boot-riscv64-alpine`
+    - `git diff --check`
+- Riscv64 `mprotect(2)` slice:
+  - Replaced the riscv64 frontend's temporary success return with real
+    `vm_protect_user_range()` and `task_protect_vm_region()` updates using
+    the same Linux-prot to task-prot mapping as the x86_64 path.
+  - `make test-boot-riscv64-alpine` logs `linux-riscv64: mprotect` for both
+    `/bin/dyn-hello` and the Alpine shell path before the deterministic
+    poweroff.
+  - Verification:
+    - `make ARCH=riscv64 all`
     - `make test-boot-riscv64-alpine`
     - `git diff --check`
