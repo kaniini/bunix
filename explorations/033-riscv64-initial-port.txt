@@ -231,7 +231,7 @@ Progress notes:
   USB, ACPI, board enumeration, and external interrupt routing.
 - Added initial riscv64 module/rootfs packaging rules:
   - `tools/build-riscv64-bootpkg.sh` creates a `BUNIX-RV64-BOOTPKG` image
-    containing a text module record and the current riscv64 `abi-smoke.user`
+    containing a text module record and the current riscv64 `native-smoke.user`
     payload.
   - `$(RISCV64_BOOTPKG)` builds `build/riscv64/bootpkg.img`, and
     `test-riscv64-bootpkg` verifies the package header and module record.
@@ -248,13 +248,30 @@ Progress notes:
     the native server execution path.
 - Added initial riscv64 boot-package payload discovery:
   - Early boot now parses the boot package text header, locates the packaged
-    `abi-smoke.user` module record, and validates that the payload is an ELF64
+    `native-smoke.user` module record, and validates that the payload is an ELF64
     little-endian RISC-V image with an entry point and program headers.
   - `test-boot-riscv64-early` now requires `module: riscv64 user elf`, proving
     the package can carry a native user payload that the kernel can find before
     poweroff.
   - Segment loading, user address-space activation, and scheduler-owned native
     task lifetime remain open.
+- Added initial riscv64 native crt0 payload execution:
+  - `native-smoke.user` is built from the riscv64 crt0 and ABI smoke C source,
+    but linked at `0x80400000` with `user/riscv64-bare.ld` so it can execute
+    before riscv64 page tables and user virtual address mappings exist.
+  - The normal `test-riscv64-user-abi` artifact remains linked at the real
+    Bunix user base `0x400000`; executing that address is still blocked on
+    user address-space activation.
+  - Early boot copies ELF PT_LOAD segments, zeros BSS, issues `fence.i`,
+    builds an `argc=1` crt0-compatible stack, enters U-mode at the loaded
+    entry point, and treats native `BUNIX_SYSCALL_EXIT` as the early harness
+    return path while a continuation is armed.
+  - `test-boot-riscv64-early` now requires `native: riscv64 user exit`,
+    proving that a packaged riscv64 crt0 payload ran in U-mode and returned
+    through the native syscall path before guest poweroff.
+  - This is still an early native execution harness, not full server lifetime:
+    proc/bootstrap launch, task ownership, user page tables, copyin/copyout,
+    and scheduler-owned cleanup remain open.
 - Added riscv64 arch skeleton headers and implementations:
   - `arch/riscv64/include/arch/sbi.h` centralizes the early SBI call ABI and
     console putchar helper used by the early payload and power path.
@@ -389,6 +406,18 @@ Verification so far:
 - `make test-boot-riscv64-early` passed after adding boot-package payload
   discovery and now requires the `module: riscv64 user elf` marker before
   guest poweroff.
+- `llvm-readelf -h -l build/riscv64/modules/native-smoke.user` verified the
+  early native smoke ELF entry point is `0x80400000` with a loadable RISC-V
+  segment at that address.
+- `make test-boot-riscv64-early` passed after adding native crt0 payload
+  execution and now requires the `native: riscv64 user exit` marker before
+  guest poweroff.
+- `cat build/riscv64-serial.log` showed the marker sequence
+  `bunixos: riscv64 early bootstrap`, `timer: riscv64 tick`,
+  `thread: riscv64 switch`, `syscall: riscv64 ecall`,
+  `user: riscv64 mode`, `bootpkg: riscv64 initrd`,
+  `module: riscv64 user elf`, `native: riscv64 user exit`, and
+  `machine: poweroff`.
 - `make ARCH=riscv64 all` passed and linked `build/riscv64/bunixos.kernel`.
 - `make test-boot-riscv64-early` passed.
 - `make all` passed for the default x86_64 target after the riscv64 linker

@@ -35,6 +35,7 @@ RISCV64_LD ?= riscv64-alpine-linux-musl-ld
 RISCV64_OBJDUMP ?= llvm-objdump
 RISCV64_READELF ?= llvm-readelf
 RISCV64_USER_ABI_MODULE := $(BUILD_DIR)/riscv64/modules/abi-smoke.user
+RISCV64_NATIVE_SMOKE_MODULE := $(BUILD_DIR)/riscv64/modules/native-smoke.user
 RISCV64_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg.img
 BOOTSTRAP_MODULE := $(BUILD_DIR)/modules/bootstrap.server
 USER_CRT0_OBJ := $(BUILD_DIR)/user/crt0.S.o
@@ -393,12 +394,26 @@ $(RISCV64_USER_ABI_MODULE): user/crt0-riscv64.S user/riscv64-abi/main.c user/use
 test-riscv64-user-abi: $(RISCV64_USER_ABI_MODULE)
 	$(RISCV64_READELF) -h $(RISCV64_USER_ABI_MODULE) | grep -F "RISC-V" >/dev/null
 
-$(RISCV64_BOOTPKG): $(RISCV64_USER_ABI_MODULE) tools/build-riscv64-bootpkg.sh
-	sh tools/build-riscv64-bootpkg.sh $@ $(RISCV64_USER_ABI_MODULE) abi-smoke.user
+$(RISCV64_NATIVE_SMOKE_MODULE): user/crt0-riscv64.S user/riscv64-abi/main.c user/riscv64-bare.ld user/include/bunix/syscall.h Makefile
+	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
+	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
+		-g -ffreestanding -fno-pic -fno-pie -Iuser/include -MMD -MP \
+		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
+	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
+		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
+		-fno-pic -fno-pie -fno-builtin -Iuser/include \
+		-Wall -Wextra -Werror -MMD -MP \
+		-c user/riscv64-abi/main.c -o $(BUILD_DIR)/riscv64/user/riscv64-abi.c.o
+	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/riscv64-bare.ld -o $@ \
+		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
+		$(BUILD_DIR)/riscv64/user/riscv64-abi.c.o
+
+$(RISCV64_BOOTPKG): $(RISCV64_NATIVE_SMOKE_MODULE) tools/build-riscv64-bootpkg.sh
+	sh tools/build-riscv64-bootpkg.sh $@ $(RISCV64_NATIVE_SMOKE_MODULE) native-smoke.user
 
 test-riscv64-bootpkg: $(RISCV64_BOOTPKG)
 	grep -aF "BUNIX-RV64-BOOTPKG" $(RISCV64_BOOTPKG) >/dev/null
-	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG) >/dev/null
+	grep -aF "module native-smoke.user" $(RISCV64_BOOTPKG) >/dev/null
 
 $(BOOTSTRAP_MODULE): $(BOOTSTRAP_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
@@ -1003,6 +1018,7 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "user: riscv64 mode" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootpkg: riscv64 initrd" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "module: riscv64 user elf" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "native: riscv64 user exit" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 
 test-boot-ext2: $(EXT2_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-ext2.txt

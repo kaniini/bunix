@@ -28,18 +28,26 @@ The early boot gate currently verifies:
   value, and return through a test-only trap continuation on a kernel stack.
 - The riscv64 boot package is visible through the FDT initrd range and starts
   with the expected `BUNIX-RV64-BOOTPKG` header.
-- The packaged `abi-smoke.user` payload can be located and validated as an
+- The packaged `native-smoke.user` payload can be located and validated as an
   ELF64 little-endian RISC-V user image.
+- The packaged `native-smoke.user` payload can have its load segments copied
+  into RAM, run in U-mode through the riscv64 crt0, and return via the native
+  Bunix `exit` syscall.
 - The guest exits through SBI poweroff.
 
 ## Boot package
 
 The first riscv64 module/rootfs carrier is a QEMU initrd image.  The host-side
 builder `tools/build-riscv64-bootpkg.sh` creates a text-header package with a
-module record and the current `abi-smoke.user` payload.  The early kernel can
-validate the carrier magic, locate that module record, and verify the payload
-is an ELF64 RISC-V image.  Mapping payload segments into native tasks is part
-of the native server launch work.
+module record and the current `native-smoke.user` payload.  The early kernel
+can validate the carrier magic, locate that module record, verify the payload
+is an ELF64 RISC-V image, copy loadable segments, build a crt0-compatible
+stack, enter U-mode, and observe native `exit`.
+
+`native-smoke.user` is linked at `0x80400000` because the initial riscv64 path
+has no page tables yet.  The normal `test-riscv64-user-abi` artifact remains
+linked at the real Bunix user base `0x400000`; running that address requires
+the later user address-space activation work.
 
 This gives riscv64 a firmware-neutral package handoff separate from
 Multiboot2.  Future rootfs images can ride in the same carrier or replace it
@@ -59,8 +67,9 @@ user ELF with `user/crt0-riscv64.S` and the shared Bunix syscall wrappers.  It
 does not prove runtime U-mode task launch yet.
 
 The early QEMU smoke does prove that the trap path can enter U-mode and handle
-an `ecall` on a supervisor stack.  This is still a probe, not a native server:
-there is no ELF/module handoff, user address-space activation, copyin/copyout,
+an `ecall` on a supervisor stack.  The boot-package smoke additionally proves
+one packaged crt0 payload can run and exit.  This is still an early harness,
+not a native server: there is no user address-space activation, copyin/copyout,
 or scheduler-owned user task lifetime in the riscv64 path yet.
 
 ## Linux personality slice

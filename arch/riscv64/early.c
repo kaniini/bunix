@@ -12,10 +12,12 @@ static volatile u32 worker_switched;
 static u8 worker_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_kernel_stack[4096] __attribute__((aligned(16)));
+static u8 native_user_stack[4096] __attribute__((aligned(16)));
+static u8 native_user_kernel_stack[4096] __attribute__((aligned(16)));
 
 static const char riscv64_bootpkg_magic[] = "BUNIX-RV64-BOOTPKG\n";
 static const char riscv64_bootpkg_module_prefix[] = "module ";
-static const char riscv64_bootpkg_abi_smoke[] = "abi-smoke.user";
+static const char riscv64_bootpkg_native_smoke[] = "native-smoke.user";
 
 const struct riscv64_boot_info *riscv64_boot_info(void)
 {
@@ -171,6 +173,12 @@ static u64 read_le64(const u8 *data)
 	return value;
 }
 
+static u32 read_le32(const u8 *data)
+{
+	return (u32)data[0] | ((u32)data[1] << 8) |
+	       ((u32)data[2] << 16) | ((u32)data[3] << 24);
+}
+
 static int user_elf_is_riscv64(u64 start, u64 size)
 {
 	const u8 *elf = (const u8 *)start;
@@ -198,12 +206,91 @@ static int user_elf_is_riscv64(u64 start, u64 size)
 	return 1;
 }
 
+static void memory_copy(u8 *dest, const u8 *src, u64 size)
+{
+	for (u64 i = 0; i < size; i++) {
+		dest[i] = src[i];
+	}
+}
+
+static void memory_zero(u8 *dest, u64 size)
+{
+	for (u64 i = 0; i < size; i++) {
+		dest[i] = 0;
+	}
+}
+
+static int load_user_elf(u64 start, u64 size, u64 *entry)
+{
+	const u8 *elf = (const u8 *)start;
+	const u32 pt_load = 1;
+	const u64 phoff = read_le64(elf + 32);
+	const u16 phentsize = read_le16(elf + 54);
+	const u16 phnum = read_le16(elf + 56);
+
+	if (!user_elf_is_riscv64(start, size) || phentsize < 56) {
+		return -1;
+	}
+	if (phoff + (u64)phentsize * phnum > size) {
+		return -1;
+	}
+
+	for (u16 i = 0; i < phnum; i++) {
+		const u8 *ph = elf + phoff + (u64)i * phentsize;
+		const u32 type = read_le32(ph);
+		const u64 offset = read_le64(ph + 8);
+		const u64 vaddr = read_le64(ph + 16);
+		const u64 filesz = read_le64(ph + 32);
+		const u64 memsz = read_le64(ph + 40);
+
+		if (type != pt_load) {
+			continue;
+		}
+		if (memsz < filesz || offset + filesz > size || vaddr == 0) {
+			return -1;
+		}
+		memory_copy((u8 *)vaddr, elf + offset, filesz);
+		if (memsz > filesz) {
+			memory_zero((u8 *)(vaddr + filesz), memsz - filesz);
+		}
+	}
+
+	__asm__ volatile ("fence.i" ::: "memory");
+	*entry = read_le64(elf + 24);
+	return *entry != 0 ? 0 : -1;
+}
+
+static u64 build_user_stack(u8 *stack, u64 size, const char *argv0)
+{
+	const char *src = argv0;
+	u64 argv0_len = cstr_len(argv0) + 1;
+	u64 sp = (u64)(stack + size);
+	u64 string_addr;
+	u64 *words;
+
+	sp -= argv0_len;
+	string_addr = sp;
+	for (u64 i = 0; i < argv0_len; i++) {
+		((char *)string_addr)[i] = src[i];
+	}
+	sp &= ~15ULL;
+	sp -= 4 * sizeof(u64);
+	words = (u64 *)sp;
+	words[0] = 1;
+	words[1] = string_addr;
+	words[2] = 0;
+	words[3] = 0;
+	return sp;
+}
+
 void riscv64_early_main(u64 hart_id, u64 fdt)
 {
 	struct riscv64_fdt_memory_range memory;
 	struct riscv64_fdt_initrd initrd;
 	u64 module_start = 0;
 	u64 module_size = 0;
+	u64 module_entry = 0;
+	u64 module_stack = 0;
 
 	boot_info.hart_id = hart_id;
 	boot_info.fdt = fdt;
@@ -251,10 +338,24 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 		early_puts("bootpkg: riscv64 initrd\n");
 		if (bootpkg_find_module(boot_info.initrd_start,
 					boot_info.initrd_end,
-					riscv64_bootpkg_abi_smoke,
+					riscv64_bootpkg_native_smoke,
 					&module_start, &module_size) == 0 &&
 		    user_elf_is_riscv64(module_start, module_size)) {
 			early_puts("module: riscv64 user elf\n");
+			if (load_user_elf(module_start, module_size,
+					  &module_entry) == 0) {
+				module_stack = build_user_stack(
+					native_user_stack,
+					sizeof(native_user_stack),
+					"/bin/native-smoke.user");
+				if (riscv64_user_mode_self_test(
+					    module_entry, module_stack,
+					    (u64)(native_user_kernel_stack +
+						  sizeof(native_user_kernel_stack))) ==
+				    1) {
+					early_puts("native: riscv64 user exit\n");
+				}
+			}
 		}
 	}
 	early_puts("machine: poweroff\n");

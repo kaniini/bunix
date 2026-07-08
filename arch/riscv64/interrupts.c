@@ -6,6 +6,7 @@
 #define RISCV64_SCAUSE_SUPERVISOR_TIMER (RISCV64_SCAUSE_INTERRUPT | 5ULL)
 #define RISCV64_SCAUSE_USER_ECALL 8ULL
 #define RISCV64_SCAUSE_SUPERVISOR_ECALL 9ULL
+#define RISCV64_SYSCALL_EXIT ((u64)-2)
 #define RISCV64_TEST_ECALL_RETURN ((u64)-998)
 #define RISCV64_SIE_STIE (1ULL << 5)
 #define RISCV64_SSTATUS_SIE (1ULL << 1)
@@ -66,7 +67,8 @@ static void riscv64_handle_ecall(struct arch_interrupt_frame *frame)
 {
 	struct arch_syscall_frame syscall_frame;
 
-	if (frame->a7 == RISCV64_TEST_ECALL_RETURN &&
+	if ((frame->a7 == RISCV64_TEST_ECALL_RETURN ||
+	     frame->a7 == RISCV64_SYSCALL_EXIT) &&
 	    riscv64_user_test_return_pc != 0) {
 		riscv64_user_test_status = frame->a0;
 		frame->a0 = 0;
