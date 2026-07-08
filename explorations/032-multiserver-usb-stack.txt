@@ -133,6 +133,9 @@ Progress notes:
   operational, doorbell, and runtime register offsets, performs a bounded
   halt/reset sequence, reads root port 0 status, and logs those milestones in
   `test-boot-xhci-discovery`.
+- `xhci.server` now allocates server-owned DMA buffers for DCBAA, command
+  ring, event ring, ERST, and bounded scratchpad pages, then programs CRCR,
+  DCBAAP, CONFIG, and interrupter 0 event-ring registers under QEMU.
 - Default boot behavior is unchanged: the USB modules are packaged but not
   launched unless a USB command-line test flag is present.
 
@@ -143,9 +146,11 @@ Open design notes:
 - The upper `USB0` constants now name the intended class-driver operations, but
   endpoint capabilities and transfer-completion objects still need full OCAP
   modeling.
-- The first xHCI hardware milestone is partially complete: register mapping,
-  reset, and port-status read are in place, but command ring, event ring, DCBAA,
-  scratchpad handling, interrupter setup, and clean ring shutdown remain open.
+- The first xHCI hardware milestone is mostly complete: register mapping,
+  reset, port-status read, DCBAA, command ring, event ring, ERST, scratchpad
+  handling, and interrupter setup are in place.  Clean shutdown is still
+  limited to keeping the controller halted in this smoke; full started-ring
+  shutdown belongs with command submission.
 
 USB DMA model:
 
