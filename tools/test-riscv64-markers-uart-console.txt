@@ -1,0 +1,4 @@
+uart: riscv64 console-driver=ns16550
+bootstrap-riscv64: done
+machine: poweroff
+sbi: system reset poweroff

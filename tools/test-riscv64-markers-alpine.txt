@@ -1,0 +1,10 @@
+cmdline: riscv64 bootpkg
+bootstrap-riscv64: rootfs mounted
+bootstrap-riscv64: linux ready
+musl hello argc=1 argv0=/bin/dyn-hello
+bootstrap-riscv64: dyn-hello ok
+BUNIX_RISCV64_ALPINE_SH_OK
+bootstrap-riscv64: alpine sh ok
+bootstrap-riscv64: done
+machine: poweroff
+sbi: system reset poweroff

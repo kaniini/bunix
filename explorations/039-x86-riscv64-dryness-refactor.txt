@@ -42,7 +42,7 @@ Tasks:
       `memset`, and future compiler-emitted helper symbols into a shared user
       support object instead of carrying one-off definitions in individual
       servers.
-- [ ] Unify common QEMU test harness behavior while preserving architecture
+- [x] Unify common QEMU test harness behavior while preserving architecture
       machine, firmware, and shutdown differences.
 - [x] Update documentation to describe the architecture boundary explicitly:
       what belongs in `arch/*`, what belongs in generic kernel code, and what
@@ -171,3 +171,18 @@ Progress notes:
     broader cleanup.
   - Verification:
     - `make test-riscv64-bootpkg`
+- Riscv64 QEMU harness slice:
+  - Added `tools/test-riscv64-boot.sh` to own shared riscv64 QEMU command
+    lookup, timeout, memory, serial log capture, and optional marker checking.
+  - Moved the long riscv64 boot marker grep chains into
+    `tools/test-riscv64-markers-early.txt`,
+    `tools/test-riscv64-markers-alpine.txt`, and
+    `tools/test-riscv64-markers-uart-console.txt`.
+  - Updated `test-boot-riscv64-early`, `test-boot-riscv64-alpine`, and
+    `test-boot-riscv64-uart-console` to use the shared harness while keeping
+    the target-specific initrd, timeout, and QEMU `virt` machine policy.
+  - Per-target serial-log isolation remains tracked in exploration 066; this
+    slice preserves the existing shared `build/riscv64-serial.log` behavior.
+  - Verification:
+    - `make test-boot-riscv64-early test-boot-riscv64-alpine test-boot-riscv64-uart-console`
+    - `git diff --check`

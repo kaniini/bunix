@@ -1427,128 +1427,32 @@ test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-b
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
 
-test-boot-riscv64-early: $(RISCV64_BOOTPKG)
-	@command -v $(RISCV64_QEMU) >/dev/null 2>&1 || { echo "missing $(RISCV64_QEMU)"; exit 1; }
+test-boot-riscv64-early: $(RISCV64_BOOTPKG) tools/test-riscv64-boot.sh tools/check-markers.sh tools/test-riscv64-markers-early.txt
 	$(MAKE) ARCH=riscv64 all
-	mkdir -p $(BUILD_DIR)
-	timeout 30s $(RISCV64_QEMU) -machine virt -m 128M -nographic \
-		-no-reboot -kernel $(RISCV64_KERNEL) \
-		-initrd $(RISCV64_BOOTPKG) > $(RISCV64_SERIAL_LOG)
-	grep -aF "bunixos: riscv64 early bootstrap" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "timer: riscv64 tick" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "thread: riscv64 switch" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "pmm: riscv64 ranges" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "boot: riscv64 memory-base=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "boot: riscv64 memory-size=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "boot: riscv64 kernel-start=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "boot: riscv64 kernel-end=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "boot: riscv64 initrd-start=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "boot: riscv64 initrd-end=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "boot: riscv64 initrd-size=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "boot: riscv64 fdt-start=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "boot: riscv64 fdt-end=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "boot: riscv64 fdt-size=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 cpus" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 cpu-count=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "smp: riscv64 discovered-harts=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "smp: riscv64 started-harts=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "smp: riscv64 boot-hart=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "smp: riscv64 secondary-policy=parked" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 timer" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 timebase-hz=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 stdout" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 stdout-path=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 stdout-uart" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 stdout-resolved=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 stdout-uart-base=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 uart" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 uart-count=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 interrupt-controller" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 interrupt-controller-path=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 interrupt-controller-compatible=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 interrupt-controller-count=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 interrupt-routing-path=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "fdt: riscv64 interrupt-routing-compatible=" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "sched: riscv64 thread" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "vm: riscv64 hooks" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "syscall: riscv64 ecall" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "user: riscv64 mode" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootpkg: riscv64 initrd" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "cmdline: riscv64 bootpkg" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "module: riscv64 registered" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "module: riscv64 user elf" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "elf: riscv64 loader" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "copy: riscv64 user" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "kernel: starting module server names" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "names: register name=bootstrap" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "names: register name=time" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "names: register name=user" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "names: register name=proc" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "names: register name=block" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "names: register name=vfs" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "names: register name=squashfs" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "names: register name=linux" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: online" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: abi-smoke launched" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: time launched" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: time ready" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: proc launched" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: block launched" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: block ready" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: vfs launched" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: vfs ready" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: squashfs launched" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: squashfs ready" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: rootfs mounted" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: linux launched" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: linux ready" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "kernel: starting module server block" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "kernel: starting module server vfs" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "kernel: starting module server squashfs" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "kernel: starting module server linux" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "names: register name=linux" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "musl hello argc=1 argv0=/bin/dyn-hello" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: dyn-hello ok" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: syscall-smoke ok" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "rv64 syscall smoke ok" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: musl-hello ok" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "musl hello argc=1 argv0=/bin/musl-hello" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "native: riscv64 server argc=1 argv0=/bin/abi-smoke.user" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "native: riscv64 syscalls" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: done" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "linux-riscv64: exit_group status=0" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "sbi: system reset poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
+	RISCV64_QEMU=$(RISCV64_QEMU) RISCV64_KERNEL=$(RISCV64_KERNEL) \
+		RISCV64_INITRD=$(RISCV64_BOOTPKG) \
+		RISCV64_SERIAL_LOG=$(RISCV64_SERIAL_LOG) \
+		RISCV64_QEMU_TIMEOUT=30s \
+		RISCV64_MARKERS=tools/test-riscv64-markers-early.txt \
+		sh tools/test-riscv64-boot.sh
 
-test-boot-riscv64-alpine: $(RISCV64_ALPINE_BOOTPKG)
-	@command -v $(RISCV64_QEMU) >/dev/null 2>&1 || { echo "missing $(RISCV64_QEMU)"; exit 1; }
+test-boot-riscv64-alpine: $(RISCV64_ALPINE_BOOTPKG) tools/test-riscv64-boot.sh tools/check-markers.sh tools/test-riscv64-markers-alpine.txt
 	$(MAKE) ARCH=riscv64 all
-	mkdir -p $(BUILD_DIR)
-	timeout 45s $(RISCV64_QEMU) -machine virt -m 128M -nographic \
-		-no-reboot -kernel $(RISCV64_KERNEL) \
-		-initrd $(RISCV64_ALPINE_BOOTPKG) > $(RISCV64_SERIAL_LOG)
-	grep -aF "cmdline: riscv64 bootpkg" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: rootfs mounted" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: linux ready" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "musl hello argc=1 argv0=/bin/dyn-hello" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: dyn-hello ok" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "BUNIX_RISCV64_ALPINE_SH_OK" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: alpine sh ok" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: done" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "sbi: system reset poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
+	RISCV64_QEMU=$(RISCV64_QEMU) RISCV64_KERNEL=$(RISCV64_KERNEL) \
+		RISCV64_INITRD=$(RISCV64_ALPINE_BOOTPKG) \
+		RISCV64_SERIAL_LOG=$(RISCV64_SERIAL_LOG) \
+		RISCV64_QEMU_TIMEOUT=45s \
+		RISCV64_MARKERS=tools/test-riscv64-markers-alpine.txt \
+		sh tools/test-riscv64-boot.sh
 
-test-boot-riscv64-uart-console: $(RISCV64_UART_BOOTPKG)
-	@command -v $(RISCV64_QEMU) >/dev/null 2>&1 || { echo "missing $(RISCV64_QEMU)"; exit 1; }
+test-boot-riscv64-uart-console: $(RISCV64_UART_BOOTPKG) tools/test-riscv64-boot.sh tools/check-markers.sh tools/test-riscv64-markers-uart-console.txt
 	$(MAKE) ARCH=riscv64 all
-	mkdir -p $(BUILD_DIR)
-	timeout 30s $(RISCV64_QEMU) -machine virt -m 128M -nographic \
-		-no-reboot -kernel $(RISCV64_KERNEL) \
-		-initrd $(RISCV64_UART_BOOTPKG) > $(RISCV64_SERIAL_LOG)
-	grep -aF "uart: riscv64 console-driver=ns16550" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: done" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "sbi: system reset poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
+	RISCV64_QEMU=$(RISCV64_QEMU) RISCV64_KERNEL=$(RISCV64_KERNEL) \
+		RISCV64_INITRD=$(RISCV64_UART_BOOTPKG) \
+		RISCV64_SERIAL_LOG=$(RISCV64_SERIAL_LOG) \
+		RISCV64_QEMU_TIMEOUT=30s \
+		RISCV64_MARKERS=tools/test-riscv64-markers-uart-console.txt \
+		sh tools/test-riscv64-boot.sh
 
 test-boot-ext2: $(EXT2_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-ext2.txt
 	ESP_DIR=$(EXT2_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
