@@ -15,6 +15,8 @@ commands:
   --check-log FILE   verify a captured serial log has first-smoke markers
   --classify-log FILE
                       summarize which exploration hardware tasks FILE supports
+  --summarize-log FILE
+                      extract board-relevant values from a captured log
   --self-test        run a host-only marker-check self test
 EOF
 }
@@ -124,6 +126,40 @@ classify_line() {
 	printf '%s\t%s\t%s\n' "$label" "$status" "$detail"
 }
 
+marker_value() {
+	log=$1
+	marker=$2
+
+	grep -aF "$marker" "$log" | sed -n '1s/^[^=]*=//p' | tr -d '\r'
+}
+
+summary_line() {
+	key=$1
+	value=$2
+
+	if [ -n "$value" ]; then
+		printf '%s\t%s\n' "$key" "$value"
+	else
+		printf '%s\tmissing\n' "$key"
+	fi
+}
+
+summarize_log() {
+	log=$1
+
+	require_file "$log"
+	summary_line "cpu-count" "$(marker_value "$log" "fdt: riscv64 cpu-count=")"
+	summary_line "timebase-hz" "$(marker_value "$log" "fdt: riscv64 timebase-hz=")"
+	summary_line "stdout-path" "$(marker_value "$log" "fdt: riscv64 stdout-path=")"
+	summary_line "stdout-resolved" "$(marker_value "$log" "fdt: riscv64 stdout-resolved=")"
+	summary_line "stdout-uart-base" "$(marker_value "$log" "fdt: riscv64 stdout-uart-base=")"
+	summary_line "uart-count" "$(marker_value "$log" "fdt: riscv64 uart-count=")"
+	summary_line "interrupt-controller-path" \
+		"$(marker_value "$log" "fdt: riscv64 interrupt-controller-path=")"
+	summary_line "interrupt-controller-count" \
+		"$(marker_value "$log" "fdt: riscv64 interrupt-controller-count=")"
+}
+
 classify_log() {
 	log=$1
 
@@ -227,6 +263,8 @@ fdt print /cpus
 EOF
 	check_preboot_log "$preboot" >/dev/null
 	classify_log "$tmp" >/dev/null
+	summarize_log "$tmp" | grep -aF "stdout-resolved	/soc/serial@10000000" >/dev/null
+	summarize_log "$tmp" | grep -aF "interrupt-controller-path	/soc/interrupt-controller@c000000" >/dev/null
 	printf 'bpi-f3 smoke self-test ok\n'
 }
 
@@ -274,6 +312,14 @@ while [ $# -gt 0 ]; do
 			exit 2
 		fi
 		classify_log "$2"
+		exit 0
+		;;
+	--summarize-log)
+		if [ $# -lt 2 ]; then
+			usage >&2
+			exit 2
+		fi
+		summarize_log "$2"
 		exit 0
 		;;
 	--self-test)

@@ -564,6 +564,7 @@ test-riscv64-bpi-f3-smoke-script: test-riscv64-bpi-f3-artifacts
 test-riscv64-bpi-f3-emulator-gate: test-boot-riscv64-early test-riscv64-bpi-f3-smoke-script
 	sh tools/bpi-f3-smoke.sh --artifact-dir $(RISCV64_BPI_F3_DIR) --check-log $(RISCV64_SERIAL_LOG)
 	sh tools/bpi-f3-smoke.sh --artifact-dir $(RISCV64_BPI_F3_DIR) --classify-log $(RISCV64_SERIAL_LOG)
+	sh tools/bpi-f3-smoke.sh --artifact-dir $(RISCV64_BPI_F3_DIR) --summarize-log $(RISCV64_SERIAL_LOG)
 
 $(BOOTSTRAP_MODULE): $(BOOTSTRAP_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)

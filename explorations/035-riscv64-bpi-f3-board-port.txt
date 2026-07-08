@@ -278,3 +278,17 @@ Verification notes:
   emulator-first BPI-F3 gate.
 - `git diff --check` passed after adding the executable emulator-first BPI-F3
   gate.
+- Added `tools/bpi-f3-smoke.sh --summarize-log FILE`:
+  - The summary extracts board-relevant captured-log values for CPU count,
+    timebase, firmware stdout path, resolved UART, UART MMIO base, UART count,
+    and interrupt-controller path/count.
+  - The emulator gate now emits both classifier evidence rows and summary rows
+    so a real BPI-F3 serial capture can be reviewed without hand-parsing the
+    entire log.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding the BPI-F3 summary
+  extractor.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding the BPI-F3
+  summary extractor.
+- `make test-riscv64-bpi-f3-emulator-gate` passed after adding the BPI-F3
+  summary extractor and printed clean summary rows for the QEMU `virt` log.
+- `git diff --check` passed after adding the BPI-F3 summary extractor.

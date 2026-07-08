@@ -120,6 +120,7 @@ Verify a captured serial log with:
 tools/bpi-f3-smoke.sh --check-preboot-log bpi-f3-serial.log
 tools/bpi-f3-smoke.sh --check-log bpi-f3-serial.log
 tools/bpi-f3-smoke.sh --classify-log bpi-f3-serial.log
+tools/bpi-f3-smoke.sh --summarize-log bpi-f3-serial.log
 ```
 
 The initial U-Boot recipe is intentionally a manual command file rather than a
@@ -142,6 +143,9 @@ Operator setup:
   `tools/bpi-f3-smoke.sh --check-log bpi-f3-serial.log`, then run
   `tools/bpi-f3-smoke.sh --classify-log bpi-f3-serial.log` to summarize which
   exploration tasks have supporting evidence and which still need follow-up.
+- Run `tools/bpi-f3-smoke.sh --summarize-log bpi-f3-serial.log` and record the
+  CPU count, timebase, firmware stdout path, resolved UART, UART MMIO base,
+  UART count, and interrupt-controller path/count in the exploration notes.
 
 The command recipe intentionally prints U-Boot `bdinfo`, `/chosen`,
 `/aliases`, and `/cpus` before entering Bunix.  Those preboot diagnostics give
@@ -187,6 +191,12 @@ The classifier output is tab-separated and intentionally conservative.  It
 reports `evidence` only when the captured log contains the markers needed to
 support a task; final task completion still requires reviewing the actual
 serial log and updating the exploration notes.
+
+The summary output is also tab-separated.  It extracts the board-specific
+values that must be reviewed before closing the remaining hardware tasks:
+`cpu-count`, `timebase-hz`, `stdout-path`, `stdout-resolved`,
+`stdout-uart-base`, `uart-count`, `interrupt-controller-path`, and
+`interrupt-controller-count`.
 
 ## Follow-Up Hardware Work
 
