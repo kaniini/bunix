@@ -567,7 +567,7 @@ $(RISCV64_USER_MODULE): user/crt0-riscv64.S user/user/main.c user/user.ld user/i
 		$(BUILD_DIR)/riscv64/user/user.c.o
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
-$(RISCV64_PROC_MODULE): user/crt0-riscv64.S user/proc/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h Makefile
+$(RISCV64_PROC_MODULE): user/crt0-riscv64.S user/proc/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_STRING_OBJ) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
@@ -579,7 +579,8 @@ $(RISCV64_PROC_MODULE): user/crt0-riscv64.S user/proc/main.c user/user.ld user/i
 		-c user/proc/main.c -o $(BUILD_DIR)/riscv64/user/proc.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
 		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
-		$(BUILD_DIR)/riscv64/user/proc.c.o
+		$(BUILD_DIR)/riscv64/user/proc.c.o \
+		$(RISCV64_USER_STRING_OBJ)
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
 $(RISCV64_USER_STRING_OBJ): user/runtime/string.c Makefile

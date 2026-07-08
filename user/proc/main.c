@@ -65,17 +65,6 @@ static unsigned short proc_elf_machine(void)
 #endif
 }
 
-void *memcpy(void *dst, const void *src, u64 len)
-{
-	unsigned char *out = (unsigned char *)dst;
-	const unsigned char *in = (const unsigned char *)src;
-
-	for (u64 i = 0; i < len; i++) {
-		out[i] = in[i];
-	}
-	return dst;
-}
-
 struct process {
 	u64 pid;
 	u64 ppid;

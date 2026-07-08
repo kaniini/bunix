@@ -77,3 +77,11 @@ Progress notes:
   pass should fold proc and server builds onto one explicit freestanding
   userspace runtime policy instead of keeping mixed local and per-rule helper
   wiring.
+- First cleanup slice:
+  - Removed proc's local freestanding `memcpy` implementation.
+  - Linked the riscv64 proc server against the shared `user/runtime/string.c`
+    object already used by the riscv64 filesystem-server builds.
+  - Verification:
+    - `make test-riscv64-proc-server-build`
+    - `make test-boot-riscv64-alpine`
+    - `git diff --check`
