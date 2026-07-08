@@ -25,6 +25,13 @@ Tasks:
       `names` and `user`, but the UART package is intentionally kept lean until
       this exploration splits hardware-console smoke from normal server-graph
       boot.
+- [ ] Replace the `riscv64-bootpkg-test` poweroff barrier that waits for
+      `/bin/rv64-syscall-smoke` and `/bin/musl-hello` with a real test-harness
+      completion primitive, likely through proc/wait once the riscv64 server
+      graph can support it.
+- [ ] Investigate why riscv64 native `sleep_ns` did not resume the bootstrap
+      smoke during exploration 035, and either fix the timer/scheduler
+      interaction or keep sleep-dependent checks out of the early boot path.
 - [ ] Move test-only checks behind explicit command-line tokens or dedicated
       test entry helpers while preserving existing smoke target coverage.
 - [ ] Keep platform/FDT diagnostics available for BPI-F3 review logs without

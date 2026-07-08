@@ -29,6 +29,10 @@ Tasks:
       where both architectures already agree.
 - [ ] Move Linux-personality syscall forwarding into a shared registry or
       dispatch layer with arch-specific ABI tables.
+- [ ] Replace the temporary riscv64 frontend behavior that re-sends
+      `BUNIX_LINUX_REGISTER_PROCESS` before forwarded scalar syscalls with
+      per-task Linux frontend state.  This must support concurrent riscv64
+      Linux tasks without a fixed single-task cache.
 - [ ] Unify server module build/package rules where the only difference is
       target triple, crt0, or linker mode.
 - [ ] Unify common QEMU test harness behavior while preserving architecture
@@ -51,3 +55,8 @@ Progress notes:
 - Created as the broad follow-on exploration requested after riscv64 cleanup
   and Alpine environment work, then moved after the focused riscv64 refactor
   explorations created from the `035` audit.
+- Exploration 035 intentionally kept the riscv64 shared-Linux smoke narrow:
+  the frontend treats duplicate registration as already registered so
+  `/bin/rv64-syscall-smoke` and `/bin/musl-hello` can run concurrently.  This
+  should become a real per-task frontend table once the riscv64 Alpine path is
+  far enough along to justify broader cleanup.

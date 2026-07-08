@@ -36,6 +36,8 @@ int main(void)
 	const char user_fail[] = "bootstrap-riscv64: user failed\n";
 	const char linux_ok[] = "bootstrap-riscv64: linux launched\n";
 	const char linux_fail[] = "bootstrap-riscv64: linux failed\n";
+	const char syscall_ok[] = "bootstrap-riscv64: syscall-smoke launched\n";
+	const char syscall_fail[] = "bootstrap-riscv64: syscall-smoke failed\n";
 	const char hello_ok[] = "bootstrap-riscv64: musl-hello launched\n";
 	const char hello_fail[] = "bootstrap-riscv64: musl-hello failed\n";
 	const char done[] = "bootstrap-riscv64: done\n";
@@ -60,6 +62,9 @@ int main(void)
 				sizeof(linux_caps) / sizeof(linux_caps[0]),
 				linux_ok, sizeof(linux_ok) - 1,
 				linux_fail, sizeof(linux_fail) - 1);
+	launch_or_log("/bin/rv64-syscall-smoke", syscall_ok,
+		      sizeof(syscall_ok) - 1, syscall_fail,
+		      sizeof(syscall_fail) - 1);
 	launch_or_log("/bin/musl-hello", hello_ok, sizeof(hello_ok) - 1,
 		      hello_fail, sizeof(hello_fail) - 1);
 

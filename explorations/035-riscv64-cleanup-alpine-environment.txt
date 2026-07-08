@@ -60,7 +60,7 @@ Tasks:
 - [x] Define riscv64 Linux syscall dispatch boundaries: syscall number table,
       argument register mapping, return/error convention, and arch-specific
       process/thread entry details.
-- [ ] Add riscv64 tests for the shared Linux server using the existing static
+- [x] Add riscv64 tests for the shared Linux server using the existing static
       musl hello smoke and at least one additional syscall-heavy static test.
 - [ ] Add riscv64 dynamic-linker smoke coverage for the musl loader path,
       including `openat(2)` and correct `fstat(2)` behavior.
@@ -78,11 +78,11 @@ Tasks:
 Verification:
 
 - [ ] `make ARCH=riscv64 all`
-- [ ] Existing `make test-boot-riscv64-early`
-- [ ] Existing `make test-boot-riscv64-uart-console`
-- [ ] New riscv64 shared-Linux-server smoke target
+- [x] Existing `make test-boot-riscv64-early`
+- [x] Existing `make test-boot-riscv64-uart-console`
+- [x] New riscv64 shared-Linux-server smoke target
 - [ ] New riscv64 Alpine environment boot target
-- [ ] A narrow x86_64 smoke proving the shared Linux server refactor did not
+- [x] A narrow x86_64 smoke proving the shared Linux server refactor did not
       break the existing x86_64 path
 
 Progress notes:
@@ -258,6 +258,35 @@ Progress notes:
     future shared Linux server has the expected USER service path available.
   - The early boot smoke now requires `names: register name=user`, proving the
     shared user server starts and registers on the main emulator path.
+- Added syscall-heavy riscv64 runtime coverage for the shared Linux server:
+  - The default riscv64 boot packages now include `/bin/rv64-syscall-smoke`,
+    a static rv64 musl program that uses raw `ecall` instructions for
+    `getpid`, `getppid`, `getuid`, `geteuid`, `getgid`, `getegid`, `gettid`,
+    `write`, and `exit_group`.
+  - `arch/riscv64/user.c` now translates those riscv64 Linux syscall numbers
+    into the shared Linux server's `LINX` messages, proving more than the
+    original static hello `write`/`exit_group` path.
+  - The early riscv64 boot smoke now requires
+    `bootstrap-riscv64: syscall-smoke launched` and
+    `rv64 syscall smoke ok` before accepting the run.
+  - During `riscv64-bootpkg-test`, the riscv64 syscall frontend powers off
+    only after both `/bin/rv64-syscall-smoke` and `/bin/musl-hello` exit.
+    This is intentionally smoke-specific; `037-riscv64-boot-test-split.txt`
+    tracks replacing these boot-test barriers with a cleaner test harness.
+  - The current frontend sends process registration before forwarded scalar
+    syscalls and treats duplicate registration as already registered.  This
+    keeps concurrent static smoke tasks correct without a fixed single-task
+    cache; `039-x86-riscv64-dryness-refactor.txt` tracks the future per-task
+    frontend state table.
+- Verification for the syscall-heavy shared Linux smoke slice:
+  - `git diff --check`
+  - `make test-riscv64-bootpkg`
+  - `make ARCH=riscv64 all`
+  - `make test-riscv64-shared-linux-server-build`
+  - `make test-boot-riscv64-early`
+  - `make test-boot-riscv64-uart-console`
+  - `make build/x86_64/bunixos.kernel`
+  - `make test-smoke`
   - The UART boot package intentionally remains lean.  Including the normal
     `user` server there exposed a UART-only timeout after names handled the
     user service registration.  That is not part of the Alpine milestone

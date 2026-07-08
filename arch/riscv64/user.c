@@ -35,11 +35,25 @@ enum {
 	LINUX_RISCV64_EXIT = 93,
 	LINUX_RISCV64_EXIT_GROUP = 94,
 	LINUX_RISCV64_SET_TID_ADDRESS = 96,
+	LINUX_RISCV64_GETPID = 172,
+	LINUX_RISCV64_GETPPID = 173,
+	LINUX_RISCV64_GETUID = 174,
+	LINUX_RISCV64_GETEUID = 175,
+	LINUX_RISCV64_GETGID = 176,
+	LINUX_RISCV64_GETEGID = 177,
+	LINUX_RISCV64_GETTID = 178,
 	LINUX_RISCV64_RPC_SYSCALL = 1010,
 	LINUX_RISCV64_ACTION_WRITE = 1,
 	LINUX_RISCV64_ACTION_EXIT = 2,
+	LINUX_SHARED_GETPID = 39,
+	LINUX_SHARED_GETUID = 102,
+	LINUX_SHARED_GETGID = 104,
+	LINUX_SHARED_GETEUID = 107,
+	LINUX_SHARED_GETEGID = 108,
+	LINUX_SHARED_GETPPID = 110,
 	LINUX_SHARED_WRITE = 1,
 	LINUX_SHARED_SET_TID_ADDRESS = 218,
+	LINUX_SHARED_GETTID = 186,
 	LINUX_SHARED_REGISTER_PROCESS = 1000,
 	LINUX_SHARED_EXIT_GROUP = 231,
 	LINUX_ENOMEM = 12,
@@ -80,7 +94,24 @@ struct user_ipc_message {
 
 static const char *strace_mode;
 static u64 current_kernel_stack;
-static u32 linux_registered_task;
+static u8 bootpkg_syscall_smoke_done;
+static u8 bootpkg_musl_hello_done;
+
+static int cstr_eq(const char *left, const char *right)
+{
+	u64 i = 0;
+
+	if (left == 0 || right == 0) {
+		return 0;
+	}
+	while (left[i] != '\0' && right[i] != '\0') {
+		if (left[i] != right[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return left[i] == right[i];
+}
 
 void riscv64_user_enter(u64 entry, u64 stack, u64 kernel_stack)
 	__attribute__((noreturn));
@@ -686,17 +717,16 @@ static u64 linux_register_current(struct ipc_port *linux,
 	};
 	struct ipc_message reply;
 
-	if (linux_registered_task == current_task) {
-		return 0;
-	}
 	if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 		return (u64)-LINUX_ENOSYS;
 	}
-	if ((i64)reply.words[0] > 0 ||
-	    (i64)reply.words[0] == -LINUX_EINVAL) {
-		linux_registered_task = current_task;
+	if ((i64)reply.words[0] > 0) {
 		console_printf("linux-riscv64: registered task=%u pid=%u\n",
 			       current_task, (u32)reply.words[0]);
+		ipc_message_release(&reply);
+		return 0;
+	}
+	if ((i64)reply.words[0] == -LINUX_EINVAL) {
 		ipc_message_release(&reply);
 		return 0;
 	}
@@ -779,6 +809,29 @@ static u64 linux_write_chunked(struct ipc_port *linux,
 	return total;
 }
 
+static u64 linux_forward_scalar(struct ipc_port *linux,
+				struct ipc_port *reply_port, u32 type)
+{
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = type,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct ipc_message reply;
+
+	if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+		return (u64)-LINUX_ENOSYS;
+	}
+	const u64 result = reply.words[0];
+	ipc_message_release(&reply);
+	return result;
+}
+
 static u64 linux_exit_current(struct ipc_port *linux, struct ipc_port *reply_port,
 			      u64 status)
 {
@@ -799,7 +852,16 @@ static u64 linux_exit_current(struct ipc_port *linux, struct ipc_port *reply_por
 	}
 	console_printf("linux-riscv64: exit_group status=%u\n", (u32)status);
 	if (kernel_cmdline_has("riscv64-bootpkg-test")) {
-		arch_poweroff();
+		const char *name = task_name(task_current());
+
+		if (cstr_eq(name, "/bin/rv64-syscall-smoke")) {
+			bootpkg_syscall_smoke_done = 1;
+		} else if (cstr_eq(name, "/bin/musl-hello")) {
+			bootpkg_musl_hello_done = 1;
+		}
+		if (bootpkg_syscall_smoke_done && bootpkg_musl_hello_done) {
+			arch_poweroff();
+		}
 	}
 	thread_exit();
 }
@@ -878,6 +940,20 @@ static u64 linux_riscv64_syscall_dispatch(struct arch_syscall_frame *frame)
 		return linux_exit_current(linux, reply_port, frame->arg0);
 	case LINUX_RISCV64_SET_TID_ADDRESS:
 		return thread_id(thread_current());
+	case LINUX_RISCV64_GETPID:
+		return linux_forward_scalar(linux, reply_port, LINUX_SHARED_GETPID);
+	case LINUX_RISCV64_GETPPID:
+		return linux_forward_scalar(linux, reply_port, LINUX_SHARED_GETPPID);
+	case LINUX_RISCV64_GETUID:
+		return linux_forward_scalar(linux, reply_port, LINUX_SHARED_GETUID);
+	case LINUX_RISCV64_GETEUID:
+		return linux_forward_scalar(linux, reply_port, LINUX_SHARED_GETEUID);
+	case LINUX_RISCV64_GETGID:
+		return linux_forward_scalar(linux, reply_port, LINUX_SHARED_GETGID);
+	case LINUX_RISCV64_GETEGID:
+		return linux_forward_scalar(linux, reply_port, LINUX_SHARED_GETEGID);
+	case LINUX_RISCV64_GETTID:
+		return linux_forward_scalar(linux, reply_port, LINUX_SHARED_GETTID);
 	default:
 		console_printf("linux-riscv64: unknown syscall=%u pc=%p arg0=%p arg1=%p arg2=%p arg3=%p\n",
 			       (u32)frame->number,

@@ -53,6 +53,7 @@ RISCV64_MUSLCC_SYSROOT := $(RISCV64_MUSLCC_PREFIX)/riscv64-linux-musl
 RISCV64_MUSLCC_GCC_LIBDIR := $(RISCV64_MUSLCC_PREFIX)/lib/gcc/riscv64-linux-musl/11.2.1
 RISCV64_MUSL_LDSO_SOURCE := $(RISCV64_MUSLCC_SYSROOT)/lib/libc.so
 RISCV64_MUSL_HELLO_MODULE := $(BUILD_DIR)/riscv64/modules/musl-hello.user
+RISCV64_SYSCALL_SMOKE_MODULE := $(BUILD_DIR)/riscv64/modules/rv64-syscall-smoke.user
 RISCV64_DYN_HELLO_MODULE := $(BUILD_DIR)/riscv64/modules/dyn-hello.user
 RISCV64_MUSL_LDSO := $(BUILD_DIR)/riscv64/modules/ld-musl-riscv64.so.1
 RISCV64_LINUX_SERVER_MODULE := $(BUILD_DIR)/riscv64/modules/linux.server
@@ -465,6 +466,18 @@ $(RISCV64_MUSL_HELLO_MODULE): user/musl-hello/main.c $(RISCV64_MUSLCC_GCC) Makef
 		-O2 -g $< -o $@
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
+$(RISCV64_SYSCALL_SMOKE_MODULE): user/riscv64-syscall-smoke/main.c $(RISCV64_MUSLCC_GCC) Makefile
+	mkdir -p $(dir $@)
+	$(RISCV64_CC) --target=riscv64-linux-musl -march=rv64gc -mabi=lp64d \
+		-isystem $(RISCV64_MUSLCC_SYSROOT)/include \
+		-static -fuse-ld=/usr/bin/$(RISCV64_LD) \
+		-B $(RISCV64_MUSLCC_SYSROOT)/lib \
+		-B $(RISCV64_MUSLCC_GCC_LIBDIR) \
+		-L $(RISCV64_MUSLCC_SYSROOT)/lib \
+		-L $(RISCV64_MUSLCC_GCC_LIBDIR) \
+		-O2 -g $< -o $@
+	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
+
 $(RISCV64_DYN_HELLO_MODULE): user/musl-hello/main.c $(RISCV64_MUSLCC_GCC) Makefile
 	mkdir -p $(dir $@)
 	$(RISCV64_CC) --target=riscv64-linux-musl -march=rv64gc -mabi=lp64d \
@@ -557,16 +570,17 @@ $(RISCV64_BOOTSTRAP_MODULE): user/crt0-riscv64.S user/riscv64-bootstrap/main.c u
 		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
 		$(BUILD_DIR)/riscv64/user/riscv64-bootstrap.c.o
 
-$(RISCV64_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
+$(RISCV64_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_SYSCALL_SMOKE_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_NAMES_MODULE) names \
 		$(RISCV64_USER_MODULE) user \
 		$(RISCV64_BOOTSTRAP_MODULE) bootstrap \
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
 		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux \
+		$(RISCV64_SYSCALL_SMOKE_MODULE) /bin/rv64-syscall-smoke \
 		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
 
-$(RISCV64_BOOTPKG_MULTI): $(RISCV64_NAMES_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
+$(RISCV64_BOOTPKG_MULTI): $(RISCV64_NAMES_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_SYSCALL_SMOKE_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_USER_ABI_MODULE) disk0 \
 		$(RISCV64_NAMES_MODULE) names \
@@ -574,6 +588,7 @@ $(RISCV64_BOOTPKG_MULTI): $(RISCV64_NAMES_MODULE) $(RISCV64_USER_MODULE) $(RISCV
 		$(RISCV64_BOOTSTRAP_MODULE) bootstrap \
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
 		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux \
+		$(RISCV64_SYSCALL_SMOKE_MODULE) /bin/rv64-syscall-smoke \
 		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
 
 $(RISCV64_UART_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
@@ -592,6 +607,7 @@ test-riscv64-bootpkg: $(RISCV64_BOOTPKG) $(RISCV64_BOOTPKG_MULTI)
 	grep -aF "module bootstrap" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module linux" $(RISCV64_BOOTPKG) >/dev/null
+	grep -aF "module /bin/rv64-syscall-smoke" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module /bin/musl-hello" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "cmdline $(RISCV64_KERNEL_CMDLINE)" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module disk0" $(RISCV64_BOOTPKG_MULTI) >/dev/null
@@ -600,6 +616,7 @@ test-riscv64-bootpkg: $(RISCV64_BOOTPKG) $(RISCV64_BOOTPKG_MULTI)
 	grep -aF "module bootstrap" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module linux" $(RISCV64_BOOTPKG_MULTI) >/dev/null
+	grep -aF "module /bin/rv64-syscall-smoke" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module /bin/musl-hello" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 
 $(RISCV64_BPI_F3_MANIFEST): $(RISCV64_KERNEL) $(RISCV64_BOOTPKG) $(RISCV64_UART_BOOTPKG) Makefile
@@ -1361,6 +1378,8 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "bootstrap-riscv64: linux launched" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "kernel: starting module server linux" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "linux-riscv64: registered task=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "bootstrap-riscv64: syscall-smoke launched" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "rv64 syscall smoke ok" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootstrap-riscv64: musl-hello launched" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "musl hello argc=1 argv0=/bin/musl-hello" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "native: riscv64 server argc=1 argv0=/bin/abi-smoke.user" $(RISCV64_SERIAL_LOG) >/dev/null

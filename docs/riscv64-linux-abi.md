@@ -16,10 +16,11 @@ and the shared Bunix Linux personality server.
 - `tp` is preserved as the riscv64 thread pointer.  Future clone/TLS work must
   update `tp` through architecture state, not through Linux server policy.
 
-The bringup path currently sends all nonnegative syscalls as
-`BUNIX_LINUX_RISCV64_SYSCALL` to `user/riscv64-linux/main.c`.  That action
-protocol is temporary and should be deleted when the real Linux server handles
-riscv64 processes.
+The default bringup path now translates the static-musl smoke syscall subset
+into shared `LINX` messages handled by `user/linux/main.c`.  The old
+`BUNIX_LINUX_RISCV64_SYSCALL` action protocol remains only for the narrower
+UART console smoke and should be deleted when that package no longer uses
+`user/riscv64-linux/main.c`.
 
 ## Target boundary
 
@@ -61,6 +62,13 @@ The first shared-server riscv64 smoke should support at least:
 - `munmap` or the existing Bunix task unmap primitive once wired
 - `brk` if dynamic riscv64 musl requires it
 - `set_tid_address` as a no-op or shared process-thread registration result
+- `getpid` -> `BUNIX_LINUX_GETPID`
+- `getppid` -> `BUNIX_LINUX_GETPPID`
+- `getuid` -> `BUNIX_LINUX_GETUID`
+- `geteuid` -> `BUNIX_LINUX_GETEUID`
+- `getgid` -> `BUNIX_LINUX_GETGID`
+- `getegid` -> `BUNIX_LINUX_GETEGID`
+- `gettid` -> `BUNIX_LINUX_GETTID`
 - `exit` and `exit_group` -> `BUNIX_LINUX_EXIT_GROUP`
 
 Dynamic-linker coverage must add the syscalls observed from

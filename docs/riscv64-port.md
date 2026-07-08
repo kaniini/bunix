@@ -51,6 +51,10 @@ The early boot gate currently verifies:
   riscv64 Linux-number syscalls through a riscv64 syscall frontend to the
   shared userspace `linux` server, register as a Linux process, write through
   the shared Linux server, and exit cleanly.
+- A static rv64 syscall smoke payload packaged as `/bin/rv64-syscall-smoke`
+  can issue raw Linux `ecall`s for process identity and credential syscalls,
+  write its result through the shared Linux server, and exit cleanly before
+  the final bootpkg poweroff.
 - The guest exits through SBI poweroff.
 
 ## Boot package
@@ -60,7 +64,8 @@ builder `tools/build-riscv64-bootpkg.sh` creates a text-header package with
 module records and payloads.  The old `OUT MODULE [NAME]` invocation remains
 valid, and the builder also accepts repeated `MODULE NAME` pairs for ordered
 module/data payloads plus an optional `cmdline` header.  The default QEMU boot
-carrier contains `abi-smoke.user`, `linux`, and `/bin/musl-hello`, while
+carrier contains `names`, `user`, `bootstrap`, `abi-smoke.user`, `linux`,
+`/bin/rv64-syscall-smoke`, and `/bin/musl-hello`, while
 `test-riscv64-bootpkg` also builds a multi-record carrier to prove host-side
 ordering.  The early kernel can parse the package command line through the
 shared `kernel_cmdline_configure()` path used by x86_64, validate the carrier
@@ -208,24 +213,29 @@ Linux personality server graph remain later riscv64 slices.
 
 ## Linux personality slice
 
-The first riscv64 Linux-personality target is a static rv64 musl hello program,
-not BusyBox or dynamic linking.  The emulator now builds the static
-`user/musl-hello/main.c` ELF with host clang against the musl.cc sysroot,
-packages it as `/bin/musl-hello`, launches it as a scheduler-owned U-mode
-task, and sends its nonnegative Linux syscalls through a riscv64 syscall
-frontend to the shared userspace Linux server built from `user/linux/main.c`.
+The first riscv64 Linux-personality target is static rv64 musl userspace, not
+BusyBox or dynamic linking.  The emulator now builds the static
+`user/musl-hello/main.c` ELF and the syscall-heavy
+`user/riscv64-syscall-smoke/main.c` ELF with host clang against the musl.cc
+sysroot, packages them as `/bin/musl-hello` and
+`/bin/rv64-syscall-smoke`, launches them as scheduler-owned U-mode tasks, and
+sends their nonnegative Linux syscalls through a riscv64 syscall frontend to
+the shared userspace Linux server built from `user/linux/main.c`.
 `make test-boot-riscv64-early` now proves the shared server path by requiring
-`names: register name=linux`, `linux-riscv64: registered task=`, the musl hello
-serial marker, and `linux-riscv64: exit_group status=0`.
+`names: register name=linux`, `linux-riscv64: registered task=`,
+`rv64 syscall smoke ok`, the musl hello serial marker, and
+`linux-riscv64: exit_group status=0`.
 
 The riscv64 syscall frontend maps the observed static hello surface to shared
 Linux server messages: riscv64 `write` becomes shared `BUNIX_LINUX_WRITE`,
 `exit` and `exit_group` become shared `BUNIX_LINUX_EXIT_GROUP`, and
-`set_tid_address` is answered by the current scheduler thread ID.  During the
-`riscv64-bootpkg-test` smoke, stdout/stderr writes are also mirrored to the
-early SBI console because the package still omits the real console server.
-That early-console mirror is a smoke-test aid, not the future Alpine console
-model.
+`set_tid_address` is answered by the current scheduler thread ID.  The
+syscall-heavy static smoke also maps riscv64 `getpid`, `getppid`, `getuid`,
+`geteuid`, `getgid`, `getegid`, and `gettid` to the shared Linux server's
+process and credential messages.  During the `riscv64-bootpkg-test` smoke,
+stdout/stderr writes are also mirrored to the early SBI console because the
+package still omits the real console server.  That early-console mirror is a
+smoke-test aid, not the future Alpine console model.
 
 The old `user/riscv64-linux/main.c` stub still exists for the narrower UART
 smoke package, and the riscv64 syscall frontend explicitly selects that
