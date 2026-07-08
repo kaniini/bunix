@@ -88,6 +88,25 @@ Check the host-side artifact shape with:
 make test-riscv64-bpi-f3-artifacts
 ```
 
+Prepare a mounted boot partition with:
+
+```sh
+make riscv64-bpi-f3-artifacts
+tools/bpi-f3-smoke.sh --prepare /path/to/boot/partition
+```
+
+Print the U-Boot commands with:
+
+```sh
+tools/bpi-f3-smoke.sh --print-uboot
+```
+
+Verify a captured serial log with:
+
+```sh
+tools/bpi-f3-smoke.sh --check-log bpi-f3-serial.log
+```
+
 The initial U-Boot recipe is intentionally a manual command file rather than a
 compiled boot script.  The first hardware sessions should run it command by
 command so the operator can inspect `bdinfo`, `fdt print /chosen`, and memory
@@ -103,15 +122,23 @@ Operator setup:
 - Copy the generated Bunix BPI-F3 artifacts to the first boot partition.
 - Stop at the U-Boot prompt.
 - Run the commands in `boot-bunix-bpi-f3.cmd` by hand.
+- Capture the full serial log and run
+  `tools/bpi-f3-smoke.sh --check-log bpi-f3-serial.log`.
 
 Expected first milestone serial markers:
 
 - `bunixos: riscv64 early bootstrap`
 - `pmm: riscv64 ranges`
+- `fdt: riscv64 cpus`
+- `fdt: riscv64 timer`
+- `fdt: riscv64 stdout`
+- `fdt: riscv64 uart`
+- `fdt: riscv64 interrupt-controller`
 - `timer: riscv64 tick`
 - `thread: riscv64 switch`
 - `bootpkg: riscv64 initrd`
 - `bootstrap-riscv64: online`
+- `native: riscv64 server argc=1 argv0=/bin/abi-smoke.user`
 - `musl hello argc=1 argv0=/bin/musl-hello`
 - `machine: poweroff`
 

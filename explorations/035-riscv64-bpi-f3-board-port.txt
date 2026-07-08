@@ -82,7 +82,7 @@ Tasks:
 - [ ] Bring up SMP hart discovery and park/release policy for the 8-core K1,
       initially allowing `SMP=1` hardware boot if secondary harts need a later
       slice.
-- [ ] Define a physical-board smoke-test script: prepare boot media, connect
+- [x] Define a physical-board smoke-test script: prepare boot media, connect
       serial, capture logs, boot Bunix, wait for milestone markers, and power
       off.
 - [ ] Prove the first hardware milestone: kernel banner, memory map, timer
@@ -148,3 +148,21 @@ Verification notes:
   FDT discovery.
 - `make test-riscv64-bootpkg` passed after adding firmware platform FDT
   discovery.
+- Added `tools/bpi-f3-smoke.sh` for physical-board first-smoke operation:
+  - `--prepare DIR` copies the generated BPI-F3 kernel ELF, boot package,
+    U-Boot command recipe, and manifest into a mounted boot partition.
+  - `--print-uboot` prints the manual U-Boot command sequence.
+  - `--check-log FILE` verifies the captured serial log has the first-smoke
+    markers for early boot, FDT platform discovery, timer, thread switch,
+    boot package, bootstrap, native smoke, static musl hello, and poweroff.
+  - `--self-test` verifies the marker checker without requiring physical
+    hardware, so the host-side script behavior is testable in CI.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding the BPI-F3
+  physical-board smoke helper.
+- `make test-riscv64-bpi-f3-artifacts` passed after adding the BPI-F3
+  physical-board smoke helper.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding the BPI-F3 physical-board
+  smoke helper.
+- `tools/bpi-f3-smoke.sh --artifact-dir build/riscv64/bpi-f3 --check-log
+  build/riscv64-serial.log` passed against the current QEMU `virt` smoke log,
+  confirming the log checker matches the emulator-proven first-smoke markers.
