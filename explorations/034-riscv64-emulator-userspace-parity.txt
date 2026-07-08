@@ -64,7 +64,7 @@ Tasks:
 - [x] Import or configure the musl.cc `riscv64-linux-musl-cross.tgz` toolchain
       in a reproducible host-tooling path without committing the toolchain
       blob.
-- [ ] Build a static riscv64 musl hello binary and package it as
+- [x] Build a static riscv64 musl hello binary and package it as
       `/bin/musl-hello` in the riscv64 boot carrier.
 - [ ] Add riscv64 Linux syscall-number dispatch in the Linux personality
       server for the static musl hello syscall surface.  Do not reuse x86_64
@@ -467,6 +467,28 @@ Verification notes:
     `build/toolchains/riscv64-linux-musl-cross`.
   - The setup script can download from musl.cc or use an already downloaded
     archive via `RISCV64_MUSLCC_TARBALL=/path/to/riscv64-linux-musl-cross.tgz`.
-  - The toolchain blob remains outside git.  The current workspace does not
-    have the toolchain installed yet, so the static musl hello build remains
-    the next slice.
+  - The toolchain blob remains outside git.
+- Built and packaged the first static riscv64 musl binary:
+  - `make riscv64-muslcc-toolchain` downloaded and unpacked the external
+    musl.cc archive under ignored `build/toolchains`.
+  - The archive's compiler driver is an i386 executable on this host and does
+    not run here, so the Makefile builds `user/musl-hello/main.c` with host
+    clang targeting `riscv64-linux-musl`, explicit musl.cc includes, crt/lib
+    search paths, libc, and libgcc support.
+  - The resulting static RISC-V ELF is
+    `build/riscv64/modules/musl-hello.user`; the default and multi-record
+    riscv64 boot packages carry it as `/bin/musl-hello`.
+  - This closes the build/package part only.  Loading and executing the
+    payload through the riscv64 Linux personality remains open.
+  - The boot-package builder now uses per-process temporary file names after
+    a parallel `test-riscv64-bootpkg`/`test-boot-riscv64-early` run exposed
+    that fixed `bootpkg.img.tmp` names could race when two Make targets rebuilt
+    the same carrier concurrently.
+- `make riscv64-muslcc-toolchain` passed and installed the external toolchain
+  under ignored `build/toolchains`.
+- `make -B build/riscv64/modules/musl-hello.user` passed, proving the static
+  riscv64 musl ELF can be rebuilt from source.
+- `make test-riscv64-bootpkg` passed and now verifies the `/bin/musl-hello`
+  package record.
+- `make test-boot-riscv64-early` passed sequentially with `/bin/musl-hello`
+  present in the boot carrier.

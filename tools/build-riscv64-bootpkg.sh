@@ -2,8 +2,8 @@
 set -eu
 
 out=$1
-tmp="$out.tmp"
-payload_tmp="$out.payload.tmp"
+tmp="$out.tmp.$$"
+payload_tmp="$out.payload.tmp.$$"
 trap 'rm -f "$tmp" "$payload_tmp"' EXIT
 
 shift

@@ -184,7 +184,8 @@ The first riscv64 Linux-personality target is a static rv64 musl hello program,
 not BusyBox or dynamic linking.  That slice should prove the loader and Linux
 syscall ABI with the smallest executable that still uses libc startup:
 
-1. Build or import a static `riscv64` musl ELF for `user/musl-hello/main.c`.
+1. Build a static `riscv64` musl ELF for `user/musl-hello/main.c` with host
+   clang targeting the musl.cc sysroot.
 2. Teach the riscv64 module/rootfs packaging path to carry that ELF as
    `/bin/musl-hello`.
 3. Load the ELF through the existing proc/VFS/server path once native user task
@@ -207,7 +208,12 @@ riscv64-muslcc-toolchain` to install the external musl.cc
 `RISCV64_MUSLCC_TARBALL=/path/to/riscv64-linux-musl-cross.tgz` to use a
 predownloaded archive.  Until that toolchain is installed or configured, the
 tree should not add a pretend riscv64 musl binary target that cannot produce a
-real libc-linked ELF.
+real libc-linked ELF.  The musl.cc driver in that archive is an i386 binary
+on this host, so the Bunix build uses host clang plus the musl.cc sysroot,
+crt objects, libc, and libgcc support directory to produce the static
+`build/riscv64/modules/musl-hello.user` ELF.  The riscv64 boot package carries
+that payload under the package name `/bin/musl-hello`; executing it through
+the Linux personality is a later slice.
 
 ## Hardware Port Gate
 

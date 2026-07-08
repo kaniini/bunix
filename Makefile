@@ -40,6 +40,9 @@ RISCV64_BOOTPKG_MULTI := $(BUILD_DIR)/riscv64/bootpkg-multi.img
 RISCV64_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test
 RISCV64_MUSLCC_PREFIX ?= $(BUILD_DIR)/toolchains/riscv64-linux-musl-cross
 RISCV64_MUSLCC_GCC := $(RISCV64_MUSLCC_PREFIX)/bin/riscv64-linux-musl-gcc
+RISCV64_MUSLCC_SYSROOT := $(RISCV64_MUSLCC_PREFIX)/riscv64-linux-musl
+RISCV64_MUSLCC_GCC_LIBDIR := $(RISCV64_MUSLCC_PREFIX)/lib/gcc/riscv64-linux-musl/11.2.1
+RISCV64_MUSL_HELLO_MODULE := $(BUILD_DIR)/riscv64/modules/musl-hello.user
 BOOTSTRAP_MODULE := $(BUILD_DIR)/modules/bootstrap.server
 USER_CRT0_OBJ := $(BUILD_DIR)/user/crt0.S.o
 BOOTSTRAP_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o
@@ -427,22 +430,41 @@ test-riscv64-user-abi: $(RISCV64_USER_ABI_MODULE)
 riscv64-muslcc-toolchain:
 	sh tools/setup-riscv64-muslcc.sh $(RISCV64_MUSLCC_PREFIX)
 
-$(RISCV64_BOOTPKG): $(RISCV64_USER_ABI_MODULE) tools/build-riscv64-bootpkg.sh
-	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
-		$(RISCV64_USER_ABI_MODULE) abi-smoke.user
+$(RISCV64_MUSLCC_GCC): tools/setup-riscv64-muslcc.sh
+	sh tools/setup-riscv64-muslcc.sh $(RISCV64_MUSLCC_PREFIX)
 
-$(RISCV64_BOOTPKG_MULTI): $(RISCV64_USER_ABI_MODULE) tools/build-riscv64-bootpkg.sh
+$(RISCV64_MUSL_HELLO_MODULE): user/musl-hello/main.c $(RISCV64_MUSLCC_GCC) Makefile
+	mkdir -p $(dir $@)
+	$(RISCV64_CC) --target=riscv64-linux-musl -march=rv64gc -mabi=lp64d \
+		-isystem $(RISCV64_MUSLCC_SYSROOT)/include \
+		-static -fuse-ld=/usr/bin/$(RISCV64_LD) \
+		-B $(RISCV64_MUSLCC_SYSROOT)/lib \
+		-B $(RISCV64_MUSLCC_GCC_LIBDIR) \
+		-L $(RISCV64_MUSLCC_SYSROOT)/lib \
+		-L $(RISCV64_MUSLCC_GCC_LIBDIR) \
+		-O2 -g $< -o $@
+	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
+
+$(RISCV64_BOOTPKG): $(RISCV64_USER_ABI_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
+	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
+		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
+		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
+
+$(RISCV64_BOOTPKG_MULTI): $(RISCV64_USER_ABI_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_USER_ABI_MODULE) disk0 \
-		$(RISCV64_USER_ABI_MODULE) abi-smoke.user
+		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
+		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
 
 test-riscv64-bootpkg: $(RISCV64_BOOTPKG) $(RISCV64_BOOTPKG_MULTI)
 	grep -aF "BUNIX-RV64-BOOTPKG" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "cmdline $(RISCV64_KERNEL_CMDLINE)" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG) >/dev/null
+	grep -aF "module /bin/musl-hello" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "cmdline $(RISCV64_KERNEL_CMDLINE)" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module disk0" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG_MULTI) >/dev/null
+	grep -aF "module /bin/musl-hello" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 
 $(BOOTSTRAP_MODULE): $(BOOTSTRAP_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)
