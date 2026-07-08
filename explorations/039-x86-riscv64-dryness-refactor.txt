@@ -38,7 +38,7 @@ Tasks:
       Linux tasks without a fixed single-task cache.
 - [ ] Unify server module build/package rules where the only difference is
       target triple, crt0, or linker mode.
-- [ ] Factor freestanding userspace runtime support such as `memcpy`,
+- [x] Factor freestanding userspace runtime support such as `memcpy`,
       `memset`, and future compiler-emitted helper symbols into a shared user
       support object instead of carrying one-off definitions in individual
       servers.
@@ -112,3 +112,15 @@ Progress notes:
     - `make test-boot-riscv64-early`
     - `make test-boot-riscv64-alpine`
     - `git diff --check`
+- Riscv64 freestanding user-runtime slice:
+  - Added a single `RISCV64_USER_CRT0_OBJ` build rule instead of recompiling
+    `user/crt0-riscv64.S` inside every riscv64 server/module rule.
+  - Promoted `user/runtime/string.c` to the explicit
+    `RISCV64_USER_RUNTIME_OBJS` list and linked it into every riscv64
+    freestanding server/ABI module, not only the modules that had already
+    tripped compiler-emitted string helper references.
+  - Left the larger module-rule/package-rule unification task open; this slice
+    only normalized startup/runtime support.
+  - Verification:
+    - `make test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build`
+    - `make test-boot-riscv64-alpine`

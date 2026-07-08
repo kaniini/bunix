@@ -71,7 +71,9 @@ RISCV64_UNIONFS_MODULE := $(BUILD_DIR)/riscv64/modules/unionfs.server
 RISCV64_BOOTSTRAP_MODULE := $(BUILD_DIR)/riscv64/modules/bootstrap.server
 RISCV64_SMOKE_SQUASHFS_IMAGE := $(BUILD_DIR)/riscv64/disk0.sqfs
 RISCV64_ALPINE_SQUASHFS_IMAGE := $(BUILD_DIR)/riscv64/alpine-rootfs.sqfs
+RISCV64_USER_CRT0_OBJ := $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
 RISCV64_USER_STRING_OBJ := $(BUILD_DIR)/riscv64/user/runtime/string.c.o
+RISCV64_USER_RUNTIME_OBJS := $(RISCV64_USER_STRING_OBJ)
 BOOTSTRAP_MODULE := $(BUILD_DIR)/modules/bootstrap.server
 USER_CRT0_OBJ := $(BUILD_DIR)/user/crt0.S.o
 BOOTSTRAP_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o
@@ -441,19 +443,23 @@ $(BUILD_DIR)/user/%.S.o: user/%.S
 	mkdir -p $(dir $@)
 	$(CC) $(USER_ASFLAGS) -c $< -o $@
 
-$(RISCV64_USER_ABI_MODULE): user/crt0-riscv64.S user/riscv64-abi/main.c user/user.ld user/include/bunix/syscall.h Makefile
+$(RISCV64_USER_CRT0_OBJ): user/crt0-riscv64.S user/include/bunix/syscall.h Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-g -ffreestanding -fno-pic -fno-pie -Iuser/include -MMD -MP \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
+		-c user/crt0-riscv64.S -o $@
+
+$(RISCV64_USER_ABI_MODULE): $(RISCV64_USER_CRT0_OBJ) user/riscv64-abi/main.c user/user.ld user/include/bunix/syscall.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
+	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 		-fno-pic -fno-pie -fno-builtin -Iuser/include \
 		-Wall -Wextra -Werror -MMD -MP \
 		-c user/riscv64-abi/main.c -o $(BUILD_DIR)/riscv64/user/riscv64-abi.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
-		$(BUILD_DIR)/riscv64/user/riscv64-abi.c.o
+		$(RISCV64_USER_CRT0_OBJ) \
+		$(BUILD_DIR)/riscv64/user/riscv64-abi.c.o \
+		$(RISCV64_USER_RUNTIME_OBJS)
 
 test-riscv64-user-abi: $(RISCV64_USER_ABI_MODULE)
 	$(RISCV64_READELF) -h $(RISCV64_USER_ABI_MODULE) | grep -F "RISC-V" >/dev/null
@@ -507,80 +513,64 @@ $(RISCV64_MUSL_LDSO): $(RISCV64_MUSLCC_GCC)
 	cp $(RISCV64_MUSL_LDSO_SOURCE) $@
 	chmod 0555 $@
 
-$(RISCV64_SHARED_LINUX_SERVER_MODULE): user/crt0-riscv64.S user/linux/main.c user/user.ld user/include/bunix/syscall.h Makefile
+$(RISCV64_SHARED_LINUX_SERVER_MODULE): $(RISCV64_USER_CRT0_OBJ) user/linux/main.c user/user.ld user/include/bunix/syscall.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
 		-c user/linux/main.c -o $(BUILD_DIR)/riscv64/user/linux-shared.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
-		$(BUILD_DIR)/riscv64/user/linux-shared.c.o
+		$(RISCV64_USER_CRT0_OBJ) \
+		$(BUILD_DIR)/riscv64/user/linux-shared.c.o \
+		$(RISCV64_USER_RUNTIME_OBJS)
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
-$(RISCV64_NAMES_MODULE): user/crt0-riscv64.S user/names/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h Makefile
+$(RISCV64_NAMES_MODULE): $(RISCV64_USER_CRT0_OBJ) user/names/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
 		-c user/names/main.c -o $(BUILD_DIR)/riscv64/user/names.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
-		$(BUILD_DIR)/riscv64/user/names.c.o
+		$(RISCV64_USER_CRT0_OBJ) \
+		$(BUILD_DIR)/riscv64/user/names.c.o \
+		$(RISCV64_USER_RUNTIME_OBJS)
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
-$(RISCV64_TIME_MODULE): user/crt0-riscv64.S user/time/main.c user/user.ld user/include/bunix/syscall.h Makefile
+$(RISCV64_TIME_MODULE): $(RISCV64_USER_CRT0_OBJ) user/time/main.c user/user.ld user/include/bunix/syscall.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
 		-c user/time/main.c -o $(BUILD_DIR)/riscv64/user/time.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
-		$(BUILD_DIR)/riscv64/user/time.c.o
+		$(RISCV64_USER_CRT0_OBJ) \
+		$(BUILD_DIR)/riscv64/user/time.c.o \
+		$(RISCV64_USER_RUNTIME_OBJS)
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
-$(RISCV64_USER_MODULE): user/crt0-riscv64.S user/user/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h Makefile
+$(RISCV64_USER_MODULE): $(RISCV64_USER_CRT0_OBJ) user/user/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
 		-c user/user/main.c -o $(BUILD_DIR)/riscv64/user/user.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
-		$(BUILD_DIR)/riscv64/user/user.c.o
+		$(RISCV64_USER_CRT0_OBJ) \
+		$(BUILD_DIR)/riscv64/user/user.c.o \
+		$(RISCV64_USER_RUNTIME_OBJS)
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
-$(RISCV64_PROC_MODULE): user/crt0-riscv64.S user/proc/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_STRING_OBJ) Makefile
+$(RISCV64_PROC_MODULE): $(RISCV64_USER_CRT0_OBJ) user/proc/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
 		-c user/proc/main.c -o $(BUILD_DIR)/riscv64/user/proc.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
+		$(RISCV64_USER_CRT0_OBJ) \
 		$(BUILD_DIR)/riscv64/user/proc.c.o \
-		$(RISCV64_USER_STRING_OBJ)
+		$(RISCV64_USER_RUNTIME_OBJS)
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
 $(RISCV64_USER_STRING_OBJ): user/runtime/string.c Makefile
@@ -590,101 +580,78 @@ $(RISCV64_USER_STRING_OBJ): user/runtime/string.c Makefile
 		-fno-pic -fno-pie -fno-builtin -Wall -Wextra -Werror \
 		-c user/runtime/string.c -o $@
 
-$(RISCV64_BLOCK_MODULE): user/crt0-riscv64.S user/block/main.c user/user.ld user/include/bunix/syscall.h $(RISCV64_USER_STRING_OBJ) Makefile
+$(RISCV64_BLOCK_MODULE): $(RISCV64_USER_CRT0_OBJ) user/block/main.c user/user.ld user/include/bunix/syscall.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
 		-c user/block/main.c -o $(BUILD_DIR)/riscv64/user/block.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
+		$(RISCV64_USER_CRT0_OBJ) \
 		$(BUILD_DIR)/riscv64/user/block.c.o \
-		$(RISCV64_USER_STRING_OBJ)
+		$(RISCV64_USER_RUNTIME_OBJS)
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
-$(RISCV64_VFS_MODULE): user/crt0-riscv64.S user/vfs/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_STRING_OBJ) Makefile
+$(RISCV64_VFS_MODULE): $(RISCV64_USER_CRT0_OBJ) user/vfs/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
 		-c user/vfs/main.c -o $(BUILD_DIR)/riscv64/user/vfs.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
+		$(RISCV64_USER_CRT0_OBJ) \
 		$(BUILD_DIR)/riscv64/user/vfs.c.o \
-		$(RISCV64_USER_STRING_OBJ)
+		$(RISCV64_USER_RUNTIME_OBJS)
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
-$(RISCV64_TMPFS_MODULE): user/crt0-riscv64.S user/tmpfs/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_STRING_OBJ) Makefile
+$(RISCV64_TMPFS_MODULE): $(RISCV64_USER_CRT0_OBJ) user/tmpfs/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
 		-c user/tmpfs/main.c -o $(BUILD_DIR)/riscv64/user/tmpfs.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
+		$(RISCV64_USER_CRT0_OBJ) \
 		$(BUILD_DIR)/riscv64/user/tmpfs.c.o \
-		$(RISCV64_USER_STRING_OBJ)
+		$(RISCV64_USER_RUNTIME_OBJS)
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
-$(RISCV64_SQUASHFS_MODULE): user/crt0-riscv64.S user/squashfs/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_STRING_OBJ) Makefile
+$(RISCV64_SQUASHFS_MODULE): $(RISCV64_USER_CRT0_OBJ) user/squashfs/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
 		-c user/squashfs/main.c -o $(BUILD_DIR)/riscv64/user/squashfs.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
+		$(RISCV64_USER_CRT0_OBJ) \
 		$(BUILD_DIR)/riscv64/user/squashfs.c.o \
-		$(RISCV64_USER_STRING_OBJ)
+		$(RISCV64_USER_RUNTIME_OBJS)
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
-$(RISCV64_UNIONFS_MODULE): user/crt0-riscv64.S user/unionfs/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_STRING_OBJ) Makefile
+$(RISCV64_UNIONFS_MODULE): $(RISCV64_USER_CRT0_OBJ) user/unionfs/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
 		-c user/unionfs/main.c -o $(BUILD_DIR)/riscv64/user/unionfs.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
+		$(RISCV64_USER_CRT0_OBJ) \
 		$(BUILD_DIR)/riscv64/user/unionfs.c.o \
-		$(RISCV64_USER_STRING_OBJ)
+		$(RISCV64_USER_RUNTIME_OBJS)
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
 test-riscv64-fs-server-build: $(RISCV64_BLOCK_MODULE) $(RISCV64_VFS_MODULE) $(RISCV64_TMPFS_MODULE) $(RISCV64_SQUASHFS_MODULE) $(RISCV64_UNIONFS_MODULE)
 
-$(RISCV64_BOOTSTRAP_MODULE): user/crt0-riscv64.S user/riscv64-bootstrap/main.c user/user.ld user/include/bunix/syscall.h Makefile
+$(RISCV64_BOOTSTRAP_MODULE): $(RISCV64_USER_CRT0_OBJ) user/riscv64-bootstrap/main.c user/user.ld user/include/bunix/syscall.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
 		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
 		-c user/riscv64-bootstrap/main.c -o $(BUILD_DIR)/riscv64/user/riscv64-bootstrap.c.o
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
-		$(BUILD_DIR)/riscv64/user/riscv64-bootstrap.c.o
+		$(RISCV64_USER_CRT0_OBJ) \
+		$(BUILD_DIR)/riscv64/user/riscv64-bootstrap.c.o \
+		$(RISCV64_USER_RUNTIME_OBJS)
 
 $(RISCV64_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_PROC_MODULE) $(RISCV64_BLOCK_MODULE) $(RISCV64_VFS_MODULE) $(RISCV64_SQUASHFS_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_SMOKE_SQUASHFS_IMAGE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
