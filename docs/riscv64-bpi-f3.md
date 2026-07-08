@@ -159,9 +159,10 @@ Operator setup:
   interrupt-routing path/compatible in the exploration notes.
 
 The command recipe intentionally prints U-Boot `bdinfo`, `/chosen`,
-`/aliases`, and `/cpus` before entering Bunix.  Those preboot diagnostics give
-the board-specific evidence needed to compare firmware DT handoff with the
-Bunix FDT parser output.
+root `model` and `compatible`, `/chosen`, `/aliases`, and `/cpus` before
+entering Bunix.  Those preboot diagnostics give the board-specific evidence
+needed to identify the firmware DT and compare its handoff with the Bunix FDT
+parser output.
 
 Expected first milestone serial markers:
 

@@ -530,6 +530,8 @@ $(RISCV64_BPI_F3_MANIFEST): $(RISCV64_KERNEL) $(RISCV64_BOOTPKG) Makefile
 		'setenv bunix_initrd_addr 0x94000000' \
 		'bdinfo' \
 		'fdt addr $${fdtcontroladdr}' \
+		'fdt print / model' \
+		'fdt print / compatible' \
 		'fdt print /chosen' \
 		'fdt print /aliases' \
 		'fdt print /cpus' \
@@ -552,6 +554,8 @@ test-riscv64-bpi-f3-artifacts: riscv64-bpi-f3-artifacts
 	grep -aF "BUNIX-RV64-BOOTPKG" $(RISCV64_BPI_F3_BOOTPKG) >/dev/null
 	grep -aF "bootelf -d" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
 	grep -aF "bdinfo" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
+	grep -aF "fdt print / model" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
+	grep -aF "fdt print / compatible" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
 	grep -aF "fdt print /aliases" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
 	grep -aF "fdt print /cpus" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
 	grep -aF "linux,initrd-start" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null

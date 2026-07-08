@@ -135,6 +135,8 @@ check_preboot_log() {
 
 	require_file "$log"
 	require_marker "$log" "bdinfo"
+	require_marker "$log" "model"
+	require_marker "$log" "compatible"
 	require_marker "$log" "fdt print /chosen"
 	require_marker "$log" "fdt print /aliases"
 	require_marker "$log" "fdt print /cpus"
@@ -421,6 +423,10 @@ EOF
 	check_log "$tmp" >/dev/null
 	cat >"$preboot" <<EOF
 bdinfo
+fdt print / model
+	model = "Banana Pi BPI-F3";
+fdt print / compatible
+	compatible = "bananapi,bpi-f3", "spacemit,k1";
 fdt print /chosen
 	stdout-path = "serial0:115200n8";
 fdt print /aliases

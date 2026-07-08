@@ -366,3 +366,20 @@ Verification notes:
 - `make test-riscv64-bpi-f3-emulator-gate` passed after adding negative
   BPI-F3 log evidence tests.
 - `git diff --check` passed after adding negative BPI-F3 log evidence tests.
+- Added firmware-DT identity evidence to the BPI-F3 preboot capture:
+  - `boot-bunix-bpi-f3.cmd` now prints root `model` and `compatible`
+    properties before entering Bunix.
+  - `tools/bpi-f3-smoke.sh --check-preboot-log` now requires those markers,
+    so a physical-board review log identifies the firmware DT used for the
+    run instead of only proving that `/chosen`, aliases, and CPU data were
+    printed.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding firmware-DT identity
+  evidence to the BPI-F3 preboot capture.
+- `make test-riscv64-bpi-f3-artifacts` passed after adding firmware-DT
+  identity evidence to the BPI-F3 preboot capture.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding firmware-DT
+  identity evidence to the BPI-F3 preboot capture.
+- `make test-riscv64-bpi-f3-emulator-gate` passed after adding firmware-DT
+  identity evidence to the BPI-F3 preboot capture.
+- `git diff --check` passed after adding firmware-DT identity evidence to the
+  BPI-F3 preboot capture.
