@@ -58,7 +58,6 @@ RISCV64_MUSL_HELLO_MODULE := $(BUILD_DIR)/riscv64/modules/musl-hello.user
 RISCV64_SYSCALL_SMOKE_MODULE := $(BUILD_DIR)/riscv64/modules/rv64-syscall-smoke.user
 RISCV64_DYN_HELLO_MODULE := $(BUILD_DIR)/riscv64/modules/dyn-hello.user
 RISCV64_MUSL_LDSO := $(BUILD_DIR)/riscv64/modules/ld-musl-riscv64.so.1
-RISCV64_LINUX_SERVER_MODULE := $(BUILD_DIR)/riscv64/modules/linux.server
 RISCV64_SHARED_LINUX_SERVER_MODULE := $(BUILD_DIR)/riscv64/modules/linux-shared.server
 RISCV64_NAMES_MODULE := $(BUILD_DIR)/riscv64/modules/names.server
 RISCV64_TIME_MODULE := $(BUILD_DIR)/riscv64/modules/time.server
@@ -508,20 +507,6 @@ $(RISCV64_MUSL_LDSO): $(RISCV64_MUSLCC_GCC)
 	cp $(RISCV64_MUSL_LDSO_SOURCE) $@
 	chmod 0555 $@
 
-$(RISCV64_LINUX_SERVER_MODULE): user/crt0-riscv64.S user/riscv64-linux/main.c user/user.ld user/include/bunix/syscall.h Makefile
-	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include \
-		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
-	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
-		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
-		-c user/riscv64-linux/main.c -o $(BUILD_DIR)/riscv64/user/riscv64-linux.c.o
-	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
-		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
-		$(BUILD_DIR)/riscv64/user/riscv64-linux.c.o
-
 $(RISCV64_SHARED_LINUX_SERVER_MODULE): user/crt0-riscv64.S user/linux/main.c user/user.ld user/include/bunix/syscall.h Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
@@ -746,13 +731,11 @@ $(RISCV64_ALPINE_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISC
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
 		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux
 
-$(RISCV64_UART_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
+$(RISCV64_UART_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_UART_KERNEL_CMDLINE)" \
 		$(RISCV64_NAMES_MODULE) names \
 		$(RISCV64_BOOTSTRAP_MODULE) bootstrap \
-		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
-		$(RISCV64_LINUX_SERVER_MODULE) linux \
-		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
+		$(RISCV64_USER_ABI_MODULE) abi-smoke.user
 
 test-riscv64-bootpkg: $(RISCV64_BOOTPKG) $(RISCV64_BOOTPKG_MULTI)
 	grep -aF "BUNIX-RV64-BOOTPKG" $(RISCV64_BOOTPKG) >/dev/null
@@ -1613,8 +1596,8 @@ test-boot-riscv64-uart-console: $(RISCV64_UART_BOOTPKG)
 		-initrd $(RISCV64_UART_BOOTPKG) > $(RISCV64_SERIAL_LOG)
 	grep -aF "uart: riscv64 console-driver=ns16550" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootstrap-riscv64: done" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "linux-riscv64-server: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "sbi: system reset poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 
 test-boot-ext2: $(EXT2_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-ext2.txt
 	ESP_DIR=$(EXT2_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

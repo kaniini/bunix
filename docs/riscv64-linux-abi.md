@@ -16,11 +16,11 @@ and the shared Bunix Linux personality server.
 - `tp` is preserved as the riscv64 thread pointer.  Future clone/TLS work must
   update `tp` through architecture state, not through Linux server policy.
 
-The default bringup path now translates the static-musl smoke syscall subset
-into shared `LINX` messages handled by `user/linux/main.c`.  The old
-`BUNIX_LINUX_RISCV64_SYSCALL` action protocol remains only for the narrower
-UART console smoke and should be deleted when that package no longer uses
-`user/riscv64-linux/main.c`.
+The default bringup path translates the static-musl, dynamic-loader, and
+Alpine shell smoke syscall subsets into shared `LINX` messages handled by
+`user/linux/main.c`.  The old `BUNIX_LINUX_RISCV64_SYSCALL` action protocol
+and `user/riscv64-linux/main.c` stub have been removed; UART console smoke is
+now native-only and does not launch a Linux personality server.
 
 ## Target boundary
 
@@ -71,14 +71,15 @@ The first shared-server riscv64 smoke should support at least:
 - `gettid` -> `BUNIX_LINUX_GETTID`
 - `exit` and `exit_group` -> `BUNIX_LINUX_EXIT_GROUP`
 
-Dynamic-linker coverage must add the syscalls observed from
+Dynamic-linker coverage now exercises the syscalls observed from
 `ld-musl-riscv64.so.1`, especially `openat(2)` and correct `fstat(2)`
-behavior.
+behavior.  The current implementation is still switch-based; the next cleanup
+step is to move those mappings into a table-driven frontend boundary.
 
 ## Refactor rule
 
-Do not add more semantics to `user/riscv64-linux/main.c`.  New riscv64 Linux
-syscall work should either:
+Do not reintroduce a separate riscv64 Linux server.  New riscv64 Linux syscall
+work should either:
 
 - add a riscv64 frontend translation into the existing shared Linux protocol,
   or

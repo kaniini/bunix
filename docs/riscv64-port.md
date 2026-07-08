@@ -252,11 +252,11 @@ stdout/stderr writes are also mirrored to the early SBI console because the
 package still omits the real console server.  That early-console mirror is a
 smoke-test aid, not the future Alpine console model.
 
-The old `user/riscv64-linux/main.c` stub still exists for the narrower UART
-smoke package, and the riscv64 syscall frontend explicitly selects that
-legacy action protocol when the command line contains `riscv64-uart-console`.
-The default riscv64 boot package no longer uses that stub for the static musl
-hello path.
+The old `user/riscv64-linux/main.c` stub and its private action protocol have
+been removed.  The narrower UART smoke package no longer launches Linux at
+all; it proves UART early console output plus native user launch and exits
+through the native machine poweroff syscall.  All riscv64 Linux-personality
+boot paths use the shared Linux server built from `user/linux/main.c`.
 
 The shared `proc` server now has initial riscv64 build coverage.  When built
 for riscv64, it accepts `EM_RISCV` ELF images instead of x86_64 images, and

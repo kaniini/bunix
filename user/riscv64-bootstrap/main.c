@@ -224,10 +224,17 @@ int main(void)
 	const char hello_fail[] = "bootstrap-riscv64: musl-hello failed\n";
 	const char done[] = "bootstrap-riscv64: done\n";
 	const int alpine_test = bunix_cmdline_has("riscv64-alpine-test") > 0;
+	const int uart_console_test =
+		bunix_cmdline_has("riscv64-uart-console") > 0;
 
 	log_line(online, sizeof(online) - 1);
 	launch_or_log("abi-smoke.user", abi_ok, sizeof(abi_ok) - 1,
 		      abi_fail, sizeof(abi_fail) - 1);
+	if (uart_console_test) {
+		log_line(done, sizeof(done) - 1);
+		(void)bunix_machine_poweroff(0);
+		return 0;
+	}
 	const struct bunix_launch_cap fs_caps[] = {
 		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
 		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },

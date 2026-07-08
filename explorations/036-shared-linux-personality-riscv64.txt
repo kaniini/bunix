@@ -45,24 +45,24 @@ Tasks:
       shared Linux server, such as launching `names` before `linux` or adding
       a tightly scoped temporary bridge that does not become a second names
       implementation.
-- [ ] Update the riscv64 bootstrap smoke so it waits for the shared Linux
+- [x] Update the riscv64 bootstrap smoke so it waits for the shared Linux
       server to become usable before launching `/bin/musl-hello`.
-- [ ] Delete or retire `user/riscv64-linux/main.c` after the shared server can
+- [x] Delete or retire `user/riscv64-linux/main.c` after the shared server can
       run the static riscv64 musl smoke.
-- [ ] Remove `BUNIX_LINUX_RISCV64_SYSCALL` and
+- [x] Remove `BUNIX_LINUX_RISCV64_SYSCALL` and
       `BUNIX_LINUX_RISCV64_ACTION_*` once no path uses the action protocol.
-- [ ] Add a riscv64 static-musl shared-Linux smoke target that proves the
+- [x] Add a riscv64 static-musl shared-Linux smoke target that proves the
       module log identifies the shared Linux server, not the old stub.
-- [ ] Keep the exploration-035 dynamic-loader smoke passing while deleting
+- [x] Keep the exploration-035 dynamic-loader smoke passing while deleting
       the temporary action protocol and old riscv64 Linux stub.
 - [ ] Run a narrow x86_64 smoke target to prove the Linux server split did not
       regress the mature path.
 
 Verification:
 
-- [ ] `make ARCH=riscv64 all`
-- [ ] Existing `make test-boot-riscv64-early`
-- [ ] New riscv64 shared-Linux static-musl smoke target
+- [x] `make ARCH=riscv64 all`
+- [x] Existing `make test-boot-riscv64-early`
+- [x] New riscv64 shared-Linux static-musl smoke target
 - [ ] Narrow x86_64 Linux-server smoke chosen during implementation
 - [ ] `git diff --check`
 
@@ -96,3 +96,19 @@ Progress notes:
   enough for smoke coverage, including `openat(2)` and `fstat(2)`.  This
   exploration should treat that as a working baseline and refactor it into a
   real riscv64 syscall ABI table rather than adding more one-off switch cases.
+- Retired the last bringup-only riscv64 Linux server path:
+  - Deleted `user/riscv64-linux/main.c`.
+  - Removed the `BUNIX_LINUX_RISCV64_SYSCALL` and
+    `BUNIX_LINUX_RISCV64_ACTION_*` protocol IDs.
+  - Removed the command-line-gated legacy syscall dispatcher from
+    `arch/riscv64/user.c`.
+  - Narrowed `test-boot-riscv64-uart-console` back to UART/native-user smoke
+    so it no longer carries or depends on any Linux personality server.
+  - The default early and Alpine riscv64 paths continue to use the shared
+    Linux server and still prove static musl, syscall-heavy static, dynamic
+    loader, and Alpine shell execution.
+- Verification for the legacy server retirement slice:
+  - `make ARCH=riscv64 all`
+  - `make test-boot-riscv64-uart-console`
+  - `make test-boot-riscv64-alpine`
+  - `make test-boot-riscv64-early`

@@ -64,9 +64,6 @@ enum {
 	LINUX_RISCV64_MUNMAP = 215,
 	LINUX_RISCV64_MMAP = 222,
 	LINUX_RISCV64_MPROTECT = 226,
-	LINUX_RISCV64_RPC_SYSCALL = 1010,
-	LINUX_RISCV64_ACTION_WRITE = 1,
-	LINUX_RISCV64_ACTION_EXIT = 2,
 	LINUX_SHARED_READ = 0,
 	LINUX_SHARED_GETPID = 39,
 	LINUX_SHARED_GETUID = 102,
@@ -1451,58 +1448,12 @@ static u64 linux_exit_current(struct ipc_port *linux, struct ipc_port *reply_por
 	thread_exit();
 }
 
-static u64 linux_riscv64_legacy_syscall_dispatch(struct arch_syscall_frame *frame)
-{
-	struct ipc_port *linux = ipc_port_find("linux");
-	struct ipc_port *reply_port = task_reply_port(task_current());
-	struct ipc_message request = {
-		.protocol = USER_FOURCC_LINX,
-		.type = LINUX_RISCV64_RPC_SYSCALL,
-		.sender = 0,
-		.cap_rights = 0,
-		.reply_port = reply_port,
-		.cap_type = IPC_CAP_NONE,
-		.cap_object = 0,
-		.words = { frame->number, frame->arg0, frame->arg1,
-			   frame->arg2 },
-	};
-	struct ipc_message reply;
-	u64 result;
-
-	if (linux == 0 || reply_port == 0 ||
-	    ipc_send(linux, &request) != 0 ||
-	    ipc_recv(reply_port, &reply) != 0) {
-		console_printf("linux-riscv64: legacy server unavailable syscall=%u pc=%p\n",
-			       (u32)frame->number,
-			       (const void *)frame->user_pc);
-		return (u64)-LINUX_ENOSYS;
-	}
-
-	result = reply.words[0];
-	if (reply.words[1] == LINUX_RISCV64_ACTION_WRITE &&
-	    frame->number == LINUX_RISCV64_WRITE && (i64)result > 0) {
-		early_console_write_user(frame->arg1, result);
-	} else if (reply.words[1] == LINUX_RISCV64_ACTION_EXIT &&
-		   (frame->number == LINUX_RISCV64_EXIT ||
-		    frame->number == LINUX_RISCV64_EXIT_GROUP)) {
-		console_printf("linux-riscv64: exit_group status=%u\n",
-			       (u32)frame->arg0);
-		ipc_message_release(&reply);
-		thread_exit();
-	}
-	ipc_message_release(&reply);
-	return result;
-}
-
 static u64 linux_riscv64_syscall_dispatch(struct arch_syscall_frame *frame)
 {
 	struct ipc_port *linux = ipc_port_find("linux");
 	struct ipc_port *reply_port = task_reply_port(task_current());
 	u64 registered;
 
-	if (kernel_cmdline_has("riscv64-uart-console")) {
-		return linux_riscv64_legacy_syscall_dispatch(frame);
-	}
 	if (linux == 0 || reply_port == 0) {
 		console_printf("linux-riscv64: server unavailable syscall=%u pc=%p\n",
 			       (u32)frame->number,
