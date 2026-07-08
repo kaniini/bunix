@@ -6,6 +6,9 @@ Status:
   `034-riscv64-emulator-userspace-parity.txt` is complete, its full emulator
   verification passes, and the QEMU `virt` path can boot scheduler-owned
   native userspace plus the static riscv64 musl/Linux-personality smoke.
+  "Works in the emulator" means the whole 034 exploration is closed; partial
+  early-boot, kernel-only, or native-smoke-only success does not unblock this
+  board port.
 
 Problem:
 
