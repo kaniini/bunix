@@ -58,11 +58,11 @@ Tasks:
       Bunix userspace server execution with a riscv64 crt0.
 - [x] Define riscv64 Bunix syscall entry for native Bunix programs, including
       negative Bunix syscall IDs and register ABI documentation.
-- [ ] Decide the riscv64 Linux-personality ABI slice: static riscv64 musl ELF
+- [x] Decide the riscv64 Linux-personality ABI slice: static riscv64 musl ELF
       loading first, then enough Linux syscalls for a `musl-hello` equivalent.
 - [ ] Add riscv64 rootfs/module packaging rules and QEMU smoke tests that end
       in guest poweroff.
-- [ ] Add documentation for unsupported riscv64 features after initial bringup:
+- [x] Add documentation for unsupported riscv64 features after initial bringup:
       SMP, FPU/vector context, signals, dynamic linking, VirtIO MMIO devices,
       networking, and Alpine rootfs parity.
 
@@ -192,6 +192,27 @@ Progress notes:
   - This completes the syscall-entry contract, but native userspace task
     launch, page-table activation, and full native syscall implementation are
     still part of the open native server execution task.
+- Documented the riscv64 Linux-personality slice in `docs/riscv64-port.md`:
+  - The first Linux target is a static rv64 musl ELF for
+    `user/musl-hello/main.c`, loaded through the proc/VFS/server path once
+    native riscv64 user task launch exists.
+  - The Linux personality must use riscv64 Linux syscall numbers for
+    non-negative syscall IDs, not the existing x86_64 Linux syscall table.
+  - The initial syscall surface should be only what static musl hello needs:
+    process exit, write, memory setup such as `brk`/`mmap` if required by
+    musl startup, aux vector setup, and the minimal file/proc reads already
+    exercised by the hello test.
+  - Dynamic linking, BusyBox, Alpine rootfs parity, and broader Linux syscall
+    coverage are explicitly later riscv64 slices.
+  - The host currently has riscv64 binutils and QEMU but no riscv64 musl
+    compiler wrapper or libc headers/libraries in the cross sysroot, so the
+    tree should not grow a fake riscv64 musl target until those inputs can
+    produce a real libc-linked ELF.
+- Documented unsupported riscv64 features in `docs/riscv64-port.md`,
+  including SMP, FPU/vector state, signal context, native U-mode task entry
+  with kernel-stack trap transitions, user page tables, Linux signal/syscall
+  parity, dynamic linking, VirtIO MMIO, networking, Alpine rootfs boot, PCI,
+  USB, ACPI, board enumeration, and external interrupt routing.
 - Added riscv64 arch skeleton headers and implementations:
   - `arch/riscv64/include/arch/sbi.h` centralizes the early SBI call ABI and
     console putchar helper used by the early payload and power path.
@@ -303,6 +324,11 @@ Verification so far:
   dispatch.
 - `make all` passed for the default x86_64 target after adding the
   syscall-entry trap dispatch.
+- `command -v riscv64-alpine-linux-musl-gcc` failed; the riscv64 musl compiler
+  wrapper is absent from `PATH`.
+- `find /usr/riscv64-alpine-linux-musl -maxdepth 4 -type f` found riscv64
+  binutils but did not find musl libc headers or libraries for a real static
+  riscv64 musl build.
 - `make ARCH=riscv64 all` passed and linked `build/riscv64/bunixos.kernel`.
 - `make test-boot-riscv64-early` passed.
 - `make all` passed for the default x86_64 target after the riscv64 linker
