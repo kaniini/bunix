@@ -278,7 +278,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso test test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -959,9 +959,17 @@ test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) $(VIRTIO_BLK_TEST_IMAGE) t
 	grep -aF "virtio-blk: write ok" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-blk: flush ok" $(BUILD_DIR)/serial.log >/dev/null
 
+test-boot-virtio-blk-irq: test-boot-virtio-blk
+	grep -aF "virtio-blk: irq ready" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "irq: bind" $(BUILD_DIR)/serial.log >/dev/null
+
 test-boot-virtio-blk-backend:
 	$(MAKE) VIRTIO_BLK_TEST_CMDLINE="log=info virtio-blk-test virtio-blk-block-test" QEMU_TIMEOUT=120s TEST_BOOT_MARKERS=tools/test-boot-markers-virtio-blk-backend.txt test-boot-virtio-blk
 	grep -aF "virtio-blk: block online" $(BUILD_DIR)/serial.log >/dev/null
+
+test-boot-virtio-blk-irq-backend: test-boot-virtio-blk-backend
+	grep -aF "virtio-blk: irq ready" $(BUILD_DIR)/serial.log >/dev/null
+	grep -aF "irq: bind" $(BUILD_DIR)/serial.log >/dev/null
 
 test-shell: $(EFI_BOOT_APP)
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

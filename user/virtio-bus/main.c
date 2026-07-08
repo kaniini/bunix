@@ -15,6 +15,8 @@ enum {
 	PCI_COMMAND_BUS_MASTER = 1 << 2,
 	PCI_STATUS = 0x06,
 	PCI_BAR0 = 0x10,
+	PCI_INTERRUPT_LINE = 0x3c,
+	PCI_INTERRUPT_PIN = 0x3d,
 	PCI_CAP_PTR = 0x34,
 	PCI_STATUS_CAP_LIST = 1 << 4,
 	PCI_CAP_ID_VENDOR = 0x09,
@@ -293,6 +295,15 @@ static u64 pci_bar_grant(u64 bus, u64 slot, u64 function, u64 bar, u64 offset,
 	const u64 packed = (bus & 0xff) | ((slot & 0x1f) << 8) |
 			   ((function & 0x7) << 16) | ((bar & 0x7) << 24);
 	const long handle = bunix_hw_pci_bar_grant(packed, offset, len, ops);
+
+	return handle > 0 ? (u64)handle : 0;
+}
+
+static u64 pci_irq_grant(u64 bus, u64 slot, u64 function, u64 line)
+{
+	const u64 packed = (bus & 0xff) | ((slot & 0x1f) << 8) |
+			   ((function & 0x7) << 16);
+	const long handle = bunix_hw_pci_irq_grant(packed, line);
 
 	return handle > 0 ? (u64)handle : 0;
 }
@@ -690,6 +701,10 @@ static void scan_pci_function(u64 bus, u64 slot, u64 function)
 {
 	const long id = pci_config_read32(bus, slot, function, 0x00);
 	const long class_revision = pci_config_read32(bus, slot, function, 0x08);
+	const long interrupt_line = pci_config_read8(bus, slot, function,
+						    PCI_INTERRUPT_LINE);
+	const long interrupt_pin = pci_config_read8(bus, slot, function,
+						   PCI_INTERRUPT_PIN);
 	struct virtio_bus_device device_record;
 	struct bunix_virtio_device_info *info = &device_record.info;
 	u64 vendor;
@@ -732,6 +747,18 @@ static void scan_pci_function(u64 bus, u64 slot, u64 function)
 	pci_enable_device(bus, slot, function);
 	scan_pci_bars(&device_record, bus, slot, function);
 	scan_virtio_capabilities(&device_record, bus, slot, function);
+	if (interrupt_line > 0 && interrupt_line < 0xff &&
+	    interrupt_pin > 0 && interrupt_pin <= 4) {
+		const u64 ops = BUNIX_DEV_OP_BIND_IRQ |
+				BUNIX_DEV_OP_ACK_IRQ |
+				BUNIX_DEV_OP_MASK_IRQ;
+		const u64 handle = pci_irq_grant(bus, slot, function,
+						 (u64)interrupt_line);
+
+		resource_add(&device_record, BUNIX_DEV_RESOURCE_IRQ, ops,
+			     handle, (u64)interrupt_line, 1,
+			     (u64)interrupt_pin, 0);
+	}
 	record_virtio_resources(&device_record);
 	(void)virtio_common_read_device_features(&device_record,
 						 &info->features.device_features);

@@ -64,6 +64,7 @@ enum task_hw_resource_ops {
 
 enum task_hw_resource_flags {
 	TASK_HW_RESOURCE_OWNED = 1 << 0,
+	TASK_HW_RESOURCE_IRQ_LEVEL_LOW = 1 << 1,
 };
 
 struct task_hw_resource {

@@ -23,6 +23,10 @@ struct virtio_blk_queue {
 	u64 queue_size;
 	u64 next_avail;
 	u64 seen_used;
+	u64 irq_handle;
+	u64 irq_port;
+	u64 irq_index;
+	int irq_enabled;
 	struct bunix_virtio_queue_layout layout;
 };
 
@@ -138,6 +142,59 @@ static u64 virtio_blk_capacity_bytes(u64 device_service, u64 device_index)
 	return sectors * VIRTIO_BLK_SECTOR_SIZE;
 }
 
+static int virtio_blk_bind_irq(u64 device_service, u64 device_index,
+			       struct virtio_blk_queue *queue)
+{
+	struct bunix_msg reply;
+	u64 resource_count;
+	long irq_port;
+
+	if (queue == 0 ||
+	    device_call(device_service, BUNIX_DEV_GET_INFO, device_index,
+			0, 0, &reply) != 0) {
+		return -1;
+	}
+	resource_count = reply.words[1] >> 32;
+	for (u64 i = 0; i < resource_count; i++) {
+		u64 type;
+		u64 ops;
+
+		if (device_call(device_service, BUNIX_DEV_GET_RESOURCE,
+				device_index, i, 0, &reply) != 0) {
+			continue;
+		}
+		type = reply.words[1] & 0xffffu;
+		ops = (reply.words[1] >> 16) & 0xffffu;
+		if (type != BUNIX_DEV_RESOURCE_IRQ ||
+		    (ops & (BUNIX_DEV_OP_BIND_IRQ | BUNIX_DEV_OP_ACK_IRQ |
+			    BUNIX_DEV_OP_MASK_IRQ)) !=
+			    (BUNIX_DEV_OP_BIND_IRQ | BUNIX_DEV_OP_ACK_IRQ |
+			     BUNIX_DEV_OP_MASK_IRQ) ||
+		    reply.cap == 0) {
+			if (reply.cap != 0) {
+				bunix_handle_close(reply.cap);
+			}
+			continue;
+		}
+		irq_port = bunix_port_create("virtio-blk-irq");
+		if (irq_port <= 0) {
+			bunix_handle_close(reply.cap);
+			return -1;
+		}
+		if (bunix_hw_irq_bind(reply.cap, 0, (u64)irq_port) != 0) {
+			bunix_handle_close(reply.cap);
+			bunix_handle_close((u64)irq_port);
+			return -1;
+		}
+		queue->irq_handle = reply.cap;
+		queue->irq_port = (u64)irq_port;
+		queue->irq_index = 0;
+		queue->irq_enabled = 1;
+		return 0;
+	}
+	return -1;
+}
+
 static int virtio_blk_feature_failure_probe(u64 device_service,
 					    u64 device_index)
 {
@@ -217,6 +274,10 @@ static int virtio_blk_queue_from_reply(struct bunix_msg *reply,
 	queue->phys = (u64)phys;
 	queue->next_avail = 0;
 	queue->seen_used = 0;
+	queue->irq_handle = 0;
+	queue->irq_port = 0;
+	queue->irq_index = 0;
+	queue->irq_enabled = 0;
 	return 0;
 }
 
@@ -237,6 +298,85 @@ static int virtio_blk_queue_init(struct virtio_blk_queue *queue)
 		       -1;
 }
 
+static int virtio_blk_completion_done(struct virtio_blk_queue *queue,
+				      u64 req_buffer, u64 status_offset)
+{
+	unsigned short used_idx;
+	unsigned char status;
+
+	if (queue_read_u16(queue->handle, queue->layout.used_offset + 2,
+			   &used_idx) != 0) {
+		return -1;
+	}
+	if (used_idx == (unsigned short)queue->seen_used) {
+		return 1;
+	}
+	queue->seen_used = used_idx;
+	if (bunix_buffer_read(req_buffer, status_offset, &status,
+			      sizeof(status)) != 0) {
+		return -1;
+	}
+	return status == BUNIX_VIRTIO_BLK_S_OK ? 0 : -1;
+}
+
+static int virtio_blk_wait_irq_completion(u64 device_service,
+					  u64 device_index,
+					  struct virtio_blk_queue *queue,
+					  u64 req_buffer,
+					  u64 status_offset)
+{
+	struct bunix_msg message;
+	struct bunix_msg reply;
+	int result;
+
+	result = virtio_blk_completion_done(queue, req_buffer, status_offset);
+	if (result != 1) {
+		return result;
+	}
+	if (bunix_hw_irq_mask(queue->irq_handle, queue->irq_index, 0) != 0) {
+		return -1;
+	}
+	for (;;) {
+		if (bunix_ipc_recv(queue->irq_port, &message) != 0) {
+			return -1;
+		}
+		if (message.protocol != BUNIX_PROTO_HW ||
+		    message.type != BUNIX_HW_EVENT_IRQ) {
+			continue;
+		}
+		if (device_call(device_service, BUNIX_DEV_ACK_INTERRUPT,
+				device_index, 0, 0, &reply) != 0 ||
+		    bunix_hw_irq_ack(queue->irq_handle, queue->irq_index) != 0) {
+			return -1;
+		}
+		result = virtio_blk_completion_done(queue, req_buffer,
+						    status_offset);
+		if (result != 1) {
+			return result;
+		}
+		if (bunix_hw_irq_mask(queue->irq_handle, queue->irq_index, 0) !=
+		    0) {
+			return -1;
+		}
+	}
+}
+
+static int virtio_blk_wait_poll_completion(struct virtio_blk_queue *queue,
+					   u64 req_buffer,
+					   u64 status_offset)
+{
+	for (u64 poll = 0; poll < VIRTIO_BLK_COMPLETION_POLLS; poll++) {
+		const int result =
+			virtio_blk_completion_done(queue, req_buffer,
+						   status_offset);
+		if (result != 1) {
+			return result;
+		}
+		bunix_sleep_ns(1000000ull);
+	}
+	return -1;
+}
+
 static int virtio_blk_submit(u64 device_service, u64 device_index,
 			     struct virtio_blk_queue *queue, u64 req_buffer,
 			     u64 req_phys, u64 type, u64 sector, int has_data,
@@ -251,11 +391,9 @@ static int virtio_blk_submit(u64 device_service, u64 device_index,
 		.reserved = 0,
 		.sector = sector,
 	};
-	unsigned short used_idx;
 	const unsigned short head = 0;
 	unsigned short avail_idx;
 	u64 ring_offset;
-	unsigned char status;
 	u64 status_desc = 1;
 	u64 data_flags = BUNIX_VIRTIO_DESC_F_NEXT;
 
@@ -305,23 +443,13 @@ static int virtio_blk_submit(u64 device_service, u64 device_index,
 			return -1;
 		}
 	}
-	for (u64 poll = 0; poll < VIRTIO_BLK_COMPLETION_POLLS; poll++) {
-		if (queue_read_u16(queue->handle, queue->layout.used_offset + 2,
-				   &used_idx) != 0) {
-			return -1;
-		}
-		if (used_idx != (unsigned short)queue->seen_used) {
-			queue->seen_used = used_idx;
-			if (bunix_buffer_read(req_buffer,
-					      status_offset,
-					      &status, sizeof(status)) != 0) {
-				return -1;
-			}
-			return status == BUNIX_VIRTIO_BLK_S_OK ? 0 : -1;
-		}
-		bunix_sleep_ns(1000000ull);
+	if (queue->irq_enabled) {
+		return virtio_blk_wait_irq_completion(device_service,
+						      device_index, queue,
+						      req_buffer,
+						      status_offset);
 	}
-	return -1;
+	return virtio_blk_wait_poll_completion(queue, req_buffer, status_offset);
 }
 
 static int virtio_blk_selftest(u64 device_service, u64 device_index,
@@ -732,6 +860,8 @@ int main(void)
 	const char feature_fail_ok[] = "virtio-blk: feature fail ok\n";
 	const char negotiated[] = "virtio-blk: negotiated\n";
 	const char queue_ready[] = "virtio-blk: queue ready\n";
+	const char irq_ready[] = "virtio-blk: irq ready\n";
+	const char irq_polling[] = "virtio-blk: irq unavailable, polling\n";
 	const char read_ok[] = "virtio-blk: read ok\n";
 	const char write_ok[] = "virtio-blk: write ok\n";
 	const char flush_ok[] = "virtio-blk: flush ok\n";
@@ -778,6 +908,12 @@ int main(void)
 		return 1;
 	}
 	bunix_console_log(queue_ready, sizeof(queue_ready) - 1);
+	if (virtio_blk_bind_irq(device_service, (u64)device_index,
+				&device.queue) == 0) {
+		bunix_console_log(irq_ready, sizeof(irq_ready) - 1);
+	} else {
+		bunix_console_log(irq_polling, sizeof(irq_polling) - 1);
+	}
 	if (device_call(device_service, BUNIX_DEV_BIND_DRIVER,
 			(u64)device_index, 0, 0, &reply) != 0) {
 		bunix_console_log(no_device, sizeof(no_device) - 1);

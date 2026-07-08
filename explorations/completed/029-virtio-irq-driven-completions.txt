@@ -36,19 +36,19 @@ Tasks:
 - [x] Decide the first x86_64 routing path for VirtIO PCI interrupts: legacy
       INTx via IOAPIC, MSI, or MSI-X.  Prefer the smallest path that can be made
       correct and later extended.
-- [ ] Extend `virtio-bus.server` discovery/resource records to expose usable IRQ
+- [x] Extend `virtio-bus.server` discovery/resource records to expose usable IRQ
       resources for the deterministic `virtio-blk-pci` test device.
-- [ ] Implement kernel/arch IRQ binding and event delivery for granted IRQ
+- [x] Implement kernel/arch IRQ binding and event delivery for granted IRQ
       resources, including masking or coalescing behavior while a userspace
       driver has not acknowledged an event.
-- [ ] Teach `virtio-blk.server` to wait for completion events instead of polling
+- [x] Teach `virtio-blk.server` to wait for completion events instead of polling
       the used ring in interrupt mode, then call `DEV0 ACK_INTERRUPT` and drain
       all completed used-ring entries.
-- [ ] Add a dedicated `test-boot-virtio-blk-irq` target that proves read, write,
+- [x] Add a dedicated `test-boot-virtio-blk-irq` target that proves read, write,
       flush, and rootfs backend boot can complete through interrupt delivery.
-- [ ] Keep the existing polling tests as fallback coverage and document when the
+- [x] Keep the existing polling tests as fallback coverage and document when the
       driver uses polling versus IRQ mode.
-- [ ] Document the ARM porting shape for the same IRQ API with GIC and VirtIO
+- [x] Document the ARM porting shape for the same IRQ API with GIC and VirtIO
       MMIO interrupt resources.
 
 Inventory notes:
@@ -127,3 +127,57 @@ First x86_64 routing decision:
   metadata, then map it to a GSI using the deterministic QEMU PCI topology and
   MADT/ACPI routing data available in the first implementation.  MSI/MSI-X
   remains future work after the INTx path proves the userspace event model.
+
+Implementation notes:
+
+- The x86_64 IDT now reserves vectors 66-95 for device IRQ delivery.  MADT
+  parsing records IOAPIC entries and ISA interrupt-source overrides alongside
+  the existing LAPIC discovery.
+- Native PCI resource syscalls now include an IRQ grant path for VirtIO PCI
+  devices.  The grant validates interrupt line/pin metadata, applies MADT
+  source overrides where present, and returns a scoped IRQ hardware resource
+  with bind, ack, and mask operations.
+- PCI hardware resources granted to `virtio-bus.server` include `DUP` authority
+  so the bus manager can intentionally delegate BAR and IRQ resource caps over
+  the device protocol.  Drivers still receive only the specific resource caps
+  returned by `BUNIX_DEV_GET_RESOURCE`.
+- IRQ binding configures an IOAPIC redirection entry to a reserved device
+  vector and starts the line masked.  Device delivery masks the line, coalesces
+  repeats while an event is pending, queues a `HWR0`/`BUNIX_HW_EVENT_IRQ`
+  message to the bound port, and EOIs the LAPIC.
+- `virtio-bus.server` publishes a `BUNIX_DEV_RESOURCE_IRQ` record for VirtIO
+  PCI functions with valid interrupt line/pin metadata.
+- `virtio-blk.server` creates a private IRQ port, binds the IRQ resource, and
+  waits on IRQ events for completions.  On each event it acknowledges the
+  VirtIO ISR via `BUNIX_DEV_ACK_INTERRUPT`, acknowledges the generic IRQ
+  resource, drains the used ring, and unmasks the IRQ only when another
+  completion is still needed.
+- The old bounded polling completion loop remains as fallback coverage when no
+  IRQ resource is exposed or binding fails.  `test-boot-virtio-blk` continues to
+  cover the normal read/write/flush path, while `test-boot-virtio-blk-irq` and
+  `test-boot-virtio-blk-irq-backend` assert that IRQ mode was actually enabled
+  by checking `virtio-blk: irq ready` and `irq: bind`.
+
+ARM porting shape:
+
+- Keep the native driver API unchanged: IRQ resources remain opaque hardware
+  handles with `bind`, `mask`, and `ack` operations, and events are still
+  delivered as `HWR0` IPC messages.
+- On ARM, the architecture backend should map a granted IRQ resource to a GIC
+  SPI/PPI identity instead of an x86 GSI/vector.  Binding should program GICD
+  target/priority/enable state and start masked until the driver unmasks it.
+- VirtIO MMIO discovery should publish the platform interrupt from the device
+  tree or ACPI resource as `BUNIX_DEV_RESOURCE_IRQ`, using the same device
+  resource type and op bits as the PCI path.
+- Driver code should not need to know whether the interrupt came from IOAPIC,
+  MSI/MSI-X, GIC, or a future interrupt controller; only the bus/platform
+  server and arch IRQ backend should change.
+
+Verification:
+
+- `make test-boot-virtio-blk-irq` passed, including read/write/flush checks and
+  assertions for `virtio-blk: irq ready` and `irq: bind`.
+- `make test-boot-virtio-blk-irq-backend` passed, proving the block backend
+  path can come online while the block driver is using IRQ completions.
+- `BUNIX_TEST_RETRIES=1 make test` passed with run
+  `20260708T024523Z-11880`: 20 shards launched, 0 skipped, all shards passed.

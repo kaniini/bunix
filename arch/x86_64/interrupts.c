@@ -5,6 +5,7 @@
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
+#include "spinlock.h"
 #include "vm.h"
 
 enum {
@@ -25,9 +26,21 @@ enum {
 	IRQ_TIMER_VECTOR = 32,
 	IRQ_SCHED_IPI_VECTOR = 64,
 	IRQ_LAPIC_TIMER_VECTOR = 65,
+	IRQ_DEVICE_VECTOR_BASE = 66,
+	IRQ_DEVICE_VECTOR_COUNT = 30,
+
+	IOAPIC_REG_SELECT = 0x00,
+	IOAPIC_REG_WINDOW = 0x10,
+	IOAPIC_REDIR_BASE = 0x10,
+	IOAPIC_REDIR_MASKED = 1 << 16,
+	IOAPIC_REDIR_TRIGGER_LEVEL = 1 << 15,
+	IOAPIC_REDIR_POLARITY_LOW = 1 << 13,
+	IOAPIC_REDIR_DELIVERY_FIXED = 0,
 
 	USER_FOURCC_LINX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
+	USER_FOURCC_HW = ('H') | ('W' << 8) | ('R' << 16) | ('0' << 24),
 	LINUX_RPC_TASK_FAULT = 1009,
+	HW_EVENT_IRQ = 14,
 
 	TASK_FAULT_ACCESS_READ = 1,
 	TASK_FAULT_ACCESS_WRITE = 2,
@@ -111,6 +124,23 @@ struct idt_ptr {
 
 static struct idt_entry idt[IDT_ENTRIES];
 static volatile u64 timer_ticks;
+static struct spinlock irq_lock = SPINLOCK_INIT("irq");
+
+struct irq_binding {
+	u32 active;
+	u32 gsi;
+	u32 input;
+	u32 vector;
+	u32 resource_flags;
+	u32 masked;
+	u32 pending;
+	u64 delivery_count;
+	u64 coalesced_count;
+	u64 ioapic_base;
+	struct ipc_port *port;
+};
+
+static struct irq_binding irq_bindings[IRQ_DEVICE_VECTOR_COUNT];
 
 #define DECL_ISR(vector) extern void isr_stub_##vector(void)
 DECL_ISR(0);
@@ -148,6 +178,36 @@ DECL_ISR(31);
 DECL_ISR(32);
 DECL_ISR(64);
 DECL_ISR(65);
+DECL_ISR(66);
+DECL_ISR(67);
+DECL_ISR(68);
+DECL_ISR(69);
+DECL_ISR(70);
+DECL_ISR(71);
+DECL_ISR(72);
+DECL_ISR(73);
+DECL_ISR(74);
+DECL_ISR(75);
+DECL_ISR(76);
+DECL_ISR(77);
+DECL_ISR(78);
+DECL_ISR(79);
+DECL_ISR(80);
+DECL_ISR(81);
+DECL_ISR(82);
+DECL_ISR(83);
+DECL_ISR(84);
+DECL_ISR(85);
+DECL_ISR(86);
+DECL_ISR(87);
+DECL_ISR(88);
+DECL_ISR(89);
+DECL_ISR(90);
+DECL_ISR(91);
+DECL_ISR(92);
+DECL_ISR(93);
+DECL_ISR(94);
+DECL_ISR(95);
 
 static void idt_set_gate_flags(u8 vector, void (*handler)(void), u8 flags)
 {
@@ -211,6 +271,191 @@ static void pic_eoi(u64 vector)
 		arch_outb(PIC2_COMMAND, PIC_EOI);
 	}
 	arch_outb(PIC1_COMMAND, PIC_EOI);
+}
+
+static volatile u32 *ioapic_reg(u64 base, u32 reg)
+{
+	return (volatile u32 *)(base + reg);
+}
+
+static u32 ioapic_read(u64 base, u32 reg)
+{
+	*ioapic_reg(base, IOAPIC_REG_SELECT) = reg;
+	return *ioapic_reg(base, IOAPIC_REG_WINDOW);
+}
+
+static void ioapic_write(u64 base, u32 reg, u32 value)
+{
+	*ioapic_reg(base, IOAPIC_REG_SELECT) = reg;
+	*ioapic_reg(base, IOAPIC_REG_WINDOW) = value;
+}
+
+static void irq_program_locked(const struct irq_binding *binding)
+{
+	u32 low = binding->vector | IOAPIC_REDIR_DELIVERY_FIXED;
+	const u32 high = arch_smp_lapic_id(0) << 24;
+	const u32 reg = IOAPIC_REDIR_BASE + binding->input * 2;
+	struct vm_space *space = task_vm_space(task_current());
+
+	if (binding->masked) {
+		low |= IOAPIC_REDIR_MASKED;
+	}
+	if ((binding->resource_flags & TASK_HW_RESOURCE_IRQ_LEVEL_LOW) != 0) {
+		low |= IOAPIC_REDIR_TRIGGER_LEVEL | IOAPIC_REDIR_POLARITY_LOW;
+	}
+
+	vm_rpc_activate_space(vm_kernel_space());
+	ioapic_write(binding->ioapic_base, reg + 1, high);
+	ioapic_write(binding->ioapic_base, reg, low);
+	(void)ioapic_read(binding->ioapic_base, reg);
+	vm_rpc_activate_space(space);
+}
+
+static struct irq_binding *irq_binding_for_gsi_locked(u32 gsi)
+{
+	for (u32 i = 0; i < IRQ_DEVICE_VECTOR_COUNT; i++) {
+		if (irq_bindings[i].active && irq_bindings[i].gsi == gsi) {
+			return &irq_bindings[i];
+		}
+	}
+	return 0;
+}
+
+static struct irq_binding *irq_binding_for_vector_locked(u32 vector)
+{
+	if (vector < IRQ_DEVICE_VECTOR_BASE ||
+	    vector >= IRQ_DEVICE_VECTOR_BASE + IRQ_DEVICE_VECTOR_COUNT) {
+		return 0;
+	}
+	struct irq_binding *binding =
+		&irq_bindings[vector - IRQ_DEVICE_VECTOR_BASE];
+	return binding->active ? binding : 0;
+}
+
+int arch_irq_bind(u32 gsi, u32 resource_flags, struct ipc_port *port)
+{
+	u64 ioapic_base;
+	u32 ioapic_id;
+	u32 input;
+
+	if (port == 0 ||
+	    arch_smp_ioapic_for_gsi(gsi, &ioapic_base, &ioapic_id, &input) != 0 ||
+	    vm_map_kernel_page(ioapic_base, ioapic_base, 1) != 0) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&irq_lock);
+	if (irq_binding_for_gsi_locked(gsi) != 0) {
+		spin_unlock_irqrestore(&irq_lock, flags);
+		return -1;
+	}
+	for (u32 i = 0; i < IRQ_DEVICE_VECTOR_COUNT; i++) {
+		if (irq_bindings[i].active) {
+			continue;
+		}
+		struct irq_binding *binding = &irq_bindings[i];
+		binding->active = 1;
+		binding->gsi = gsi;
+		binding->input = input;
+		binding->vector = IRQ_DEVICE_VECTOR_BASE + i;
+		binding->resource_flags = resource_flags;
+		binding->masked = 1;
+		binding->pending = 0;
+		binding->delivery_count = 0;
+		binding->coalesced_count = 0;
+		binding->ioapic_base = ioapic_base;
+		binding->port = port;
+		ipc_port_retain(port);
+		irq_program_locked(binding);
+		spin_unlock_irqrestore(&irq_lock, flags);
+		console_printf("irq: bind gsi=%u vector=%u ioapic=%u input=%u\n",
+			       gsi, binding->vector, ioapic_id, input);
+		return 0;
+	}
+	spin_unlock_irqrestore(&irq_lock, flags);
+	return -1;
+}
+
+int arch_irq_mask(u32 gsi, int masked)
+{
+	const u64 flags = spin_lock_irqsave(&irq_lock);
+	struct irq_binding *binding = irq_binding_for_gsi_locked(gsi);
+
+	if (binding == 0) {
+		spin_unlock_irqrestore(&irq_lock, flags);
+		return -1;
+	}
+	binding->masked = masked != 0;
+	irq_program_locked(binding);
+	spin_unlock_irqrestore(&irq_lock, flags);
+	return 0;
+}
+
+int arch_irq_ack(u32 gsi)
+{
+	const u64 flags = spin_lock_irqsave(&irq_lock);
+	struct irq_binding *binding = irq_binding_for_gsi_locked(gsi);
+
+	if (binding == 0) {
+		spin_unlock_irqrestore(&irq_lock, flags);
+		return -1;
+	}
+	binding->pending = 0;
+	binding->coalesced_count = 0;
+	spin_unlock_irqrestore(&irq_lock, flags);
+	return 0;
+}
+
+static int handle_device_irq(u32 vector)
+{
+	struct ipc_port *port;
+	struct ipc_message message;
+	u32 gsi;
+	u64 delivery_count;
+	u64 coalesced_count;
+
+	const u64 flags = spin_lock_irqsave(&irq_lock);
+	struct irq_binding *binding = irq_binding_for_vector_locked(vector);
+	if (binding == 0) {
+		spin_unlock_irqrestore(&irq_lock, flags);
+		return -1;
+	}
+
+	binding->masked = 1;
+	irq_program_locked(binding);
+	if (binding->pending) {
+		binding->coalesced_count++;
+		gsi = binding->gsi;
+		coalesced_count = binding->coalesced_count;
+		spin_unlock_irqrestore(&irq_lock, flags);
+		arch_smp_lapic_eoi();
+		console_printf("irq: coalesced gsi=%u count=%u\n", gsi,
+			       (u32)coalesced_count);
+		return 0;
+	}
+	binding->pending = 1;
+	binding->delivery_count++;
+	port = binding->port;
+	ipc_port_retain(port);
+	gsi = binding->gsi;
+	delivery_count = binding->delivery_count;
+	coalesced_count = binding->coalesced_count;
+	spin_unlock_irqrestore(&irq_lock, flags);
+
+	message = (struct ipc_message){
+		.protocol = USER_FOURCC_HW,
+		.type = HW_EVENT_IRQ,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = 0,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { gsi, delivery_count, coalesced_count, vector },
+	};
+	(void)ipc_send(port, &message);
+	ipc_port_release(port);
+	arch_smp_lapic_eoi();
+	return 0;
 }
 
 u64 arch_timer_ticks(void)
@@ -426,6 +671,12 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 		return;
 	}
 
+	if (frame->vector >= IRQ_DEVICE_VECTOR_BASE &&
+	    frame->vector < IRQ_DEVICE_VECTOR_BASE + IRQ_DEVICE_VECTOR_COUNT &&
+	    handle_device_irq((u32)frame->vector) == 0) {
+		return;
+	}
+
 	u64 cr2 = 0;
 
 	if (frame->vector == 14) {
@@ -492,6 +743,36 @@ void arch_interrupts_init(void)
 	SET_ISR(32);
 	SET_ISR(64);
 	SET_ISR(65);
+	SET_ISR(66);
+	SET_ISR(67);
+	SET_ISR(68);
+	SET_ISR(69);
+	SET_ISR(70);
+	SET_ISR(71);
+	SET_ISR(72);
+	SET_ISR(73);
+	SET_ISR(74);
+	SET_ISR(75);
+	SET_ISR(76);
+	SET_ISR(77);
+	SET_ISR(78);
+	SET_ISR(79);
+	SET_ISR(80);
+	SET_ISR(81);
+	SET_ISR(82);
+	SET_ISR(83);
+	SET_ISR(84);
+	SET_ISR(85);
+	SET_ISR(86);
+	SET_ISR(87);
+	SET_ISR(88);
+	SET_ISR(89);
+	SET_ISR(90);
+	SET_ISR(91);
+	SET_ISR(92);
+	SET_ISR(93);
+	SET_ISR(94);
+	SET_ISR(95);
 	arch_interrupts_load();
 	console_printf("interrupts: idt loaded\n");
 

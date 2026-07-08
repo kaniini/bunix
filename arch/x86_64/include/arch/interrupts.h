@@ -3,6 +3,8 @@
 
 #include "types.h"
 
+struct ipc_port;
+
 struct arch_interrupt_frame {
 	u64 vector;
 	u64 error_code;
@@ -18,5 +20,8 @@ void arch_interrupts_load(void);
 u64 arch_timer_ticks(void);
 u64 arch_timer_hz(void);
 void arch_interrupt_dispatch(struct arch_interrupt_frame *frame);
+int arch_irq_bind(u32 gsi, u32 resource_flags, struct ipc_port *port);
+int arch_irq_mask(u32 gsi, int masked);
+int arch_irq_ack(u32 gsi);
 
 #endif

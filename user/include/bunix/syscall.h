@@ -56,6 +56,10 @@ enum {
 	BUNIX_SYSCALL_BUFFER_PHYS = -96,
 	BUNIX_SYSCALL_CMDLINE_HAS = -98,
 	BUNIX_SYSCALL_SCHED_STATS = -100,
+	BUNIX_SYSCALL_HW_PCI_IRQ_GRANT = -102,
+	BUNIX_SYSCALL_HW_IRQ_BIND = -104,
+	BUNIX_SYSCALL_HW_IRQ_ACK = -106,
+	BUNIX_SYSCALL_HW_IRQ_MASK = -108,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_SCHED_STATS_CPUS = 8,
@@ -1209,6 +1213,27 @@ static inline long bunix_hw_pci_bar_grant(u64 device, u64 offset, u64 len,
 {
 	return bunix_syscall4(BUNIX_SYSCALL_HW_PCI_BAR_GRANT, device, offset,
 			      len, ops);
+}
+
+static inline long bunix_hw_pci_irq_grant(u64 device, u64 line)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_HW_PCI_IRQ_GRANT, device, line);
+}
+
+static inline long bunix_hw_irq_bind(u64 handle, u64 index, u64 event_port)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_HW_IRQ_BIND, handle, index,
+			      event_port);
+}
+
+static inline long bunix_hw_irq_ack(u64 handle, u64 index)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_HW_IRQ_ACK, handle, index);
+}
+
+static inline long bunix_hw_irq_mask(u64 handle, u64 index, u64 masked)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_HW_IRQ_MASK, handle, index, masked);
 }
 
 static inline long bunix_hw_mmio_read8(u64 handle, u64 offset)

@@ -15,6 +15,10 @@ enum {
 	AP_TRAMPOLINE_PHYS = 0x7000,
 	ACPI_MADT_SIGNATURE = 0x43495041,
 	MADT_TYPE_LOCAL_APIC = 0,
+	MADT_TYPE_IOAPIC = 1,
+	MADT_TYPE_INTERRUPT_SOURCE_OVERRIDE = 2,
+	MAX_IOAPICS = 8,
+	MAX_IRQ_OVERRIDES = 16,
 	LAPIC_REG_ID = 0x20,
 	LAPIC_REG_EOI = 0xb0,
 	LAPIC_REG_SVR = 0xf0,
@@ -87,10 +91,45 @@ struct madt_local_apic {
 	u32 flags;
 } __attribute__((packed));
 
+struct madt_ioapic {
+	u8 type;
+	u8 length;
+	u8 ioapic_id;
+	u8 reserved;
+	u32 address;
+	u32 gsi_base;
+} __attribute__((packed));
+
+struct madt_interrupt_source_override {
+	u8 type;
+	u8 length;
+	u8 bus;
+	u8 source;
+	u32 gsi;
+	u16 flags;
+} __attribute__((packed));
+
+struct ioapic_record {
+	u32 id;
+	u32 address;
+	u32 gsi_base;
+	u32 inputs;
+};
+
+struct irq_override_record {
+	u32 source;
+	u32 gsi;
+	u16 flags;
+};
+
 static u32 cpu_count;
 static u32 lapic_ids[MAX_SMP_CPUS];
 static u32 lapic_mmio_address;
 static u32 lapic_ready;
+static u32 ioapic_count;
+static struct ioapic_record ioapics[MAX_IOAPICS];
+static u32 irq_override_count;
+static struct irq_override_record irq_overrides[MAX_IRQ_OVERRIDES];
 static volatile u32 ap_started_count;
 static volatile u32 ap_scheduler_count;
 static volatile u32 release_aps;
@@ -170,6 +209,32 @@ static void record_lapic(u8 apic_id, u32 flags)
 	lapic_ids[cpu_count++] = apic_id;
 }
 
+static void record_ioapic(const struct madt_ioapic *ioapic)
+{
+	if (ioapic == 0 || ioapic_count >= MAX_IOAPICS) {
+		return;
+	}
+
+	ioapics[ioapic_count].id = ioapic->ioapic_id;
+	ioapics[ioapic_count].address = ioapic->address;
+	ioapics[ioapic_count].gsi_base = ioapic->gsi_base;
+	ioapics[ioapic_count].inputs = 24;
+	ioapic_count++;
+}
+
+static void record_irq_override(const struct madt_interrupt_source_override *iso)
+{
+	if (iso == 0 || irq_override_count >= MAX_IRQ_OVERRIDES ||
+	    iso->bus != 0) {
+		return;
+	}
+
+	irq_overrides[irq_override_count].source = iso->source;
+	irq_overrides[irq_override_count].gsi = iso->gsi;
+	irq_overrides[irq_override_count].flags = iso->flags;
+	irq_override_count++;
+}
+
 static void parse_madt(const struct madt *madt)
 {
 	u64 cursor = (u64)madt->entries;
@@ -189,6 +254,15 @@ static void parse_madt(const struct madt *madt)
 			const struct madt_local_apic *lapic =
 				(const struct madt_local_apic *)entry;
 			record_lapic(lapic->apic_id, lapic->flags);
+		} else if (entry->type == MADT_TYPE_IOAPIC &&
+			   entry->length >= sizeof(struct madt_ioapic)) {
+			record_ioapic((const struct madt_ioapic *)entry);
+		} else if (entry->type == MADT_TYPE_INTERRUPT_SOURCE_OVERRIDE &&
+			   entry->length >=
+				   sizeof(struct madt_interrupt_source_override)) {
+			record_irq_override(
+				(const struct madt_interrupt_source_override *)
+					entry);
 		}
 
 		cursor += entry->length;
@@ -255,6 +329,13 @@ static int lapic_wait_delivery(const char *stage)
 static void lapic_eoi(void)
 {
 	lapic_write(LAPIC_REG_EOI, 0);
+}
+
+void arch_smp_lapic_eoi(void)
+{
+	if (lapic_ready) {
+		lapic_eoi();
+	}
 }
 
 static void lapic_enable_current_cpu(void)
@@ -382,6 +463,8 @@ void arch_smp_init(u64 multiboot_info)
 
 	cpu_count = 1;
 	lapic_ids[0] = 0;
+	ioapic_count = 0;
+	irq_override_count = 0;
 
 	if (rsdp == 0 || !mem_eq(rsdp->signature, "RSD PTR ", 8) ||
 	    checksum8(rsdp, 20) != 0) {
@@ -413,6 +496,8 @@ void arch_smp_init(u64 multiboot_info)
 	console_printf("smp: discovered cpus=%u lapic=%p bsp_apic=%u\n",
 		       cpu_count, (const void *)(u64)lapic_mmio_address,
 		       lapic_ids[0]);
+	console_printf("smp: ioapics=%u irq_overrides=%u\n", ioapic_count,
+		       irq_override_count);
 	start_aps();
 }
 
@@ -441,6 +526,47 @@ u32 arch_smp_lapic_id(u32 cpu_index)
 u64 arch_smp_lapic_address(void)
 {
 	return lapic_mmio_address;
+}
+
+int arch_smp_ioapic_for_gsi(u32 gsi, u64 *base, u32 *ioapic_id, u32 *input)
+{
+	for (u32 i = 0; i < ioapic_count; i++) {
+		const u32 first = ioapics[i].gsi_base;
+		const u32 count = ioapics[i].inputs;
+
+		if (gsi >= first && gsi < first + count) {
+			if (base != 0) {
+				*base = ioapics[i].address;
+			}
+			if (ioapic_id != 0) {
+				*ioapic_id = ioapics[i].id;
+			}
+			if (input != 0) {
+				*input = gsi - first;
+			}
+			return 0;
+		}
+	}
+
+	return -1;
+}
+
+int arch_smp_irq_override(u32 source, u32 *gsi, u16 *flags)
+{
+	for (u32 i = 0; i < irq_override_count; i++) {
+		if (irq_overrides[i].source != source) {
+			continue;
+		}
+		if (gsi != 0) {
+			*gsi = irq_overrides[i].gsi;
+		}
+		if (flags != 0) {
+			*flags = irq_overrides[i].flags;
+		}
+		return 0;
+	}
+
+	return -1;
 }
 
 void arch_smp_send_scheduler_ipi(u32 cpu_index)

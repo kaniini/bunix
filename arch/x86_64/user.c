@@ -1,4 +1,5 @@
 #include <arch/user.h>
+#include <arch/interrupts.h>
 #include <arch/io.h>
 #include <arch/power.h>
 #include <arch/smp.h>
@@ -79,6 +80,10 @@ enum {
 	SYSCALL_BUFFER_PHYS = -96,
 	SYSCALL_CMDLINE_HAS = -98,
 	SYSCALL_SCHED_STATS = -100,
+	SYSCALL_HW_PCI_IRQ_GRANT = -102,
+	SYSCALL_HW_IRQ_BIND = -104,
+	SYSCALL_HW_IRQ_ACK = -106,
+	SYSCALL_HW_IRQ_MASK = -108,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -6054,6 +6059,8 @@ enum {
 	PCI_VENDOR_VIRTIO = 0x1af4,
 	PCI_VENDOR_NONE = 0xffff,
 	PCI_BAR0 = 0x10,
+	PCI_INTERRUPT_LINE = 0x3c,
+	PCI_INTERRUPT_PIN = 0x3d,
 	PCI_BAR_IO = 1,
 	PCI_BAR_MEM_TYPE_MASK = 0x6,
 	PCI_BAR_MEM_TYPE_64 = 0x4,
@@ -6072,6 +6079,13 @@ static u32 pci_config_read32(u64 bus, u64 slot, u64 function, u64 offset)
 {
 	arch_outl(0xcf8, pci_config_address(bus, slot, function, offset));
 	return arch_inl(0xcfc);
+}
+
+static u8 pci_config_read8(u64 bus, u64 slot, u64 function, u64 offset)
+{
+	const u32 value = pci_config_read32(bus, slot, function, offset);
+
+	return (value >> ((offset & 3) * 8)) & 0xff;
 }
 
 static void pci_config_write32(u64 bus, u64 slot, u64 function, u64 offset,
@@ -6189,11 +6203,117 @@ static u64 native_sys_hw_pci_bar_grant(const struct native_syscall_args *args)
 	resource->base = base + offset;
 	resource->len = len;
 	const u64 handle =
-		task_grant_hw_resource(task_current(), resource, TASK_RIGHT_SEND);
+		task_grant_hw_resource(task_current(), resource,
+				       TASK_RIGHT_SEND | TASK_RIGHT_DUP);
 	if (handle == 0) {
 		slab_free(resource);
 	}
 	return handle;
+}
+
+static u64 native_sys_hw_pci_irq_grant(const struct native_syscall_args *args)
+{
+	const u64 packed = args->arg0;
+	const u64 bus = packed & 0xff;
+	const u64 slot = (packed >> 8) & 0x1f;
+	const u64 function = (packed >> 16) & 0x7;
+	const u64 requested_line = args->arg1;
+	const u64 line = pci_config_read8(bus, slot, function, PCI_INTERRUPT_LINE);
+	const u64 pin = pci_config_read8(bus, slot, function, PCI_INTERRUPT_PIN);
+	u32 gsi;
+
+	if (!pci_device_is_virtio(bus, slot, function) || pin == 0 ||
+	    line == 0 || line == 0xff ||
+	    (requested_line != 0 && requested_line != line)) {
+		return (u64)-1;
+	}
+
+	gsi = (u32)line;
+	(void)arch_smp_irq_override((u32)line, &gsi, 0);
+
+	struct task_hw_resource *resource =
+		(struct task_hw_resource *)slab_alloc(sizeof(*resource));
+	if (resource == 0) {
+		return (u64)-1;
+	}
+	resource->type = TASK_HW_RESOURCE_IRQ;
+	resource->ops = TASK_HW_OP_BIND_IRQ | TASK_HW_OP_ACK_IRQ |
+			TASK_HW_OP_MASK_IRQ;
+	resource->flags = TASK_HW_RESOURCE_OWNED |
+			  TASK_HW_RESOURCE_IRQ_LEVEL_LOW;
+	resource->ref_count = 0;
+	resource->base = gsi;
+	resource->len = 1;
+	const u64 handle =
+		task_grant_hw_resource(task_current(), resource,
+				       TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+	if (handle == 0) {
+		slab_free(resource);
+	}
+	return handle;
+}
+
+static int hw_irq_validate(u64 handle, u64 index, u32 op,
+			   const struct task_hw_resource **out, u32 *gsi)
+{
+	const struct task_hw_resource *resource =
+		task_hw_resource_from_handle(task_current(), handle,
+					     TASK_RIGHT_SEND);
+
+	if (resource == 0 || out == 0 || gsi == 0 ||
+	    resource->type != TASK_HW_RESOURCE_IRQ ||
+	    (resource->ops & op) == 0 ||
+	    index >= resource->len ||
+	    resource->base + index < resource->base ||
+	    resource->base + index > 0xffffffffull) {
+		return -1;
+	}
+
+	*out = resource;
+	*gsi = (u32)(resource->base + index);
+	return 0;
+}
+
+static u64 native_sys_hw_irq_bind(const struct native_syscall_args *args)
+{
+	const struct task_hw_resource *resource;
+	u32 gsi;
+	struct ipc_port *port =
+		task_port_from_handle(task_current(), args->arg2,
+				      TASK_RIGHT_RECV);
+
+	if (port == 0 ||
+	    hw_irq_validate(args->arg0, args->arg1, TASK_HW_OP_BIND_IRQ,
+			    &resource, &gsi) != 0) {
+		return (u64)-1;
+	}
+	return arch_irq_bind(gsi, resource->flags, port) == 0 ? 0 : (u64)-1;
+}
+
+static u64 native_sys_hw_irq_ack(const struct native_syscall_args *args)
+{
+	const struct task_hw_resource *resource;
+	u32 gsi;
+
+	if (hw_irq_validate(args->arg0, args->arg1, TASK_HW_OP_ACK_IRQ,
+			    &resource, &gsi) != 0) {
+		return (u64)-1;
+	}
+	(void)resource;
+	return arch_irq_ack(gsi) == 0 ? 0 : (u64)-1;
+}
+
+static u64 native_sys_hw_irq_mask(const struct native_syscall_args *args)
+{
+	const struct task_hw_resource *resource;
+	u32 gsi;
+
+	if (hw_irq_validate(args->arg0, args->arg1, TASK_HW_OP_MASK_IRQ,
+			    &resource, &gsi) != 0) {
+		return (u64)-1;
+	}
+	(void)resource;
+	return arch_irq_mask(gsi, args->arg2 != 0) == 0 ? 0 : (u64)-1;
 }
 
 static int hw_port_validate(u64 handle, u64 offset, u64 width, u32 op,
@@ -6588,6 +6708,11 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_HW_PORT_OUT32, "hw_port_out32", native_sys_hw_port_out32 },
 	{ SYSCALL_HW_PCI_BAR_GRANT, "hw_pci_bar_grant",
 	  native_sys_hw_pci_bar_grant },
+	{ SYSCALL_HW_PCI_IRQ_GRANT, "hw_pci_irq_grant",
+	  native_sys_hw_pci_irq_grant },
+	{ SYSCALL_HW_IRQ_BIND, "hw_irq_bind", native_sys_hw_irq_bind },
+	{ SYSCALL_HW_IRQ_ACK, "hw_irq_ack", native_sys_hw_irq_ack },
+	{ SYSCALL_HW_IRQ_MASK, "hw_irq_mask", native_sys_hw_irq_mask },
 	{ SYSCALL_HW_MMIO_READ8, "hw_mmio_read8", native_sys_hw_mmio_read8 },
 	{ SYSCALL_HW_MMIO_WRITE8, "hw_mmio_write8", native_sys_hw_mmio_write8 },
 	{ SYSCALL_HW_MMIO_READ16, "hw_mmio_read16", native_sys_hw_mmio_read16 },
