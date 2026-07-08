@@ -41,6 +41,7 @@ static const struct server boot_servers[] = {
 	{ "vfs", 0 },
 	{ "ping", 0 },
 	{ "abi-smoke.user", 0 },
+	{ "/bin/musl-hello", 0 },
 	{ "vm", vm_server_start },
 };
 
@@ -313,12 +314,13 @@ static int seed_initial_stack(struct vm_space *space, const char *name,
 {
 	char argv0[96];
 	const char prefix[] = "/bin/";
-	const u64 prefix_len = sizeof(prefix) - 1;
+	const u64 prefix_len = name != 0 && name[0] == '/' ?
+			       0 : sizeof(prefix) - 1;
 	const u64 name_len = str_len(name);
 	const u64 argv0_len = prefix_len + name_len + 1;
 	u64 string_addr;
 	u64 sp;
-	u64 words[4];
+	u64 words[6];
 
 	if (space == 0 || name == 0 || stack == 0 ||
 	    argv0_len > sizeof(argv0)) {
@@ -342,6 +344,8 @@ static int seed_initial_stack(struct vm_space *space, const char *name,
 	words[1] = string_addr;
 	words[2] = 0;
 	words[3] = 0;
+	words[4] = 0;
+	words[5] = 0;
 	if (vm_write_user(space, sp, words, sizeof(words)) != 0) {
 		return -1;
 	}

@@ -69,7 +69,7 @@ Tasks:
 - [ ] Add riscv64 Linux syscall-number dispatch in the Linux personality
       server for the static musl hello syscall surface.  Do not reuse x86_64
       Linux syscall numbers.
-- [ ] Add a QEMU riscv64 smoke test that runs the native server smoke and the
+- [x] Add a QEMU riscv64 smoke test that runs the native server smoke and the
       static musl hello path, checks their serial or dmesg markers, and ends in
       guest poweroff.
 - [ ] Update `docs/riscv64-port.md` with the emulator-supported feature set,
@@ -492,3 +492,36 @@ Verification notes:
   package record.
 - `make test-boot-riscv64-early` passed sequentially with `/bin/musl-hello`
   present in the boot carrier.
+- Added an early static-musl execution bridge for the riscv64 emulator:
+  - The generic boot-module table now accepts `/bin/musl-hello` as a
+    scheduler-owned user payload, and stack seeding preserves absolute argv0
+    names instead of prefixing `/bin/` a second time.
+  - The generic initial stack now seeds `argc`, `argv[0]`, a null argv
+    terminator, a null envp terminator, and an `AT_NULL` auxv terminator.
+    Static musl startup walks through argv/envp into auxv, so omitting the
+    auxv terminator let it run off the mapped stack top on riscv64.
+  - `arch/riscv64/user.c` now decodes the riscv64 Linux syscall numbers used
+    by the first static musl hello smoke: `write`, `exit`, `exit_group`, and
+    `set_tid_address`.
+  - `test-boot-riscv64-early` now launches `/bin/musl-hello` after the native
+    ABI smoke and requires the `musl hello argc=1 argv0=/bin/musl-hello`
+    marker plus `linux: riscv64 musl hello`.
+  - The test ends in guest poweroff after launching the native
+    scheduler-owned server smoke, launching the static musl hello payload,
+    reaping both tasks, and running the riscv64 copyin/copyout smoke.
+  - This is deliberately still an early bridge.  The exploration item for
+    dispatch through the userspace Linux personality server remains open until
+    riscv64 can launch the real server graph and route these calls as RPCs.
+- `make all` passed after adding the early static-musl execution bridge.
+- `make ARCH=riscv64 all` passed after adding the early static-musl execution
+  bridge.
+- `make test-boot-riscv64-early` passed and now checks the static musl hello
+  marker plus guest poweroff.
+- `make test-riscv64-user-abi` passed after adding the early static-musl
+  execution bridge.
+- `make test-riscv64-bootpkg` passed after adding the early static-musl
+  execution bridge.
+- `make test-boot` passed after changing the shared initial stack layout,
+  covering the x86_64 boot path.
+- Confirmed the BPI-F3 board port remains gated: do not begin BPI-F3 hardware
+  work until the QEMU `virt` riscv64 emulator userspace path fully works.

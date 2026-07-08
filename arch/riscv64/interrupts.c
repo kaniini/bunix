@@ -1,6 +1,8 @@
 #include <arch/interrupts.h>
 #include <arch/sbi.h>
 #include <arch/user.h>
+#include "console.h"
+#include "sched.h"
 
 #define RISCV64_SCAUSE_INTERRUPT (1ULL << 63)
 #define RISCV64_SCAUSE_SUPERVISOR_TIMER (RISCV64_SCAUSE_INTERRUPT | 5ULL)
@@ -18,6 +20,7 @@ extern u64 riscv64_user_test_return_pc;
 extern volatile u64 riscv64_user_test_status;
 
 static u64 ticks;
+static int unhandled_trap_logged;
 
 static u64 csr_read_time(void)
 {
@@ -155,6 +158,20 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 	    (frame->scause == RISCV64_SCAUSE_USER_ECALL ||
 	     frame->scause == RISCV64_SCAUSE_SUPERVISOR_ECALL)) {
 		riscv64_handle_ecall(frame);
+		return;
+	}
+	if (frame != 0 && !unhandled_trap_logged) {
+		unhandled_trap_logged = 1;
+		console_printf("riscv64: unhandled trap scause=%p stval=%p sepc=%p sstatus=%p task=%u name=%s\n",
+			       (const void *)frame->scause,
+			       (const void *)frame->stval,
+			       (const void *)frame->sepc,
+			       (const void *)frame->sstatus,
+			       (u32)task_id(task_current()),
+			       task_name(task_current()));
+		if ((frame->sstatus & RISCV64_SSTATUS_SPP) == 0) {
+			thread_exit();
+		}
 	}
 }
 

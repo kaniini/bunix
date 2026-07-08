@@ -45,6 +45,11 @@ The early boot gate currently verifies:
 - The packaged native payload can call the real riscv64 native syscall
   dispatcher for early console writes and `exit`, proving a server-shaped
   userspace payload can report through the native Bunix ABI before poweroff.
+- A static riscv64 musl hello payload packaged as `/bin/musl-hello` can be
+  launched as a scheduler-owned U-mode task, preserve absolute `argv[0]`, use
+  an initial stack with argv/envp plus an `AT_NULL` aux vector terminator, call
+  the early riscv64 Linux-number bridge for `set_tid_address`, `write`, and
+  `exit_group`, and exit cleanly.
 - The guest exits through SBI poweroff.
 
 ## Boot package
@@ -54,14 +59,14 @@ builder `tools/build-riscv64-bootpkg.sh` creates a text-header package with
 module records and payloads.  The old `OUT MODULE [NAME]` invocation remains
 valid, and the builder also accepts repeated `MODULE NAME` pairs for ordered
 module/data payloads plus an optional `cmdline` header.  The default QEMU boot
-carrier still contains only the current `abi-smoke.user` payload, while
+carrier contains `abi-smoke.user` and `/bin/musl-hello`, while
 `test-riscv64-bootpkg` also builds a multi-record carrier to prove host-side
 ordering.  The early kernel can parse the package command line through the
 shared `kernel_cmdline_configure()` path used by x86_64, validate the carrier
-magic, locate the module record, verify the payload is an ELF64 RISC-V image,
-register it with the generic module registry, launch it with
-`server_launch_module()`, build a crt0-compatible stack, enter U-mode at
-`0x400000`, and observe native `exit` through scheduler task teardown.
+magic, locate module records, verify RISC-V user ELF payloads, register them
+with the generic module registry, launch them with `server_launch_module()`,
+build a crt0/libc-compatible stack, enter U-mode, and observe native or early
+Linux-number `exit` through scheduler task teardown.
 
 Riscv64 now also has initial implementations of the generic `arch_vm_*` hooks
 for Sv39 page-table roots, map/protect/unmap/translate, and `satp`
@@ -175,28 +180,29 @@ does not boot QEMU by itself; runtime launch is covered by
 The early QEMU smoke proves that the trap path can enter U-mode, handle an
 `ecall` on a supervisor stack, dispatch a small native syscall subset, and run
 one packaged crt0 payload at the real Bunix user base through a scheduler-owned
-task and generic VM space.  Full proc/bootstrap integration and the Linux
-personality path remain later riscv64 slices.
+task and generic VM space.  Full proc/bootstrap integration and routing Linux
+syscalls through the userspace Linux personality server remain later riscv64
+slices.
 
 ## Linux personality slice
 
 The first riscv64 Linux-personality target is a static rv64 musl hello program,
-not BusyBox or dynamic linking.  That slice should prove the loader and Linux
-syscall ABI with the smallest executable that still uses libc startup:
+not BusyBox or dynamic linking.  The emulator now builds the static
+`user/musl-hello/main.c` ELF with host clang against the musl.cc sysroot,
+packages it as `/bin/musl-hello`, launches it as a scheduler-owned U-mode task,
+and checks its serial marker from `make test-boot-riscv64-early`.
 
-1. Build a static `riscv64` musl ELF for `user/musl-hello/main.c` with host
-   clang targeting the musl.cc sysroot.
-2. Teach the riscv64 module/rootfs packaging path to carry that ELF as
-   `/bin/musl-hello`.
-3. Load the ELF through the existing proc/VFS/server path once native user task
-   launch is available on riscv64.
-4. Dispatch non-negative riscv64 Linux syscall numbers through the Linux
-   personality server.  Do not reuse x86_64 Linux syscall numbers.
-5. Support only the static-hello syscall set at first: process exit, write,
-   brk or mmap as required by musl startup, aux vector setup, and the minimal
-   file/proc reads used by the existing hello test.
-6. Add a QEMU smoke that runs `/bin/musl-hello`, checks the expected serial or
-   dmesg marker, and ends in guest poweroff.
+That path is intentionally an early bridge.  Non-negative riscv64 Linux
+syscall numbers are decoded in `arch/riscv64/user.c` for the observed static
+hello surface: `set_tid_address`, `write`, `exit`, and `exit_group`.  The final
+design still needs those calls to route through the userspace Linux
+personality server as RPCs.  Do not reuse x86_64 Linux syscall numbers for
+that server path.
+
+The generic initial stack seeds `argc`, `argv[0]`, a null argv terminator, a
+null envp terminator, and an `AT_NULL` auxv terminator.  The auxv terminator is
+required even for the simple static musl smoke because musl startup walks past
+envp into auxv before reaching `main()`.
 
 Dynamic linking, Alpine rootfs parity, and BusyBox are later riscv64 slices.
 
@@ -213,14 +219,15 @@ on this host, so the Bunix build uses host clang plus the musl.cc sysroot,
 crt objects, libc, and libgcc support directory to produce the static
 `build/riscv64/modules/musl-hello.user` ELF.  The riscv64 boot package carries
 that payload under the package name `/bin/musl-hello`; executing it through
-the Linux personality is a later slice.
+the userspace Linux personality server is a later slice.
 
 ## Hardware Port Gate
 
 Board-specific riscv64 work, including the Banana Pi BPI-F3 port, is blocked
 until the QEMU `virt` emulator path has full generic riscv64 userspace bringup:
 normal scheduler-owned native task launch, general user VM/copyin/copyout,
-proc/bootstrap integration, and a static riscv64 musl/Linux-personality smoke.
+proc/bootstrap integration, and static riscv64 musl/Linux-personality-server
+smoke.
 Hardware debugging should not start while those generic emulator pieces are
 still missing.
 
@@ -236,7 +243,8 @@ The initial riscv64 port intentionally does not support:
 - Task-owned user-copy integration for unmapped-page fault reporting through
   `vm_read_user()`/`vm_write_user()`.
 - Console input and dmesg-ring reads from the riscv64 SBI console shim.
-- Linux signal frames or riscv64-specific Linux syscall parity.
+- Linux signal frames or riscv64-specific Linux syscall parity beyond the
+  early static-musl bridge.
 - Dynamic linking and `ld-musl-riscv64.so.1`.
 - VirtIO MMIO devices, block storage, networking, or Alpine rootfs boot.
 - PCI, USB, ACPI, or board-specific device enumeration.

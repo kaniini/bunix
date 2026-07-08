@@ -19,6 +19,10 @@ enum {
 	SYSCALL_EARLY_CONSOLE_WRITE = -54,
 	SYSCALL_EARLY_CONSOLE_LOG = -56,
 	SYSCALL_MACHINE_POWER = -64,
+	LINUX_RISCV64_WRITE = 64,
+	LINUX_RISCV64_EXIT = 93,
+	LINUX_RISCV64_EXIT_GROUP = 94,
+	LINUX_RISCV64_SET_TID_ADDRESS = 96,
 	RISCV64_SSTATUS_SUM = 1ULL << 18,
 	RISCV64_USER_COPY_CHUNK = 256,
 	RISCV64_MAX_CSTR = 256,
@@ -320,6 +324,40 @@ static const struct native_syscall_entry *native_syscall_lookup(i64 number)
 	return 0;
 }
 
+static u64 linux_riscv64_write(u64 fd, u64 user_buffer, u64 len)
+{
+	if (fd != 1 && fd != 2) {
+		return (u64)-1;
+	}
+	early_console_write_user(user_buffer, len);
+	return len;
+}
+
+static u64 linux_riscv64_syscall_dispatch(struct arch_syscall_frame *frame)
+{
+	switch (frame->number) {
+	case LINUX_RISCV64_WRITE:
+		return linux_riscv64_write(frame->a[0], frame->a[1],
+					   frame->a[2]);
+	case LINUX_RISCV64_EXIT:
+	case LINUX_RISCV64_EXIT_GROUP:
+		console_printf("linux-riscv64: exit status=%u\n",
+			       (u32)frame->a[0]);
+		thread_exit();
+	case LINUX_RISCV64_SET_TID_ADDRESS:
+		return task_id(task_current());
+	default:
+		console_printf("linux-riscv64: unknown syscall=%u pc=%p arg0=%p arg1=%p arg2=%p arg3=%p\n",
+			       (u32)frame->number,
+			       (const void *)frame->user_pc,
+			       (const void *)frame->a[0],
+			       (const void *)frame->a[1],
+			       (const void *)frame->a[2],
+			       (const void *)frame->a[3]);
+		return (u64)-1;
+	}
+}
+
 u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 {
 	const struct native_syscall_entry *entry;
@@ -328,6 +366,9 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 	(void)strace_mode;
 	if (frame == 0) {
 		return (u64)-1;
+	}
+	if ((i64)frame->number >= 0) {
+		return linux_riscv64_syscall_dispatch(frame);
 	}
 	entry = native_syscall_lookup((i64)frame->number);
 	if (entry == 0) {
