@@ -37,7 +37,9 @@ RISCV64_READELF ?= llvm-readelf
 RISCV64_USER_ABI_MODULE := $(BUILD_DIR)/riscv64/modules/abi-smoke.user
 RISCV64_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg.img
 RISCV64_BOOTPKG_MULTI := $(BUILD_DIR)/riscv64/bootpkg-multi.img
+RISCV64_UART_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg-uart.img
 RISCV64_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test
+RISCV64_UART_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test riscv64-uart-console
 RISCV64_BPI_F3_DIR := $(BUILD_DIR)/riscv64/bpi-f3
 RISCV64_BPI_F3_KERNEL := $(RISCV64_BPI_F3_DIR)/bunixos-riscv64.elf
 RISCV64_BPI_F3_BOOTPKG := $(RISCV64_BPI_F3_DIR)/bunix-riscv64.bootpkg
@@ -302,6 +304,7 @@ KERNEL_GENERIC_SRCS_x86_64 := \
 	kernel/multiboot2.c \
 	kernel/name.c \
 	kernel/pmm.c \
+	kernel/runtime.c \
 	kernel/pmm_multiboot2.c \
 	kernel/sched.c \
 	kernel/slab.c \
@@ -319,6 +322,7 @@ KERNEL_GENERIC_SRCS_riscv64 := \
 	kernel/ipc.c \
 	kernel/name.c \
 	kernel/pmm.c \
+	kernel/runtime.c \
 	kernel/sched.c \
 	kernel/slab.c \
 	kernel/server.c \
@@ -373,7 +377,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-riscv64-bootpkg test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -490,6 +494,13 @@ $(RISCV64_BOOTPKG): $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RIS
 $(RISCV64_BOOTPKG_MULTI): $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_USER_ABI_MODULE) disk0 \
+		$(RISCV64_BOOTSTRAP_MODULE) bootstrap \
+		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
+		$(RISCV64_LINUX_SERVER_MODULE) linux \
+		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
+
+$(RISCV64_UART_BOOTPKG): $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
+	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_UART_KERNEL_CMDLINE)" \
 		$(RISCV64_BOOTSTRAP_MODULE) bootstrap \
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
 		$(RISCV64_LINUX_SERVER_MODULE) linux \
@@ -1225,6 +1236,18 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "linux-riscv64-server: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "sbi: system reset poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
+
+test-boot-riscv64-uart-console: $(RISCV64_UART_BOOTPKG)
+	@command -v $(RISCV64_QEMU) >/dev/null 2>&1 || { echo "missing $(RISCV64_QEMU)"; exit 1; }
+	$(MAKE) ARCH=riscv64 all
+	mkdir -p $(BUILD_DIR)
+	timeout 30s $(RISCV64_QEMU) -machine virt -m 128M -nographic \
+		-no-reboot -kernel $(RISCV64_KERNEL) \
+		-initrd $(RISCV64_UART_BOOTPKG) > $(RISCV64_SERIAL_LOG)
+	grep -aF "uart: riscv64 console-driver=ns16550" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "bootstrap-riscv64: done" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "linux-riscv64-server: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 
 test-boot-ext2: $(EXT2_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-ext2.txt
 	ESP_DIR=$(EXT2_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

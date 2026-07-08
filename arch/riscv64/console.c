@@ -1,16 +1,100 @@
 #include "console.h"
 #include "spinlock.h"
+#include <arch/console.h>
+#include <arch/fdt.h>
+#include <arch/vm.h>
 #include <arch/sbi.h>
 #include <stdarg.h>
 
 static struct spinlock console_lock = SPINLOCK_INIT("riscv64-console");
+static volatile void *console_uart_base;
+static u32 console_uart_reg_shift;
+static u32 console_uart_reg_io_width = 1;
+static int console_uart_enabled;
+
+enum {
+	UART_THR = 0,
+	UART_LSR = 5,
+	UART_LSR_THRE = 0x20,
+};
+
+static int console_str_contains(const char *text, const char *needle)
+{
+	if (*needle == '\0') {
+		return 1;
+	}
+	for (u32 i = 0; text[i] != '\0'; i++) {
+		u32 j = 0;
+
+		while (needle[j] != '\0' && text[i + j] == needle[j]) {
+			j++;
+		}
+		if (needle[j] == '\0') {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int uart_is_8250_compatible(const char *compatible)
+{
+	return console_str_contains(compatible, "ns16550") ||
+	       console_str_contains(compatible, "ns16550a") ||
+	       console_str_contains(compatible, "snps,dw-apb-uart");
+}
+
+static volatile void *uart_reg(u32 reg)
+{
+	return (volatile u8 *)console_uart_base +
+	       ((u64)reg << console_uart_reg_shift);
+}
+
+static u8 uart_read(u32 reg)
+{
+	if (console_uart_reg_io_width == 4) {
+		return (u8)(*(volatile u32 *)uart_reg(reg));
+	}
+	return *(volatile u8 *)uart_reg(reg);
+}
+
+static void uart_write(u32 reg, u8 value)
+{
+	if (console_uart_reg_io_width == 4) {
+		*(volatile u32 *)uart_reg(reg) = value;
+		return;
+	}
+	*(volatile u8 *)uart_reg(reg) = value;
+}
+
+static int uart_wait_tx_ready(void)
+{
+	for (u32 i = 0; i < 1000000; i++) {
+		if ((uart_read(UART_LSR) & UART_LSR_THRE) != 0) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int uart_putc_raw(char c)
+{
+	if (!console_uart_enabled || !uart_wait_tx_ready()) {
+		return 0;
+	}
+	uart_write(UART_THR, (u8)c);
+	return 1;
+}
 
 static void console_putc_raw(char c)
 {
 	if (c == '\n') {
-		riscv64_sbi_putchar('\r');
+		if (!uart_putc_raw('\r')) {
+			riscv64_sbi_putchar('\r');
+		}
 	}
-	riscv64_sbi_putchar(c);
+	if (!uart_putc_raw(c)) {
+		riscv64_sbi_putchar(c);
+	}
 }
 
 static void console_write_raw(const char *text)
@@ -22,6 +106,37 @@ static void console_write_raw(const char *text)
 
 void console_init(void)
 {
+}
+
+void riscv64_console_init_from_fdt(const void *fdt)
+{
+	struct riscv64_fdt_platform platform;
+
+	if (fdt == 0 ||
+	    riscv64_fdt_scan_platform(fdt, &platform) != 0 ||
+	    platform.stdout_uart_valid == 0) {
+		return;
+	}
+
+	const struct riscv64_fdt_device *uart =
+		&platform.uarts[platform.stdout_uart_index];
+
+	if (uart->reg_base == 0 || !uart_is_8250_compatible(uart->compatible)) {
+		console_printf("uart: riscv64 console-driver=sbi\n");
+		return;
+	}
+	if (arch_vm_register_mmio_identity(uart->reg_base, 0x1000) != 0) {
+		console_printf("uart: riscv64 console-driver=sbi mmio-map-failed\n");
+		return;
+	}
+
+	console_uart_base = (volatile void *)uart->reg_base;
+	console_uart_reg_shift = uart->reg_shift;
+	console_uart_reg_io_width = uart->reg_io_width == 4 ? 4 : 1;
+	console_uart_enabled = 1;
+	console_printf("uart: riscv64 console-driver=ns16550 base=%p shift=%u width=%u compatible=%s\n",
+		       (const void *)uart->reg_base, console_uart_reg_shift,
+		       console_uart_reg_io_width, uart->compatible);
 }
 
 void console_set_verbosity(const char *level)

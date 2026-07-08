@@ -169,7 +169,8 @@ static u64 read_prop_cells(const u8 *data, u32 len)
 static void platform_record_device(struct riscv64_fdt_device *devices,
 				   u32 *count, const char *path,
 				   const char *compatible, u64 reg_base,
-				   u64 reg_size)
+				   u64 reg_size, u32 reg_shift,
+				   u32 reg_io_width)
 {
 	struct riscv64_fdt_device *device;
 
@@ -181,6 +182,8 @@ static void platform_record_device(struct riscv64_fdt_device *devices,
 	str_copy_cstr(device->compatible, sizeof(device->compatible), compatible);
 	device->reg_base = reg_base;
 	device->reg_size = reg_size;
+	device->reg_shift = reg_shift;
+	device->reg_io_width = reg_io_width;
 	(*count)++;
 }
 
@@ -473,6 +476,8 @@ int riscv64_fdt_scan_platform(const void *fdt,
 	u32 parent_size_cells[FDT_MAX_DEPTH];
 	u64 reg_base[FDT_MAX_DEPTH];
 	u64 reg_size[FDT_MAX_DEPTH];
+	u32 reg_shift[FDT_MAX_DEPTH];
+	u32 reg_io_width[FDT_MAX_DEPTH];
 	u32 has_reg[FDT_MAX_DEPTH];
 	u32 interrupt_controller[FDT_MAX_DEPTH];
 
@@ -493,6 +498,8 @@ int riscv64_fdt_scan_platform(const void *fdt,
 		parent_size_cells[i] = 1;
 		reg_base[i] = 0;
 		reg_size[i] = 0;
+		reg_shift[i] = 0;
+		reg_io_width[i] = 1;
 		has_reg[i] = 0;
 		interrupt_controller[i] = 0;
 	}
@@ -529,6 +536,8 @@ int riscv64_fdt_scan_platform(const void *fdt,
 			parent_size_cells[child_depth] = size_cells[depth];
 			reg_base[child_depth] = 0;
 			reg_size[child_depth] = 0;
+			reg_shift[child_depth] = 0;
+			reg_io_width[child_depth] = 1;
 			has_reg[child_depth] = 0;
 			interrupt_controller[child_depth] = 0;
 
@@ -560,14 +569,16 @@ int riscv64_fdt_scan_platform(const void *fdt,
 				platform_record_device(
 					platform->uarts, &platform->uart_count,
 					paths[depth], compatible[depth],
-					reg_base[depth], reg_size[depth]);
+					reg_base[depth], reg_size[depth],
+					reg_shift[depth], reg_io_width[depth]);
 			}
 			if (interrupt_controller[depth] != 0) {
 				platform_record_device(
 					platform->interrupt_controllers,
 					&platform->interrupt_controller_count,
 					paths[depth], compatible[depth],
-					reg_base[depth], reg_size[depth]);
+					reg_base[depth], reg_size[depth],
+					reg_shift[depth], reg_io_width[depth]);
 			}
 			depth--;
 			continue;
@@ -626,6 +637,12 @@ int riscv64_fdt_scan_platform(const void *fdt,
 				}
 			} else if (str_eq(name, "interrupt-controller")) {
 				interrupt_controller[depth] = 1;
+			} else if (str_eq(name, "reg-shift") &&
+				   len >= sizeof(u32)) {
+				reg_shift[depth] = be32(data);
+			} else if (str_eq(name, "reg-io-width") &&
+				   len >= sizeof(u32)) {
+				reg_io_width[depth] = be32(data);
 			} else if (str_eq(name, "reg")) {
 				const u32 a = parent_address_cells[depth];
 				const u32 s = parent_size_cells[depth];

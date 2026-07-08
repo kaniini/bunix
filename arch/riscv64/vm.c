@@ -7,12 +7,22 @@ enum {
 	RISCV64_PAGE_ENTRIES = 512,
 	RISCV64_PTE_TABLE_MASK = RISCV64_PTE_V,
 	RISCV64_PTE_LEAF_MASK = RISCV64_PTE_R | RISCV64_PTE_W | RISCV64_PTE_X,
+	RISCV64_MAX_MMIO_IDENTITY_MAPPINGS = 16,
 };
+
+struct mmio_identity_mapping {
+	u64 start;
+	u64 end;
+};
+
+static struct mmio_identity_mapping mmio_identity_mappings[RISCV64_MAX_MMIO_IDENTITY_MAPPINGS];
+static u32 mmio_identity_mapping_count;
 
 static u64 pte_phys(u64 pte);
 static int pte_table_valid(u64 pte);
 static int map_supervisor_identity_window(struct arch_vm_space *space,
 					  u64 start, u64 end);
+static int map_registered_mmio(struct arch_vm_space *space);
 
 static void zero_table(u64 *table)
 {
@@ -199,6 +209,10 @@ int arch_vm_space_init(struct arch_vm_space *space)
 		arch_vm_space_destroy(space);
 		return -1;
 	}
+	if (map_registered_mmio(space) != 0) {
+		arch_vm_space_destroy(space);
+		return -1;
+	}
 	return 0;
 }
 
@@ -248,6 +262,43 @@ static int map_supervisor_identity_window(struct arch_vm_space *space,
 			return -1;
 		}
 	}
+	return 0;
+}
+
+static int map_registered_mmio(struct arch_vm_space *space)
+{
+	for (u32 i = 0; i < mmio_identity_mapping_count; i++) {
+		if (map_supervisor_identity_window(
+			    space, mmio_identity_mappings[i].start,
+			    mmio_identity_mappings[i].end) != 0) {
+			return -1;
+		}
+	}
+	return 0;
+}
+
+int arch_vm_register_mmio_identity(u64 start, u64 len)
+{
+	u64 end;
+
+	if (len == 0 || start + len < start ||
+	    mmio_identity_mapping_count >= RISCV64_MAX_MMIO_IDENTITY_MAPPINGS) {
+		return -1;
+	}
+
+	end = start + len;
+	start &= ~(RISCV64_PAGE_SIZE - 1);
+	if (end + RISCV64_PAGE_SIZE - 1 < end) {
+		return -1;
+	}
+	end = (end + RISCV64_PAGE_SIZE - 1) & ~(RISCV64_PAGE_SIZE - 1);
+	if (end <= start) {
+		return -1;
+	}
+
+	mmio_identity_mappings[mmio_identity_mapping_count].start = start;
+	mmio_identity_mappings[mmio_identity_mapping_count].end = end;
+	mmio_identity_mapping_count++;
 	return 0;
 }
 

@@ -28,6 +28,8 @@ struct riscv64_fdt_device {
 	char compatible[RISCV64_FDT_MAX_COMPATIBLE];
 	u64 reg_base;
 	u64 reg_size;
+	u32 reg_shift;
+	u32 reg_io_width;
 };
 
 struct riscv64_fdt_alias {

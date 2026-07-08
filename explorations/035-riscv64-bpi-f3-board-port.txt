@@ -80,6 +80,10 @@ Tasks:
 - [x] Implement firmware device-tree parsing sufficient to discover memory,
       CPU harts, UART, interrupt controller, timer source, chosen stdout path,
       and initrd/module locations.
+- [x] Refactor riscv64 boot so it reaches a shared kernel initialization
+      lifecycle instead of keeping driver bringup inside the early smoke path.
+      This must create a clean place for arch console, timer, interrupt,
+      power, SMP, and boot-module hooks before adding more BPI-F3 drivers.
 - [ ] Bring up early serial console on the BPI-F3 using firmware-provided
       stdout first, then a native UART driver once the DT binding is confirmed.
 - [ ] Bring up SBI poweroff/reboot and timer behavior on real hardware, with
@@ -442,3 +446,48 @@ Verification notes:
   milestone classifier rows; the QEMU-only log reports the hardware milestone
   rows as missing because it lacks BPI-F3 preboot board identity.
 - `git diff --check` passed after adding BPI-F3 milestone classifier rows.
+- Refactored shared kernel runtime initialization:
+  - Added `kernel_runtime_memory_init()`,
+    `kernel_runtime_services_init()`, and
+    `kernel_runtime_scheduler_init()` as shared generic lifecycle helpers.
+  - x86_64 `kernel_main()` now uses those helpers after Multiboot2-specific
+    boot parsing and SMP setup.
+  - riscv64 keeps FDT, boot-package, and smoke sequencing in
+    `riscv64_early_main()`, but now reaches the same generic VM/slab/buffer,
+    IPC/name/VM-server, and scheduler initialization helpers.
+  - This is not a single fully generic `kernel_main()` yet because x86_64 and
+    riscv64 still enter through different firmware protocols, but the generic
+    runtime lifecycle is no longer duplicated.
+- Added the first native riscv64 console driver hook:
+  - `console_init()` is now called from the riscv64 boot lifecycle.
+  - `riscv64_console_init_from_fdt()` can bind the firmware-selected
+    `/chosen/stdout-path` UART when the boot command line includes
+    `riscv64-uart-console`.
+  - The backend supports ns16550/8250-compatible UARTs, including QEMU
+    `ns16550a` and `snps,dw-apb-uart`, and honors FDT `reg-shift` and
+    `reg-io-width`.
+  - The default riscv64 path remains SBI-backed so the normal emulator and
+    BPI-F3 smoke gates keep their existing conservative behavior.
+- Added supervisor MMIO identity mappings for early riscv64 device drivers:
+  - The UART backend registers its MMIO page with the riscv64 VM layer.
+  - New task address spaces inherit that mapping as supervisor-only, which
+    keeps kernel syscall/trap-time console output working after a user task
+    page table is active.
+- Added `make test-boot-riscv64-uart-console`:
+  - The target builds a separate riscv64 boot package whose command line
+    includes `riscv64-uart-console`.
+  - It boots QEMU `virt`, requires the ns16550 console-driver marker, then
+    requires bootstrap completion, linux-riscv64 server poweroff, and machine
+    poweroff.
+  - This gives the current driver slice a concrete test the user can run
+    before trying the equivalent stdout UART binding on physical hardware.
+- `make ARCH=riscv64 all` passed after adding the shared runtime helpers and
+  opt-in riscv64 UART console backend.
+- `make ARCH=x86_64 all` passed after adding the shared runtime helpers.
+- `make test-boot-riscv64-uart-console` passed after adding supervisor MMIO
+  mappings for the riscv64 UART backend.
+- `make test-riscv64-bpi-f3-emulator-gate` passed after adding the UART
+  backend; the default path remains SBI-backed and still reports hardware
+  milestone rows as missing in QEMU-only logs.
+- `git diff --check` passed after adding the shared runtime and UART console
+  driver slice.

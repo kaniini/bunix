@@ -1,4 +1,5 @@
 #include <arch/boot.h>
+#include <arch/console.h>
 #include <arch/fdt.h>
 #include <arch/interrupts.h>
 #include <arch/power.h>
@@ -9,10 +10,12 @@
 #include <arch/vm.h>
 #include "buffer.h"
 #include "cmdline.h"
+#include "console.h"
 #include "elf.h"
 #include "ipc.h"
 #include "name.h"
 #include "pmm.h"
+#include "runtime.h"
 #include "sched.h"
 #include "server.h"
 #include "slab.h"
@@ -231,15 +234,10 @@ static void sched_worker_thread(void *arg)
 static int generic_services_self_test(u64 fdt)
 {
 	arch_smp_init(fdt);
-	vm_init();
-	slab_init();
-	buffer_init();
-	arch_user_init();
-	ipc_init();
-	name_service_init();
-	vm_server_init();
+	kernel_runtime_memory_init();
+	kernel_runtime_services_init();
 	server_boot_modules_init();
-	sched_init();
+	kernel_runtime_scheduler_init();
 
 	sched_worker_ran = 0;
 	if (thread_create(task_current(), "rv64-sched-smoke",
@@ -723,6 +721,7 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 		boot_info.initrd_end = initrd.end;
 	}
 
+	console_init();
 	early_puts("bunixos: riscv64 early bootstrap\n");
 	pmm_bootstrap_from_fdt(fdt);
 	if (pmm_total_page_count() != 0 && pmm_free_page_count() != 0) {
@@ -763,6 +762,9 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 					      boot_info.initrd_end) == 0 &&
 		    kernel_cmdline_has("riscv64-bootpkg-test")) {
 			early_puts("cmdline: riscv64 bootpkg\n");
+			if (kernel_cmdline_has("riscv64-uart-console")) {
+				riscv64_console_init_from_fdt((const void *)fdt);
+			}
 		}
 		if (bootpkg_record_modules(boot_info.initrd_start,
 					   boot_info.initrd_end) == 0 &&

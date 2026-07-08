@@ -5,6 +5,7 @@
 #include "multiboot2.h"
 #include "name.h"
 #include "pmm.h"
+#include "runtime.h"
 #include "sched.h"
 #include "server.h"
 #include "slab.h"
@@ -34,18 +35,13 @@ void kernel_main(u32 magic, u64 multiboot_info)
 	kernel_cmdline_configure(multiboot2_cmdline(multiboot_info));
 	multiboot2_dump(multiboot_info);
 	pmm_init(multiboot_info);
-	vm_init();
-	slab_init();
-	buffer_init();
+	kernel_runtime_memory_init();
 	vm_self_test();
 	arch_power_init(multiboot_info);
 	arch_interrupts_init();
-	arch_user_init();
 	arch_smp_init(multiboot_info);
-	ipc_init();
-	name_service_init();
-	vm_server_init();
-	sched_init();
+	kernel_runtime_services_init();
+	kernel_runtime_scheduler_init();
 	arch_smp_release_aps();
 	server_start_boot_modules(multiboot_info);
 	sched_enable_preemption();
