@@ -214,7 +214,18 @@ null envp terminator, and an `AT_NULL` auxv terminator.  The auxv terminator is
 required even for the simple static musl smoke because musl startup walks past
 envp into auxv before reaching `main()`.
 
-Dynamic linking, Alpine rootfs parity, and BusyBox are later riscv64 slices.
+Dynamic linking, Alpine rootfs boot parity, and BusyBox execution are later
+riscv64 slices.  The host can now prepare a minimal riscv64 Alpine squashfs
+artifact with:
+
+```
+make test-riscv64-alpine-rootfs
+```
+
+That target uses `APK_ARCH=riscv64`, builds a pure Alpine rootfs without
+x86_64 Bunix user overlays, and records `ttyS0::respawn:/bin/sh` as a
+temporary init command.  It proves host-side riscv64 Alpine artifact creation;
+it does not yet prove that Bunix can boot the artifact.
 
 The current host has riscv64 binutils and QEMU, but Alpine does not ship the
 needed riscv64 Linux musl cross compiler.  Use `make

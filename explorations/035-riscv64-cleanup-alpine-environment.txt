@@ -64,7 +64,7 @@ Tasks:
       musl hello smoke and at least one additional syscall-heavy static test.
 - [ ] Add riscv64 dynamic-linker smoke coverage for the musl loader path,
       including `openat(2)` and correct `fstat(2)` behavior.
-- [ ] Build or prepare a minimal riscv64 Alpine rootfs artifact using the
+- [x] Build or prepare a minimal riscv64 Alpine rootfs artifact using the
       existing project rootfs conventions where possible.
 - [ ] Add a riscv64 QEMU boot target for the Alpine environment with clear
       serial markers and a clean poweroff condition.
@@ -165,3 +165,22 @@ Progress notes:
     temporary and should be deleted when riscv64 uses the shared Linux server.
   - The initial shared-server syscall map should cover static smoke plus
     dynamic-loader basics such as `openat(2)` and correct `fstat(2)`.
+- Added a riscv64 Alpine rootfs artifact builder:
+  - `tools/build-riscv64-alpine-rootfs.sh` wraps the shared Alpine rootfs
+    builder with `APK_ARCH=riscv64`, an official Alpine edge repository file,
+    `BUNIX_ALPINE_OVERLAY=0`, and an interim `/bin/sh` serial init command.
+  - The shared `tools/build-alpine-rootfs.sh` now supports `APK_ARCH`,
+    configurable Bunix overlay installation, and configurable inittab init
+    command while keeping the existing x86_64 overlay defaults.
+  - `make test-riscv64-alpine-rootfs` builds a riscv64 squashfs Alpine
+    artifact and verifies the manifest, repository file, runlevel metadata,
+    no x86_64 Bunix tools were copied into it, and `ttyS0` respawns `/bin/sh`.
+  - This completes rootfs artifact preparation only.  Booting it in QEMU still
+    depends on the shared Linux server and riscv64 server/rootfs packaging
+    follow-up work.
+- `make test-riscv64-alpine-rootfs` passed after adding the riscv64 Alpine
+  artifact builder.
+- `make test-alpine-rootfs` passed after making the shared Alpine builder's
+  Bunix overlay configurable, proving the x86_64 default overlay path still
+  works.
+- `git diff --check` passed after adding the riscv64 Alpine artifact builder.

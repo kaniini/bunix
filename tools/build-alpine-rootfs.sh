@@ -12,6 +12,7 @@ apk_plain_log=$artifact_dir/apk.plain.log
 apk_cache=${APK_CACHE_DIR:-$artifact_dir/apk-cache}
 repositories=${APK_REPOSITORIES_FILE:-/etc/apk/repositories}
 apk_packages=${ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc ifupdown-ng}
+apk_arch=${APK_ARCH:-}
 runlevel_policy=${ALPINE_OPENRC_POLICY:-tools/alpine-openrc-runlevels.policy}
 reference_runlevels=$artifact_dir/openrc-reference-runlevels.tsv
 bunix_runlevels=$artifact_dir/openrc-bunix-runlevels.tsv
@@ -22,6 +23,8 @@ rootfs_format=${ROOTFS_IMAGE_FORMAT:-squashfs}
 login=${LOGIN_MODULE:-build/modules/login.user}
 statidtest=${STATIDTEST_MODULE:-build/modules/statidtest.user}
 netdhcp=${NETDHCP_MODULE:-build/modules/bunix-udhcpc-script.user}
+bunix_overlay=${BUNIX_ALPINE_OVERLAY:-1}
+init_command=${BUNIX_ALPINE_INIT_COMMAND:-/bin/login}
 
 merge_account_file() {
 	base=$1
@@ -106,23 +109,33 @@ materialize_openrc_policy() {
 	done < "$runlevel_policy"
 }
 
+apk_add_rootfs() {
+	if [ -n "$apk_arch" ]; then
+		# shellcheck disable=SC2086
+		apk --arch "$apk_arch" "$@" add $apk_packages
+	else
+		# shellcheck disable=SC2086
+		apk "$@" add $apk_packages
+	fi
+}
+
 rm -rf "$stage"
 mkdir -p "$root" "$(dirname "$out")" "$artifact_dir" "$apk_cache"
 apk_cache=$(CDPATH= cd "$apk_cache" && pwd)
 
-# shellcheck disable=SC2086
-if ! apk --root "$root" --initdb --allow-untrusted \
+if ! apk_add_rootfs \
+	--root "$root" --initdb --allow-untrusted \
 	--cache-dir "$apk_cache" \
 	--repositories-file "$repositories" \
-	add $apk_packages >"$apk_log" 2>&1; then
+	>"$apk_log" 2>&1; then
 	mv "$apk_log" "$apk_plain_log"
 	rm -rf "$root"
 	mkdir -p "$root"
-	# shellcheck disable=SC2086
-	if ! apk --root "$root" --initdb --usermode --allow-untrusted \
+	if ! apk_add_rootfs \
+		--root "$root" --initdb --usermode --allow-untrusted \
 		--cache-dir "$apk_cache" \
 		--repositories-file "$repositories" \
-		add $apk_packages >"$apk_log" 2>&1; then
+		>"$apk_log" 2>&1; then
 		cat "$apk_plain_log" >&2
 		cat "$apk_log" >&2
 		exit 1
@@ -138,19 +151,21 @@ mkdir -p "$root/bin" "$root/etc" "$root/etc/init.d" "$root/etc/runlevels/default
 	"$root/etc/runlevels/boot" "$root/proc" "$root/sys" "$root/dev" "$root/run" \
 	"$root/tmp" "$root/root" "$root/var/tmp"
 mkdir -p "$root/run/openrc" "$root/run/lock" "$root/lib/rc/init.d"
-rm -f "$root/bin/login"
-cp "$login" "$root/bin/login"
-chmod 0555 "$root/bin/login"
-cp "$statidtest" "$root/bin/statidtest"
-chmod 0555 "$root/bin/statidtest"
-mkdir -p "$root/usr/share/udhcpc" "$root/sbin"
-cp "$netdhcp" "$root/sbin/bunix-udhcpc-script"
-chmod 0555 "$root/sbin/bunix-udhcpc-script"
-ln -sf /sbin/bunix-udhcpc-script "$root/usr/share/udhcpc/default.script"
+if [ "$bunix_overlay" = 1 ]; then
+	rm -f "$root/bin/login"
+	cp "$login" "$root/bin/login"
+	chmod 0555 "$root/bin/login"
+	cp "$statidtest" "$root/bin/statidtest"
+	chmod 0555 "$root/bin/statidtest"
+	mkdir -p "$root/usr/share/udhcpc" "$root/sbin"
+	cp "$netdhcp" "$root/sbin/bunix-udhcpc-script"
+	chmod 0555 "$root/sbin/bunix-udhcpc-script"
+	ln -sf /sbin/bunix-udhcpc-script "$root/usr/share/udhcpc/default.script"
 
-merge_account_file "$root/etc/passwd" modules/passwd
-merge_account_file "$root/etc/shadow" modules/shadow
-merge_account_file "$root/etc/group" modules/group
+	merge_account_file "$root/etc/passwd" modules/passwd
+	merge_account_file "$root/etc/shadow" modules/shadow
+	merge_account_file "$root/etc/group" modules/group
+fi
 chmod 0444 "$root/etc/passwd" "$root/etc/group"
 chmod 0400 "$root/etc/shadow"
 
@@ -169,6 +184,8 @@ cat > "$root/etc/inittab" <<'EOF_INITTAB'
 ttyS0::respawn:/bin/login
 ::shutdown:/sbin/openrc shutdown
 EOF_INITTAB
+sed -i "s|ttyS0::respawn:/bin/login|ttyS0::respawn:$init_command|" \
+	"$root/etc/inittab"
 
 mkdir -p "$root/etc/network"
 cat > "$root/etc/network/interfaces" <<'EOF_INTERFACES'
@@ -252,6 +269,9 @@ find "$root/var/cache/apk" -type f -delete 2>/dev/null || true
 	echo "apk_cache=$apk_cache"
 	echo "repositories=$repositories"
 	echo "packages=$apk_packages"
+	echo "apk_arch=${apk_arch:-$(apk --print-arch)}"
+	echo "bunix_overlay=$bunix_overlay"
+	echo "init_command=$init_command"
 	echo "openrc_policy=$runlevel_policy"
 	echo "openrc_reference_runlevels=$reference_runlevels"
 	echo "openrc_bunix_runlevels=$bunix_runlevels"
