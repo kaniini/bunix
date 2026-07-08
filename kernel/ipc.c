@@ -9,7 +9,6 @@
 enum {
 	PROTO_BLOCK = ('B') | ('L' << 8) | ('K' << 16) | ('0' << 24),
 	PROTO_VFS = ('V') | ('F' << 8) | ('S' << 16) | ('0' << 24),
-	IPC_INTERRUPT_QUEUE = 16,
 };
 
 struct ipc_message_node {
@@ -33,10 +32,6 @@ struct ipc_port {
 	struct ipc_message_node *tail;
 	struct thread *receiver;
 	struct ipc_wait *receiver_wait;
-	struct ipc_message interrupt_messages[IPC_INTERRUPT_QUEUE];
-	u32 interrupt_head;
-	u32 interrupt_tail;
-	u32 interrupt_queued;
 	u32 affinity_cpu;
 	u32 affinity_valid;
 	u32 queued;
@@ -95,21 +90,6 @@ static void message_free(struct ipc_message_node *node)
 		ipc_message_release(&node->message);
 	}
 	slab_free(node);
-}
-
-static int ipc_interrupt_dequeue_locked(struct ipc_port *port,
-					struct ipc_message *message)
-{
-	if (port->interrupt_queued == 0) {
-		return 0;
-	}
-
-	*message = port->interrupt_messages[port->interrupt_head];
-	port->interrupt_head =
-		(port->interrupt_head + 1) % IPC_INTERRUPT_QUEUE;
-	port->interrupt_queued--;
-	port->queued--;
-	return 1;
 }
 
 static void ipc_message_retain(struct ipc_message *message)
@@ -351,7 +331,7 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 	ipc_counters.sends++;
 	ipc_stats_inc_cpu(ipc_counters.cpu_sends);
 	if (port->receiver != 0 && port->receiver_wait != 0 &&
-	    port->head == 0 && port->interrupt_queued == 0) {
+	    port->head == 0) {
 		receiver = port->receiver;
 		*port->receiver_wait->message = direct_message;
 		port->receiver_wait->delivered = 1;
@@ -428,56 +408,6 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 	return 0;
 }
 
-int ipc_send_interrupt(struct ipc_port *port, const struct ipc_message *message)
-{
-	struct thread *receiver = 0;
-	struct ipc_message direct_message;
-
-	if (port == 0 || message == 0 || message->reply_port != 0 ||
-	    message->cap_type != IPC_CAP_NONE || message->cap_object != 0) {
-		return -1;
-	}
-
-	direct_message = *message;
-	direct_message.sender = task_id(task_current());
-
-	const u64 flags = spin_lock_irqsave(&ipc_lock);
-	ipc_counters.sends++;
-	ipc_stats_inc_cpu(ipc_counters.cpu_sends);
-	if (port->receiver != 0 && port->receiver_wait != 0 &&
-	    port->head == 0 && port->interrupt_queued == 0) {
-		receiver = port->receiver;
-		*port->receiver_wait->message = direct_message;
-		port->receiver_wait->delivered = 1;
-		port->receiver = 0;
-		port->receiver_wait = 0;
-		ipc_counters.direct_delivered++;
-		ipc_stats_inc_cpu(ipc_counters.cpu_direct_delivered);
-	}
-
-	if (receiver == 0) {
-		if (port->interrupt_queued < IPC_INTERRUPT_QUEUE) {
-			port->interrupt_messages[port->interrupt_tail] =
-				direct_message;
-			port->interrupt_tail =
-				(port->interrupt_tail + 1) %
-				IPC_INTERRUPT_QUEUE;
-			port->interrupt_queued++;
-			port->queued++;
-			ipc_counters.queued++;
-			ipc_stats_inc_cpu(ipc_counters.cpu_queued);
-			spin_unlock_irqrestore(&ipc_lock, flags);
-			return 0;
-		}
-		spin_unlock_irqrestore(&ipc_lock, flags);
-		return -1;
-	}
-	spin_unlock_irqrestore(&ipc_lock, flags);
-
-	thread_unblock(receiver);
-	return 0;
-}
-
 int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 {
 	if (port == 0 || message == 0) {
@@ -491,7 +421,7 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 	u64 flags = spin_lock_irqsave(&ipc_lock);
 	port->affinity_cpu = sched_current_cpu_id();
 	port->affinity_valid = 1;
-	while (port->head == 0 && port->interrupt_queued == 0) {
+	while (port->head == 0) {
 		port->receiver = thread_current();
 		port->receiver_wait = &wait;
 		wait.delivered = 0;
@@ -508,17 +438,6 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 			spin_unlock_irqrestore(&ipc_lock, flags);
 			return 0;
 		}
-	}
-
-	if (ipc_interrupt_dequeue_locked(port, message)) {
-		if (ipc_should_log(port, message)) {
-			console_printf("ipc: recv port=%s proto=0x%x type=%u sender=%u queued=%u\n",
-				       port->name, message->protocol,
-				       message->type, message->sender,
-				       port->queued);
-		}
-		spin_unlock_irqrestore(&ipc_lock, flags);
-		return 0;
 	}
 
 	struct ipc_message_node *node = port->head;
@@ -553,20 +472,9 @@ int ipc_try_recv(struct ipc_port *port, struct ipc_message *message)
 	const u64 flags = spin_lock_irqsave(&ipc_lock);
 	port->affinity_cpu = sched_current_cpu_id();
 	port->affinity_valid = 1;
-	if (port->head == 0 && port->interrupt_queued == 0) {
+	if (port->head == 0) {
 		spin_unlock_irqrestore(&ipc_lock, flags);
 		return 1;
-	}
-
-	if (ipc_interrupt_dequeue_locked(port, message)) {
-		if (ipc_should_log(port, message)) {
-			console_printf("ipc: try_recv port=%s proto=0x%x type=%u sender=%u queued=%u\n",
-				       port->name, message->protocol,
-				       message->type, message->sender,
-				       port->queued);
-		}
-		spin_unlock_irqrestore(&ipc_lock, flags);
-		return 0;
 	}
 
 	struct ipc_message_node *node = port->head;

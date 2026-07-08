@@ -30,19 +30,31 @@ Progress notes:
 - The current slice adds a generic Bunix task-fault event shape and routes
   user-mode synchronous faults to the Linux server as `BUNIX_LINUX_TASK_FAULT`
   messages.
-- The kernel fault path uses interrupt-safe, cap-free IPC delivery so a page
-  fault does not allocate or scheduler-handoff from the exception handler.
+- The kernel fault path now uses a reply-capable Linux-server RPC so the
+  exception path can either build a signal frame and resume into a handler or
+  let the server record default process termination before the task exits.
 - The Linux server currently implements default termination only: page faults
   and general-protection faults become SIGSEGV-style wait status, while x86
   alignment-check faults become SIGBUS-style wait status.
 - File-backed mmap-hole SIGBUS remains open until the VFS mmap path can report
   that condition distinctly.
+- Synchronous fault delivery now reuses the Linux signal disposition tables:
+  if a SIGSEGV/SIGBUS handler and restorer are installed, the x86 exception
+  path builds a signal frame on the interrupted user stack and resumes into the
+  handler; otherwise the Linux server records the default signal exit status.
 - The focused default SIGSEGV/SIGBUS regression is:
 
   ```
   make BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
     BUNIX_CMD=/bin/faulttest \
     BUNIX_MARKER='faulttest sigsegv sigbus wait status ok' test-command
+  ```
+- The focused caught SIGSEGV/SIGBUS regression is:
+
+  ```
+  make BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
+    BUNIX_CMD=/bin/signaltest \
+    BUNIX_MARKER='linux signaltest ok' test-command
   ```
 
 Tasks:
@@ -60,15 +72,15 @@ Tasks:
 - [ ] Implement SIGBUS default termination for address errors that should not
       be reported as SIGSEGV, including file-backed mapping holes once the VFS
       mmap path can distinguish them.
-- [ ] Add Linux `sigaction`, signal-mask, pending-signal, and return-frame
+- [x] Add Linux `sigaction`, signal-mask, pending-signal, and return-frame
       support sufficient for catching SIGSEGV/SIGBUS in a static musl or
       BusyBox-compatible test program.
 - [ ] Populate `siginfo_t` fields for delivered SIGSEGV/SIGBUS: signal number,
       code, and faulting address at minimum.
-- [ ] Add architecture-specific x86_64 signal-frame construction and
+- [x] Add architecture-specific x86_64 signal-frame construction and
       `rt_sigreturn` restoration behind a narrow interface that can later be
       implemented on ARM.
-- [ ] Add tests for default SIGSEGV termination, caught SIGSEGV, default
+- [x] Add tests for default SIGSEGV termination, caught SIGSEGV, default
       SIGBUS, caught SIGBUS, wait-status reporting, and shell-visible exit
       behavior.
 - [ ] Document the remaining signal roadmap after SIGSEGV/SIGBUS, including

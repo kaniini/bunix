@@ -62,7 +62,6 @@ u64 ipc_port_id(const struct ipc_port *port);
 struct ipc_port *ipc_port_from_id(u64 id);
 int ipc_port_affinity_cpu(struct ipc_port *port, u32 *cpu_id);
 int ipc_send(struct ipc_port *port, const struct ipc_message *message);
-int ipc_send_interrupt(struct ipc_port *port, const struct ipc_message *message);
 int ipc_recv(struct ipc_port *port, struct ipc_message *message);
 int ipc_try_recv(struct ipc_port *port, struct ipc_message *message);
 void ipc_message_release(struct ipc_message *message);

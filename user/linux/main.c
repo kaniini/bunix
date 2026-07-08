@@ -2322,7 +2322,8 @@ static u64 linux_task_fault_signal(const struct bunix_task_fault_event *event)
 }
 
 static long linux_task_fault(u64 task, u64 thread, u64 trap, u64 flags,
-			     u64 cap, u64 cap_rights)
+			     u64 cap, u64 cap_rights, u64 *handler,
+			     u64 *restorer, u64 *old_mask)
 {
 	struct bunix_task_fault_event event = {
 		.task = task,
@@ -2348,6 +2349,23 @@ static long linux_task_fault(u64 task, u64 thread, u64 trap, u64 flags,
 	}
 
 	const u64 signal = linux_task_fault_signal(&event);
+	const u64 bit = linux_signal_bit(signal);
+	if (bit != 0 && (process->signal_ignored & bit) == 0 &&
+	    process->signal_handlers[signal] != 0 &&
+	    process->signal_restorers[signal] != 0) {
+		if (handler != 0) {
+			*handler = process->signal_handlers[signal];
+		}
+		if (restorer != 0) {
+			*restorer = process->signal_restorers[signal];
+		}
+		if (old_mask != 0) {
+			*old_mask = process->signal_mask;
+		}
+		process->signal_mask |= bit;
+		return (long)signal;
+	}
+
 	const u64 wait_status = signal | 0x80;
 	const char fault_log[] = "linux-server: task fault\n";
 
@@ -7410,14 +7428,20 @@ int main(void)
 			continue;
 		}
 		if (message.type == BUNIX_LINUX_TASK_FAULT) {
-			(void)linux_task_fault(message.words[0],
-					       message.words[1],
-					       message.words[2],
-					       message.words[3],
-					       message.cap,
-					       message.cap_rights);
+			reply.words[0] = (u64)linux_task_fault(message.words[0],
+							       message.words[1],
+							       message.words[2],
+							       message.words[3],
+							       message.cap,
+							       message.cap_rights,
+							       &reply.words[1],
+							       &reply.words[2],
+							       &reply.words[3]);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
+			}
+			if (message.reply != 0) {
+				bunix_ipc_send(message.reply, &reply);
 			}
 			continue;
 		}

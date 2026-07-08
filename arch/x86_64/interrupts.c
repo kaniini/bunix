@@ -1,9 +1,11 @@
 #include <arch/interrupts.h>
 #include <arch/io.h>
 #include <arch/smp.h>
+#include <arch/user.h>
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
+#include "vm.h"
 
 enum {
 	IDT_ENTRIES = 256,
@@ -36,6 +38,8 @@ enum {
 	TASK_FAULT_CLASS_BUS = 3,
 
 	IPC_RIGHT_SEND = 1 << 0,
+	LINUX_SIGNAL_FRAME_MAGIC = 0x534947424e555858ull,
+	RFLAGS_AC = 1u << 18,
 };
 
 struct task_fault_event {
@@ -49,6 +53,31 @@ struct task_fault_event {
 	u64 flags;
 	u64 arch0;
 	u64 arch1;
+};
+
+struct interrupt_saved_regs {
+	u64 r15;
+	u64 r14;
+	u64 r13;
+	u64 r12;
+	u64 r11;
+	u64 r10;
+	u64 r9;
+	u64 r8;
+	u64 rbp;
+	u64 rdi;
+	u64 rsi;
+	u64 rdx;
+	u64 rcx;
+	u64 rbx;
+	u64 rax;
+};
+
+struct linux_signal_frame {
+	u64 magic;
+	u64 saved_rax;
+	u64 old_mask;
+	struct arch_syscall_frame frame;
 };
 
 struct idt_entry {
@@ -220,9 +249,63 @@ static u64 user_fault_class(const struct arch_interrupt_frame *frame)
 	return TASK_FAULT_CLASS_UNKNOWN;
 }
 
-static void notify_linux_task_fault(struct arch_interrupt_frame *frame, u64 cr2)
+static int write_signal_frame(struct arch_interrupt_frame *frame,
+			      struct interrupt_saved_regs *regs,
+			      u64 signal, u64 handler, u64 restorer,
+			      u64 old_mask)
+{
+	const struct linux_signal_frame signal_frame = {
+		.magic = LINUX_SIGNAL_FRAME_MAGIC,
+		.saved_rax = regs->rax,
+		.old_mask = old_mask,
+		.frame = {
+			.number = regs->rax,
+			.arg0 = regs->rdi,
+			.arg1 = regs->rsi,
+			.arg2 = regs->rdx,
+			.arg3 = regs->r10,
+			.user_rip = frame->rip,
+			.user_rflags = frame->rflags,
+			.user_rsp = frame->rsp,
+			.rbx = regs->rbx,
+			.rbp = regs->rbp,
+			.r12 = regs->r12,
+			.r13 = regs->r13,
+			.r14 = regs->r14,
+			.r15 = regs->r15,
+			.r8 = regs->r8,
+			.r9 = regs->r9,
+		},
+	};
+	const u64 frame_addr =
+		((frame->rsp - sizeof(signal_frame) - 8) & ~15ull) - 8;
+
+	if (vm_write_user(task_vm_space(task_current()), frame_addr,
+			  &restorer, sizeof(restorer)) != 0 ||
+	    vm_write_user(task_vm_space(task_current()), frame_addr + 8,
+			  &signal_frame, sizeof(signal_frame)) != 0) {
+		return -1;
+	}
+
+	regs->rax = 0;
+	regs->rdi = signal;
+	regs->rsi = 0;
+	regs->rdx = 0;
+	regs->r10 = 0;
+	regs->r8 = 0;
+	regs->r9 = 0;
+	frame->rip = handler;
+	frame->rsp = frame_addr;
+	frame->rflags &= ~((u64)RFLAGS_AC);
+	return 0;
+}
+
+static int notify_linux_task_fault(struct arch_interrupt_frame *frame, u64 cr2)
 {
 	struct ipc_port *linux = ipc_port_find("linux");
+	struct ipc_port *reply_port = task_reply_port(task_current());
+	struct interrupt_saved_regs *regs =
+		(struct interrupt_saved_regs *)((u64 *)frame - 15);
 	const struct task_fault_event event = {
 		.task = task_id(task_current()),
 		.thread = thread_id(thread_current()),
@@ -241,24 +324,40 @@ static void notify_linux_task_fault(struct arch_interrupt_frame *frame, u64 cr2)
 		console_printf("interrupts: user fault notify failed vector=%u rip=%p task=%u\n",
 			       (u32)frame->vector, (const void *)frame->rip,
 			       task_id(task_current()));
-		return;
+		return 0;
 	}
 	const struct ipc_message message = {
 		.protocol = USER_FOURCC_LINX,
 		.type = LINUX_RPC_TASK_FAULT,
 		.sender = 0,
 		.cap_rights = IPC_RIGHT_SEND,
-		.reply_port = 0,
+		.reply_port = reply_port,
 		.cap_type = IPC_CAP_NONE,
 		.cap_object = 0,
 		.words = { event.task, event.thread, event.trap, event.flags },
 	};
+	struct ipc_message reply;
 
-	if (ipc_send_interrupt(linux, &message) != 0) {
+	if (reply_port == 0 ||
+	    ipc_send(linux, &message) != 0 ||
+	    ipc_recv(reply_port, &reply) != 0) {
 		console_printf("interrupts: user fault send failed vector=%u rip=%p task=%u\n",
 			       (u32)frame->vector, (const void *)frame->rip,
 			       task_id(task_current()));
+		return 0;
 	}
+
+	if ((i64)reply.words[0] <= 0) {
+		return 0;
+	}
+	if (write_signal_frame(frame, regs, reply.words[0], reply.words[1],
+			       reply.words[2], reply.words[3]) != 0) {
+		console_printf("interrupts: user fault signal frame failed vector=%u rip=%p task=%u\n",
+			       (u32)frame->vector, (const void *)frame->rip,
+			       task_id(task_current()));
+		return 0;
+	}
+	return 1;
 }
 
 void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
@@ -297,7 +396,9 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 
 	if (user_fault_from_user_context(frame) &&
 	    user_fault_signal_vector(frame->vector)) {
-		notify_linux_task_fault(frame, cr2);
+		if (notify_linux_task_fault(frame, cr2) != 0) {
+			return;
+		}
 		(void)task_kill(task_current());
 		thread_exit();
 	}
