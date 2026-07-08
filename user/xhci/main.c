@@ -22,13 +22,29 @@ enum {
 	XHCI_IR_ERSTSZ = 0x08,
 	XHCI_IR_ERSTBA = 0x10,
 	XHCI_IR_ERDP = 0x18,
+	XHCI_DOORBELL_STRIDE = 0x04,
 	XHCI_USBCMD_RUN = 1 << 0,
 	XHCI_USBCMD_HCRST = 1 << 1,
+	XHCI_USBCMD_INTE = 1 << 2,
 	XHCI_USBSTS_HCH = 1 << 0,
+	XHCI_IR_IMAN = 0x00,
+	XHCI_IR_IMAN_IE = 1 << 1,
+	XHCI_PORTSC_CCS = 1 << 0,
+	XHCI_PORTSC_PR = 1 << 4,
+	XHCI_PORTSC_SPEED_SHIFT = 10,
+	XHCI_PORTSC_SPEED_MASK = 0xf,
+	XHCI_PORTSC_CHANGE_BITS = (1 << 17) | (1 << 18) | (1 << 19) |
+				  (1 << 20) | (1 << 21) | (1 << 22) |
+				  (1 << 23),
 	XHCI_TRB_TYPE_LINK = 6,
+	XHCI_TRB_TYPE_ENABLE_SLOT = 9,
+	XHCI_TRB_TYPE_COMMAND_COMPLETION = 33,
+	XHCI_TRB_TYPE_PORT_STATUS_CHANGE = 34,
 	XHCI_TRB_CYCLE = 1 << 0,
 	XHCI_TRB_TOGGLE_CYCLE = 1 << 1,
+	XHCI_COMPLETION_SUCCESS = 1,
 	XHCI_WAIT_POLLS = 1000,
+	XHCI_COMMAND_POLLS = 2000,
 	XHCI_PAGE_SIZE = 4096,
 	XHCI_RING_TRBS = 256,
 	XHCI_TRB_SIZE = 16,
@@ -65,6 +81,10 @@ struct xhci_rings {
 	struct xhci_dma_buffer scratchpad_array;
 	struct xhci_dma_buffer scratchpad[XHCI_MAX_SCRATCHPADS];
 	u64 scratchpad_count;
+	u64 command_producer;
+	u64 command_cycle;
+	u64 event_consumer;
+	u64 event_cycle;
 };
 
 static const unsigned char zeroes[64];
@@ -177,6 +197,19 @@ static long mmio_read32(u64 handle, u64 offset)
 	return bunix_hw_mmio_read32(handle, offset);
 }
 
+static long mmio_read64(u64 handle, u64 offset, u64 *value)
+{
+	const long low = bunix_hw_mmio_read32(handle, offset);
+	const long high = bunix_hw_mmio_read32(handle, offset + 4);
+
+	if (value == 0 || low < 0 || high < 0) {
+		return -1;
+	}
+	*value = ((u64)low & 0xffffffffull) |
+		 (((u64)high & 0xffffffffull) << 32);
+	return 0;
+}
+
 static int mmio_write32(u64 handle, u64 offset, u64 value)
 {
 	return bunix_hw_mmio_write32(handle, offset, value) == 0 ? 0 : -1;
@@ -215,6 +248,31 @@ static int buffer_write32(u64 handle, u64 offset, u64 value)
 
 	return bunix_buffer_write(handle, offset, &low, sizeof(low)) == 0 ? 0 :
 									-1;
+}
+
+static int buffer_read32(u64 handle, u64 offset, u64 *value)
+{
+	unsigned int low;
+
+	if (value == 0 ||
+	    bunix_buffer_read(handle, offset, &low, sizeof(low)) != 0) {
+		return -1;
+	}
+	*value = low;
+	return 0;
+}
+
+static int buffer_read64(u64 handle, u64 offset, u64 *value)
+{
+	u64 low;
+	u64 high;
+
+	if (value == 0 || buffer_read32(handle, offset, &low) != 0 ||
+	    buffer_read32(handle, offset + 4, &high) != 0) {
+		return -1;
+	}
+	*value = low | (high << 32);
+	return 0;
 }
 
 static int buffer_write64(u64 handle, u64 offset, u64 value)
@@ -358,6 +416,36 @@ static int xhci_reset_controller(const struct xhci_controller *controller)
 	return -1;
 }
 
+static int xhci_start_controller(const struct xhci_controller *controller)
+{
+	const u64 op_base = controller->cap_length;
+	long command;
+
+	command = mmio_read32(controller->mmio, op_base + XHCI_OP_USBCMD);
+	if (command < 0 ||
+	    mmio_write32(controller->mmio, op_base + XHCI_OP_USBCMD,
+			 ((u64)command) | XHCI_USBCMD_RUN |
+				 XHCI_USBCMD_INTE) != 0) {
+		return -1;
+	}
+	return wait_status_bits(controller->mmio, op_base, XHCI_USBSTS_HCH, 0);
+}
+
+static int xhci_stop_controller(const struct xhci_controller *controller)
+{
+	const u64 op_base = controller->cap_length;
+	long command;
+
+	command = mmio_read32(controller->mmio, op_base + XHCI_OP_USBCMD);
+	if (command < 0 ||
+	    mmio_write32(controller->mmio, op_base + XHCI_OP_USBCMD,
+			 ((u64)command) & ~XHCI_USBCMD_RUN) != 0) {
+		return -1;
+	}
+	return wait_status_bits(controller->mmio, op_base, XHCI_USBSTS_HCH,
+				XHCI_USBSTS_HCH);
+}
+
 static int xhci_setup_scratchpads(const struct xhci_controller *controller,
 				  struct xhci_rings *rings)
 {
@@ -421,7 +509,9 @@ static int xhci_setup_event_ring(const struct xhci_controller *controller,
 	    mmio_write64(controller->mmio, ir0 + XHCI_IR_ERSTBA,
 			 rings->erst.phys) != 0 ||
 	    mmio_write64(controller->mmio, ir0 + XHCI_IR_ERDP,
-			 rings->event_ring.phys) != 0) {
+			 rings->event_ring.phys) != 0 ||
+	    mmio_write32(controller->mmio, ir0 + XHCI_IR_IMAN,
+			 XHCI_IR_IMAN_IE) != 0) {
 		return -1;
 	}
 	return 0;
@@ -459,7 +549,169 @@ static int xhci_setup_rings(const struct xhci_controller *controller,
 	    xhci_setup_event_ring(controller, rings) != 0) {
 		return -1;
 	}
+	rings->command_producer = 0;
+	rings->command_cycle = 1;
+	rings->event_consumer = 0;
+	rings->event_cycle = 1;
 	return 0;
+}
+
+static u64 xhci_port_offset(const struct xhci_controller *controller, u64 port)
+{
+	return controller->cap_length + XHCI_OP_PORTSC_BASE +
+	       port * XHCI_OP_PORT_STRIDE;
+}
+
+static int xhci_find_connected_port(const struct xhci_controller *controller,
+				    u64 *port, u64 *status)
+{
+	for (u64 i = 0; i < controller->max_ports; i++) {
+		const long portsc =
+			mmio_read32(controller->mmio,
+				    xhci_port_offset(controller, i));
+
+		if (portsc >= 0 && (((u64)portsc) & XHCI_PORTSC_CCS) != 0) {
+			*port = i;
+			*status = (u64)portsc;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+static int xhci_reset_port(const struct xhci_controller *controller, u64 *port,
+			   u64 *speed)
+{
+	u64 selected = 0;
+	u64 status = 0;
+	const u64 clear_mask = XHCI_PORTSC_CHANGE_BITS;
+
+	if (port == 0 || speed == 0 ||
+	    xhci_find_connected_port(controller, &selected, &status) != 0) {
+		return -1;
+	}
+	if (mmio_write32(controller->mmio, xhci_port_offset(controller, selected),
+			 (status & ~clear_mask) | XHCI_PORTSC_PR) != 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < XHCI_WAIT_POLLS; i++) {
+		const long portsc =
+			mmio_read32(controller->mmio,
+				    xhci_port_offset(controller, selected));
+
+		if (portsc < 0) {
+			return -1;
+		}
+		status = (u64)portsc;
+		if ((status & XHCI_PORTSC_PR) == 0 &&
+		    (status & XHCI_PORTSC_CCS) != 0) {
+			*port = selected;
+			*speed = (status >> XHCI_PORTSC_SPEED_SHIFT) &
+				 XHCI_PORTSC_SPEED_MASK;
+			(void)mmio_write32(controller->mmio,
+					   xhci_port_offset(controller,
+							    selected),
+					   status & clear_mask);
+			return 0;
+		}
+		bunix_sleep_ns(1000000ull);
+	}
+	return -1;
+}
+
+static int xhci_write_command_trb(struct xhci_rings *rings, u64 parameter,
+				  u64 status, u64 control)
+{
+	u64 index;
+	u64 offset;
+
+	if (rings == 0 || rings->command_producer >= XHCI_RING_TRBS - 1) {
+		return -1;
+	}
+	index = rings->command_producer;
+	offset = rings->command_ring.offset + index * XHCI_TRB_SIZE;
+	if (buffer_write64(rings->command_ring.handle, offset, parameter) != 0 ||
+	    buffer_write32(rings->command_ring.handle, offset + 8, status) !=
+		    0 ||
+	    buffer_write32(rings->command_ring.handle, offset + 12,
+			   control | rings->command_cycle) != 0) {
+		return -1;
+	}
+	rings->command_producer++;
+	return 0;
+}
+
+static int xhci_ring_command_doorbell(const struct xhci_controller *controller)
+{
+	return mmio_write32(controller->mmio, controller->doorbell_offset, 0);
+}
+
+static int xhci_wait_command_completion(const struct xhci_controller *controller,
+					struct xhci_rings *rings, u64 *slot_id,
+					u64 *completion_code)
+{
+	for (u64 poll = 0; poll < XHCI_COMMAND_POLLS; poll++) {
+		const u64 offset = rings->event_ring.offset +
+				   rings->event_consumer * XHCI_TRB_SIZE;
+		u64 parameter = 0;
+		u64 status = 0;
+		u64 control = 0;
+		u64 type;
+
+		if (buffer_read64(rings->event_ring.handle, offset,
+				  &parameter) != 0 ||
+		    buffer_read32(rings->event_ring.handle, offset + 8,
+				  &status) != 0 ||
+		    buffer_read32(rings->event_ring.handle, offset + 12,
+				  &control) != 0) {
+			return -1;
+		}
+		if ((control & XHCI_TRB_CYCLE) != rings->event_cycle) {
+			bunix_sleep_ns(1000000ull);
+			continue;
+		}
+		rings->event_consumer++;
+		if (rings->event_consumer == XHCI_RING_TRBS) {
+			rings->event_consumer = 0;
+			rings->event_cycle ^= 1;
+		}
+		{
+			const u64 erdp = rings->event_ring.phys +
+					 rings->event_consumer * XHCI_TRB_SIZE;
+
+			(void)mmio_write64(controller->mmio,
+					   controller->runtime_offset +
+						   XHCI_RUNTIME_IR0 +
+						   XHCI_IR_ERDP,
+					   erdp | (1 << 3));
+		}
+		type = (control >> 10) & 0x3fu;
+		if (type == XHCI_TRB_TYPE_COMMAND_COMPLETION) {
+			*completion_code = (status >> 24) & 0xffu;
+			*slot_id = (control >> 24) & 0xffu;
+			return parameter != 0 ? 0 : -1;
+		}
+		if (type != XHCI_TRB_TYPE_PORT_STATUS_CHANGE) {
+			return -1;
+		}
+	}
+	return -1;
+}
+
+static int xhci_enable_slot(const struct xhci_controller *controller,
+			    struct xhci_rings *rings, u64 *slot_id,
+			    u64 *completion_code)
+{
+	const u64 control = ((u64)XHCI_TRB_TYPE_ENABLE_SLOT) << 10;
+
+	if (xhci_write_command_trb(rings, 0, 0, control) != 0 ||
+	    xhci_ring_command_doorbell(controller) != 0 ||
+	    xhci_wait_command_completion(controller, rings, slot_id,
+					 completion_code) != 0) {
+		return -1;
+	}
+	return *completion_code == XHCI_COMPLETION_SUCCESS && *slot_id != 0 ? 0 :
+									-1;
 }
 
 static void log_rings(const struct xhci_rings *rings)
@@ -474,6 +726,72 @@ static void log_rings(const struct xhci_rings *rings)
 	append_u64(line, sizeof(line), &offset, rings->event_ring.phys);
 	append_text(line, sizeof(line), &offset, " scratchpads=");
 	append_u64(line, sizeof(line), &offset, rings->scratchpad_count);
+	append_char(line, sizeof(line), &offset, '\n');
+	bunix_console_log(line, offset);
+}
+
+static void log_port_reset(u64 port, u64 speed)
+{
+	char line[96];
+	u64 offset = 0;
+
+	line[0] = '\0';
+	append_text(line, sizeof(line), &offset, "xhci: port reset port=");
+	append_u64(line, sizeof(line), &offset, port + 1);
+	append_text(line, sizeof(line), &offset, " speed=");
+	append_u64(line, sizeof(line), &offset, speed);
+	append_char(line, sizeof(line), &offset, '\n');
+	bunix_console_log(line, offset);
+}
+
+static void log_enable_slot(u64 slot_id, u64 completion_code)
+{
+	char line[96];
+	u64 offset = 0;
+
+	line[0] = '\0';
+	append_text(line, sizeof(line), &offset, "xhci: enable slot slot=");
+	append_u64(line, sizeof(line), &offset, slot_id);
+	append_text(line, sizeof(line), &offset, " code=");
+	append_u64(line, sizeof(line), &offset, completion_code);
+	append_char(line, sizeof(line), &offset, '\n');
+	bunix_console_log(line, offset);
+}
+
+static void log_command_debug(const struct xhci_controller *controller,
+			      const struct xhci_rings *rings)
+{
+	char line[192];
+	u64 offset = 0;
+	u64 crcr = 0;
+	u64 erdp = 0;
+	u64 event0_control = 0;
+	u64 event0_status = 0;
+	long usbsts;
+
+	usbsts = mmio_read32(controller->mmio,
+			     controller->cap_length + XHCI_OP_USBSTS);
+	(void)mmio_read64(controller->mmio,
+			  controller->cap_length + XHCI_OP_CRCR, &crcr);
+	(void)mmio_read64(controller->mmio,
+			  controller->runtime_offset + XHCI_RUNTIME_IR0 +
+				  XHCI_IR_ERDP,
+			  &erdp);
+	(void)buffer_read32(rings->event_ring.handle,
+			    rings->event_ring.offset + 8, &event0_status);
+	(void)buffer_read32(rings->event_ring.handle,
+			    rings->event_ring.offset + 12, &event0_control);
+	line[0] = '\0';
+	append_text(line, sizeof(line), &offset, "xhci: command debug usbsts=");
+	append_u64(line, sizeof(line), &offset, usbsts < 0 ? 0 : (u64)usbsts);
+	append_text(line, sizeof(line), &offset, " crcr=");
+	append_u64(line, sizeof(line), &offset, crcr);
+	append_text(line, sizeof(line), &offset, " erdp=");
+	append_u64(line, sizeof(line), &offset, erdp);
+	append_text(line, sizeof(line), &offset, " evst=");
+	append_u64(line, sizeof(line), &offset, event0_status);
+	append_text(line, sizeof(line), &offset, " evctl=");
+	append_u64(line, sizeof(line), &offset, event0_control);
 	append_char(line, sizeof(line), &offset, '\n');
 	bunix_console_log(line, offset);
 }
@@ -559,7 +877,35 @@ int main(void)
 
 					if (xhci_setup_rings(&controller,
 							     &rings) == 0) {
+						u64 port = 0;
+						u64 speed = 0;
+						u64 slot_id = 0;
+						u64 code = 0;
+
 						log_rings(&rings);
+						if (xhci_start_controller(
+							    &controller) == 0 &&
+						    xhci_reset_port(&controller,
+								    &port,
+								    &speed) == 0) {
+							log_port_reset(port,
+								       speed);
+							if (xhci_enable_slot(
+								    &controller,
+								    &rings,
+								    &slot_id,
+								    &code) == 0) {
+								log_enable_slot(
+									slot_id,
+									code);
+							} else {
+								log_command_debug(
+									&controller,
+									&rings);
+							}
+						}
+						(void)xhci_stop_controller(
+							&controller);
 					}
 				}
 			}

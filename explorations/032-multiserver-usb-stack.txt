@@ -90,7 +90,7 @@ Tasks:
 - [x] Implement a synthetic USB controller test backend so descriptor parsing,
       interface claiming, endpoint scoping, and transfer-completion plumbing can
       be tested without real xHCI hardware.
-- [ ] Implement the first real xHCI milestone: controller reset, capability/
+- [x] Implement the first real xHCI milestone: controller reset, capability/
       operational/runtime register mapping, command ring/event ring setup,
       port status read, and clean shutdown under QEMU.
 - [ ] Implement xHCI device enumeration for one deterministic QEMU USB device:
@@ -136,6 +136,11 @@ Progress notes:
 - `xhci.server` now allocates server-owned DMA buffers for DCBAA, command
   ring, event ring, ERST, and bounded scratchpad pages, then programs CRCR,
   DCBAAP, CONFIG, and interrupter 0 event-ring registers under QEMU.
+- `test-boot-xhci-discovery` now attaches a deterministic QEMU USB keyboard.
+  `xhci.server` starts the controller, finds and resets the connected root
+  port, consumes the port-status-change event, submits `Enable Slot`, observes
+  the command-completion event with success, logs the allocated slot, and halts
+  the controller before guest poweroff.
 - Default boot behavior is unchanged: the USB modules are packaged but not
   launched unless a USB command-line test flag is present.
 
@@ -146,11 +151,9 @@ Open design notes:
 - The upper `USB0` constants now name the intended class-driver operations, but
   endpoint capabilities and transfer-completion objects still need full OCAP
   modeling.
-- The first xHCI hardware milestone is mostly complete: register mapping,
-  reset, port-status read, DCBAA, command ring, event ring, ERST, scratchpad
-  handling, and interrupter setup are in place.  Clean shutdown is still
-  limited to keeping the controller halted in this smoke; full started-ring
-  shutdown belongs with command submission.
+- The next xHCI enumeration step is `Address Device`: allocate and program
+  input/device contexts, set route/root-port/speed context fields, submit the
+  address-device command, then issue control transfers for descriptors.
 
 USB DMA model:
 
