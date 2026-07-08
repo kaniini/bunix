@@ -145,7 +145,8 @@ Operator setup:
   exploration tasks have supporting evidence and which still need follow-up.
 - Run `tools/bpi-f3-smoke.sh --summarize-log bpi-f3-serial.log` and record the
   CPU count, timebase, firmware stdout path, resolved UART, UART MMIO base,
-  UART count, and interrupt-controller path/count in the exploration notes.
+  UART count, interrupt-controller path/compatible/count, and selected
+  interrupt-routing path/compatible in the exploration notes.
 
 The command recipe intentionally prints U-Boot `bdinfo`, `/chosen`,
 `/aliases`, and `/cpus` before entering Bunix.  Those preboot diagnostics give
@@ -169,7 +170,10 @@ Expected first milestone serial markers:
 - `fdt: riscv64 uart-count=...`
 - `fdt: riscv64 interrupt-controller`
 - `fdt: riscv64 interrupt-controller-path=...`
+- `fdt: riscv64 interrupt-controller-compatible=...`
 - `fdt: riscv64 interrupt-controller-count=...`
+- `fdt: riscv64 interrupt-routing-path=...`
+- `fdt: riscv64 interrupt-routing-compatible=...`
 - `timer: riscv64 tick`
 - `thread: riscv64 switch`
 - `bootpkg: riscv64 initrd`
@@ -195,8 +199,9 @@ serial log and updating the exploration notes.
 The summary output is also tab-separated.  It extracts the board-specific
 values that must be reviewed before closing the remaining hardware tasks:
 `cpu-count`, `timebase-hz`, `stdout-path`, `stdout-resolved`,
-`stdout-uart-base`, `uart-count`, `interrupt-controller-path`, and
-`interrupt-controller-count`.
+`stdout-uart-base`, `uart-count`, `interrupt-controller-path`,
+`interrupt-controller-compatible`, `interrupt-controller-count`,
+`interrupt-routing-path`, and `interrupt-routing-compatible`.
 
 ## Follow-Up Hardware Work
 

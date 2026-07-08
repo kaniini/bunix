@@ -92,7 +92,10 @@ check_log() {
 	require_marker "$log" "fdt: riscv64 uart-count="
 	require_marker "$log" "fdt: riscv64 interrupt-controller"
 	require_marker "$log" "fdt: riscv64 interrupt-controller-path="
+	require_marker "$log" "fdt: riscv64 interrupt-controller-compatible="
 	require_marker "$log" "fdt: riscv64 interrupt-controller-count="
+	require_marker "$log" "fdt: riscv64 interrupt-routing-path="
+	require_marker "$log" "fdt: riscv64 interrupt-routing-compatible="
 	require_marker "$log" "timer: riscv64 tick"
 	require_marker "$log" "thread: riscv64 switch"
 	require_marker "$log" "bootpkg: riscv64 initrd"
@@ -156,8 +159,14 @@ summarize_log() {
 	summary_line "uart-count" "$(marker_value "$log" "fdt: riscv64 uart-count=")"
 	summary_line "interrupt-controller-path" \
 		"$(marker_value "$log" "fdt: riscv64 interrupt-controller-path=")"
+	summary_line "interrupt-controller-compatible" \
+		"$(marker_value "$log" "fdt: riscv64 interrupt-controller-compatible=")"
 	summary_line "interrupt-controller-count" \
 		"$(marker_value "$log" "fdt: riscv64 interrupt-controller-count=")"
+	summary_line "interrupt-routing-path" \
+		"$(marker_value "$log" "fdt: riscv64 interrupt-routing-path=")"
+	summary_line "interrupt-routing-compatible" \
+		"$(marker_value "$log" "fdt: riscv64 interrupt-routing-compatible=")"
 }
 
 classify_log() {
@@ -193,12 +202,13 @@ classify_log() {
 	fi
 
 	if has_marker "$log" "fdt: riscv64 interrupt-controller" &&
-	    has_marker "$log" "fdt: riscv64 interrupt-controller-path="; then
+	    has_marker "$log" "fdt: riscv64 interrupt-controller-path=" &&
+	    has_marker "$log" "fdt: riscv64 interrupt-routing-compatible="; then
 		classify_line "interrupt-routing" "evidence" \
-			"firmware interrupt-controller node discovered; routing still needs driver policy"
+			"firmware interrupt-controller node discovered with routing-compatible diagnostic"
 	else
 		classify_line "interrupt-routing" "missing" \
-			"need interrupt-controller discovery diagnostics"
+			"need interrupt-controller discovery and routing-compatible diagnostics"
 	fi
 
 	if has_marker "$log" "fdt: riscv64 cpu-count="; then
@@ -241,7 +251,10 @@ fdt: riscv64 uart
 fdt: riscv64 uart-count=1
 fdt: riscv64 interrupt-controller
 fdt: riscv64 interrupt-controller-path=/soc/interrupt-controller@c000000
+fdt: riscv64 interrupt-controller-compatible=sifive,plic-1.0.0
 fdt: riscv64 interrupt-controller-count=1
+fdt: riscv64 interrupt-routing-path=/soc/interrupt-controller@c000000
+fdt: riscv64 interrupt-routing-compatible=sifive,plic-1.0.0
 timer: riscv64 tick
 thread: riscv64 switch
 bootpkg: riscv64 initrd
@@ -265,6 +278,7 @@ EOF
 	classify_log "$tmp" >/dev/null
 	summarize_log "$tmp" | grep -aF "stdout-resolved	/soc/serial@10000000" >/dev/null
 	summarize_log "$tmp" | grep -aF "interrupt-controller-path	/soc/interrupt-controller@c000000" >/dev/null
+	summarize_log "$tmp" | grep -aF "interrupt-routing-compatible	sifive,plic-1.0.0" >/dev/null
 	printf 'bpi-f3 smoke self-test ok\n'
 }
 

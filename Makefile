@@ -1179,7 +1179,10 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "fdt: riscv64 uart-count=" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 interrupt-controller" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 interrupt-controller-path=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "fdt: riscv64 interrupt-controller-compatible=" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 interrupt-controller-count=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "fdt: riscv64 interrupt-routing-path=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "fdt: riscv64 interrupt-routing-compatible=" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "sched: riscv64 thread" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "vm: riscv64 hooks" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "syscall: riscv64 ecall" $(RISCV64_SERIAL_LOG) >/dev/null

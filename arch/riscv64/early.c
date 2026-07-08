@@ -116,6 +116,24 @@ static void early_put_kv_str(const char *key, const char *value)
 	early_puts("\n");
 }
 
+static int early_str_contains(const char *text, const char *needle)
+{
+	if (*needle == '\0') {
+		return 1;
+	}
+	for (u32 i = 0; text[i] != '\0'; i++) {
+		u32 j = 0;
+
+		while (needle[j] != '\0' && text[i + j] == needle[j]) {
+			j++;
+		}
+		if (needle[j] == '\0') {
+			return 1;
+		}
+	}
+	return 0;
+}
+
 static void pmm_bootstrap_from_fdt(u64 fdt)
 {
 	struct riscv64_fdt_memory_range memory_ranges[8];
@@ -243,11 +261,30 @@ static void platform_discovery_smoke(u64 fdt)
 				 platform.uart_count);
 	}
 	if (platform.interrupt_controller_count != 0) {
+		const struct riscv64_fdt_device *routing =
+			&platform.interrupt_controllers[0];
+
+		for (u32 i = 0; i < platform.interrupt_controller_count; i++) {
+			const struct riscv64_fdt_device *candidate =
+				&platform.interrupt_controllers[i];
+
+			if (!early_str_contains(candidate->compatible,
+						"cpu-intc")) {
+				routing = candidate;
+				break;
+			}
+		}
 		early_puts("fdt: riscv64 interrupt-controller\n");
 		early_put_kv_str("fdt: riscv64 interrupt-controller-path=",
 				 platform.interrupt_controllers[0].path);
+		early_put_kv_str("fdt: riscv64 interrupt-controller-compatible=",
+				 platform.interrupt_controllers[0].compatible);
 		early_put_kv_dec("fdt: riscv64 interrupt-controller-count=",
 				 platform.interrupt_controller_count);
+		early_put_kv_str("fdt: riscv64 interrupt-routing-path=",
+				 routing->path);
+		early_put_kv_str("fdt: riscv64 interrupt-routing-compatible=",
+				 routing->compatible);
 	}
 }
 

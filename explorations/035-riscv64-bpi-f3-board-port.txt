@@ -292,3 +292,17 @@ Verification notes:
 - `make test-riscv64-bpi-f3-emulator-gate` passed after adding the BPI-F3
   summary extractor and printed clean summary rows for the QEMU `virt` log.
 - `git diff --check` passed after adding the BPI-F3 summary extractor.
+- Added interrupt-controller routing diagnostics:
+  - The riscv64 firmware-DT smoke now prints the first interrupt-controller
+    compatible string, a selected routing controller path, and its compatible
+    string.
+  - The selection skips local `cpu-intc` nodes when a nonlocal interrupt
+    controller is available, so QEMU and BPI-F3 logs can distinguish PLIC,
+    AIA, or vendor-specific routing candidates.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding interrupt-controller
+  routing diagnostics.
+- `make test-riscv64-bpi-f3-emulator-gate` passed after adding
+  interrupt-controller routing diagnostics and reported QEMU `virt`
+  `interrupt-routing-compatible=sifive,plic-1.0.0`.
+- `git diff --check` passed after adding interrupt-controller routing
+  diagnostics.
