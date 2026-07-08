@@ -2,8 +2,13 @@
 #include <arch/fdt.h>
 #include <arch/interrupts.h>
 #include <arch/sbi.h>
+#include <arch/thread.h>
 
 static struct riscv64_boot_info boot_info;
+static struct arch_thread_context boot_context;
+static struct arch_thread_context worker_context;
+static volatile u32 worker_switched;
+static u8 worker_stack[4096] __attribute__((aligned(16)));
 
 const struct riscv64_boot_info *riscv64_boot_info(void)
 {
@@ -23,6 +28,26 @@ static void early_puts(const char *text)
 		}
 		sbi_putchar(*text++);
 	}
+}
+
+static void worker_thread_main(void)
+{
+	worker_switched = 1;
+	arch_thread_switch(&worker_context, &boot_context);
+	for (;;) {
+		__asm__ volatile ("wfi");
+	}
+}
+
+static int context_switch_self_test(void)
+{
+	worker_switched = 0;
+	arch_thread_context_init_current(&boot_context);
+	arch_thread_context_init(&worker_context,
+				 worker_stack + sizeof(worker_stack),
+				 worker_thread_main);
+	arch_thread_switch(&boot_context, &worker_context);
+	return worker_switched == 1 ? 0 : -1;
 }
 
 void riscv64_early_main(u64 hart_id, u64 fdt)
@@ -52,6 +77,9 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	}
 	arch_interrupts_disable();
 	early_puts("timer: riscv64 tick\n");
+	if (context_switch_self_test() == 0) {
+		early_puts("thread: riscv64 switch\n");
+	}
 	early_puts("machine: poweroff\n");
 	(void)riscv64_sbi_call1(RISCV64_SBI_LEGACY_SHUTDOWN, 0);
 

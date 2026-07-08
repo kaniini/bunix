@@ -152,6 +152,15 @@ Progress notes:
     was emitted at a 2-byte-aligned address, which corrupted the low `stvec`
     mode bits.  Aligning the trap entry to a 4-byte boundary fixed timer
     delivery.
+- Proved the riscv64 kernel-thread context switch primitive in early boot:
+  - The early path now initializes a boot context and worker context with
+    `arch_thread_context_init_current()` and `arch_thread_context_init()`.
+  - It switches to a worker stack through `arch_thread_switch()`, the worker
+    records progress, and it switches back to the boot context.
+  - `test-boot-riscv64-early` now requires the `thread: riscv64 switch`
+    marker before poweroff.
+  - This covers the kernel-thread context-switch half of the context/userspace
+    task; native riscv64 userspace server execution remains open.
 - Added riscv64 arch skeleton headers and implementations:
   - `arch/riscv64/include/arch/sbi.h` centralizes the early SBI call ABI and
     console putchar helper used by the early payload and power path.
@@ -258,3 +267,8 @@ Verification so far:
 - `make test-boot-riscv64-early` passed with the additional
   `timer: riscv64 tick` marker.
 - `make all` passed for the default x86_64 target after the trap/timer change.
+- `make ARCH=riscv64 all` passed with the early context-switch self-test.
+- `make test-boot-riscv64-early` passed with the additional
+  `thread: riscv64 switch` marker.
+- `make all` passed for the default x86_64 target after the context-switch
+  change.
