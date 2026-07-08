@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 042-kernel-borrowed-handle-races.txt
+The current exploration is: 043-user-address-space-identity-map-escape.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.
