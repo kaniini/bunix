@@ -30,6 +30,7 @@ static const struct server boot_servers[] = {
 	{ "unionfs", 0 },
 	{ "ext2", 0 },
 	{ "block", 0 },
+	{ "pci", 0 },
 	{ "virtio-bus", 0 },
 	{ "virtio-blk", 0 },
 	{ "virtio-net", 0 },
@@ -360,7 +361,7 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 		return;
 	}
 
-	if (str_eq(server_name, "virtio-bus")) {
+	if (str_eq(server_name, "pci")) {
 		task_grant_hw_resource(task, &pci_config_ports, TASK_RIGHT_SEND);
 		return;
 	}

@@ -3,11 +3,9 @@
 
 enum {
 	VIRTIO_BUS_HANDLE_NAMES = 3,
-	VIRTIO_BUS_HANDLE_PCI_CONFIG = 4,
+	VIRTIO_BUS_HANDLE_PCI = 4,
 	VIRTIO_BUS_MAX_RESOURCES = 16,
 	VIRTIO_BUS_MAX_QUEUES = 8,
-	PCI_CONFIG_ADDRESS = 0,
-	PCI_CONFIG_DATA = 4,
 	PCI_VENDOR_NONE = 0xffff,
 	PCI_COMMAND = 0x04,
 	PCI_COMMAND_IO = 1 << 0,
@@ -52,6 +50,7 @@ struct virtio_bus_device {
 	struct bunix_virtio_device_info info;
 	struct bunix_device_resource resources[VIRTIO_BUS_MAX_RESOURCES];
 	struct virtio_bus_queue queues[VIRTIO_BUS_MAX_QUEUES];
+	u64 pci_index;
 	u64 resource_count;
 };
 
@@ -193,65 +192,109 @@ static long register_service(u64 service, u64 handle)
 	return reply.words[0] == BUNIX_DEV_OK ? 0 : -1;
 }
 
-static long pci_config_read32(u64 bus, u64 slot, u64 function, u64 offset)
+static long pci_call(struct bunix_msg *request, struct bunix_msg *reply)
 {
-	const u64 address = 0x80000000ull |
-			    ((bus & 0xff) << 16) |
-			    ((slot & 0x1f) << 11) |
-			    ((function & 0x7) << 8) |
-			    (offset & 0xfc);
-
-	if (bunix_hw_port_out32(VIRTIO_BUS_HANDLE_PCI_CONFIG,
-				PCI_CONFIG_ADDRESS, address) != 0) {
+	if (request == 0 || reply == 0) {
 		return -1;
 	}
-	return bunix_hw_port_in32(VIRTIO_BUS_HANDLE_PCI_CONFIG,
-				  PCI_CONFIG_DATA);
+	request->protocol = BUNIX_PROTO_PCI;
+	return bunix_ipc_call(VIRTIO_BUS_HANDLE_PCI, request, reply) == 0 &&
+		       reply->protocol == BUNIX_PROTO_PCI &&
+		       reply->words[0] == BUNIX_PCI_OK ?
+	       0 :
+	       -1;
 }
 
-static long pci_config_write32(u64 bus, u64 slot, u64 function, u64 offset,
-			       u64 value)
+static long pci_enumerate(void)
 {
-	const u64 address = 0x80000000ull |
-			    ((bus & 0xff) << 16) |
-			    ((slot & 0x1f) << 11) |
-			    ((function & 0x7) << 8) |
-			    (offset & 0xfc);
+	struct bunix_msg request = {
+		.type = BUNIX_PCI_ENUMERATE,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
 
-	if (bunix_hw_port_out32(VIRTIO_BUS_HANDLE_PCI_CONFIG,
-				PCI_CONFIG_ADDRESS, address) != 0) {
+	return pci_call(&request, &reply) == 0 ? (long)reply.words[1] : -1;
+}
+
+static int pci_get_info(u64 index, u64 *bus, u64 *slot, u64 *function,
+			u64 *vendor, u64 *device, u64 *class_code,
+			u64 *revision, u64 *interrupt_line,
+			u64 *interrupt_pin)
+{
+	struct bunix_msg request = {
+		.type = BUNIX_PCI_GET_INFO,
+		.words = { index, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (pci_call(&request, &reply) != 0) {
 		return -1;
 	}
-	return bunix_hw_port_out32(VIRTIO_BUS_HANDLE_PCI_CONFIG,
-				   PCI_CONFIG_DATA, value);
-}
-
-static void pci_enable_device(u64 bus, u64 slot, u64 function)
-{
-	const long value = pci_config_read32(bus, slot, function, PCI_COMMAND);
-	u64 command;
-
-	if (value < 0) {
-		return;
+	if (bus != 0) {
+		*bus = reply.words[1] & 0xffu;
 	}
-	command = ((u64)value & 0xffffu) | PCI_COMMAND_IO |
-		  PCI_COMMAND_MEMORY | PCI_COMMAND_BUS_MASTER;
-	(void)pci_config_write32(bus, slot, function, PCI_COMMAND,
-				 ((u64)value & 0xffff0000u) | command);
+	if (slot != 0) {
+		*slot = (reply.words[1] >> 8) & 0x1fu;
+	}
+	if (function != 0) {
+		*function = (reply.words[1] >> 16) & 0x7u;
+	}
+	if (vendor != 0) {
+		*vendor = reply.words[2] & 0xffffu;
+	}
+	if (device != 0) {
+		*device = (reply.words[2] >> 16) & 0xffffu;
+	}
+	if (revision != 0) {
+		*revision = (reply.words[2] >> 32) & 0xffu;
+	}
+	if (class_code != 0) {
+		*class_code = reply.words[3] & 0xffffffu;
+	}
+	if (interrupt_line != 0) {
+		*interrupt_line = (reply.words[3] >> 32) & 0xffu;
+	}
+	if (interrupt_pin != 0) {
+		*interrupt_pin = (reply.words[3] >> 40) & 0xffu;
+	}
+	return 0;
 }
 
-static long pci_config_read8(u64 bus, u64 slot, u64 function, u64 offset)
+static int pci_enable_device(u64 index)
 {
-	const long value = pci_config_read32(bus, slot, function, offset);
+	struct bunix_msg request = {
+		.type = BUNIX_PCI_ENABLE,
+		.words = { index, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
 
-	return value < 0 ? value : (long)(((u64)value >> ((offset & 3) * 8)) & 0xff);
+	return pci_call(&request, &reply) == 0 ? 0 : -1;
 }
 
-static long pci_config_read16(u64 bus, u64 slot, u64 function, u64 offset)
+static long pci_config_read(u64 index, u64 offset, u64 width)
 {
-	const long value = pci_config_read32(bus, slot, function, offset);
+	struct bunix_msg request = {
+		.type = BUNIX_PCI_READ_CONFIG,
+		.words = { index, offset, width, 0 },
+	};
+	struct bunix_msg reply;
 
-	return value < 0 ? value : (long)(((u64)value >> ((offset & 2) * 8)) & 0xffff);
+	return pci_call(&request, &reply) == 0 ? (long)reply.words[1] : -1;
+}
+
+static long pci_config_read32(u64 index, u64 offset)
+{
+	return pci_config_read(index, offset, 4);
+}
+
+static long pci_config_read8(u64 index, u64 offset)
+{
+	return pci_config_read(index, offset, 1);
+}
+
+static long pci_config_read16(u64 index, u64 offset)
+{
+	return pci_config_read(index, offset, 2);
 }
 
 static int device_push(const struct virtio_bus_device *device)
@@ -289,23 +332,35 @@ static int pci_is_virtio(u64 vendor, u64 device)
 	       (device >= 0x1040 && device <= 0x107f);
 }
 
-static u64 pci_bar_grant(u64 bus, u64 slot, u64 function, u64 bar, u64 offset,
-			 u64 len, u64 ops)
+static int pci_get_bar(u64 pci_index, u64 bar, struct bunix_msg *reply)
 {
-	const u64 packed = (bus & 0xff) | ((slot & 0x1f) << 8) |
-			   ((function & 0x7) << 16) | ((bar & 0x7) << 24);
-	const long handle = bunix_hw_pci_bar_grant(packed, offset, len, ops);
+	struct bunix_msg request = {
+		.type = BUNIX_PCI_GET_BAR,
+		.words = { pci_index, bar, 0, 0 },
+	};
 
-	return handle > 0 ? (u64)handle : 0;
+	return pci_call(&request, reply);
 }
 
-static u64 pci_irq_grant(u64 bus, u64 slot, u64 function, u64 line)
+static int pci_grant_bar(u64 pci_index, u64 bar, u64 offset, u64 len,
+			 struct bunix_msg *reply)
 {
-	const u64 packed = (bus & 0xff) | ((slot & 0x1f) << 8) |
-			   ((function & 0x7) << 16);
-	const long handle = bunix_hw_pci_irq_grant(packed, line);
+	struct bunix_msg request = {
+		.type = BUNIX_PCI_GRANT_BAR,
+		.words = { pci_index, bar, offset, len },
+	};
 
-	return handle > 0 ? (u64)handle : 0;
+	return pci_call(&request, reply);
+}
+
+static int pci_grant_irq(u64 pci_index, struct bunix_msg *reply)
+{
+	struct bunix_msg request = {
+		.type = BUNIX_PCI_GRANT_IRQ,
+		.words = { pci_index, 0, 0, 0 },
+	};
+
+	return pci_call(&request, reply);
 }
 
 static void resource_add(struct virtio_bus_device *device, u64 type, u64 ops,
@@ -514,96 +569,25 @@ static u64 queue_size_choose(u64 max_size, u64 requested_size)
 	return size;
 }
 
-static void scan_pci_bars(struct virtio_bus_device *device, u64 bus, u64 slot,
-			  u64 function)
+static void scan_pci_bars(struct virtio_bus_device *device, u64 pci_index)
 {
 	for (u64 bar = 0; bar < 6; bar++) {
-		const u64 offset = PCI_BAR0 + bar * 4;
-		const long original = pci_config_read32(bus, slot, function,
-							offset);
-		long original_high = 0;
-		long mask_value;
-		long mask_high_value = 0;
-		u64 raw;
-		u64 raw_high = 0;
-		u64 mask;
-		u64 mask_high = 0;
-		u64 size;
-		u64 base;
-		u64 flags = 0;
+		struct bunix_msg reply;
+		u64 type;
+		u64 ops;
+		u64 flags;
 
-		if (original < 0 || original == 0) {
+		if (pci_get_bar(pci_index, bar, &reply) != 0) {
 			continue;
 		}
-		raw = (u64)original & 0xffffffffu;
-		if ((raw & PCI_BAR_IO) == 0 &&
-		    (raw & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
-			if (bar + 1 >= 6) {
-				continue;
-			}
-			original_high = pci_config_read32(bus, slot, function,
-							  offset + 4);
-			if (original_high < 0) {
-				continue;
-			}
-			(void)pci_config_write32(bus, slot, function,
-						 offset + 4, 0xffffffffu);
-		}
-		(void)pci_config_write32(bus, slot, function, offset,
-					 0xffffffffu);
-		mask_value = pci_config_read32(bus, slot, function, offset);
-		if ((raw & PCI_BAR_IO) == 0 &&
-		    (raw & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
-			mask_high_value = pci_config_read32(bus, slot, function,
-							    offset + 4);
-		}
-		(void)pci_config_write32(bus, slot, function, offset,
-					 (u64)original);
-		if ((raw & PCI_BAR_IO) == 0 &&
-		    (raw & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
-			(void)pci_config_write32(bus, slot, function,
-						 offset + 4,
-						 (u64)original_high);
-		}
-		if (mask_value <= 0) {
-			continue;
-		}
-
-		mask = (u64)mask_value & 0xffffffffu;
-		if ((raw & PCI_BAR_IO) != 0) {
-			base = raw & ~0x3ull;
-			size = (~(mask & ~0x3ull) + 1) & 0xffffffffu;
-			flags |= BUNIX_DEV_RESOURCE_FLAG_PCI_IO;
-			const u64 ops = BUNIX_DEV_OP_READ | BUNIX_DEV_OP_WRITE;
-			const u64 handle = pci_bar_grant(bus, slot, function,
-							 bar, 0, size, ops);
-			resource_add(device, BUNIX_DEV_RESOURCE_PIO, ops,
-				     handle, base, size, bar, flags);
-			continue;
-		}
-
-		base = raw & ~0xfull;
-		size = (~(mask & ~0xfull) + 1) & 0xffffffffu;
-		const u64 original_bar = bar;
-		if ((raw & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
-			if (mask_high_value < 0) {
-				continue;
-			}
-			raw_high = (u64)original_high & 0xffffffffu;
-			mask_high = (u64)mask_high_value & 0xffffffffu;
-			base = ((raw_high << 32) | raw) & ~0xfull;
-			size = ~(((mask_high << 32) | mask) & ~0xfull) + 1;
-			flags |= BUNIX_DEV_RESOURCE_FLAG_PCI_MEM64;
+		type = reply.words[1] & 0xffffu;
+		ops = (reply.words[1] >> 16) & 0xffffu;
+		flags = reply.words[1] >> 32;
+		resource_add(device, type, ops, reply.cap, reply.words[2],
+			     reply.words[3], bar, flags);
+		if ((flags & BUNIX_DEV_RESOURCE_FLAG_PCI_MEM64) != 0) {
 			bar++;
 		}
-		if ((raw & PCI_BAR_MEM_PREFETCH) != 0) {
-			flags |= BUNIX_DEV_RESOURCE_FLAG_PCI_PREFETCH;
-		}
-		const u64 ops = BUNIX_DEV_OP_READ | BUNIX_DEV_OP_WRITE;
-		const u64 handle = pci_bar_grant(bus, slot, function,
-						 original_bar, 0, size, ops);
-		resource_add(device, BUNIX_DEV_RESOURCE_MMIO, ops, handle,
-			     base, size, original_bar, flags);
 	}
 }
 
@@ -623,29 +607,24 @@ static u64 virtio_cfg_flag(u64 cfg_type)
 	}
 }
 
-static void scan_virtio_capabilities(struct virtio_bus_device *device, u64 bus,
-				     u64 slot, u64 function)
+static void scan_virtio_capabilities(struct virtio_bus_device *device,
+				     u64 pci_index)
 {
-	const long status = pci_config_read16(bus, slot, function, PCI_STATUS);
+	const long status = pci_config_read16(pci_index, PCI_STATUS);
 	long cap;
 	u64 guard = 0;
 
 	if (status < 0 || (((u64)status & PCI_STATUS_CAP_LIST) == 0)) {
 		return;
 	}
-	cap = pci_config_read8(bus, slot, function, PCI_CAP_PTR);
+	cap = pci_config_read8(pci_index, PCI_CAP_PTR);
 	while (cap > 0 && guard++ < 48) {
 		const u64 offset = (u64)cap & ~0x3ull;
-		const long header = pci_config_read32(bus, slot, function,
-						      offset);
-		const long data0 = pci_config_read32(bus, slot, function,
-						     offset + 4);
-		const long cap_offset = pci_config_read32(bus, slot, function,
-							  offset + 8);
-		const long cap_len = pci_config_read32(bus, slot, function,
-						       offset + 12);
-		const long cap_extra = pci_config_read32(bus, slot, function,
-							 offset + 16);
+		const long header = pci_config_read32(pci_index, offset);
+		const long data0 = pci_config_read32(pci_index, offset + 4);
+		const long cap_offset = pci_config_read32(pci_index, offset + 8);
+		const long cap_len = pci_config_read32(pci_index, offset + 12);
+		const long cap_extra = pci_config_read32(pci_index, offset + 16);
 		u64 cfg_type;
 		u64 bar;
 		u64 flag;
@@ -674,16 +653,19 @@ static void scan_virtio_capabilities(struct virtio_bus_device *device, u64 bus,
 						const u64 sub_len =
 							(u64)cap_len &
 							0xffffffffu;
-						const u64 handle =
-							pci_bar_grant(
-								bus, slot,
-								function, bar,
-								sub_offset,
-								sub_len,
-								resource->ops);
+						struct bunix_msg reply;
+
+						if (pci_grant_bar(
+							    pci_index, bar,
+							    sub_offset,
+							    sub_len,
+							    &reply) != 0) {
+							break;
+						}
 						resource_add(
 							device, resource->type,
-							resource->ops, handle,
+							resource->ops,
+							reply.cap,
 							resource->base +
 							sub_offset, sub_len,
 							bar, resource->flags |
@@ -697,28 +679,31 @@ static void scan_virtio_capabilities(struct virtio_bus_device *device, u64 bus,
 	}
 }
 
-static void scan_pci_function(u64 bus, u64 slot, u64 function)
+static void scan_pci_function(u64 pci_index)
 {
-	const long id = pci_config_read32(bus, slot, function, 0x00);
-	const long class_revision = pci_config_read32(bus, slot, function, 0x08);
-	const long interrupt_line = pci_config_read8(bus, slot, function,
-						    PCI_INTERRUPT_LINE);
-	const long interrupt_pin = pci_config_read8(bus, slot, function,
-						   PCI_INTERRUPT_PIN);
 	struct virtio_bus_device device_record;
 	struct bunix_virtio_device_info *info = &device_record.info;
+	struct bunix_msg irq_reply;
+	u64 bus;
+	u64 slot;
+	u64 function;
 	u64 vendor;
 	u64 device;
+	u64 class_code;
+	u64 revision;
+	u64 interrupt_line;
+	u64 interrupt_pin;
 
-	if (id < 0 || class_revision < 0) {
+	if (pci_get_info(pci_index, &bus, &slot, &function, &vendor, &device,
+			 &class_code, &revision, &interrupt_line,
+			 &interrupt_pin) != 0) {
 		return;
 	}
-	vendor = (u64)id & 0xffff;
-	device = ((u64)id >> 16) & 0xffff;
 	if (vendor == PCI_VENDOR_NONE || !pci_is_virtio(vendor, device)) {
 		return;
 	}
 
+	device_record.pci_index = pci_index;
 	device_record.resource_count = 0;
 	info->id.transport = BUNIX_DEV_TRANSPORT_PCI;
 	info->id.bus = bus;
@@ -728,8 +713,8 @@ static void scan_pci_function(u64 bus, u64 slot, u64 function)
 	info->id.device = device;
 	info->id.subsystem_vendor = 0;
 	info->id.subsystem_device = 0;
-	info->id.class_code = ((u64)class_revision >> 8) & 0xffffff;
-	info->id.revision = (u64)class_revision & 0xff;
+	info->id.class_code = class_code;
+	info->id.revision = revision;
 	info->transport.transport = BUNIX_VIRTIO_TRANSPORT_PCI;
 	info->transport.device_index = device_count;
 	info->transport.device_type = device >= 0x1040 ? device - 0x1040 : 0;
@@ -744,20 +729,17 @@ static void scan_pci_function(u64 bus, u64 slot, u64 function)
 	info->features.driver_features = 0;
 	info->features.required_features = 0;
 	info->features.negotiated_features = 0;
-	pci_enable_device(bus, slot, function);
-	scan_pci_bars(&device_record, bus, slot, function);
-	scan_virtio_capabilities(&device_record, bus, slot, function);
+	(void)pci_enable_device(pci_index);
+	scan_pci_bars(&device_record, pci_index);
+	scan_virtio_capabilities(&device_record, pci_index);
 	if (interrupt_line > 0 && interrupt_line < 0xff &&
-	    interrupt_pin > 0 && interrupt_pin <= 4) {
-		const u64 ops = BUNIX_DEV_OP_BIND_IRQ |
-				BUNIX_DEV_OP_ACK_IRQ |
-				BUNIX_DEV_OP_MASK_IRQ;
-		const u64 handle = pci_irq_grant(bus, slot, function,
-						 (u64)interrupt_line);
+	    interrupt_pin > 0 && interrupt_pin <= 4 &&
+	    pci_grant_irq(pci_index, &irq_reply) == 0) {
+		const u64 type = irq_reply.words[1] & 0xffffu;
+		const u64 ops = (irq_reply.words[1] >> 16) & 0xffffu;
 
-		resource_add(&device_record, BUNIX_DEV_RESOURCE_IRQ, ops,
-			     handle, (u64)interrupt_line, 1,
-			     (u64)interrupt_pin, 0);
+		resource_add(&device_record, type, ops, irq_reply.cap,
+			     irq_reply.words[2], 1, irq_reply.words[3], 0);
 	}
 	record_virtio_resources(&device_record);
 	(void)virtio_common_read_device_features(&device_record,
@@ -767,14 +749,13 @@ static void scan_pci_function(u64 bus, u64 slot, u64 function)
 
 static void scan_pci_bus0(void)
 {
-	for (u64 slot = 0; slot < 32; slot++) {
-		const long header = pci_config_read32(0, slot, 0, 0x0c);
-		const u64 header_type = header < 0 ? 0 : ((u64)header >> 16) & 0xff;
-		const u64 functions = (header_type & 0x80) != 0 ? 8 : 1;
+	const long count = pci_enumerate();
 
-		for (u64 function = 0; function < functions; function++) {
-			scan_pci_function(0, slot, function);
-		}
+	if (count <= 0) {
+		return;
+	}
+	for (u64 i = 0; i < (u64)count; i++) {
+		scan_pci_function(i);
 	}
 }
 

@@ -50,26 +50,65 @@ Constraints:
 
 Tasks:
 
-- [ ] Inventory current PCI/PCIe-specific code in `virtio-bus.server`,
+- [x] Inventory current PCI/PCIe-specific code in `virtio-bus.server`,
       x86_64 hardware-resource syscalls, BAR grant paths, VirtIO PCI resource
       descriptors, and QEMU test assumptions.
-- [ ] Define the `PCI0` protocol: enumerate functions, read function identity,
+- [x] Define the `PCI0` protocol: enumerate functions, read function identity,
       enable bus-master/MMIO/I/O, size BARs, grant BAR subranges, expose PCI
       capabilities, and report interrupt/MSI/MSI-X resources when available.
-- [ ] Add a buildable `pci.server` skeleton and register it in boot packaging
+- [x] Add a buildable `pci.server` skeleton and register it in boot packaging
       without changing default behavior.
-- [ ] Move x86_64 PCI config-port access and bus-0 scan logic from
+- [x] Move x86_64 PCI config-port access and bus-0 scan logic from
       `virtio-bus.server` into `pci.server`.
-- [ ] Move BAR sizing and BAR hardware-resource grant logic behind `PCI0`
+- [x] Move BAR sizing and BAR hardware-resource grant logic behind `PCI0`
       requests, preserving narrow resource attenuation.
-- [ ] Refactor `virtio-bus.server` to discover VirtIO PCI devices through
+- [x] Refactor `virtio-bus.server` to discover VirtIO PCI devices through
       `PCI0` instead of scanning PCI directly.
-- [ ] Keep VirtIO PCI capability parsing in the correct layer: generic PCI
+- [x] Keep VirtIO PCI capability parsing in the correct layer: generic PCI
       capability walking in `PCI0`, VirtIO-specific interpretation in
       `virtio-bus.server`, unless a thinner shared descriptor proves cleaner.
-- [ ] Add tests proving `pci.server` enumerates the deterministic QEMU VirtIO
+- [x] Add tests proving `pci.server` enumerates the deterministic QEMU VirtIO
       functions and exposes expected vendor/device/class/BAR metadata.
-- [ ] Update VirtIO block and net boot tests to assert the new PCI server
+- [x] Update VirtIO block and net boot tests to assert the new PCI server
       comes online and that VirtIO still reaches the existing milestones.
-- [ ] Document follow-up PCI work: ECAM, bridges, MSI/MSI-X, interrupt
+- [x] Document follow-up PCI work: ECAM, bridges, MSI/MSI-X, interrupt
       routing, hotplug, multifunction devices, and non-VirtIO PCI drivers.
+
+Completion notes:
+
+- Added `pci.server`, registered as `PCI0`, and moved x86_64 config-port bus-0
+  discovery, command-register enable, BAR sizing, BAR grants, and IRQ grants
+  behind that service.
+- The kernel now grants raw PCI config-port authority to `pci.server`, not
+  `virtio-bus.server`.
+- `virtio-bus.server` now discovers VirtIO PCI functions through `PCI0`, uses
+  `PCI0` to obtain attenuated BAR/IRQ handles, and keeps VirtIO feature,
+  queue, notify, ISR, and device-config interpretation in the VirtIO layer.
+- `PCI0` currently exposes generic config reads as the capability substrate;
+  typed PCI capability descriptors should be expanded later when non-VirtIO
+  PCI consumers need them.
+- PCI-to-VirtIO resource grants include `DUP` so `virtio-bus.server` can
+  further attenuate and re-export handles to drivers; driver-facing `DEV0`
+  grants remain narrow.
+
+Follow-up PCI work:
+
+- Add ECAM and firmware-described host bridge discovery.
+- Add bridge traversal and non-bus-0 enumeration.
+- Add MSI/MSI-X resource discovery, allocation, and masking.
+- Replace the current legacy INTx-only routing assumptions with a richer
+  interrupt routing model.
+- Add PCI hotplug and rescanning policy.
+- Add first non-VirtIO PCI driver consumer.
+- Add typed PCI capability descriptor RPCs once a second consumer proves the
+  common shape.
+
+Verification:
+
+- `make build/modules/pci.server build/modules/virtio-bus.server build/modules/bootstrap.server`
+- `make test-boot-virtio-blk`
+- `make test-boot-virtio-net`
+- `make test-boot-virtio`
+- `BUNIX_TEST_RETRIES=1 make test`
+  - run id `20260708T034413Z-23497`
+  - 20 shards launched, 0 skipped

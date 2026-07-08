@@ -3270,8 +3270,23 @@ int main(void)
 		return 1;
 	}
 
-	bunix_launch_module_with_caps("virtio-bus", fs_caps,
+	bunix_launch_module_with_caps("pci", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	const u64 pci = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						  BUNIX_SERVICE_PCI,
+						  BUNIX_RIGHT_SEND |
+							  BUNIX_RIGHT_DUP);
+	if (pci == 0) {
+		return 1;
+	}
+	const struct bunix_launch_cap virtio_bus_caps[] = {
+		{ console, BUNIX_RIGHT_SEND, 0 },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+		{ pci, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
+	};
+	bunix_launch_module_with_caps(
+		"virtio-bus", virtio_bus_caps,
+		sizeof(virtio_bus_caps) / sizeof(virtio_bus_caps[0]));
 	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_DEVICE,
 				      BUNIX_RIGHT_SEND) == 0) {
 		return 1;
