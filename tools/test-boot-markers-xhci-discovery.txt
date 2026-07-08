@@ -1,0 +1,5 @@
+bootstrap: xhci test
+xhci: online
+xhci: pci controllers=1 dma=deferred
+xhci: ready skeleton
+machine: poweroff

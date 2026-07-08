@@ -124,6 +124,9 @@ Progress notes:
 - Added `test-boot-usb-synth`, which boots with `usb-synth-test`, validates
   descriptor parsing and interface claim/release from bootstrap, checks USB
   log markers, and ends in guest poweroff.
+- Added `test-boot-xhci-discovery`, which boots QEMU with a `qemu-xhci` PCI
+  function, launches the disabled-by-default `xhci.server`, proves it can
+  discover one xHCI controller through `PCI0`, and ends in guest poweroff.
 - Default boot behavior is unchanged: the USB modules are packaged but not
   launched unless a USB command-line test flag is present.
 
@@ -179,4 +182,5 @@ Verification so far:
 
 - `make build/modules/usb-bus.server build/modules/usb-synth.server build/modules/xhci.server build/modules/bootstrap.server`
 - `make test-boot-usb-synth`
+- `make test-boot-xhci-discovery`
 - `make test-boot`

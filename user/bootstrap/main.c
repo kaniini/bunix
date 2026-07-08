@@ -3260,6 +3260,7 @@ int main(void)
 	const char virtio_blk_test[] = "bootstrap: virtio-blk test\n";
 	const char usb_synth_test[] = "bootstrap: usb synth test\n";
 	const char usb_synth_ok[] = "bootstrap: usb synth ok\n";
+	const char xhci_test[] = "bootstrap: xhci test\n";
 	const char net_loopback_ok[] = "bootstrap: net loopback ok\n";
 	const char net_udp_ok[] = "bootstrap: net udp ok\n";
 	const char net_tcp_ok[] = "bootstrap: net tcp ok\n";
@@ -3389,9 +3390,14 @@ int main(void)
 			{ pci, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, 0 },
 		};
 
+		bunix_console_log(xhci_test, sizeof(xhci_test) - 1);
 		bunix_launch_module_with_caps(
 			"xhci", xhci_caps,
 			sizeof(xhci_caps) / sizeof(xhci_caps[0]));
+		bunix_sleep_ns(1000000000ull);
+		(void)bunix_machine_poweroff(0);
+		for (;;) {
+		}
 	}
 	bunix_launch_module_with_caps("net", fs_caps,
 				      sizeof(fs_caps) / sizeof(fs_caps[0]));
