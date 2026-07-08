@@ -37,6 +37,7 @@ RISCV64_READELF ?= llvm-readelf
 RISCV64_USER_ABI_MODULE := $(BUILD_DIR)/riscv64/modules/abi-smoke.user
 RISCV64_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg.img
 RISCV64_BOOTPKG_MULTI := $(BUILD_DIR)/riscv64/bootpkg-multi.img
+RISCV64_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test
 BOOTSTRAP_MODULE := $(BUILD_DIR)/modules/bootstrap.server
 USER_CRT0_OBJ := $(BUILD_DIR)/user/crt0.S.o
 BOOTSTRAP_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o
@@ -282,6 +283,7 @@ USER_ASFLAGS := -m64 -g -ffreestanding -fno-pic -fno-pie \
 KERNEL_GENERIC_SRCS_x86_64 := \
 	kernel/main.c \
 	kernel/buffer.c \
+	kernel/cmdline.c \
 	kernel/console.c \
 	kernel/elf.c \
 	kernel/ipc.c \
@@ -300,6 +302,7 @@ KERNEL_GENERIC_SRCS_x86_64 := \
 	servers/vm/vm.c
 KERNEL_GENERIC_SRCS_riscv64 := \
 	kernel/buffer.c \
+	kernel/cmdline.c \
 	kernel/elf.c \
 	kernel/ipc.c \
 	kernel/name.c \
@@ -420,16 +423,19 @@ test-riscv64-user-abi: $(RISCV64_USER_ABI_MODULE)
 	$(RISCV64_READELF) -h $(RISCV64_USER_ABI_MODULE) | grep -F "RISC-V" >/dev/null
 
 $(RISCV64_BOOTPKG): $(RISCV64_USER_ABI_MODULE) tools/build-riscv64-bootpkg.sh
-	sh tools/build-riscv64-bootpkg.sh $@ $(RISCV64_USER_ABI_MODULE) abi-smoke.user
+	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
+		$(RISCV64_USER_ABI_MODULE) abi-smoke.user
 
 $(RISCV64_BOOTPKG_MULTI): $(RISCV64_USER_ABI_MODULE) tools/build-riscv64-bootpkg.sh
-	sh tools/build-riscv64-bootpkg.sh $@ \
+	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_USER_ABI_MODULE) disk0 \
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user
 
 test-riscv64-bootpkg: $(RISCV64_BOOTPKG) $(RISCV64_BOOTPKG_MULTI)
 	grep -aF "BUNIX-RV64-BOOTPKG" $(RISCV64_BOOTPKG) >/dev/null
+	grep -aF "cmdline $(RISCV64_KERNEL_CMDLINE)" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG) >/dev/null
+	grep -aF "cmdline $(RISCV64_KERNEL_CMDLINE)" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module disk0" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 
@@ -1038,6 +1044,7 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "syscall: riscv64 ecall" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "user: riscv64 mode" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootpkg: riscv64 initrd" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "cmdline: riscv64 bootpkg" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "module: riscv64 registered" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "module: riscv64 user elf" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "elf: riscv64 loader" $(RISCV64_SERIAL_LOG) >/dev/null

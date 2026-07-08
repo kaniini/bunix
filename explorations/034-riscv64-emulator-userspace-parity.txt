@@ -442,3 +442,21 @@ Verification notes:
 - `make test-riscv64-user-abi` passed after expanding the ABI smoke.
 - `make test-boot-riscv64-early` passed with the native syscall subset marker.
 - `make test-riscv64-bootpkg` passed after expanding the ABI smoke.
+- Added command-line metadata to the riscv64 boot package:
+  - `tools/build-riscv64-bootpkg.sh` now accepts an optional `--cmdline TEXT`
+    argument and emits a `cmdline` header before module records.
+  - The default riscv64 QEMU boot package now carries
+    `log=info riscv64-bootpkg-test`; `test-riscv64-bootpkg` verifies that both
+    the single-module and multi-record carriers contain the command line.
+  - The kernel command-line parser moved from x86-only `kernel/main.c` into
+    shared `kernel/cmdline.c`; x86_64 still configures it from Multiboot2,
+    while riscv64 configures it from the boot-package header.
+  - The riscv64 early boot test now requires the
+    `cmdline: riscv64 bootpkg` marker, proving `kernel_cmdline_has()` works
+    from the package command line.  The real riscv64 server graph and musl
+    payload packaging remain open under the boot-carrier task.
+- `make ARCH=riscv64 all` passed after adding boot-package command-line
+  metadata.
+- `make all` passed after sharing kernel command-line parsing.
+- `make test-riscv64-bootpkg` passed and now verifies the `cmdline` header.
+- `make test-boot-riscv64-early` passed with the command-line marker.

@@ -7,6 +7,11 @@ payload_tmp="$out.payload.tmp"
 trap 'rm -f "$tmp" "$payload_tmp"' EXIT
 
 shift
+cmdline=
+if [ "$#" -ge 2 ] && [ "$1" = "--cmdline" ]; then
+	cmdline=$2
+	shift 2
+fi
 if [ "$#" -eq 1 ]; then
 	set -- "$1" abi-smoke.user
 fi
@@ -20,6 +25,9 @@ mkdir -p "$(dirname "$out")"
 {
 	printf 'BUNIX-RV64-BOOTPKG\n'
 	printf 'version 1\n'
+	if [ -n "$cmdline" ]; then
+		printf 'cmdline %s\n' "$cmdline"
+	fi
 	while [ "$#" -gt 0 ]; do
 		module=$1
 		name=$2

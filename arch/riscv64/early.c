@@ -7,6 +7,7 @@
 #include <arch/user.h>
 #include <arch/vm.h>
 #include "buffer.h"
+#include "cmdline.h"
 #include "elf.h"
 #include "ipc.h"
 #include "name.h"
@@ -31,6 +32,7 @@ extern u8 __kernel_end[];
 
 static const char riscv64_bootpkg_magic[] = "BUNIX-RV64-BOOTPKG\n";
 static const char riscv64_bootpkg_module_prefix[] = "module ";
+static const char riscv64_bootpkg_cmdline_prefix[] = "cmdline ";
 static const char riscv64_bootpkg_abi_smoke[] = "abi-smoke.user";
 
 enum {
@@ -358,6 +360,45 @@ static int bootpkg_payload_offset(u64 start, u64 end, u64 *payload_offset)
 	return -1;
 }
 
+static int bootpkg_configure_cmdline(u64 start, u64 end)
+{
+	static char cmdline[256];
+	const char *image = (const char *)start;
+	const u64 prefix_len = cstr_len(riscv64_bootpkg_cmdline_prefix);
+	u64 cursor = sizeof(riscv64_bootpkg_magic) - 1;
+
+	while (start + cursor < end) {
+		u64 line = cursor;
+		u64 line_end = cursor;
+
+		while (start + line_end < end && image[line_end] != '\n') {
+			line_end++;
+		}
+		if (line_end == line) {
+			break;
+		}
+		if (line_end - line > prefix_len &&
+		    cstr_eq_len(image + line, riscv64_bootpkg_cmdline_prefix,
+				prefix_len)) {
+			u64 len = line_end - line - prefix_len;
+
+			if (len >= sizeof(cmdline)) {
+				len = sizeof(cmdline) - 1;
+			}
+			for (u64 i = 0; i < len; i++) {
+				cmdline[i] = image[line + prefix_len + i];
+			}
+			cmdline[len] = '\0';
+			kernel_cmdline_configure(cmdline);
+			return 0;
+		}
+		cursor = line_end + 1;
+	}
+
+	kernel_cmdline_configure("");
+	return -1;
+}
+
 static int bootpkg_record_modules(u64 start, u64 end)
 {
 	const char *image = (const char *)start;
@@ -553,6 +594,11 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	}
 	if (bootpkg_magic_ok(boot_info.initrd_start, boot_info.initrd_end)) {
 		early_puts("bootpkg: riscv64 initrd\n");
+		if (bootpkg_configure_cmdline(boot_info.initrd_start,
+					      boot_info.initrd_end) == 0 &&
+		    kernel_cmdline_has("riscv64-bootpkg-test")) {
+			early_puts("cmdline: riscv64 bootpkg\n");
+		}
 		if (bootpkg_record_modules(boot_info.initrd_start,
 					   boot_info.initrd_end) == 0 &&
 		    server_boot_module_registered(riscv64_bootpkg_abi_smoke)) {

@@ -50,15 +50,17 @@ The early boot gate currently verifies:
 ## Boot package
 
 The first riscv64 module/rootfs carrier is a QEMU initrd image.  The host-side
-builder `tools/build-riscv64-bootpkg.sh` creates a text-header package with a
+builder `tools/build-riscv64-bootpkg.sh` creates a text-header package with
 module records and payloads.  The old `OUT MODULE [NAME]` invocation remains
 valid, and the builder also accepts repeated `MODULE NAME` pairs for ordered
-module/data payloads.  The default QEMU boot carrier still contains only the
-current `abi-smoke.user` payload, while `test-riscv64-bootpkg` also builds a
-multi-record carrier to prove host-side ordering.  The early kernel can
-validate the carrier magic, locate the module record, verify the payload is an
-ELF64 RISC-V image, register it with the generic module registry, launch it
-with `server_launch_module()`, build a crt0-compatible stack, enter U-mode at
+module/data payloads plus an optional `cmdline` header.  The default QEMU boot
+carrier still contains only the current `abi-smoke.user` payload, while
+`test-riscv64-bootpkg` also builds a multi-record carrier to prove host-side
+ordering.  The early kernel can parse the package command line through the
+shared `kernel_cmdline_configure()` path used by x86_64, validate the carrier
+magic, locate the module record, verify the payload is an ELF64 RISC-V image,
+register it with the generic module registry, launch it with
+`server_launch_module()`, build a crt0-compatible stack, enter U-mode at
 `0x400000`, and observe native `exit` through scheduler task teardown.
 
 Riscv64 now also has initial implementations of the generic `arch_vm_*` hooks
@@ -143,8 +145,9 @@ The PMM core is also console-independent now, so linking it for riscv64 does
 not require the current x86-specific console implementation.
 
 This gives riscv64 a firmware-neutral package handoff separate from
-Multiboot2.  Future rootfs images can ride in the same carrier or replace it
-with a stricter binary table once the riscv64 bootstrap/proc path exists.
+Multiboot2 while preserving the same kernel command-line semantics.  Future
+rootfs images can ride in the same carrier or replace it with a stricter
+binary table once the riscv64 bootstrap/proc path exists.
 
 ## Native Bunix ABI
 
