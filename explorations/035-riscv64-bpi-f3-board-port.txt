@@ -340,3 +340,16 @@ Verification notes:
 - `make test-riscv64-bpi-f3-smoke-script` passed after adding the BPI-F3
   review command.
 - `git diff --check` passed after adding the BPI-F3 review command.
+- Added BPI-F3 boot-layout sanity checks:
+  - `tools/bpi-f3-smoke.sh --check-log` now verifies that the reported memory
+    size is nonzero, kernel/initrd/FDT ranges are ordered, and initrd/FDT
+    size fields exactly match their start/end ranges.
+  - This turns the boot-layout evidence from marker presence into a basic
+    consistency check before a physical-board log is accepted.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding BPI-F3 boot-layout sanity
+  checks.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding BPI-F3
+  boot-layout sanity checks.
+- `make test-riscv64-bpi-f3-emulator-gate` passed after adding BPI-F3
+  boot-layout sanity checks.
+- `git diff --check` passed after adding BPI-F3 boot-layout sanity checks.

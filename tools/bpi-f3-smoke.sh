@@ -43,6 +43,13 @@ require_marker() {
 	fi
 }
 
+fail_sanity() {
+	message=$1
+
+	echo "invalid serial evidence: $message" >&2
+	exit 1
+}
+
 has_marker() {
 	log=$1
 	marker=$2
@@ -90,6 +97,7 @@ check_log() {
 	require_marker "$log" "boot: riscv64 fdt-start="
 	require_marker "$log" "boot: riscv64 fdt-end="
 	require_marker "$log" "boot: riscv64 fdt-size="
+	check_layout_sanity "$log"
 	require_marker "$log" "fdt: riscv64 cpus"
 	require_marker "$log" "fdt: riscv64 cpu-count="
 	require_marker "$log" "smp: riscv64 discovered-harts="
@@ -149,6 +157,73 @@ marker_value() {
 	marker=$2
 
 	grep -aF "$marker" "$log" | sed -n '1s/^[^=]*=//p' | tr -d '\r'
+}
+
+marker_number() {
+	log=$1
+	marker=$2
+	value=$(marker_value "$log" "$marker")
+
+	if [ -z "$value" ]; then
+		fail_sanity "missing numeric marker $marker"
+	fi
+	printf '%s\n' "$((value))"
+}
+
+require_nonzero_marker() {
+	log=$1
+	marker=$2
+	value=$(marker_number "$log" "$marker")
+
+	if [ "$value" -eq 0 ]; then
+		fail_sanity "$marker is zero"
+	fi
+}
+
+require_ordered_range() {
+	log=$1
+	label=$2
+	start_marker=$3
+	end_marker=$4
+	start=$(marker_number "$log" "$start_marker")
+	end=$(marker_number "$log" "$end_marker")
+
+	if [ "$start" -ge "$end" ]; then
+		fail_sanity "$label range is not ordered"
+	fi
+}
+
+require_exact_size() {
+	log=$1
+	label=$2
+	start_marker=$3
+	end_marker=$4
+	size_marker=$5
+	start=$(marker_number "$log" "$start_marker")
+	end=$(marker_number "$log" "$end_marker")
+	size=$(marker_number "$log" "$size_marker")
+
+	if [ $((end - start)) -ne "$size" ]; then
+		fail_sanity "$label size does not match start/end"
+	fi
+}
+
+check_layout_sanity() {
+	log=$1
+
+	require_nonzero_marker "$log" "boot: riscv64 memory-size="
+	require_ordered_range "$log" "kernel" \
+		"boot: riscv64 kernel-start=" "boot: riscv64 kernel-end="
+	require_ordered_range "$log" "initrd" \
+		"boot: riscv64 initrd-start=" "boot: riscv64 initrd-end="
+	require_ordered_range "$log" "fdt" \
+		"boot: riscv64 fdt-start=" "boot: riscv64 fdt-end="
+	require_exact_size "$log" "initrd" \
+		"boot: riscv64 initrd-start=" "boot: riscv64 initrd-end=" \
+		"boot: riscv64 initrd-size="
+	require_exact_size "$log" "fdt" \
+		"boot: riscv64 fdt-start=" "boot: riscv64 fdt-end=" \
+		"boot: riscv64 fdt-size="
 }
 
 summary_line() {

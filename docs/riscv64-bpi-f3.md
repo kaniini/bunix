@@ -122,7 +122,9 @@ tools/bpi-f3-smoke.sh --review-log bpi-f3-serial.log
 
 The review command runs the checks below and then prints the classifier and
 summary tables.  The individual commands are also available when debugging a
-specific phase:
+specific phase.  The Bunix smoke check also validates that memory size is
+nonzero, kernel/initrd/FDT ranges are ordered, and initrd/FDT size fields match
+their start/end ranges.
 
 ```sh
 tools/bpi-f3-smoke.sh --check-preboot-log bpi-f3-serial.log
