@@ -1025,6 +1025,7 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "timer: riscv64 tick" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "thread: riscv64 switch" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "pmm: riscv64 ranges" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "sched: riscv64 thread" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "vm: riscv64 hooks" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "syscall: riscv64 ecall" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "user: riscv64 mode" $(RISCV64_SERIAL_LOG) >/dev/null

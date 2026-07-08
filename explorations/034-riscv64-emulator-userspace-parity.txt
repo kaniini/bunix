@@ -300,3 +300,27 @@ Verification notes:
   enumeration.
 - `make test-riscv64-user-abi` passed after linking the generic service set.
 - `make test-riscv64-bootpkg` passed after linking the generic service set.
+- Initialized the generic service stack in the riscv64 early emulator path and
+  proved the scheduler can own a kernel thread:
+  - `riscv64_early_main()` now initializes arch SMP stubs, generic VM, slab,
+    buffers, arch user state, IPC, names, the in-kernel VM server, and the
+    scheduler after FDT-backed PMM initialization.
+  - The early smoke creates a scheduler-owned kernel thread with
+    `thread_create()`, runs it with `sched_run()`, and verifies it exits via
+    `thread_exit()` back to the scheduler.
+  - `test-boot-riscv64-early` now requires the `sched: riscv64 thread`
+    marker.
+  - This proves scheduler-owned kernel thread lifetime on riscv64.  It does
+    not yet launch a scheduler-owned U-mode task or feed boot-package modules
+    into `server_record_boot_module()`.
+- `make ARCH=riscv64 all` passed after adding the scheduler-owned thread
+  smoke.
+- `make test-boot-riscv64-early` passed with the scheduler-owned thread
+  smoke.
+- `make all` passed after adding the scheduler-owned riscv64 thread smoke.
+- `make test-boot` passed after adding the scheduler-owned riscv64 thread
+  smoke.
+- `make test-riscv64-user-abi` passed after adding the scheduler-owned thread
+  smoke.
+- `make test-riscv64-bootpkg` passed after adding the scheduler-owned thread
+  smoke.

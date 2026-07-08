@@ -2,15 +2,24 @@
 #include <arch/fdt.h>
 #include <arch/interrupts.h>
 #include <arch/sbi.h>
+#include <arch/smp.h>
 #include <arch/thread.h>
 #include <arch/user.h>
 #include <arch/vm.h>
+#include "buffer.h"
+#include "ipc.h"
+#include "name.h"
 #include "pmm.h"
+#include "sched.h"
+#include "slab.h"
+#include "vm.h"
+#include "../servers/vm/vm_server.h"
 
 static struct riscv64_boot_info boot_info;
 static struct arch_thread_context boot_context;
 static struct arch_thread_context worker_context;
 static volatile u32 worker_switched;
+static volatile u32 sched_worker_ran;
 static u8 worker_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_kernel_stack[4096] __attribute__((aligned(16)));
@@ -111,6 +120,35 @@ static int context_switch_self_test(void)
 				 worker_thread_main);
 	arch_thread_switch(&boot_context, &worker_context);
 	return worker_switched == 1 ? 0 : -1;
+}
+
+static void sched_worker_thread(void *arg)
+{
+	(void)arg;
+
+	sched_worker_ran = 1;
+	thread_exit();
+}
+
+static int generic_services_self_test(u64 fdt)
+{
+	arch_smp_init(fdt);
+	vm_init();
+	slab_init();
+	buffer_init();
+	arch_user_init();
+	ipc_init();
+	name_service_init();
+	vm_server_init();
+	sched_init();
+
+	sched_worker_ran = 0;
+	if (thread_create(task_current(), "rv64-sched-smoke",
+			  sched_worker_thread, 0) == 0) {
+		return -1;
+	}
+	sched_run();
+	return sched_worker_ran == 1 ? 0 : -1;
 }
 
 static int vm_hook_self_test(void)
@@ -496,6 +534,9 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	pmm_bootstrap_from_fdt(fdt);
 	if (pmm_total_page_count() != 0 && pmm_free_page_count() != 0) {
 		early_puts("pmm: riscv64 ranges\n");
+	}
+	if (generic_services_self_test(fdt) == 0) {
+		early_puts("sched: riscv64 thread\n");
 	}
 	arch_interrupts_init();
 	riscv64_timer_set_relative(arch_timer_hz() / 100);

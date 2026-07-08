@@ -99,9 +99,17 @@ and the in-kernel VM server.  VM initialization is boot-protocol-neutral, with
 the x86 boot path initializing Multiboot PMM before calling generic `vm_init()`.
 Boot-module recording is also generic: `kernel/server.c` accepts name/start/end
 module records, while x86 Multiboot enumeration lives in
-`kernel/server_multiboot2.c`.  Riscv64 still needs to initialize these services
-from the early boot path and feed boot-package records before the packaged
-payload can launch through scheduler/proc/bootstrap.
+`kernel/server_multiboot2.c`.  Riscv64 still needs to feed boot-package
+records into this generic recorder before the packaged payload can launch
+through scheduler/proc/bootstrap.
+
+The early riscv64 emulator path now initializes those generic services after
+PMM bringup and proves scheduler-owned kernel thread lifetime: it creates a
+kernel thread through `thread_create()`, runs it with `sched_run()`, and
+observes it exit through `thread_exit()`.  This is not yet scheduler-owned
+U-mode launch; boot-package records still need to be fed into the generic
+server recorder and the `abi-smoke.user` payload still runs through the early
+payload launcher.
 
 The PMM has been split enough to support multiple boot protocols:
 `pmm_init_from_ranges()` initializes the generic page allocator from
@@ -184,6 +192,8 @@ The initial riscv64 port intentionally does not support:
 - SMP or secondary hart startup.
 - FPU, vector, or signal context save/restore.
 - Native server task launch through proc/bootstrap.
+- Scheduler-owned U-mode task launch; only a scheduler-owned kernel-thread
+  smoke runs on riscv64 today.
 - VM server integration and normal task address-space lifetime wiring.
 - Task-owned user-copy integration for unmapped-page fault reporting through
   `vm_read_user()`/`vm_write_user()`.
