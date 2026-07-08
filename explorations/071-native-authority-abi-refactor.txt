@@ -1,0 +1,33 @@
+Refactor native authority syscall ABI and bootstrap authority assignment.
+
+Parent exploration: `041-native-privileged-syscall-authority.txt`
+
+Problem:
+
+- Exploration 041 intentionally kept the security fix narrow by threading PCI
+  grant authority through the existing four-argument native syscall ABI.
+- `bunix_hw_pci_bar_grant()` currently packs the authority handle into the high
+  32 bits of the ops argument.
+- Bootstrap and server authority handles are documented as task-local constants,
+  but the grant policy itself still lives in ad hoc server-name checks in the
+  kernel bootstrap path.
+
+Goal:
+
+- Make privileged native syscall authority passing explicit and boring.
+- Keep the OCAP semantics from exploration 041 while removing packed argument
+  tricks and implicit launch-handle layout assumptions.
+
+Tasks:
+
+- [ ] Add a generic native syscall ABI path for five or six arguments, or add a
+      structured request-buffer convention for privileged native syscalls.
+- [ ] Convert PCI BAR and IRQ grant wrappers plus kernel handlers to pass
+      authority handles as explicit arguments.
+- [ ] Replace overlapping task-local authority constants with a documented
+      bootstrap/server authority descriptor table.
+- [ ] Move kernel bootstrap authority grants from scattered string checks into
+      the descriptor table without changing which tasks receive authority.
+- [ ] Preserve the unprivileged denial regression from exploration 041.
+- [ ] Run focused privileged-native, virtio, OpenRC tests, then full
+      `make test`.

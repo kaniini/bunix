@@ -81,4 +81,4 @@ Tasks:
       `BUNIX_SYSCALL_HW_PCI_BAR_GRANT`.
 - [x] Add regression tests for denied unprivileged calls and authorized
       platform/device paths.
-- [ ] Run focused boot/virtio/OpenRC tests, then full `make test`.
+- [x] Run focused boot/virtio/OpenRC tests, then full `make test`.
