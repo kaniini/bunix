@@ -61,7 +61,7 @@ Tasks:
 - [x] Implement the riscv64 native syscall subset needed by the initial native
       servers through the same semantic negative Bunix syscall IDs used by
       x86_64.
-- [ ] Import or configure the musl.cc `riscv64-linux-musl-cross.tgz` toolchain
+- [x] Import or configure the musl.cc `riscv64-linux-musl-cross.tgz` toolchain
       in a reproducible host-tooling path without committing the toolchain
       blob.
 - [ ] Build a static riscv64 musl hello binary and package it as
@@ -460,3 +460,13 @@ Verification notes:
 - `make all` passed after sharing kernel command-line parsing.
 - `make test-riscv64-bootpkg` passed and now verifies the `cmdline` header.
 - `make test-boot-riscv64-early` passed with the command-line marker.
+- Added a reproducible musl.cc toolchain setup path:
+  - `make riscv64-muslcc-toolchain` runs
+    `tools/setup-riscv64-muslcc.sh` and installs or reuses the external
+    `riscv64-linux-musl-cross.tgz` tree under ignored
+    `build/toolchains/riscv64-linux-musl-cross`.
+  - The setup script can download from musl.cc or use an already downloaded
+    archive via `RISCV64_MUSLCC_TARBALL=/path/to/riscv64-linux-musl-cross.tgz`.
+  - The toolchain blob remains outside git.  The current workspace does not
+    have the toolchain installed yet, so the static musl hello build remains
+    the next slice.

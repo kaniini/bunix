@@ -200,10 +200,14 @@ syscall ABI with the smallest executable that still uses libc startup:
 Dynamic linking, Alpine rootfs parity, and BusyBox are later riscv64 slices.
 
 The current host has riscv64 binutils and QEMU, but Alpine does not ship the
-needed riscv64 Linux musl cross compiler.  Use the external musl.cc
-`riscv64-linux-musl-cross.tgz` toolchain for the later static riscv64 musl
-slice; until that toolchain is installed or vendored, the tree should not add a
-pretend riscv64 musl binary target that cannot produce a real libc-linked ELF.
+needed riscv64 Linux musl cross compiler.  Use `make
+riscv64-muslcc-toolchain` to install the external musl.cc
+`riscv64-linux-musl-cross.tgz` toolchain under ignored
+`build/toolchains/riscv64-linux-musl-cross`, or set
+`RISCV64_MUSLCC_TARBALL=/path/to/riscv64-linux-musl-cross.tgz` to use a
+predownloaded archive.  Until that toolchain is installed or configured, the
+tree should not add a pretend riscv64 musl binary target that cannot produce a
+real libc-linked ELF.
 
 ## Hardware Port Gate
 

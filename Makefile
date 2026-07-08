@@ -38,6 +38,8 @@ RISCV64_USER_ABI_MODULE := $(BUILD_DIR)/riscv64/modules/abi-smoke.user
 RISCV64_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg.img
 RISCV64_BOOTPKG_MULTI := $(BUILD_DIR)/riscv64/bootpkg-multi.img
 RISCV64_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test
+RISCV64_MUSLCC_PREFIX ?= $(BUILD_DIR)/toolchains/riscv64-linux-musl-cross
+RISCV64_MUSLCC_GCC := $(RISCV64_MUSLCC_PREFIX)/bin/riscv64-linux-musl-gcc
 BOOTSTRAP_MODULE := $(BUILD_DIR)/modules/bootstrap.server
 USER_CRT0_OBJ := $(BUILD_DIR)/user/crt0.S.o
 BOOTSTRAP_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o
@@ -361,7 +363,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early test test-alpine-rootfs test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-riscv64-bootpkg test-riscv64-user-abi test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early riscv64-muslcc-toolchain test test-alpine-rootfs test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-riscv64-bootpkg test-riscv64-user-abi test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -421,6 +423,9 @@ $(RISCV64_USER_ABI_MODULE): user/crt0-riscv64.S user/riscv64-abi/main.c user/use
 
 test-riscv64-user-abi: $(RISCV64_USER_ABI_MODULE)
 	$(RISCV64_READELF) -h $(RISCV64_USER_ABI_MODULE) | grep -F "RISC-V" >/dev/null
+
+riscv64-muslcc-toolchain:
+	sh tools/setup-riscv64-muslcc.sh $(RISCV64_MUSLCC_PREFIX)
 
 $(RISCV64_BOOTPKG): $(RISCV64_USER_ABI_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
