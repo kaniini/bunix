@@ -315,7 +315,9 @@ int main(void)
 				stat_node(&message, &reply, node);
 			}
 			break;
-		case BUNIX_VFS_READ_FILE_BUFFER:
+		case BUNIX_VFS_READ_FILE_BUFFER: {
+			u64 nread;
+
 			node = node_from_handle(message.words[0]);
 			if (node == 0 || node->type != BUNIX_VFS_TYPE_REGULAR ||
 			    message.cap == 0 ||
@@ -323,18 +325,25 @@ int main(void)
 				reply.words[0] = (u64)-1;
 				break;
 			}
-			reply.words[1] = node_size(node);
-			if (reply.words[1] > message.words[2]) {
-				reply.words[1] = message.words[2];
+			nread = node_size(node);
+			if (message.words[1] >= nread) {
+				reply.words[0] = 0;
+				reply.words[1] = 0;
+				break;
+			}
+			nread -= message.words[1];
+			if (nread > message.words[2]) {
+				nread = message.words[2];
 			}
 			reply.words[0] =
-				bunix_buffer_write(message.cap, 0, node->content,
-						   reply.words[1]) == 0 ?
+				bunix_buffer_write(message.cap, 0,
+						   node->content +
+						   message.words[1],
+						   nread) == 0 ?
 				0 : (u64)-1;
-			if (reply.words[0] != 0) {
-				reply.words[1] = 0;
-			}
+			reply.words[1] = reply.words[0] == 0 ? nread : 0;
 			break;
+		}
 		case BUNIX_VFS_READDIR_BUFFER:
 			node = child_at(node_from_handle(message.words[0]),
 					message.words[1]);

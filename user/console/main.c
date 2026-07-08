@@ -206,8 +206,10 @@ static int console_poll_input(void)
 		return 0;
 	}
 	while (serial_try_getc(&c)) {
-		if (len < sizeof(console_input_buffer)) {
-			console_input_buffer[len++] = c;
+		console_input_buffer[len++] = c;
+		if (len == sizeof(console_input_buffer)) {
+			(void)console_forward_input_buffer(console_input_buffer, len);
+			len = 0;
 		}
 		any = 1;
 	}

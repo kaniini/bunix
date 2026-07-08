@@ -74,7 +74,7 @@ Tasks:
 - [x] Remove user-accessible low identity mappings from task page tables.
 - [x] Preserve required syscall/trap/kernel execution mappings safely.
 - [x] Add regression coverage for denied low-memory access.
-- [ ] Run focused boot/shell/virtio/OpenRC tests, then full `make test`.
+- [x] Run focused boot/shell/virtio/OpenRC tests, then full `make test`.
 
 Progress:
 
@@ -104,7 +104,10 @@ Validation:
 - `BUNIX_SHELL_PART=tmpfs-basic-linux-tests make test-shell-part` passed.
 - `BUNIX_SHELL_PART=root-login-union make test-shell-part` passed.
 - `BUNIX_SHELL_PART=root-tmpfs-chown make test-shell-part` passed.
+- `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part` passed.
+- `BUNIX_SHELL_PART=rootfs-vfs-proc-dev make test-shell-part` passed.
+- `make test` passed with run id `20260708T231224Z-28587`.
 
 Open blocker:
 
-- None currently.  The remaining task is the broader OpenRC/full-test gate.
+- None.
