@@ -211,3 +211,15 @@ Progress notes:
   `/bin/musl-hello`.  That service-registration dependency is recorded in
   `036-shared-linux-personality-riscv64.txt` so the shared-server work does
   not turn into an unplanned broad refactor.
+- Added a build-only riscv64 shared Linux server target:
+  - `make test-riscv64-shared-linux-server-build` compiles
+    `user/linux/main.c` with the riscv64 freestanding user flags, links it
+    with `user/crt0-riscv64.S`, and verifies the output is a RISC-V ELF.
+  - This proves the shared Linux server source is portable enough to build for
+    riscv64, but it does not replace the boot-package `linux` module yet.
+    Runtime replacement still needs the names/service-registration work
+    tracked in `036-shared-linux-personality-riscv64.txt`.
+- `make test-riscv64-shared-linux-server-build` passed after adding the
+  build-only shared Linux server target.
+- `make build/modules/linux.server` passed after the shared Linux portability
+  fixes, proving the x86_64 Linux server still builds.

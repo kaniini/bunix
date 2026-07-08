@@ -3333,7 +3333,7 @@ static long linux_net_interface_details(u64 iface,
 			 bunix_buffer_read((u64)buffer, 0, info,
 					   sizeof(*info)) == 0 ?
 		 0 :
-		 -LINUX_ENODEV;
+		 -((int)LINUX_ENODEV);
 	bunix_handle_close((u64)buffer);
 	return result;
 }
@@ -5918,10 +5918,11 @@ static long linux_socket_addr(struct linux_process *process, u64 fd, u64 max_len
 		return -LINUX_ENOTSOCK;
 	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NETLINK_ROUTE) {
-		unsigned char raw[12] = { 0 };
+		unsigned char raw[12];
 		u64 copy;
 
 		(void)peer;
+		zero_bytes((char *)raw, sizeof(raw));
 		if (actual_len != 0) {
 			*actual_len = sizeof(raw);
 		}
@@ -5987,12 +5988,13 @@ static long linux_netlink_route_send(struct linux_process *process, u64 fd,
 static long linux_netlink_route_recv(struct linux_process *process, u64 fd,
 				     u64 len, u64 buffer)
 {
-	unsigned char ack[36] = { 0 };
+	unsigned char ack[36];
 	const u64 seq = process->fds[fd].offset;
 	u64 msg_len = sizeof(ack);
 	u64 msg_type = LINUX_NLMSG_ERROR;
 	u64 copy;
 
+	zero_bytes((char *)ack, sizeof(ack));
 	if ((process->fds[fd].flags & LINUX_FD_NETLINK_ACK_PENDING) != 0) {
 		process->fds[fd].flags &= ~LINUX_FD_NETLINK_ACK_PENDING;
 	} else if ((process->fds[fd].flags &
