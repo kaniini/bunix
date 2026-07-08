@@ -155,6 +155,15 @@ Native Bunix syscalls on rv64 use `ecall`:
 - `a0`: return value.
 - `sepc`: advanced by 4 before returning from the syscall trap.
 
+The current riscv64 native dispatcher is table-driven and uses the same
+negative Bunix IDs as x86_64 for the implemented subset: `exit`,
+`timer_ticks`, `launch_module`, `boot_module_read`, `clock_monotonic_ns`,
+`sleep_ns`, `task_id`, `early_console_write`, `early_console_log`, and
+`machine_power`.  The QEMU smoke proves the U-mode `abi-smoke.user` payload
+can call `task_id(0)`, timer ticks, monotonic clock, early console write/log,
+and `exit` through that path.  `boot_module_read` is present for modules with
+attached data payloads, but `abi-smoke.user` does not currently have one.
+
 The build smoke target `make test-riscv64-user-abi` links a freestanding rv64
 user ELF with `user/crt0-riscv64.S` and the shared Bunix syscall wrappers.  It
 does not boot QEMU by itself; runtime launch is covered by

@@ -58,7 +58,7 @@ Tasks:
 - [ ] Extend the riscv64 boot package format or loader enough to carry the
       module list, server names, command line, and data payloads required by
       the normal bootstrap path.
-- [ ] Implement the riscv64 native syscall subset needed by the initial native
+- [x] Implement the riscv64 native syscall subset needed by the initial native
       servers through the same semantic negative Bunix syscall IDs used by
       x86_64.
 - [ ] Import or configure the musl.cc `riscv64-linux-musl-cross.tgz` toolchain
@@ -421,3 +421,24 @@ Verification notes:
   coverage.
 - `make test-boot-riscv64-early` passed with the updated boot-package builder.
 - `make all` passed after adding multi-record package coverage.
+- Implemented the first table-driven riscv64 native syscall subset:
+  - `arch/riscv64/user.c` now dispatches negative Bunix syscall IDs through a
+    named native syscall table instead of a bespoke switch.
+  - The implemented subset covers `exit`, `timer_ticks`, `launch_module`,
+    `boot_module_read`, `clock_monotonic_ns`, `sleep_ns`, `task_id`,
+    `early_console_write`, `early_console_log`, and `machine_power`.
+  - The semantics intentionally match the x86_64 negative IDs.  For example,
+    native `exit` terminates the current scheduler thread, `launch_module`
+    calls `server_launch_module_with_caps()`, and `boot_module_read` reads the
+    current module's attached data payload rather than its ELF image.
+  - The riscv64 ABI smoke now proves `task_id(0)`, timer ticks, monotonic
+    clock, and early console log/write from U-mode before exiting, and
+    `test-boot-riscv64-early` requires the `native: riscv64 syscalls` marker.
+    `boot_module_read` is implemented but is not checked by `abi-smoke.user`
+    because that module currently has no attached data payload.
+- `make ARCH=riscv64 all` passed after adding the riscv64 native syscall
+  table.
+- `make all` passed after adding the riscv64 native syscall table.
+- `make test-riscv64-user-abi` passed after expanding the ABI smoke.
+- `make test-boot-riscv64-early` passed with the native syscall subset marker.
+- `make test-riscv64-bootpkg` passed after expanding the ABI smoke.
