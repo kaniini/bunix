@@ -154,15 +154,15 @@ Operator setup:
   which exploration tasks have supporting evidence, which still need follow-up,
   and the summary values listed below.
 - In particular, record the
-  CPU count, timebase, firmware stdout path, resolved UART, UART MMIO base,
-  UART count, interrupt-controller path/compatible/count, and selected
-  interrupt-routing path/compatible in the exploration notes.
+  preboot model/compatible strings, CPU count, timebase, firmware stdout path,
+  resolved UART, UART MMIO base, UART count,
+  interrupt-controller path/compatible/count, and selected interrupt-routing
+  path/compatible in the exploration notes.
 
-The command recipe intentionally prints U-Boot `bdinfo`, `/chosen`,
-root `model` and `compatible`, `/chosen`, `/aliases`, and `/cpus` before
-entering Bunix.  Those preboot diagnostics give the board-specific evidence
-needed to identify the firmware DT and compare its handoff with the Bunix FDT
-parser output.
+The command recipe intentionally prints U-Boot `bdinfo`, root `model` and
+`compatible`, `/chosen`, `/aliases`, and `/cpus` before entering Bunix.  Those
+preboot diagnostics give the board-specific evidence needed to identify the
+firmware DT and compare its handoff with the Bunix FDT parser output.
 
 Expected first milestone serial markers:
 

@@ -158,7 +158,7 @@ marker_value() {
 	log=$1
 	marker=$2
 
-	grep -aF "$marker" "$log" | sed -n '1s/^[^=]*=//p' | tr -d '\r'
+	grep -aF "$marker" "$log" | sed -n '1s/^[^=]*=[[:space:]]*//p' | tr -d '\r'
 }
 
 marker_number() {
@@ -260,6 +260,8 @@ summarize_log() {
 	log=$1
 
 	require_file "$log"
+	summary_line "preboot-model" "$(marker_value "$log" "model = ")"
+	summary_line "preboot-compatible" "$(marker_value "$log" "compatible = ")"
 	summary_line "memory-base" "$(marker_value "$log" "boot: riscv64 memory-base=")"
 	summary_line "memory-size" "$(marker_value "$log" "boot: riscv64 memory-size=")"
 	summary_line "kernel-start" "$(marker_value "$log" "boot: riscv64 kernel-start=")"
@@ -451,6 +453,9 @@ EOF
 		"invalid serial evidence: initrd size does not match start/end"
 	classify_log "$tmp" >/dev/null
 	summarize_log "$tmp" | grep -aF "initrd-size	0x10000" >/dev/null
+	summarize_log "$review" | grep -aF 'preboot-model	"Banana Pi BPI-F3";' >/dev/null
+	summarize_log "$review" | grep -aF \
+		'preboot-compatible	"bananapi,bpi-f3", "spacemit,k1";' >/dev/null
 	summarize_log "$tmp" | grep -aF "smp-secondary-policy	parked" >/dev/null
 	summarize_log "$tmp" | grep -aF "stdout-resolved	/soc/serial@10000000" >/dev/null
 	summarize_log "$tmp" | grep -aF "interrupt-controller-path	/soc/interrupt-controller@c000000" >/dev/null

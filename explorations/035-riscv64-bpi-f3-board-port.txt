@@ -383,3 +383,16 @@ Verification notes:
   identity evidence to the BPI-F3 preboot capture.
 - `git diff --check` passed after adding firmware-DT identity evidence to the
   BPI-F3 preboot capture.
+- Added preboot board-identity summary rows:
+  - `tools/bpi-f3-smoke.sh --summarize-log` now emits `preboot-model` and
+    `preboot-compatible` when the serial log includes the U-Boot root DT
+    diagnostics.
+  - The operator notes now call out those values as required review output for
+    the physical-board run.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding preboot board-identity
+  summary rows.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding preboot
+  board-identity summary rows.
+- `make test-riscv64-bpi-f3-emulator-gate` passed after adding preboot
+  board-identity summary rows.
+- `git diff --check` passed after adding preboot board-identity summary rows.
