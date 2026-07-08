@@ -25,6 +25,7 @@ statidtest=${STATIDTEST_MODULE:-build/modules/statidtest.user}
 netdhcp=${NETDHCP_MODULE:-build/modules/bunix-udhcpc-script.user}
 bunix_overlay=${BUNIX_ALPINE_OVERLAY:-1}
 init_command=${BUNIX_ALPINE_INIT_COMMAND:-/bin/login}
+extra_dir=${BUNIX_ALPINE_EXTRA_DIR:-}
 
 merge_account_file() {
 	base=$1
@@ -166,6 +167,13 @@ if [ "$bunix_overlay" = 1 ]; then
 	merge_account_file "$root/etc/shadow" modules/shadow
 	merge_account_file "$root/etc/group" modules/group
 fi
+if [ -n "$extra_dir" ]; then
+	if [ ! -d "$extra_dir" ]; then
+		echo "BUNIX_ALPINE_EXTRA_DIR is not a directory: $extra_dir" >&2
+		exit 2
+	fi
+	cp -a "$extra_dir"/. "$root"/
+fi
 chmod 0444 "$root/etc/passwd" "$root/etc/group"
 chmod 0400 "$root/etc/shadow"
 
@@ -272,6 +280,7 @@ find "$root/var/cache/apk" -type f -delete 2>/dev/null || true
 	echo "apk_arch=${apk_arch:-$(apk --print-arch)}"
 	echo "bunix_overlay=$bunix_overlay"
 	echo "init_command=$init_command"
+	echo "extra_dir=$extra_dir"
 	echo "openrc_policy=$runlevel_policy"
 	echo "openrc_reference_runlevels=$reference_runlevels"
 	echo "openrc_bunix_runlevels=$bunix_runlevels"

@@ -58,6 +58,15 @@ require_grep "openrc" "$artifact_dir/manifest.txt"
 require_grep "ttyS0::respawn:/bin/sh" "$root/etc/inittab"
 reject_file "$root/bin/statidtest"
 reject_file "$root/sbin/bunix-udhcpc-script"
+if [ -n "${RISCV64_DYN_HELLO_MODULE:-}" ] ||
+   [ -n "${RISCV64_MUSL_LDSO:-}" ]; then
+	require_file "$root/bin/dyn-hello"
+	require_file "$root/lib/ld-musl-riscv64.so.1"
+	require_grep "extra_dir=$artifact_dir/riscv64-overlay" \
+		"$artifact_dir/manifest.txt"
+else
+	reject_file "$root/bin/dyn-hello"
+fi
 
 printf 'test-riscv64-alpine-rootfs: artifact ok stage=%s artifact=%s\n' \
 	"$stage" "$artifact_dir"

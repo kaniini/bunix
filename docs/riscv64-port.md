@@ -227,6 +227,20 @@ x86_64 Bunix user overlays, and records `ttyS0::respawn:/bin/sh` as a
 temporary init command.  It proves host-side riscv64 Alpine artifact creation;
 it does not yet prove that Bunix can boot the artifact.
 
+The host can also prepare the first dynamic-linker artifacts:
+
+```
+make test-riscv64-dynamic-linker-artifacts
+```
+
+That target builds `build/riscv64/modules/dyn-hello.user` with interpreter
+`/lib/ld-musl-riscv64.so.1` and stages the musl loader content as
+`build/riscv64/modules/ld-musl-riscv64.so.1`.  The riscv64 Alpine rootfs
+builder overlays those files into `/bin` and `/lib` when they are supplied.
+Runtime dynamic-linker coverage still requires the shared riscv64 Linux
+personality path so `ld-musl-riscv64.so.1` can perform `openat(2)` and
+`fstat(2)` successfully.
+
 The current host has riscv64 binutils and QEMU, but Alpine does not ship the
 needed riscv64 Linux musl cross compiler.  Use `make
 riscv64-muslcc-toolchain` to install the external musl.cc

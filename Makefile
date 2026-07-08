@@ -51,7 +51,10 @@ RISCV64_MUSLCC_PREFIX ?= $(BUILD_DIR)/toolchains/riscv64-linux-musl-cross
 RISCV64_MUSLCC_GCC := $(RISCV64_MUSLCC_PREFIX)/bin/riscv64-linux-musl-gcc
 RISCV64_MUSLCC_SYSROOT := $(RISCV64_MUSLCC_PREFIX)/riscv64-linux-musl
 RISCV64_MUSLCC_GCC_LIBDIR := $(RISCV64_MUSLCC_PREFIX)/lib/gcc/riscv64-linux-musl/11.2.1
+RISCV64_MUSL_LDSO_SOURCE := $(RISCV64_MUSLCC_SYSROOT)/lib/libc.so
 RISCV64_MUSL_HELLO_MODULE := $(BUILD_DIR)/riscv64/modules/musl-hello.user
+RISCV64_DYN_HELLO_MODULE := $(BUILD_DIR)/riscv64/modules/dyn-hello.user
+RISCV64_MUSL_LDSO := $(BUILD_DIR)/riscv64/modules/ld-musl-riscv64.so.1
 RISCV64_LINUX_SERVER_MODULE := $(BUILD_DIR)/riscv64/modules/linux.server
 RISCV64_BOOTSTRAP_MODULE := $(BUILD_DIR)/riscv64/modules/bootstrap.server
 RISCV64_ALPINE_SQUASHFS_IMAGE := $(BUILD_DIR)/riscv64/alpine-rootfs.sqfs
@@ -380,7 +383,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-riscv64-alpine-rootfs test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -458,6 +461,25 @@ $(RISCV64_MUSL_HELLO_MODULE): user/musl-hello/main.c $(RISCV64_MUSLCC_GCC) Makef
 		-L $(RISCV64_MUSLCC_GCC_LIBDIR) \
 		-O2 -g $< -o $@
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
+
+$(RISCV64_DYN_HELLO_MODULE): user/musl-hello/main.c $(RISCV64_MUSLCC_GCC) Makefile
+	mkdir -p $(dir $@)
+	$(RISCV64_CC) --target=riscv64-linux-musl -march=rv64gc -mabi=lp64d \
+		-isystem $(RISCV64_MUSLCC_SYSROOT)/include \
+		-fuse-ld=/usr/bin/$(RISCV64_LD) \
+		-B $(RISCV64_MUSLCC_SYSROOT)/lib \
+		-B $(RISCV64_MUSLCC_GCC_LIBDIR) \
+		-L $(RISCV64_MUSLCC_SYSROOT)/lib \
+		-L $(RISCV64_MUSLCC_GCC_LIBDIR) \
+		-Wl,--dynamic-linker=/lib/ld-musl-riscv64.so.1 \
+		-O2 -g $< -o $@
+	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
+	$(RISCV64_READELF) -l $@ | grep -F "/lib/ld-musl-riscv64.so.1" >/dev/null
+
+$(RISCV64_MUSL_LDSO): $(RISCV64_MUSLCC_GCC)
+	mkdir -p $(dir $@)
+	cp $(RISCV64_MUSL_LDSO_SOURCE) $@
+	chmod 0555 $@
 
 $(RISCV64_LINUX_SERVER_MODULE): user/crt0-riscv64.S user/riscv64-linux/main.c user/user.ld user/include/bunix/syscall.h Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
@@ -865,8 +887,8 @@ $(SYNTHETIC_SQUASHFS_IMAGE): tools/build-synthetic-squashfs-rootfs.sh $(ROOTFS_H
 $(ALPINE_SQUASHFS_IMAGE): $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy modules/passwd modules/shadow modules/group
 	ROOTFS_IMAGE_FORMAT=squashfs LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/build-alpine-rootfs.sh $@
 
-$(RISCV64_ALPINE_SQUASHFS_IMAGE): tools/build-riscv64-alpine-rootfs.sh tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy
-	sh tools/build-riscv64-alpine-rootfs.sh $@
+$(RISCV64_ALPINE_SQUASHFS_IMAGE): tools/build-riscv64-alpine-rootfs.sh tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO)
+	RISCV64_DYN_HELLO_MODULE=$(RISCV64_DYN_HELLO_MODULE) RISCV64_MUSL_LDSO=$(RISCV64_MUSL_LDSO) sh tools/build-riscv64-alpine-rootfs.sh $@
 
 $(ROOTFS_FLAVOR_STAMP): FORCE
 	mkdir -p $(dir $@)
@@ -1205,8 +1227,13 @@ test: test-parallel
 test-alpine-rootfs: $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy tools/test-alpine-rootfs.sh modules/passwd modules/shadow modules/group
 	LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/test-alpine-rootfs.sh
 
-test-riscv64-alpine-rootfs: tools/build-riscv64-alpine-rootfs.sh tools/build-alpine-rootfs.sh tools/test-riscv64-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy
-	sh tools/test-riscv64-alpine-rootfs.sh
+test-riscv64-dynamic-linker-artifacts: $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO)
+	test -s $(RISCV64_DYN_HELLO_MODULE)
+	test -s $(RISCV64_MUSL_LDSO)
+	$(RISCV64_READELF) -l $(RISCV64_DYN_HELLO_MODULE) | grep -F "/lib/ld-musl-riscv64.so.1" >/dev/null
+
+test-riscv64-alpine-rootfs: tools/build-riscv64-alpine-rootfs.sh tools/build-alpine-rootfs.sh tools/test-riscv64-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO)
+	RISCV64_DYN_HELLO_MODULE=$(RISCV64_DYN_HELLO_MODULE) RISCV64_MUSL_LDSO=$(RISCV64_MUSL_LDSO) sh tools/test-riscv64-alpine-rootfs.sh
 
 test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-squashfs.txt tools/test-boot-markers-squashfs-up.txt tools/test-boot-markers-alpine-smoke.txt tools/test-boot-markers-alpine-squashfs.txt
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) QEMU_TIMEOUT=$(QEMU_TIMEOUT) \

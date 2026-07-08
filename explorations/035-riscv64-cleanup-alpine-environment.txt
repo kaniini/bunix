@@ -184,3 +184,24 @@ Progress notes:
   Bunix overlay configurable, proving the x86_64 default overlay path still
   works.
 - `git diff --check` passed after adding the riscv64 Alpine artifact builder.
+- Prepared riscv64 dynamic-linker artifacts for the future runtime smoke:
+  - `build/riscv64/modules/dyn-hello.user` now builds from
+    `user/musl-hello/main.c` as a dynamic riscv64 musl ELF with interpreter
+    `/lib/ld-musl-riscv64.so.1`.
+  - `build/riscv64/modules/ld-musl-riscv64.so.1` is copied from the musl.cc
+    sysroot `libc.so` content because that toolchain's `ld-musl` path is an
+    absolute symlink inside the sysroot.
+  - The riscv64 Alpine rootfs builder overlays `/bin/dyn-hello`,
+    `/lib/ld-musl-riscv64.so.1`, and the canonical musl libc symlink when the
+    artifacts are provided.
+  - `make test-riscv64-dynamic-linker-artifacts` validates the dynamic ELF
+    interpreter and loader artifact.
+  - This is prerequisite artifact coverage only.  The dynamic-linker smoke
+    task remains open until Bunix actually executes the dynamic binary on
+    riscv64 and proves the musl loader's `openat(2)` and `fstat(2)` behavior.
+- `make test-riscv64-dynamic-linker-artifacts` passed after adding the
+  dynamic riscv64 musl artifacts.
+- `make test-riscv64-alpine-rootfs` passed after overlaying riscv64 dynamic
+  musl artifacts into the Alpine rootfs.
+- `make test-alpine-rootfs` passed after adding shared Alpine extra-rootfs
+  overlay support.
