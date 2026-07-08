@@ -263,9 +263,6 @@ worker_parts() {
 	smoke-up)
 		echo "smoke"
 		;;
-	tmpfs-extended)
-		echo "tmpfs-basic-linux-tests,tmpfs-extended"
-		;;
 	root-tmpfs-chown)
 		echo "tmpfs-basic-linux-tests,root-tmpfs-chown"
 		;;

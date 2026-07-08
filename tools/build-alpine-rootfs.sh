@@ -12,6 +12,12 @@ apk_plain_log=$artifact_dir/apk.plain.log
 apk_cache=${APK_CACHE_DIR:-$artifact_dir/apk-cache}
 repositories=${APK_REPOSITORIES_FILE:-/etc/apk/repositories}
 apk_packages=${ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc ifupdown-ng}
+runlevel_policy=${ALPINE_OPENRC_POLICY:-tools/alpine-openrc-runlevels.policy}
+reference_runlevels=$artifact_dir/openrc-reference-runlevels.tsv
+bunix_runlevels=$artifact_dir/openrc-bunix-runlevels.tsv
+initd_manifest=$artifact_dir/openrc-initd.tsv
+confd_manifest=$artifact_dir/openrc-confd.tsv
+policy_manifest=$artifact_dir/openrc-policy.tsv
 rootfs_format=${ROOTFS_IMAGE_FORMAT:-squashfs}
 login=${LOGIN_MODULE:-build/modules/login.user}
 statidtest=${STATIDTEST_MODULE:-build/modules/statidtest.user}
@@ -40,6 +46,66 @@ merge_account_file() {
 	mv "$tmp" "$base"
 }
 
+write_runlevel_inventory() {
+	root_dir=$1
+	out_file=$2
+
+	: > "$out_file"
+	if [ ! -d "$root_dir/etc/runlevels" ]; then
+		return
+	fi
+	find "$root_dir/etc/runlevels" -maxdepth 2 -type l | sort |
+	while IFS= read -r link; do
+		rel=${link#"$root_dir/etc/runlevels/"}
+		printf '%s\t%s\n' "$rel" "$(readlink "$link")"
+	done > "$out_file"
+}
+
+write_file_inventory() {
+	dir=$1
+	out_file=$2
+
+	: > "$out_file"
+	if [ -d "$dir" ]; then
+		find "$dir" -maxdepth 1 -type f | sed 's|.*/||' | sort > "$out_file"
+	fi
+}
+
+materialize_openrc_policy() {
+	if [ ! -r "$runlevel_policy" ]; then
+		echo "OpenRC runlevel policy is not readable: $runlevel_policy" >&2
+		exit 2
+	fi
+
+	mkdir -p "$root/etc/runlevels/sysinit" "$root/etc/runlevels/boot" \
+		"$root/etc/runlevels/default" "$root/etc/runlevels/nonetwork" \
+		"$root/etc/runlevels/shutdown"
+	find "$root/etc/runlevels" -maxdepth 2 -type l -exec rm -f {} \;
+	cp "$runlevel_policy" "$policy_manifest"
+
+	while IFS='	' read -r action runlevel service target reason; do
+		case "$action" in
+		''|\#*) continue ;;
+		add|keep)
+			if [ -z "$runlevel" ] || [ -z "$service" ] ||
+			   [ -z "$target" ]; then
+				echo "invalid OpenRC policy row: $action $runlevel $service" >&2
+				exit 2
+			fi
+			mkdir -p "$root/etc/runlevels/$runlevel"
+			ln -sf "$target" "$root/etc/runlevels/$runlevel/$service"
+			;;
+		replace|suppress|defer)
+			: "$reason"
+			;;
+		*)
+			echo "unknown OpenRC policy action: $action" >&2
+			exit 2
+			;;
+		esac
+	done < "$runlevel_policy"
+}
+
 rm -rf "$stage"
 mkdir -p "$root" "$(dirname "$out")" "$artifact_dir" "$apk_cache"
 apk_cache=$(CDPATH= cd "$apk_cache" && pwd)
@@ -62,6 +128,10 @@ if ! apk --root "$root" --initdb --allow-untrusted \
 		exit 1
 	fi
 fi
+
+write_runlevel_inventory "$root" "$reference_runlevels"
+write_file_inventory "$root/etc/init.d" "$initd_manifest"
+write_file_inventory "$root/etc/conf.d" "$confd_manifest"
 
 chmod -R u+w "$root"
 mkdir -p "$root/bin" "$root/etc" "$root/etc/init.d" "$root/etc/runlevels/default" \
@@ -94,7 +164,8 @@ fi
 
 cat > "$root/etc/inittab" <<'EOF_INITTAB'
 ::sysinit:/sbin/openrc sysinit
-::wait:/sbin/rc-service networking start
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default
 ttyS0::respawn:/bin/login
 ::shutdown:/sbin/openrc shutdown
 EOF_INITTAB
@@ -171,7 +242,8 @@ esac
 EOF_NETWORKING
 chmod 0755 "$root/etc/init.d/networking"
 
-ln -sf /etc/init.d/networking "$root/etc/runlevels/boot/networking"
+materialize_openrc_policy
+write_runlevel_inventory "$root" "$bunix_runlevels"
 
 find "$root/var/cache/apk" -type f -delete 2>/dev/null || true
 
@@ -180,6 +252,9 @@ find "$root/var/cache/apk" -type f -delete 2>/dev/null || true
 	echo "apk_cache=$apk_cache"
 	echo "repositories=$repositories"
 	echo "packages=$apk_packages"
+	echo "openrc_policy=$runlevel_policy"
+	echo "openrc_reference_runlevels=$reference_runlevels"
+	echo "openrc_bunix_runlevels=$bunix_runlevels"
 	apk --root "$root" info 2>/dev/null | sort
 } > "$manifest"
 
