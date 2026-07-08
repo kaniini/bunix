@@ -6,6 +6,9 @@ Problem:
   `/etc/init.d/networking` service in the Alpine rootfs.
 - That is acceptable as a temporary bootstrap path, but the intended Alpine
   environment should run the real Alpine/ifupdown-ng networking service.
+- The current generated service is fine for now because it keeps `make run`
+  useful while networking is still being brought up, but it is explicitly a
+  compatibility crutch to remove in a future slice.
 - The current replacement service is a stopgap only.  It should not become the
   Bunix network-management interface or a permanent OpenRC compatibility
   contract.
@@ -31,6 +34,9 @@ Constraints:
 - BusyBox init, not OpenRC, manages login respawn processes.
 - Do not reintroduce a blocking `bunix-login` OpenRC service.
 - Do not bypass OpenRC networking with bootstrap DHCP or test-only hooks.
+- Do not regress the current working default Alpine boot while this exploration
+  is pending; keep the temporary generated service enabled until the real
+  Alpine service has a deterministic test and a replacement path.
 - Keep policy in userspace: Alpine OpenRC, ifupdown-ng, and BusyBox/Alpine
   `udhcpc` drive network configuration.
 - Any Bunix-specific compatibility should be in general VFS, mount, procfs,
