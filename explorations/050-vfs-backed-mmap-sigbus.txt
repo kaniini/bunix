@@ -1,0 +1,49 @@
+Implement VFS-backed mmap metadata and file-hole SIGBUS delivery.
+
+Problem:
+
+- The Linux mmap path currently allocates anonymous user pages and eagerly
+  copies file data into them.
+- Once bytes are copied, the VM layer no longer knows which pages came from a
+  file, what file extent they represent, or whether later access is past the
+  mapped file object.
+- Linux-compatible file-backed mappings should deliver SIGBUS for invalid
+  file-backed accesses such as mapping holes or pages beyond the valid file
+  object, instead of silently exposing zero-filled anonymous memory or reporting
+  an ordinary SIGSEGV.
+
+Constraints:
+
+- Keep filesystem policy in VFS/filesystem servers.  The kernel VM layer should
+  hold enough object metadata to ask the owning service for page contents or
+  fault classification, but should not learn filesystem-specific layout rules.
+- Preserve anonymous/private mmap behavior that is already sufficient for
+  dynamic linking and current BusyBox workloads.
+- Keep the design portable: x86 page-fault classification should hand off a
+  generic file-backed mapping fault class that ARM can produce later.
+
+Tasks:
+
+- [ ] Inventory current Linux mmap, VFS read, VM region metadata, task clone,
+      munmap, mprotect, and fault classification paths.
+- [ ] Extend task VM region metadata to represent file-backed mappings with
+      file identity, file offset, mapping length, protections, and private/COW
+      policy.
+- [ ] Replace eager file mmap copying with either fault-time population or
+      explicit VFS-backed mapping metadata that can distinguish EOF zero-fill
+      from file-hole SIGBUS cases.
+- [ ] Add a Linux-server/VFS RPC contract for classifying file-backed mmap page
+      faults and reading the relevant page contents.
+- [ ] Route file-backed mapping holes through the task-fault event path as
+      SIGBUS with a useful `si_addr` and Linux-compatible `si_code`.
+- [ ] Add regressions for file mappings that stay inside file size, partial
+      final-page zero-fill where Linux permits it, and invalid file-backed
+      access that must deliver SIGBUS.
+- [ ] Re-run focused dynamic-linker, mmap, signal, and boot tests.
+
+Completion criteria:
+
+- Static and dynamic userspace continue to boot and run.
+- A focused test can catch SIGBUS from a file-backed mmap hole and verify
+  `siginfo_t.si_addr`.
+- Existing SIGSEGV/SIGBUS default and caught-signal tests still pass.

@@ -37,7 +37,8 @@ Progress notes:
   and general-protection faults become SIGSEGV-style wait status, while x86
   alignment-check faults become SIGBUS-style wait status.
 - File-backed mmap-hole SIGBUS remains open until the VFS mmap path can report
-  that condition distinctly.
+  that condition distinctly; this is split into
+  `050-vfs-backed-mmap-sigbus.txt`.
 - Synchronous fault delivery now reuses the Linux signal disposition tables:
   if a SIGSEGV/SIGBUS handler and restorer are installed, the x86 exception
   path builds a signal frame on the interrupted user stack and resumes into the
@@ -74,7 +75,7 @@ Tasks:
       process-level Linux signal delivery instead of unconditional task death.
 - [x] Implement SIGSEGV default termination and wait-status reporting,
       including the expected signal number and core-dump bit policy.
-- [ ] Implement SIGBUS default termination for address errors that should not
+- [x] Implement SIGBUS default termination for address errors that should not
       be reported as SIGSEGV, including file-backed mapping holes once the VFS
       mmap path can distinguish them.
 - [x] Add Linux `sigaction`, signal-mask, pending-signal, and return-frame
@@ -88,6 +89,26 @@ Tasks:
 - [x] Add tests for default SIGSEGV termination, caught SIGSEGV, default
       SIGBUS, caught SIGBUS, wait-status reporting, and shell-visible exit
       behavior.
-- [ ] Document the remaining signal roadmap after SIGSEGV/SIGBUS, including
+- [x] Document the remaining signal roadmap after SIGSEGV/SIGBUS, including
       asynchronous signals, job-control signals, timers, and ptrace/strace
       interactions.
+
+Remaining Signal Roadmap:
+
+- File-backed mmap-hole SIGBUS is tracked separately in
+  `050-vfs-backed-mmap-sigbus.txt`, because the current mmap implementation
+  eagerly copies file bytes into anonymous mappings and loses the file extent
+  metadata needed to distinguish a late mapping hole from an ordinary unmapped
+  page.
+- Asynchronous signal delivery should grow beyond the current syscall-return
+  polling model so runnable tasks can be interrupted promptly for job-control,
+  timer, and externally generated signals.
+- Job-control signals need process-group and terminal foreground semantics
+  connected to the TTY/session model, including SIGSTOP, SIGTSTP, SIGTTIN,
+  SIGTTOU, SIGCONT, and shell-visible wait status changes.
+- Timer-generated signals should be integrated with the time server and Linux
+  personality signal queues, including interval timers and per-process timer
+  ownership rules.
+- ptrace/strace interactions should preserve the current native observability
+  while adding Linux-compatible stop reasons, signal injection, and fault
+  inspection.
