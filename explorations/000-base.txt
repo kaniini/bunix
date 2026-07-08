@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 035-riscv64-cleanup-alpine-environment.txt
+The current exploration is: 036-shared-linux-personality-riscv64.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.
