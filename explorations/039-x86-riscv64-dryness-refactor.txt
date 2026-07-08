@@ -160,3 +160,14 @@ Progress notes:
     - `make ARCH=x86_64 all`
     - `make ARCH=riscv64 all`
     - `make test-boot-riscv64-alpine`
+- Riscv64 boot-package argument slice:
+  - Centralized the repeated riscv64 boot-package module/file argument lists
+    into `RISCV64_BOOTPKG_*_ARGS` Make variables.
+  - The standard, multi-record, Alpine, and UART boot-package recipes now
+    share their package composition policy instead of spelling module pairs in
+    every recipe body.
+  - This is partial progress toward the server module build/package rule task;
+    the x86_64 EFI module list and generic server link rules still need a
+    broader cleanup.
+  - Verification:
+    - `make test-riscv64-bootpkg`
