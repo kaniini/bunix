@@ -81,7 +81,7 @@ Tasks:
 - [x] Add a buildable `xhci.server` skeleton that can consume PCI/PCIe
       resources from the future `PCI0` server, but keep it disabled until the
       PCI server exposes the needed BAR/IRQ/DMA capabilities.
-- [ ] Design the DMA model for USB transfers: pinned pages or bounded shared
+- [x] Design the DMA model for USB transfers: pinned pages or bounded shared
       buffers, ownership transfer rules, bounce-buffer fallback, cache
       coherency notes for non-x86, and IOMMU/security follow-up needs.
 - [x] Implement minimal USB descriptor parsing in `usb-bus.server`: device,
@@ -134,8 +134,46 @@ Open design notes:
 - The upper `USB0` constants now name the intended class-driver operations, but
   endpoint capabilities and transfer-completion objects still need full OCAP
   modeling.
-- DMA remains the next major design item before real xHCI ring setup.  The
-  current synthetic backend intentionally uses shared buffers only.
+
+USB DMA model:
+
+- Class drivers never hand host controllers raw arbitrary task memory.  A class
+  driver submits a bounded shared buffer and an endpoint capability to `USB0`.
+- `usb-bus.server` validates endpoint scope, transfer type, direction, maximum
+  packet size, timeout, and transfer length before forwarding work to a host
+  controller.
+- Host-controller servers receive only per-transfer DMA authority.  The
+  intended primitive is a pinned or bounce-backed DMA buffer capability derived
+  from the caller's shared buffer for the exact byte range needed by that
+  transfer.
+- Until Bunix has an IOMMU server, all real USB DMA must use bounded
+  bounce buffers allocated by the trusted host-controller server or a dedicated
+  DMA broker.  Direct device access to arbitrary userspace physical pages is
+  not acceptable for class drivers.
+- x86_64 can initially treat coherent shared/bounce buffers as cache coherent,
+  but the API must include explicit sync points before submit and after
+  completion so riscv64/ARM can add cache maintenance without changing
+  class-driver contracts.
+- Ownership rules:
+  - OUT transfers copy or pin caller data before submit; the caller may not
+    mutate the submitted range until completion or cancellation.
+  - IN transfers write into a controller-owned bounce buffer first, then copy
+    into the caller buffer only after a successful completion.
+  - Setup packets for control transfers are copied into controller-owned memory
+    and are never exposed as mutable hardware state.
+  - Cancellation returns either completed bytes or a cancelled status, never
+    silent partial mutation.
+- Completion records should include endpoint ID, transfer cookie, status,
+  actual length, short-packet indication, stall/reset indication, and timeout
+  status.  Completion delivery should be through an event port or wait RPC, not
+  by polling shared memory from class drivers.
+- Follow-up needed before real hardware exposure:
+  - Add a generic DMA/bounce-buffer broker or extend the buffer server with
+    pinned DMA grants.
+  - Add IOMMU domain design for PCI/PCIe controllers.
+  - Add cache maintenance hooks in an architecture abstraction.
+  - Add transfer lifetime accounting so cancellation and task exit revoke DMA
+    authority promptly.
 
 Verification so far:
 
