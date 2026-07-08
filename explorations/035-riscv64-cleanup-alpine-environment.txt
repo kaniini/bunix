@@ -287,6 +287,27 @@ Progress notes:
   - `make test-boot-riscv64-uart-console`
   - `make build/x86_64/bunixos.kernel`
   - `make test-smoke`
+- Added the next prerequisite for riscv64 dynamic-linker runtime coverage:
+  - The riscv64 native Bunix syscall frontend now implements the low-level
+    task primitives used by the shared `proc` server's exec path:
+    `task_create`, `task_map`, `task_grant`, `task_start`, `task_write`,
+    `task_start_at`, `task_clone_range`, `task_kill`, and `task_clear`.
+  - `user/proc/main.c` now treats the accepted ELF machine as an architecture
+    boundary, using `EM_RISCV` when built for riscv64 and `EM_X86_64`
+    otherwise.  This keeps the existing proc dynamic-loader implementation
+    usable for riscv64 instead of adding a second proc server.
+  - `make test-riscv64-proc-server-build` now builds the shared proc server
+    as a RISC-V userspace ELF.  This is build/runtime-primitive coverage only:
+    proc is not launched in the riscv64 boot package yet because the current
+    bootstrap still lacks the time/VFS/rootfs service graph and service-wait
+    sequencing needed by proc spawn/exec.
+  - Verification for this prerequisite slice:
+    - `git diff --check`
+    - `make test-riscv64-proc-server-build`
+    - `make ARCH=riscv64 all`
+    - `make build/modules/proc.server`
+    - `make test-boot-riscv64-early`
+    - `make test-smoke`
   - The UART boot package intentionally remains lean.  Including the normal
     `user` server there exposed a UART-only timeout after names handled the
     user service registration.  That is not part of the Alpine milestone

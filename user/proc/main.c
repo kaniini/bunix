@@ -16,6 +16,7 @@ enum {
 	ET_EXEC = 2,
 	ET_DYN = 3,
 	EM_X86_64 = 62,
+	EM_RISCV = 243,
 	PT_LOAD = 1,
 	PT_DYNAMIC = 2,
 	PT_INTERP = 3,
@@ -54,6 +55,26 @@ enum {
 	PROC_SPAWN_FLAGS_MASK = 0xffffffff,
 	PROC_SPAWN_SESSION_SHIFT = 32,
 };
+
+static unsigned short proc_elf_machine(void)
+{
+#if defined(__riscv)
+	return EM_RISCV;
+#else
+	return EM_X86_64;
+#endif
+}
+
+void *memcpy(void *dst, const void *src, u64 len)
+{
+	unsigned char *out = (unsigned char *)dst;
+	const unsigned char *in = (const unsigned char *)src;
+
+	for (u64 i = 0; i < len; i++) {
+		out[i] = in[i];
+	}
+	return dst;
+}
 
 struct process {
 	u64 pid;
@@ -1361,7 +1382,7 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 	    ehdr.ident[4] != ELFCLASS64 ||
 	    ehdr.ident[5] != ELFDATA2LSB ||
 	    (ehdr.type != ET_EXEC && ehdr.type != ET_DYN) ||
-	    ehdr.machine != EM_X86_64 ||
+	    ehdr.machine != proc_elf_machine() ||
 	    elf_phdr_table_size(&ehdr, file.size, &phdr_bytes) != 0) {
 		bunix_console_log("proc: exec elf invalid\n",
 				  sizeof("proc: exec elf invalid\n") - 1);
@@ -1410,7 +1431,7 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 		    interp_ehdr.ident[5] != ELFDATA2LSB ||
 		    (interp_ehdr.type != ET_EXEC &&
 		     interp_ehdr.type != ET_DYN) ||
-		    interp_ehdr.machine != EM_X86_64 ||
+		    interp_ehdr.machine != proc_elf_machine() ||
 		    elf_phdr_table_size(&interp_ehdr, interp_file.size,
 					&interp_phdr_bytes) != 0) {
 			goto out;

@@ -35,6 +35,10 @@ Tasks:
       Linux tasks without a fixed single-task cache.
 - [ ] Unify server module build/package rules where the only difference is
       target triple, crt0, or linker mode.
+- [ ] Factor freestanding userspace runtime support such as `memcpy`,
+      `memset`, and future compiler-emitted helper symbols into a shared user
+      support object instead of carrying one-off definitions in individual
+      servers.
 - [ ] Unify common QEMU test harness behavior while preserving architecture
       machine, firmware, and shutdown differences.
 - [ ] Update documentation to describe the architecture boundary explicitly:
@@ -60,3 +64,7 @@ Progress notes:
   `/bin/rv64-syscall-smoke` and `/bin/musl-hello` can run concurrently.  This
   should become a real per-task frontend table once the riscv64 Alpine path is
   far enough along to justify broader cleanup.
+- Exploration 035 added a local freestanding `memcpy` definition to
+  `user/proc/main.c` because the riscv64 compiler lowered a struct copy into
+  an external helper while linking proc without libc.  Keep that local unblock
+  narrow; the DRYness pass should replace it with shared user runtime support.

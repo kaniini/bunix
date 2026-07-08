@@ -9,6 +9,7 @@
 #include "ipc.h"
 #include "sched.h"
 #include "server.h"
+#include "slab.h"
 #include "timer.h"
 
 enum {
@@ -23,14 +24,23 @@ enum {
 	SYSCALL_BOOT_MODULE_READ = -18,
 	SYSCALL_CLOCK_MONOTONIC_NS = -20,
 	SYSCALL_SLEEP_NS = -22,
+	SYSCALL_TASK_CREATE = -24,
+	SYSCALL_TASK_MAP = -26,
+	SYSCALL_TASK_GRANT = -28,
+	SYSCALL_TASK_START = -30,
 	SYSCALL_BUFFER_CREATE = -32,
 	SYSCALL_BUFFER_READ = -34,
 	SYSCALL_BUFFER_WRITE = -36,
+	SYSCALL_TASK_WRITE = -38,
+	SYSCALL_TASK_START_AT = -40,
 	SYSCALL_TASK_ID = -42,
 	SYSCALL_TASK_ALLOC = -44,
+	SYSCALL_TASK_CLONE_RANGE = -46,
+	SYSCALL_TASK_KILL = -50,
 	SYSCALL_EARLY_CONSOLE_WRITE = -54,
 	SYSCALL_EARLY_CONSOLE_LOG = -56,
 	SYSCALL_MACHINE_POWER = -64,
+	SYSCALL_TASK_CLEAR = -66,
 	LINUX_RISCV64_WRITE = 64,
 	LINUX_RISCV64_EXIT = 93,
 	LINUX_RISCV64_EXIT_GROUP = 94,
@@ -533,6 +543,79 @@ static u64 native_sys_task_id(const struct native_syscall_args *args)
 	return task != 0 ? task_id(task) : (u64)-1;
 }
 
+static u64 native_sys_task_create(const struct native_syscall_args *args)
+{
+	char name[RISCV64_MAX_CSTR];
+
+	if (copy_cstr_from_user(name, args->arg0, sizeof(name)) != 0) {
+		return (u64)-1;
+	}
+	return server_task_create(task_current(), name);
+}
+
+static u64 native_sys_task_map(const struct native_syscall_args *args)
+{
+	u64 map_args[6];
+	u8 *copy;
+	u64 copy_len;
+	u64 result;
+
+	if (args->arg0 == 0 ||
+	    arch_user_copy_from(map_args, args->arg0, sizeof(map_args)) != 0 ||
+	    map_args[3] > LINUX_MAX_SYSCALL_BUFFER) {
+		return (u64)-1;
+	}
+	copy_len = map_args[3] != 0 ? map_args[3] : 1;
+	copy = (u8 *)slab_alloc(copy_len);
+	if (copy == 0) {
+		return (u64)-1;
+	}
+	if (map_args[3] != 0 &&
+	    arch_user_copy_from(copy, map_args[2], map_args[3]) != 0) {
+		slab_free(copy);
+		return (u64)-1;
+	}
+	result = (u64)server_task_map(task_current(), map_args[0],
+				      map_args[1], copy, map_args[3],
+				      map_args[4], (u32)map_args[5]);
+	slab_free(copy);
+	return result;
+}
+
+static u64 native_sys_task_grant(const struct native_syscall_args *args)
+{
+	return (u64)server_task_grant(task_current(), args->arg0, args->arg1,
+				      (u32)args->arg2);
+}
+
+static u64 native_sys_task_start(const struct native_syscall_args *args)
+{
+	return (u64)server_task_start(task_current(), args->arg0, args->arg1);
+}
+
+static u64 native_sys_task_write(const struct native_syscall_args *args)
+{
+	u64 write_args[4];
+	u8 copy[RISCV64_USER_COPY_CHUNK];
+
+	if (args->arg0 == 0 ||
+	    arch_user_copy_from(write_args, args->arg0,
+				sizeof(write_args)) != 0) {
+		return (u64)-1;
+	}
+	for (u64 done = 0; done < write_args[3];) {
+		const u64 chunk = min_u64(write_args[3] - done, sizeof(copy));
+
+		if (arch_user_copy_from(copy, write_args[2] + done, chunk) != 0 ||
+		    server_task_write(task_current(), write_args[0],
+				      write_args[1] + done, copy, chunk) != 0) {
+			return (u64)-1;
+		}
+		done += chunk;
+	}
+	return 0;
+}
+
 static u64 native_sys_task_alloc(const struct native_syscall_args *args)
 {
 	u64 alloc_args[4];
@@ -545,6 +628,37 @@ static u64 native_sys_task_alloc(const struct native_syscall_args *args)
 	return (u64)server_task_alloc(task_current(), alloc_args[0],
 				      alloc_args[1], alloc_args[2],
 				      (u32)alloc_args[3]);
+}
+
+static u64 native_sys_task_clone_range(const struct native_syscall_args *args)
+{
+	u64 clone_args[5];
+
+	if (args->arg0 == 0 ||
+	    arch_user_copy_from(clone_args, args->arg0,
+				sizeof(clone_args)) != 0) {
+		return (u64)-1;
+	}
+	return (u64)server_task_clone_range(task_current(), clone_args[0],
+					    clone_args[1], clone_args[2],
+					    clone_args[3],
+					    (u32)clone_args[4]);
+}
+
+static u64 native_sys_task_start_at(const struct native_syscall_args *args)
+{
+	return (u64)server_task_start_at(task_current(), args->arg0,
+					 args->arg1, args->arg2);
+}
+
+static u64 native_sys_task_kill(const struct native_syscall_args *args)
+{
+	return (u64)server_task_kill(task_current(), args->arg0);
+}
+
+static u64 native_sys_task_clear(const struct native_syscall_args *args)
+{
+	return (u64)server_task_clear(task_current(), args->arg0);
 }
 
 static u64 native_sys_buffer_create(const struct native_syscall_args *args)
@@ -664,8 +778,18 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_CLOCK_MONOTONIC_NS, "clock_monotonic_ns",
 	  native_sys_clock_monotonic_ns },
 	{ SYSCALL_SLEEP_NS, "sleep_ns", native_sys_sleep_ns },
+	{ SYSCALL_TASK_CREATE, "task_create", native_sys_task_create },
+	{ SYSCALL_TASK_MAP, "task_map", native_sys_task_map },
+	{ SYSCALL_TASK_GRANT, "task_grant", native_sys_task_grant },
+	{ SYSCALL_TASK_START, "task_start", native_sys_task_start },
+	{ SYSCALL_TASK_WRITE, "task_write", native_sys_task_write },
+	{ SYSCALL_TASK_START_AT, "task_start_at", native_sys_task_start_at },
 	{ SYSCALL_TASK_ID, "task_id", native_sys_task_id },
 	{ SYSCALL_TASK_ALLOC, "task_alloc", native_sys_task_alloc },
+	{ SYSCALL_TASK_CLONE_RANGE, "task_clone_range",
+	  native_sys_task_clone_range },
+	{ SYSCALL_TASK_KILL, "task_kill", native_sys_task_kill },
+	{ SYSCALL_TASK_CLEAR, "task_clear", native_sys_task_clear },
 	{ SYSCALL_BUFFER_CREATE, "buffer_create", native_sys_buffer_create },
 	{ SYSCALL_BUFFER_READ, "buffer_read", native_sys_buffer_read },
 	{ SYSCALL_BUFFER_WRITE, "buffer_write", native_sys_buffer_write },

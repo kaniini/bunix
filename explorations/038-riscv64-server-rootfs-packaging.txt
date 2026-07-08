@@ -25,6 +25,9 @@ Tasks:
       rootfs conventions.
 - [ ] Build riscv64 variants of the normal server graph needed for an Alpine
       userspace environment.
+- [ ] Launch riscv64 `time` and `proc` with the same handle layout expected by
+      the shared x86_64 bootstrap before attempting proc-managed exec or
+      dynamic-loader smoke.
 - [ ] Wire the existing riscv64 Alpine squashfs artifact from exploration 035
       into the chosen QEMU boot path.
 - [ ] Wire the existing riscv64 dynamic-linker artifacts into the runtime
@@ -51,3 +54,7 @@ Progress notes:
   `make test-riscv64-dynamic-linker-artifacts`.  The remaining packaging work
   is boot integration and normal server graph delivery, not host-side APK
   rootfs assembly.
+- Exploration 035 added `make test-riscv64-proc-server-build` and the native
+  task syscall primitives required by proc's exec path.  This exploration owns
+  packaging and launching proc in the riscv64 server graph with the required
+  time/VFS/rootfs services.

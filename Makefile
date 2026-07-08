@@ -60,6 +60,7 @@ RISCV64_LINUX_SERVER_MODULE := $(BUILD_DIR)/riscv64/modules/linux.server
 RISCV64_SHARED_LINUX_SERVER_MODULE := $(BUILD_DIR)/riscv64/modules/linux-shared.server
 RISCV64_NAMES_MODULE := $(BUILD_DIR)/riscv64/modules/names.server
 RISCV64_USER_MODULE := $(BUILD_DIR)/riscv64/modules/user.server
+RISCV64_PROC_MODULE := $(BUILD_DIR)/riscv64/modules/proc.server
 RISCV64_BOOTSTRAP_MODULE := $(BUILD_DIR)/riscv64/modules/bootstrap.server
 RISCV64_ALPINE_SQUASHFS_IMAGE := $(BUILD_DIR)/riscv64/alpine-rootfs.sqfs
 BOOTSTRAP_MODULE := $(BUILD_DIR)/modules/bootstrap.server
@@ -387,7 +388,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -554,6 +555,21 @@ $(RISCV64_USER_MODULE): user/crt0-riscv64.S user/user/main.c user/user.ld user/i
 	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
 		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
 		$(BUILD_DIR)/riscv64/user/user.c.o
+	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
+
+$(RISCV64_PROC_MODULE): user/crt0-riscv64.S user/proc/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h Makefile
+	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
+	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
+		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
+		-fno-pic -fno-pie -fno-builtin -Iuser/include \
+		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
+	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
+		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
+		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
+		-c user/proc/main.c -o $(BUILD_DIR)/riscv64/user/proc.c.o
+	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
+		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
+		$(BUILD_DIR)/riscv64/user/proc.c.o
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
 $(RISCV64_BOOTSTRAP_MODULE): user/crt0-riscv64.S user/riscv64-bootstrap/main.c user/user.ld user/include/bunix/syscall.h Makefile
@@ -1311,6 +1327,9 @@ test-riscv64-alpine-rootfs: tools/build-riscv64-alpine-rootfs.sh tools/build-alp
 
 test-riscv64-shared-linux-server-build: $(RISCV64_SHARED_LINUX_SERVER_MODULE)
 	test -s $(RISCV64_SHARED_LINUX_SERVER_MODULE)
+
+test-riscv64-proc-server-build: $(RISCV64_PROC_MODULE)
+	test -s $(RISCV64_PROC_MODULE)
 
 test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-squashfs.txt tools/test-boot-markers-squashfs-up.txt tools/test-boot-markers-alpine-smoke.txt tools/test-boot-markers-alpine-squashfs.txt
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) QEMU_TIMEOUT=$(QEMU_TIMEOUT) \
