@@ -22,6 +22,9 @@ enum {
 	SYSCALL_BOOT_MODULE_READ = -18,
 	SYSCALL_CLOCK_MONOTONIC_NS = -20,
 	SYSCALL_SLEEP_NS = -22,
+	SYSCALL_BUFFER_CREATE = -32,
+	SYSCALL_BUFFER_READ = -34,
+	SYSCALL_BUFFER_WRITE = -36,
 	SYSCALL_TASK_ID = -42,
 	SYSCALL_TASK_ALLOC = -44,
 	SYSCALL_EARLY_CONSOLE_WRITE = -54,
@@ -503,6 +506,77 @@ static u64 native_sys_task_alloc(const struct native_syscall_args *args)
 				      (u32)alloc_args[3]);
 }
 
+static u64 native_sys_buffer_create(const struct native_syscall_args *args)
+{
+	struct shared_buffer *buffer = buffer_create(args->arg0);
+	u64 handle;
+
+	if (buffer == 0) {
+		return (u64)-1;
+	}
+	handle = task_grant_buffer(task_current(), buffer,
+				   TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+				   TASK_RIGHT_DUP);
+	buffer_release(buffer);
+	return handle != 0 ? handle : (u64)-1;
+}
+
+static u64 native_sys_buffer_read(const struct native_syscall_args *args)
+{
+	u64 read_args[4];
+	u8 copy[RISCV64_USER_COPY_CHUNK];
+	struct shared_buffer *buffer;
+
+	if (args->arg0 == 0 ||
+	    arch_user_copy_from(read_args, args->arg0,
+				sizeof(read_args)) != 0) {
+		return (u64)-1;
+	}
+	buffer = task_buffer_from_handle(task_current(), read_args[0],
+					 TASK_RIGHT_RECV);
+	if (buffer == 0) {
+		return (u64)-1;
+	}
+	for (u64 done = 0; done < read_args[3];) {
+		const u64 chunk = min_u64(read_args[3] - done, sizeof(copy));
+
+		if (buffer_read(buffer, read_args[1] + done, copy, chunk) != 0 ||
+		    arch_user_copy_to(read_args[2] + done, copy, chunk) != 0) {
+			return (u64)-1;
+		}
+		done += chunk;
+	}
+	return 0;
+}
+
+static u64 native_sys_buffer_write(const struct native_syscall_args *args)
+{
+	u64 write_args[4];
+	u8 copy[RISCV64_USER_COPY_CHUNK];
+	struct shared_buffer *buffer;
+
+	if (args->arg0 == 0 ||
+	    arch_user_copy_from(write_args, args->arg0,
+				sizeof(write_args)) != 0) {
+		return (u64)-1;
+	}
+	buffer = task_buffer_from_handle(task_current(), write_args[0],
+					 TASK_RIGHT_SEND);
+	if (buffer == 0) {
+		return (u64)-1;
+	}
+	for (u64 done = 0; done < write_args[3];) {
+		const u64 chunk = min_u64(write_args[3] - done, sizeof(copy));
+
+		if (arch_user_copy_from(copy, write_args[2] + done, chunk) != 0 ||
+		    buffer_write(buffer, write_args[1] + done, copy, chunk) != 0) {
+			return (u64)-1;
+		}
+		done += chunk;
+	}
+	return 0;
+}
+
 static u64 native_sys_early_console_write(const struct native_syscall_args *args)
 {
 	early_console_write_user(args->arg0, args->arg1);
@@ -551,6 +625,9 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_SLEEP_NS, "sleep_ns", native_sys_sleep_ns },
 	{ SYSCALL_TASK_ID, "task_id", native_sys_task_id },
 	{ SYSCALL_TASK_ALLOC, "task_alloc", native_sys_task_alloc },
+	{ SYSCALL_BUFFER_CREATE, "buffer_create", native_sys_buffer_create },
+	{ SYSCALL_BUFFER_READ, "buffer_read", native_sys_buffer_read },
+	{ SYSCALL_BUFFER_WRITE, "buffer_write", native_sys_buffer_write },
 	{ SYSCALL_EARLY_CONSOLE_WRITE, "early_console_write",
 	  native_sys_early_console_write },
 	{ SYSCALL_EARLY_CONSOLE_LOG, "early_console_log",

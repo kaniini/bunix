@@ -223,3 +223,27 @@ Progress notes:
   build-only shared Linux server target.
 - `make build/modules/linux.server` passed after the shared Linux portability
   fixes, proving the x86_64 Linux server still builds.
+- Added the first normal riscv64 service-graph piece needed by the shared
+  Linux personality:
+  - `build/riscv64/modules/names.server` now builds from the shared
+    `user/names/main.c` server with the riscv64 crt0 and user linker script.
+  - The riscv64 boot packages now include the `names` module so
+    `server_start_initial_boot_modules()` can launch it before
+    `bootstrap`, matching the handle assumptions used by the x86_64
+    bootstrap path.
+  - riscv64 native syscall dispatch now implements `buffer_create`,
+    `buffer_read`, and `buffer_write`, which are required by normal user
+    servers using the shared console/log/buffer helpers.
+  - The riscv64 boot smoke now proves `names` runs by checking the module
+    launch marker and a real `names: register name=bootstrap` service effect.
+    The plain `names: online` console-log marker is not expected yet because
+    the riscv64 smoke package still does not include the console server to
+    drain `bunix_console_log()` messages.
+- `make test-riscv64-bootpkg` passed after adding the riscv64 names module to
+  the boot package.
+- `make ARCH=riscv64 all` passed after adding the riscv64 buffer syscalls.
+- `make test-boot-riscv64-early` passed after proving the riscv64 names
+  service launches and the existing static musl hello path still powers off
+  cleanly.
+- `make test-boot-riscv64-uart-console` passed after adding `names` to the
+  UART boot package.
