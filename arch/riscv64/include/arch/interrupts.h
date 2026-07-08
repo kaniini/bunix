@@ -20,6 +20,7 @@ void arch_interrupts_disable(void);
 u64 arch_timer_ticks(void);
 u64 arch_timer_hz(void);
 void arch_interrupt_dispatch(struct arch_interrupt_frame *frame);
+void riscv64_timer_set_relative(u64 cycles);
 int arch_irq_bind(u32 gsi, u32 resource_flags, struct ipc_port *port);
 int arch_irq_mask(u32 gsi, int masked);
 int arch_irq_ack(u32 gsi);

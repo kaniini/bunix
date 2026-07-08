@@ -52,7 +52,7 @@ Tasks:
       limits.
 - [x] Implement enough boot and early memory initialization to print a kernel
       banner and power off cleanly under QEMU.
-- [ ] Bring up trap/interrupt handling and a timer tick with SBI/CLINT/PLIC
+- [x] Bring up trap/interrupt handling and a timer tick with SBI/CLINT/PLIC
       integration appropriate to the chosen machine model.
 - [ ] Bring up task/thread context switching for kernel threads, then native
       Bunix userspace server execution with a riscv64 crt0.
@@ -134,6 +134,24 @@ Progress notes:
   via guest poweroff.
 - Tightened `arch/riscv64/linker.ld` with explicit RX/R/RW program headers so
   the riscv64 kernel no longer links with a RWX LOAD segment.
+- Added the first riscv64 supervisor trap/timer path:
+  - `arch/riscv64/trap.S` installs a supervisor trap entry that saves general
+    registers, snapshots `scause`, `stval`, `sepc`, `sstatus`, and interrupted
+    `sp`, calls `arch_interrupt_dispatch()`, restores registers, and returns
+    through `sret`.
+  - `arch_interrupts_init()` programs `stvec` and enables supervisor timer
+    interrupts in `sie`; `arch_interrupts_enable()`/`disable()` control
+    `sstatus.SIE`.
+  - `riscv64_timer_set_relative()` programs the next timer through SBI
+    `set_timer`, and the dispatcher handles supervisor timer interrupts by
+    incrementing the timer tick counter and disarming the timer.
+  - The early boot path now schedules a short timer interrupt, waits in `wfi`
+    until `arch_timer_ticks()` advances, prints `timer: riscv64 tick`, and
+    then powers off.
+  - The first QEMU attempt exposed a real low-level bug: `riscv64_trap_entry`
+    was emitted at a 2-byte-aligned address, which corrupted the low `stvec`
+    mode bits.  Aligning the trap entry to a 4-byte boundary fixed timer
+    delivery.
 - Added riscv64 arch skeleton headers and implementations:
   - `arch/riscv64/include/arch/sbi.h` centralizes the early SBI call ABI and
     console putchar helper used by the early payload and power path.
@@ -235,3 +253,8 @@ Verification so far:
 - `make test-boot-riscv64-early` passed.
 - `make all` passed for the default x86_64 target after the riscv64 linker
   script change.
+- `llvm-nm -n build/riscv64/bunixos.kernel` verified
+  `riscv64_trap_entry` is 4-byte aligned at `0x80200610`.
+- `make test-boot-riscv64-early` passed with the additional
+  `timer: riscv64 tick` marker.
+- `make all` passed for the default x86_64 target after the trap/timer change.

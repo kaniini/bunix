@@ -245,6 +245,7 @@ KERNEL_ARCH_SRCS := \
 	arch/riscv64/interrupts.c \
 	arch/riscv64/power.c \
 	arch/riscv64/smp.c \
+	arch/riscv64/trap.S \
 	arch/riscv64/thread.c \
 	arch/riscv64/thread.S \
 	arch/riscv64/user.c \
@@ -969,6 +970,7 @@ test-boot-riscv64-early:
 	timeout 30s $(RISCV64_QEMU) -machine virt -m 128M -nographic \
 		-no-reboot -kernel $(RISCV64_KERNEL) > $(RISCV64_SERIAL_LOG)
 	grep -aF "bunixos: riscv64 early bootstrap" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "timer: riscv64 tick" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 
 test-boot-ext2: $(EXT2_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-ext2.txt

@@ -1,5 +1,6 @@
 #include <arch/boot.h>
 #include <arch/fdt.h>
+#include <arch/interrupts.h>
 #include <arch/sbi.h>
 
 static struct riscv64_boot_info boot_info;
@@ -43,6 +44,14 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	}
 
 	early_puts("bunixos: riscv64 early bootstrap\n");
+	arch_interrupts_init();
+	riscv64_timer_set_relative(arch_timer_hz() / 100);
+	arch_interrupts_enable();
+	while (arch_timer_ticks() == 0) {
+		__asm__ volatile ("wfi");
+	}
+	arch_interrupts_disable();
+	early_puts("timer: riscv64 tick\n");
 	early_puts("machine: poweroff\n");
 	(void)riscv64_sbi_call1(RISCV64_SBI_LEGACY_SHUTDOWN, 0);
 
