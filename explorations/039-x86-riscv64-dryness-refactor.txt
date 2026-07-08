@@ -68,3 +68,9 @@ Progress notes:
   `user/proc/main.c` because the riscv64 compiler lowered a struct copy into
   an external helper while linking proc without libc.  Keep that local unblock
   narrow; the DRYness pass should replace it with shared user runtime support.
+- Exploration 035 later added an interim `user/runtime/string.c` object for
+  the riscv64 filesystem-server builds because squashfs and future larger
+  userspace servers need compiler-emitted string helpers too.  The DRYness
+  pass should fold proc and server builds onto one explicit freestanding
+  userspace runtime policy instead of keeping mixed local and per-rule helper
+  wiring.

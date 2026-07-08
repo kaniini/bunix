@@ -81,6 +81,7 @@ Verification:
 - [x] Existing `make test-boot-riscv64-early`
 - [x] Existing `make test-boot-riscv64-uart-console`
 - [x] New riscv64 shared-Linux-server smoke target
+- [x] New riscv64 filesystem-server build target
 - [ ] New riscv64 Alpine environment boot target
 - [x] A narrow x86_64 smoke proving the shared Linux server refactor did not
       break the existing x86_64 path
@@ -374,3 +375,40 @@ Progress notes:
   `user/linux/main.c` as module `linux`.
 - `make test-boot-riscv64-uart-console` passed with the command-line-gated
   legacy stub path preserved for that narrower package.
+- Added the first riscv64 VFS/rootfs runtime graph:
+  - `build/riscv64/modules/block.server`,
+    `build/riscv64/modules/vfs.server`,
+    `build/riscv64/modules/tmpfs.server`,
+    `build/riscv64/modules/squashfs.server`, and
+    `build/riscv64/modules/unionfs.server` now build from the shared
+    userspace server sources.
+  - `make test-riscv64-fs-server-build` verifies those artifacts are RISC-V
+    ELFs.
+  - Added a small freestanding `user/runtime/string.c` support object for
+    compiler-emitted `memcpy`, `memset`, `memmove`, and `memcmp` references
+    in the riscv64 filesystem-server builds.  This is an interim unblocker;
+    `039-x86-riscv64-dryness-refactor.txt` owns unifying all freestanding
+    userspace runtime support, including the older local proc helper.
+  - Added `tools/build-riscv64-smoke-rootfs.sh` and
+    `build/riscv64/disk0.sqfs`, a tiny squashfs image built with the same
+    no-export/no-xattrs/no-fragments shape supported by the current squashfs
+    server.
+  - The default and multi-record riscv64 boot packages now carry `disk0`,
+    `block`, `vfs`, and `squashfs`.
+  - `user/riscv64-bootstrap/main.c` launches `block`, `vfs`, and `squashfs`,
+    waits for each service through names, sets the squashfs mount path to
+    `/`, and mounts it at `/` through VFS.
+  - `make test-boot-riscv64-early` now proves the rootfs graph with
+    `bootstrap-riscv64: block ready`, `vfs ready`, `squashfs ready`, and
+    `rootfs mounted` before the existing shared-Linux static musl smoke.
+  - This is not the Alpine boot target yet.  The remaining runtime work is to
+    swap in the riscv64 Alpine squashfs artifact and exec `/bin/dyn-hello`
+    through proc/Linux so the musl loader exercises `openat(2)` and
+    `fstat(2)`.
+- Verification for the riscv64 rootfs graph slice:
+  - `git diff --check`
+  - `make test-riscv64-fs-server-build`
+  - `make test-riscv64-bootpkg`
+  - `make ARCH=riscv64 all`
+  - `make test-boot-riscv64-early`
+  - `make build/x86_64/bunixos.kernel`

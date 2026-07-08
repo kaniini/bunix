@@ -48,6 +48,30 @@ static u64 wait_service(u64 service, unsigned int rights)
 	return reply.cap;
 }
 
+static long send_path_command(u64 service, unsigned int protocol,
+			      unsigned int type, const char *path)
+{
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call_path(service, protocol, type, path, 0, 0, 0,
+				&reply) != 0) {
+		return -1;
+	}
+	return reply.words[0] == 0 ? 0 : -1;
+}
+
+static long vfs_mount_service(u64 vfs, const char *path, u64 service)
+{
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call_path(vfs, BUNIX_PROTO_VFS,
+				BUNIX_VFS_MOUNT_BUFFER, path, service,
+				0, 0, &reply) != 0) {
+		return -1;
+	}
+	return reply.words[0] == 0 ? 0 : -1;
+}
+
 int main(void)
 {
 	const char online[] = "bootstrap-riscv64: online\n";
@@ -61,6 +85,20 @@ int main(void)
 	const char user_fail[] = "bootstrap-riscv64: user failed\n";
 	const char proc_ok[] = "bootstrap-riscv64: proc launched\n";
 	const char proc_fail[] = "bootstrap-riscv64: proc failed\n";
+	const char block_ok[] = "bootstrap-riscv64: block launched\n";
+	const char block_fail[] = "bootstrap-riscv64: block failed\n";
+	const char block_ready[] = "bootstrap-riscv64: block ready\n";
+	const char block_wait_fail[] = "bootstrap-riscv64: block wait failed\n";
+	const char vfs_ok[] = "bootstrap-riscv64: vfs launched\n";
+	const char vfs_fail[] = "bootstrap-riscv64: vfs failed\n";
+	const char vfs_ready[] = "bootstrap-riscv64: vfs ready\n";
+	const char vfs_wait_fail[] = "bootstrap-riscv64: vfs wait failed\n";
+	const char squashfs_ok[] = "bootstrap-riscv64: squashfs launched\n";
+	const char squashfs_fail[] = "bootstrap-riscv64: squashfs failed\n";
+	const char squashfs_ready[] = "bootstrap-riscv64: squashfs ready\n";
+	const char squashfs_wait_fail[] = "bootstrap-riscv64: squashfs wait failed\n";
+	const char root_ok[] = "bootstrap-riscv64: rootfs mounted\n";
+	const char root_fail[] = "bootstrap-riscv64: rootfs mount failed\n";
 	const char linux_ok[] = "bootstrap-riscv64: linux launched\n";
 	const char linux_fail[] = "bootstrap-riscv64: linux failed\n";
 	const char syscall_ok[] = "bootstrap-riscv64: syscall-smoke launched\n";
@@ -103,6 +141,45 @@ int main(void)
 					proc_fail, sizeof(proc_fail) - 1);
 	} else {
 		log_line(proc_fail, sizeof(proc_fail) - 1);
+	}
+	launch_with_caps_or_log("block", fs_caps,
+				sizeof(fs_caps) / sizeof(fs_caps[0]),
+				block_ok, sizeof(block_ok) - 1,
+				block_fail, sizeof(block_fail) - 1);
+	const u64 block = wait_service(BUNIX_SERVICE_BLOCK, BUNIX_RIGHT_SEND);
+	if (block != 0) {
+		log_line(block_ready, sizeof(block_ready) - 1);
+	} else {
+		log_line(block_wait_fail, sizeof(block_wait_fail) - 1);
+	}
+	launch_with_caps_or_log("vfs", fs_caps,
+				sizeof(fs_caps) / sizeof(fs_caps[0]),
+				vfs_ok, sizeof(vfs_ok) - 1,
+				vfs_fail, sizeof(vfs_fail) - 1);
+	const u64 vfs = wait_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
+	if (vfs != 0) {
+		log_line(vfs_ready, sizeof(vfs_ready) - 1);
+	} else {
+		log_line(vfs_wait_fail, sizeof(vfs_wait_fail) - 1);
+	}
+	launch_with_caps_or_log("squashfs", fs_caps,
+				sizeof(fs_caps) / sizeof(fs_caps[0]),
+				squashfs_ok, sizeof(squashfs_ok) - 1,
+				squashfs_fail, sizeof(squashfs_fail) - 1);
+	const u64 squashfs = wait_service(BUNIX_SERVICE_SQUASHFS,
+					  BUNIX_RIGHT_SEND);
+	if (squashfs != 0) {
+		log_line(squashfs_ready, sizeof(squashfs_ready) - 1);
+	} else {
+		log_line(squashfs_wait_fail, sizeof(squashfs_wait_fail) - 1);
+	}
+	if (vfs != 0 && squashfs != 0 &&
+	    send_path_command(squashfs, BUNIX_PROTO_SQUASHFS,
+			      BUNIX_SQUASHFS_MOUNT_PATH, "/") == 0 &&
+	    vfs_mount_service(vfs, "/", BUNIX_SERVICE_SQUASHFS) == 0) {
+		log_line(root_ok, sizeof(root_ok) - 1);
+	} else {
+		log_line(root_fail, sizeof(root_fail) - 1);
 	}
 	const struct bunix_launch_cap linux_caps[] = {
 		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },

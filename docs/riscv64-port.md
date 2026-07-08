@@ -250,9 +250,27 @@ that proc uses to create, map, write, clear, and start exec images.  The
 default boot package now carries shared `time` and `proc` modules; the
 riscv64 bootstrap launches time, waits for `BUNIX_SERVICE_TIME` through
 names, and then launches proc with console, names, and time capabilities.
-This is not runtime dynamic-linker coverage yet: proc still needs a VFS and
-rootfs service graph before `/bin/dyn-hello` can exercise the musl loader's
-`openat(2)` and `fstat(2)` path.
+This is not runtime dynamic-linker coverage yet: proc still needs to execute
+`/bin/dyn-hello` from a mounted rootfs so the musl loader can exercise the
+Linux/VFS `openat(2)` and `fstat(2)` path.
+
+The first riscv64 VFS/rootfs service graph is now present in the default boot
+package.  The host builds shared-server riscv64 variants for block, VFS,
+tmpfs, squashfs, and unionfs:
+
+```
+make test-riscv64-fs-server-build
+```
+
+The smoke boot package carries a tiny squashfs image as `disk0`, plus `block`,
+`vfs`, and `squashfs` modules.  The riscv64 bootstrap launches those servers,
+waits for names registrations, sets the squashfs mount path to `/`, and mounts
+it at `/` through VFS.  `make test-boot-riscv64-early` now requires
+`bootstrap-riscv64: block ready`, `bootstrap-riscv64: vfs ready`,
+`bootstrap-riscv64: squashfs ready`, and
+`bootstrap-riscv64: rootfs mounted` before the static Linux smoke tasks run.
+This is still a synthetic rootfs smoke; Alpine boot integration and
+proc-managed `/bin/dyn-hello` execution remain the next runtime milestones.
 
 The generic initial stack seeds `argc`, `argv[0]`, a null argv terminator, a
 null envp terminator, and an `AT_NULL` auxv terminator.  The auxv terminator is
