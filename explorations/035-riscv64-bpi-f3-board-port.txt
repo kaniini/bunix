@@ -226,3 +226,18 @@ Verification notes:
   serial lines.
 - `tools/bpi-f3-smoke.sh --artifact-dir build/riscv64/bpi-f3 --check-log
   build/riscv64-serial.log` passed after adding FDT diagnostic serial lines.
+- Added U-Boot-side preboot diagnostics to the BPI-F3 command recipe:
+  - `boot-bunix-bpi-f3.cmd` now prints `bdinfo`, `/chosen`, `/aliases`, and
+    `/cpus` before loading Bunix, then prints `/chosen` again after setting
+    the Bunix command line and initrd properties.
+  - `tools/bpi-f3-smoke.sh --check-preboot-log FILE` verifies that a captured
+    U-Boot session includes those diagnostics, including `stdout-path`,
+    `serial`, and `timebase-frequency` evidence.
+  - The physical board run should now produce both firmware-side evidence and
+    Bunix-side parser output in one serial capture.
+- `make test-riscv64-bpi-f3-artifacts` passed after adding U-Boot preboot
+  diagnostics.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding U-Boot preboot
+  diagnostics.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding U-Boot preboot
+  diagnostics.

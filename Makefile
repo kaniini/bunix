@@ -528,14 +528,19 @@ $(RISCV64_BPI_F3_MANIFEST): $(RISCV64_KERNEL) $(RISCV64_BOOTPKG) Makefile
 		'# Stop at the U-Boot prompt and run these commands by hand first.' \
 		'setenv bunix_kernel_addr 0x90200000' \
 		'setenv bunix_initrd_addr 0x94000000' \
+		'bdinfo' \
+		'fdt addr $${fdtcontroladdr}' \
+		'fdt print /chosen' \
+		'fdt print /aliases' \
+		'fdt print /cpus' \
 		'load mmc 0:1 $${bunix_kernel_addr} /bunixos-riscv64.elf' \
 		'load mmc 0:1 $${bunix_initrd_addr} /bunix-riscv64.bootpkg' \
 		'setexpr bunix_initrd_end $${bunix_initrd_addr} + $${filesize}' \
-		'fdt addr $${fdtcontroladdr}' \
 		'fdt resize 4096' \
 		'fdt set /chosen bootargs "$(RISCV64_KERNEL_CMDLINE)"' \
 		'fdt set /chosen linux,initrd-start <$${bunix_initrd_addr}>' \
 		'fdt set /chosen linux,initrd-end <$${bunix_initrd_end}>' \
+		'fdt print /chosen' \
 		'bootelf -d $${fdtcontroladdr} $${bunix_kernel_addr} $${fdtcontroladdr}' \
 		> $(RISCV64_BPI_F3_BOOT_SCRIPT)
 
@@ -546,6 +551,9 @@ test-riscv64-bpi-f3-artifacts: riscv64-bpi-f3-artifacts
 	test -s $(RISCV64_BPI_F3_BOOTPKG)
 	grep -aF "BUNIX-RV64-BOOTPKG" $(RISCV64_BPI_F3_BOOTPKG) >/dev/null
 	grep -aF "bootelf -d" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
+	grep -aF "bdinfo" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
+	grep -aF "fdt print /aliases" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
+	grep -aF "fdt print /cpus" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
 	grep -aF "linux,initrd-start" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
 	grep -aF "kernel_load_base=0x80200000" $(RISCV64_BPI_F3_MANIFEST) >/dev/null
 

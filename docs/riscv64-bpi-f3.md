@@ -104,6 +104,7 @@ tools/bpi-f3-smoke.sh --print-uboot
 Verify a captured serial log with:
 
 ```sh
+tools/bpi-f3-smoke.sh --check-preboot-log bpi-f3-serial.log
 tools/bpi-f3-smoke.sh --check-log bpi-f3-serial.log
 ```
 
@@ -122,8 +123,14 @@ Operator setup:
 - Copy the generated Bunix BPI-F3 artifacts to the first boot partition.
 - Stop at the U-Boot prompt.
 - Run the commands in `boot-bunix-bpi-f3.cmd` by hand.
-- Capture the full serial log and run
+- Capture the full serial log and run both
+  `tools/bpi-f3-smoke.sh --check-preboot-log bpi-f3-serial.log` and
   `tools/bpi-f3-smoke.sh --check-log bpi-f3-serial.log`.
+
+The command recipe intentionally prints U-Boot `bdinfo`, `/chosen`,
+`/aliases`, and `/cpus` before entering Bunix.  Those preboot diagnostics give
+the board-specific evidence needed to compare firmware DT handoff with the
+Bunix FDT parser output.
 
 Expected first milestone serial markers:
 

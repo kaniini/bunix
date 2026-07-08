@@ -10,6 +10,8 @@ usage: $0 [--artifact-dir DIR] COMMAND [ARG]
 commands:
   --prepare DIR       copy Bunix BPI-F3 boot artifacts into DIR
   --print-uboot      print the manual U-Boot command recipe
+  --check-preboot-log FILE
+                      verify captured U-Boot preboot diagnostics
   --check-log FILE   verify a captured serial log has first-smoke markers
   --self-test        run a host-only marker-check self test
 EOF
@@ -91,10 +93,25 @@ check_log() {
 	printf 'bpi-f3 smoke log ok: %s\n' "$log"
 }
 
+check_preboot_log() {
+	log=$1
+
+	require_file "$log"
+	require_marker "$log" "bdinfo"
+	require_marker "$log" "fdt print /chosen"
+	require_marker "$log" "fdt print /aliases"
+	require_marker "$log" "fdt print /cpus"
+	require_marker "$log" "stdout-path"
+	require_marker "$log" "serial"
+	require_marker "$log" "timebase-frequency"
+	printf 'bpi-f3 preboot log ok: %s\n' "$log"
+}
+
 self_test() {
 	tmp=${TMPDIR:-/tmp}/bunix-bpi-f3-smoke.$$
+	preboot=${TMPDIR:-/tmp}/bunix-bpi-f3-preboot.$$
 
-	trap 'rm -f "$tmp"' EXIT HUP INT TERM
+	trap 'rm -f "$tmp" "$preboot"' EXIT HUP INT TERM
 	cat >"$tmp" <<EOF
 bunixos: riscv64 early bootstrap
 pmm: riscv64 ranges
@@ -122,6 +139,16 @@ machine: poweroff
 sbi: system reset poweroff
 EOF
 	check_log "$tmp" >/dev/null
+	cat >"$preboot" <<EOF
+bdinfo
+fdt print /chosen
+	stdout-path = "serial0:115200n8";
+fdt print /aliases
+	serial0 = "/soc/serial@10000000";
+fdt print /cpus
+	timebase-frequency = <0x00989680>;
+EOF
+	check_preboot_log "$preboot" >/dev/null
 	printf 'bpi-f3 smoke self-test ok\n'
 }
 
@@ -153,6 +180,14 @@ while [ $# -gt 0 ]; do
 			exit 2
 		fi
 		check_log "$2"
+		exit 0
+		;;
+	--check-preboot-log)
+		if [ $# -lt 2 ]; then
+			usage >&2
+			exit 2
+		fi
+		check_preboot_log "$2"
 		exit 0
 		;;
 	--self-test)
