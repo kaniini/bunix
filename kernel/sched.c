@@ -2047,6 +2047,11 @@ int task_is_killing(const struct task *task)
 	return task != 0 && task->killing;
 }
 
+enum sched_class task_sched_class(const struct task *task)
+{
+	return task != 0 ? task->sched_class : SCHED_CLASS_KERNEL;
+}
+
 void thread_exit(void)
 {
 	struct cpu_sched *cpu = sched_current_cpu();

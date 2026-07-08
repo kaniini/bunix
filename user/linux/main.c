@@ -85,6 +85,8 @@ enum {
 	LINUX_VTIME = 5,
 	LINUX_VMIN = 6,
 	LINUX_SIGINT = 2,
+	LINUX_SIGBUS = 7,
+	LINUX_SIGSEGV = 11,
 	LINUX_SIGTERM = 15,
 	LINUX_SIGCHLD = 17,
 	LINUX_ICRNL = 0000400,
@@ -2306,6 +2308,51 @@ static int linux_signal_process(struct linux_process *process, u64 signal)
 		return 1;
 	}
 
+	return 0;
+}
+
+static u64 linux_task_fault_signal(const struct bunix_task_fault_event *event)
+{
+	const u64 fault_class = event->flags >> 32;
+
+	if (fault_class == BUNIX_TASK_FAULT_CLASS_BUS || event->trap == 17) {
+		return LINUX_SIGBUS;
+	}
+	return LINUX_SIGSEGV;
+}
+
+static long linux_task_fault(u64 task, u64 thread, u64 trap, u64 flags,
+			     u64 cap, u64 cap_rights)
+{
+	struct bunix_task_fault_event event = {
+		.task = task,
+		.thread = thread,
+		.trap = trap,
+		.flags = flags,
+	};
+
+	if (cap != 0 && (cap_rights & BUNIX_RIGHT_SEND) != 0) {
+		if (bunix_buffer_read(cap, 0, &event, sizeof(event)) != 0) {
+			return -LINUX_EINVAL;
+		}
+	} else if (cap != 0) {
+		return -LINUX_EINVAL;
+	}
+	if (event.task == 0) {
+		event.task = task;
+	}
+
+	struct linux_process *process = linux_process_find(event.task);
+	if (process == 0) {
+		return -LINUX_ESRCH;
+	}
+
+	const u64 signal = linux_task_fault_signal(&event);
+	const u64 wait_status = signal | 0x80;
+	const char fault_log[] = "linux-server: task fault\n";
+
+	bunix_console_log(fault_log, sizeof(fault_log) - 1);
+	linux_process_exit_status(process, wait_status, 0);
 	return 0;
 }
 
@@ -7359,6 +7406,18 @@ int main(void)
 			}
 			if (message.reply != 0) {
 				bunix_ipc_send(message.reply, &reply);
+			}
+			continue;
+		}
+		if (message.type == BUNIX_LINUX_TASK_FAULT) {
+			(void)linux_task_fault(message.words[0],
+					       message.words[1],
+					       message.words[2],
+					       message.words[3],
+					       message.cap,
+					       message.cap_rights);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
 			}
 			continue;
 		}

@@ -4,6 +4,7 @@
 /bin/lxtest lxtest 1
 /bin/musl-hello musl-hello 1
 /bin/fputest fputest 1
+/bin/faulttest faulttest 1
 /bin/phdrstress phdrstress 0
 /bin/alloctest alloctest 0
 /bin/sh busybox 1

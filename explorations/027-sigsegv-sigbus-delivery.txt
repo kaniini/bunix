@@ -25,17 +25,35 @@ Constraints:
   policy.  Keep architecture-specific frame construction isolated so ARM can
   supply its own frame shape later.
 
+Progress notes:
+
+- The current slice adds a generic Bunix task-fault event shape and routes
+  user-mode synchronous faults to the Linux server as `BUNIX_LINUX_TASK_FAULT`
+  messages.
+- The kernel fault path uses interrupt-safe, cap-free IPC delivery so a page
+  fault does not allocate or scheduler-handoff from the exception handler.
+- The Linux server currently implements default termination only: page faults
+  and general-protection faults become SIGSEGV-style wait status, while task
+  fault events classified as bus faults are reserved for SIGBUS handling.
+- The focused default SIGSEGV regression is:
+
+  ```
+  make BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
+    BUNIX_CMD=/bin/faulttest \
+    BUNIX_MARKER='faulttest sigsegv wait status ok' test-command
+  ```
+
 Tasks:
 
-- [ ] Inventory current exception, page-fault, task-kill, Linux process-exit,
+- [x] Inventory current exception, page-fault, task-kill, Linux process-exit,
       wait-status, and strace/debug logging paths.
-- [ ] Define a generic task-fault event record that can carry trap number,
+- [x] Define a generic task-fault event record that can carry trap number,
       error code, fault address, instruction pointer, stack pointer, access
       type, protection-vs-mapping classification, and architecture-specific
       details.
-- [ ] Route user-mode page faults and relevant synchronous CPU exceptions into
+- [x] Route user-mode page faults and relevant synchronous CPU exceptions into
       process-level Linux signal delivery instead of unconditional task death.
-- [ ] Implement SIGSEGV default termination and wait-status reporting,
+- [x] Implement SIGSEGV default termination and wait-status reporting,
       including the expected signal number and core-dump bit policy.
 - [ ] Implement SIGBUS default termination for address errors that should not
       be reported as SIGSEGV, including file-backed mapping holes once the VFS

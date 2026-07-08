@@ -299,10 +299,7 @@ exit
 EOF_COMMAND_DONE
 fi
 
-wait_for_fixed "$log" "__BUNIX_COMMAND_STATUS__=" "command did not report status" 90 220
-if ! grep -aF "__BUNIX_COMMAND_STATUS__=0" "$log" >/dev/null 2>&1; then
-	fail_command "command failed" 220
-fi
+wait_for_fixed "$log" "__BUNIX_COMMAND_STATUS__=0" "command failed" 90 220
 wait_for_fixed "$log" "$marker" "command marker missing" 15 220
 
 if [ "$guest_poweroff" = 1 ]; then

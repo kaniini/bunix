@@ -274,6 +274,7 @@ enum {
 	BUNIX_LINUX_ATTACH_SESSION = 1006,
 	BUNIX_LINUX_SIGNAL_PENDING = 1007,
 	BUNIX_LINUX_SIGNAL_DEQUEUE = 1008,
+	BUNIX_LINUX_TASK_FAULT = 1009,
 	BUNIX_LINUX_EXIT_GROUP = 231,
 	BUNIX_TIME_NOW_MONOTONIC = 1,
 	BUNIX_TIME_SLEEP_NS = 2,
@@ -507,6 +508,32 @@ struct bunix_msg {
 	u64 reply;
 	u64 cap;
 	u64 words[BUNIX_IPC_WORDS];
+};
+
+enum bunix_task_fault_access {
+	BUNIX_TASK_FAULT_ACCESS_READ = 1,
+	BUNIX_TASK_FAULT_ACCESS_WRITE = 2,
+	BUNIX_TASK_FAULT_ACCESS_EXEC = 3,
+};
+
+enum bunix_task_fault_class {
+	BUNIX_TASK_FAULT_CLASS_UNKNOWN = 0,
+	BUNIX_TASK_FAULT_CLASS_MAPPING = 1,
+	BUNIX_TASK_FAULT_CLASS_PROTECTION = 2,
+	BUNIX_TASK_FAULT_CLASS_BUS = 3,
+};
+
+struct bunix_task_fault_event {
+	u64 task;
+	u64 thread;
+	u64 trap;
+	u64 error;
+	u64 fault_addr;
+	u64 ip;
+	u64 sp;
+	u64 flags;
+	u64 arch0;
+	u64 arch1;
 };
 
 struct bunix_launch_cap {

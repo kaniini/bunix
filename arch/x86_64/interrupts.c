@@ -2,6 +2,7 @@
 #include <arch/io.h>
 #include <arch/smp.h>
 #include "console.h"
+#include "ipc.h"
 #include "sched.h"
 
 enum {
@@ -22,6 +23,32 @@ enum {
 	IRQ_TIMER_VECTOR = 32,
 	IRQ_SCHED_IPI_VECTOR = 64,
 	IRQ_LAPIC_TIMER_VECTOR = 65,
+
+	USER_FOURCC_LINX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
+	LINUX_RPC_TASK_FAULT = 1009,
+
+	TASK_FAULT_ACCESS_READ = 1,
+	TASK_FAULT_ACCESS_WRITE = 2,
+	TASK_FAULT_ACCESS_EXEC = 3,
+	TASK_FAULT_CLASS_UNKNOWN = 0,
+	TASK_FAULT_CLASS_MAPPING = 1,
+	TASK_FAULT_CLASS_PROTECTION = 2,
+	TASK_FAULT_CLASS_BUS = 3,
+
+	IPC_RIGHT_SEND = 1 << 0,
+};
+
+struct task_fault_event {
+	u64 task;
+	u64 thread;
+	u64 trap;
+	u64 error;
+	u64 fault_addr;
+	u64 ip;
+	u64 sp;
+	u64 flags;
+	u64 arch0;
+	u64 arch1;
 };
 
 struct idt_entry {
@@ -153,6 +180,87 @@ u64 arch_timer_hz(void)
 	return PIT_HZ;
 }
 
+static int user_fault_signal_vector(u64 vector)
+{
+	return vector == 13 || vector == 14 || vector == 17;
+}
+
+static int user_fault_from_user_context(const struct arch_interrupt_frame *frame)
+{
+	return ((frame->cs & 3) == 3) ||
+		task_sched_class(task_current()) == SCHED_CLASS_USER;
+}
+
+static u64 user_fault_access(const struct arch_interrupt_frame *frame)
+{
+	if (frame->vector == 14) {
+		if ((frame->error_code & (1ull << 4)) != 0) {
+			return TASK_FAULT_ACCESS_EXEC;
+		}
+		if ((frame->error_code & (1ull << 1)) != 0) {
+			return TASK_FAULT_ACCESS_WRITE;
+		}
+	}
+	return TASK_FAULT_ACCESS_READ;
+}
+
+static u64 user_fault_class(const struct arch_interrupt_frame *frame)
+{
+	if (frame->vector == 17) {
+		return TASK_FAULT_CLASS_BUS;
+	}
+	if (frame->vector == 14) {
+		return (frame->error_code & 1) != 0 ?
+			TASK_FAULT_CLASS_PROTECTION :
+			TASK_FAULT_CLASS_MAPPING;
+	}
+	if (frame->vector == 13) {
+		return TASK_FAULT_CLASS_PROTECTION;
+	}
+	return TASK_FAULT_CLASS_UNKNOWN;
+}
+
+static void notify_linux_task_fault(struct arch_interrupt_frame *frame, u64 cr2)
+{
+	struct ipc_port *linux = ipc_port_find("linux");
+	const struct task_fault_event event = {
+		.task = task_id(task_current()),
+		.thread = thread_id(thread_current()),
+		.trap = frame->vector,
+		.error = frame->error_code,
+		.fault_addr = cr2,
+		.ip = frame->rip,
+		.sp = frame->rsp,
+		.flags = user_fault_access(frame) |
+			(user_fault_class(frame) << 32),
+		.arch0 = frame->cs,
+		.arch1 = frame->rflags,
+	};
+
+	if (linux == 0) {
+		console_printf("interrupts: user fault notify failed vector=%u rip=%p task=%u\n",
+			       (u32)frame->vector, (const void *)frame->rip,
+			       task_id(task_current()));
+		return;
+	}
+	const struct ipc_message message = {
+		.protocol = USER_FOURCC_LINX,
+		.type = LINUX_RPC_TASK_FAULT,
+		.sender = 0,
+		.cap_rights = IPC_RIGHT_SEND,
+		.reply_port = 0,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { event.task, event.thread, event.trap, event.flags },
+	};
+
+	if (ipc_send_interrupt(linux, &message) != 0) {
+		console_printf("interrupts: user fault send failed vector=%u rip=%p task=%u\n",
+			       (u32)frame->vector, (const void *)frame->rip,
+			       task_id(task_current()));
+	}
+}
+
 void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 {
 	if (frame->vector == IRQ_TIMER_VECTOR) {
@@ -186,6 +294,14 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 	if (frame->vector == 14) {
 		__asm__ volatile ("movq %%cr2, %0" : "=r"(cr2));
 	}
+
+	if (user_fault_from_user_context(frame) &&
+	    user_fault_signal_vector(frame->vector)) {
+		notify_linux_task_fault(frame, cr2);
+		(void)task_kill(task_current());
+		thread_exit();
+	}
+
 	console_printf("interrupts: vector=%u error=0x%x rip=%p cr2=%p rsp=%p rflags=0x%x task=%u thread=%u task_name=%s thread_name=%s\n",
 		       (u32)frame->vector, (u32)frame->error_code,
 		       (const void *)frame->rip, (const void *)cr2,
