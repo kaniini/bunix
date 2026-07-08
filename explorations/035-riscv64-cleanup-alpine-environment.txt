@@ -57,7 +57,7 @@ Tasks:
 - [ ] Replace the separate `user/riscv64-linux` server with a shared Linux
       personality build, or split the current x86_64 Linux server so riscv64
       can use shared Linux semantics behind a riscv64 syscall ABI frontend.
-- [ ] Define riscv64 Linux syscall dispatch boundaries: syscall number table,
+- [x] Define riscv64 Linux syscall dispatch boundaries: syscall number table,
       argument register mapping, return/error convention, and arch-specific
       process/thread entry details.
 - [ ] Add riscv64 tests for the shared Linux server using the existing static
@@ -154,3 +154,14 @@ Progress notes:
   - `039-x86-riscv64-dryness-refactor.txt` remains the broader DRYness pass
     after the targeted riscv64 refactors.
 - `git diff --check` passed after recording the riscv64 cleanup audit.
+- Added `docs/riscv64-linux-abi.md` to define the intended riscv64 Linux
+  personality boundary:
+  - riscv64 architecture code owns `a7` syscall-number decode, `a0`-`a5`
+    argument collection, riscv64 syscall-number translation, user-copy details,
+    trap return, TLS/thread-pointer state, and signal-frame ABI.
+  - The shared Linux server owns process, PID, fd, VFS, TTY, signal, wait,
+    exec, credentials, socket, pipe, and mmap semantics.
+  - The current `BUNIX_LINUX_RISCV64_SYSCALL` action protocol is documented as
+    temporary and should be deleted when riscv64 uses the shared Linux server.
+  - The initial shared-server syscall map should cover static smoke plus
+    dynamic-loader basics such as `openat(2)` and correct `fstat(2)`.
