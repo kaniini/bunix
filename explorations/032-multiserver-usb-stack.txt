@@ -96,15 +96,15 @@ Tasks:
 - [x] Implement xHCI device enumeration for one deterministic QEMU USB device:
       port reset, slot enable, address device, descriptor read, configuration
       set, and descriptor publication through `USB0`.
-- [ ] Add a USB smoke test that boots with the synthetic backend first, then a
+- [x] Add a USB smoke test that boots with the synthetic backend first, then a
       QEMU xHCI backend once available, and always ends in guest poweroff.
-- [ ] Add a minimal HID keyboard class-driver exploration or sub-slice after
+- [x] Add a minimal HID keyboard class-driver exploration or sub-slice after
       enumeration is proven, wiring key events toward the future TTY/input
       stack without coupling HID to the console.
-- [ ] Add a minimal USB mass-storage exploration or sub-slice after bulk
+- [x] Add a minimal USB mass-storage exploration or sub-slice after bulk
       transfers are proven, mapping USB storage into the existing block-device
       protocol rather than inventing a separate filesystem path.
-- [ ] Document follow-up USB work: hubs, hotplug, HID reports, mass-storage
+- [x] Document follow-up USB work: hubs, hotplug, HID reports, mass-storage
       reset/retry, CDC ACM, USB networking, isochronous transfers, suspend/
       resume, power management, xHCI streams, MSI/MSI-X, IOMMU, and
       platform-host controllers for riscv64/ARM.
@@ -157,6 +157,12 @@ Progress notes:
   descriptor blob through `USB0`.  The xHCI smoke launches `usb-bus.server`,
   passes its capability to `xhci.server`, and verifies `usb-bus.server` parses
   vendor/product/interface/endpoint metadata from the real descriptor set.
+- Added `test-boot-usb` as an aggregate focused USB smoke target that runs both
+  `test-boot-usb-synth` and `test-boot-xhci-discovery`; both shards end in
+  guest poweroff.
+- Planned follow-up class-driver work in
+  `051-usb-hid-keyboard-driver.txt` and
+  `052-usb-mass-storage-driver.txt`.
 - Default boot behavior is unchanged: the USB modules are packaged but not
   launched unless a USB command-line test flag is present.
 
@@ -167,8 +173,13 @@ Open design notes:
 - The upper `USB0` constants now name the intended class-driver operations, but
   endpoint capabilities and transfer-completion objects still need full OCAP
   modeling.
-- The next USB stack step is to consolidate synthetic and xHCI boot smoke
-  coverage, then split class-driver follow-up work for HID input and storage.
+- Follow-up USB work is intentionally split out of this base stack slice:
+  HID keyboard/input handling is tracked by `051-usb-hid-keyboard-driver.txt`;
+  USB mass storage and block-device integration are tracked by
+  `052-usb-mass-storage-driver.txt`.
+- Additional later work remains for hubs, hotplug, CDC ACM, USB networking,
+  isochronous transfers, suspend/resume, power management, xHCI streams,
+  MSI/MSI-X, IOMMU, and platform-host controllers for riscv64/ARM.
 
 USB DMA model:
 
@@ -215,5 +226,6 @@ Verification so far:
 - `make build/modules/usb-bus.server build/modules/usb-synth.server build/modules/xhci.server build/modules/bootstrap.server`
 - `make test-boot-usb-synth`
 - `make test-boot-xhci-discovery`
+- `make test-boot-usb`
 - `make test-boot-virtio-blk`
 - `make test-boot`

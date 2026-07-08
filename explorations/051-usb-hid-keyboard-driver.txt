@@ -1,0 +1,44 @@
+Implement a USB HID keyboard class driver.
+
+Problem:
+
+- The base USB stack can enumerate a deterministic QEMU keyboard through xHCI
+  and publish its descriptor set through `USB0`, but no class driver consumes
+  HID interfaces yet.
+- Keyboard input must flow through the future input/TTY path, not through
+  xHCI-specific console shortcuts.
+- HID should claim only the interface and interrupt endpoint it is authorized
+  to use.
+
+Constraints:
+
+- Keep HID policy in a userspace class-driver server above `USB0`.
+- Do not let the HID driver talk to arbitrary USB endpoints.  It must claim a
+  HID interface and receive scoped endpoint capabilities for its interrupt IN
+  endpoint.
+- Do not couple HID to the console server.  Keyboard events should be published
+  through an input protocol that the TTY layer can consume later.
+- Preserve synthetic USB and xHCI smoke tests.
+
+Tasks:
+
+- [ ] Define an input-event protocol for key events that is independent of USB.
+- [ ] Extend `USB0` interface-claim/open-endpoint plumbing enough for a HID
+      driver to obtain an interrupt IN endpoint capability.
+- [ ] Add `usb-hid-kbd.server` that scans `USB0` devices, claims HID boot
+      keyboard interfaces, opens interrupt IN endpoints, and parses boot
+      keyboard reports.
+- [ ] Add an event path from `usb-hid-kbd.server` to the input/TTY layer without
+      direct console coupling.
+- [ ] Add a QEMU USB keyboard smoke test that proves HID report delivery with a
+      deterministic injected key event and guest poweroff.
+- [ ] Keep `test-boot-usb-synth`, `test-boot-xhci-discovery`, and default boot
+      passing.
+
+Completion criteria:
+
+- A QEMU USB keyboard is enumerated by xHCI, claimed by the HID keyboard
+  driver through `USB0`, and produces at least one input event through the
+  input protocol.
+- The HID server never receives broad hardware authority or unscoped endpoint
+  access.
