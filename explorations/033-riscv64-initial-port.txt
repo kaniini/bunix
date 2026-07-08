@@ -246,6 +246,15 @@ Progress notes:
   - The package is only a carrier at this stage.  Parsing the package table,
     mapping payloads into native tasks, and carrying a real rootfs are left to
     the native server execution path.
+- Added initial riscv64 boot-package payload discovery:
+  - Early boot now parses the boot package text header, locates the packaged
+    `abi-smoke.user` module record, and validates that the payload is an ELF64
+    little-endian RISC-V image with an entry point and program headers.
+  - `test-boot-riscv64-early` now requires `module: riscv64 user elf`, proving
+    the package can carry a native user payload that the kernel can find before
+    poweroff.
+  - Segment loading, user address-space activation, and scheduler-owned native
+    task lifetime remain open.
 - Added riscv64 arch skeleton headers and implementations:
   - `arch/riscv64/include/arch/sbi.h` centralizes the early SBI call ABI and
     console putchar helper used by the early payload and power path.
@@ -377,6 +386,9 @@ Verification so far:
   `thread: riscv64 switch`, `syscall: riscv64 ecall`,
   `user: riscv64 mode`, `bootpkg: riscv64 initrd`, and
   `machine: poweroff`.
+- `make test-boot-riscv64-early` passed after adding boot-package payload
+  discovery and now requires the `module: riscv64 user elf` marker before
+  guest poweroff.
 - `make ARCH=riscv64 all` passed and linked `build/riscv64/bunixos.kernel`.
 - `make test-boot-riscv64-early` passed.
 - `make all` passed for the default x86_64 target after the riscv64 linker

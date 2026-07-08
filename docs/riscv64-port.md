@@ -28,15 +28,18 @@ The early boot gate currently verifies:
   value, and return through a test-only trap continuation on a kernel stack.
 - The riscv64 boot package is visible through the FDT initrd range and starts
   with the expected `BUNIX-RV64-BOOTPKG` header.
+- The packaged `abi-smoke.user` payload can be located and validated as an
+  ELF64 little-endian RISC-V user image.
 - The guest exits through SBI poweroff.
 
 ## Boot package
 
 The first riscv64 module/rootfs carrier is a QEMU initrd image.  The host-side
 builder `tools/build-riscv64-bootpkg.sh` creates a text-header package with a
-module record and the current `abi-smoke.user` payload.  The early kernel only
-validates the carrier magic today; parsing the module table and mapping
-payloads into native tasks is part of the native server launch work.
+module record and the current `abi-smoke.user` payload.  The early kernel can
+validate the carrier magic, locate that module record, and verify the payload
+is an ELF64 RISC-V image.  Mapping payload segments into native tasks is part
+of the native server launch work.
 
 This gives riscv64 a firmware-neutral package handoff separate from
 Multiboot2.  Future rootfs images can ride in the same carrier or replace it

@@ -14,6 +14,8 @@ static u8 user_probe_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_kernel_stack[4096] __attribute__((aligned(16)));
 
 static const char riscv64_bootpkg_magic[] = "BUNIX-RV64-BOOTPKG\n";
+static const char riscv64_bootpkg_module_prefix[] = "module ";
+static const char riscv64_bootpkg_abi_smoke[] = "abi-smoke.user";
 
 const struct riscv64_boot_info *riscv64_boot_info(void)
 {
@@ -71,10 +73,137 @@ static int bootpkg_magic_ok(u64 start, u64 end)
 	return 1;
 }
 
+static int cstr_eq_len(const char *left, const char *right, u64 len)
+{
+	for (u64 i = 0; i < len; i++) {
+		if (left[i] != right[i] || right[i] == '\0') {
+			return 0;
+		}
+	}
+	return right[len] == '\0';
+}
+
+static u64 cstr_len(const char *text)
+{
+	u64 len = 0;
+
+	while (text[len] != '\0') {
+		len++;
+	}
+	return len;
+}
+
+static u64 parse_decimal(const char *text, u64 len, u64 *used)
+{
+	u64 value = 0;
+	u64 i = 0;
+
+	while (i < len && text[i] >= '0' && text[i] <= '9') {
+		value = value * 10 + (u64)(text[i] - '0');
+		i++;
+	}
+	*used = i;
+	return value;
+}
+
+static int bootpkg_find_module(u64 start, u64 end, const char *wanted,
+			       u64 *module_start, u64 *module_size)
+{
+	const char *image = (const char *)start;
+	const u64 prefix_len = cstr_len(riscv64_bootpkg_module_prefix);
+	const u64 wanted_len = cstr_len(wanted);
+	u64 cursor = sizeof(riscv64_bootpkg_magic) - 1;
+	u64 payload = 0;
+	u64 found_start = 0;
+	u64 found_size = 0;
+
+	while (start + cursor < end) {
+		u64 line = cursor;
+		u64 line_end = cursor;
+
+		while (start + line_end < end && image[line_end] != '\n') {
+			line_end++;
+		}
+		if (line_end == line) {
+			payload = line_end + 1;
+			break;
+		}
+		if (line_end - line > prefix_len + wanted_len + 1 &&
+		    cstr_eq_len(image + line, riscv64_bootpkg_module_prefix,
+				prefix_len) &&
+		    cstr_eq_len(image + line + prefix_len, wanted,
+				wanted_len) &&
+		    image[line + prefix_len + wanted_len] == ' ') {
+			u64 used = 0;
+			const u64 size = parse_decimal(
+				image + line + prefix_len + wanted_len + 1,
+				line_end - line - prefix_len - wanted_len - 1,
+				&used);
+
+			if (used != 0) {
+				found_size = size;
+			}
+		}
+		cursor = line_end + 1;
+	}
+
+	if (payload == 0 || found_size == 0 || start + payload + found_size > end) {
+		return -1;
+	}
+	found_start = start + payload;
+	*module_start = found_start;
+	*module_size = found_size;
+	return 0;
+}
+
+static u16 read_le16(const u8 *data)
+{
+	return (u16)data[0] | ((u16)data[1] << 8);
+}
+
+static u64 read_le64(const u8 *data)
+{
+	u64 value = 0;
+
+	for (u32 i = 0; i < 8; i++) {
+		value |= (u64)data[i] << (i * 8);
+	}
+	return value;
+}
+
+static int user_elf_is_riscv64(u64 start, u64 size)
+{
+	const u8 *elf = (const u8 *)start;
+	const u16 elf_machine_riscv = 243;
+
+	if (size < 64) {
+		return 0;
+	}
+	if (elf[0] != 0x7f || elf[1] != 'E' || elf[2] != 'L' ||
+	    elf[3] != 'F') {
+		return 0;
+	}
+	if (elf[4] != 2 || elf[5] != 1) {
+		return 0;
+	}
+	if (read_le16(elf + 18) != elf_machine_riscv) {
+		return 0;
+	}
+	if (read_le64(elf + 24) == 0 || read_le64(elf + 32) == 0) {
+		return 0;
+	}
+	if (read_le16(elf + 56) == 0) {
+		return 0;
+	}
+	return 1;
+}
+
 void riscv64_early_main(u64 hart_id, u64 fdt)
 {
 	struct riscv64_fdt_memory_range memory;
 	struct riscv64_fdt_initrd initrd;
+	u64 module_start = 0;
+	u64 module_size = 0;
 
 	boot_info.hart_id = hart_id;
 	boot_info.fdt = fdt;
@@ -120,6 +249,13 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	}
 	if (bootpkg_magic_ok(boot_info.initrd_start, boot_info.initrd_end)) {
 		early_puts("bootpkg: riscv64 initrd\n");
+		if (bootpkg_find_module(boot_info.initrd_start,
+					boot_info.initrd_end,
+					riscv64_bootpkg_abi_smoke,
+					&module_start, &module_size) == 0 &&
+		    user_elf_is_riscv64(module_start, module_size)) {
+			early_puts("module: riscv64 user elf\n");
+		}
 	}
 	early_puts("machine: poweroff\n");
 	(void)riscv64_sbi_call1(RISCV64_SBI_LEGACY_SHUTDOWN, 0);
