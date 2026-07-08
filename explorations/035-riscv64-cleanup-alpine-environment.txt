@@ -3,13 +3,16 @@ Clean up the riscv64 port and get to an Alpine environment on riscv64.
 Status:
 
 - Active.
-- This exploration pauses `055-riscv64-bpi-f3-board-port.txt`.  BPI-F3
+- This exploration pauses `058-riscv64-bpi-f3-board-port.txt`.  BPI-F3
   hardware proof remains important, but the generic riscv64 port should be
   cleaned up first so board work does not accumulate around temporary
   emulator-only scaffolding.
-- The next exploration after this one is
-  `036-x86-riscv64-dryness-refactor.txt`, which should remove broader
-  duplication once riscv64 can boot a real Alpine-style environment.
+- The next explorations after this one split future refactors into focused
+  work:
+  - `036-shared-linux-personality-riscv64.txt`
+  - `037-riscv64-boot-test-split.txt`
+  - `038-riscv64-server-rootfs-packaging.txt`
+  - `039-x86-riscv64-dryness-refactor.txt`
 
 Problem:
 
@@ -48,7 +51,7 @@ Constraints:
 
 Tasks:
 
-- [ ] Audit the current riscv64 user/kernel/server path and list all places
+- [x] Audit the current riscv64 user/kernel/server path and list all places
       where riscv64 uses a bringup-only implementation instead of the shared
       x86_64 path.
 - [ ] Replace the separate `user/riscv64-linux` server with a shared Linux
@@ -84,5 +87,70 @@ Verification:
 
 Progress notes:
 
-- Created as the active exploration when `055-riscv64-bpi-f3-board-port.txt`
+- Created as the active exploration when `058-riscv64-bpi-f3-board-port.txt`
   was paused.
+- Completed the first audit of bringup-only riscv64 pieces:
+  - `user/riscv64-linux/main.c` is a toy Linux personality server.  It only
+    recognizes riscv64 Linux `write`, `exit`, `exit_group`, and
+    `set_tid_address`, emits `linux-riscv64-server:*` markers, and powers off
+    directly after `exit_group`.  This must be replaced by the shared Linux
+    server semantics before Alpine can work.
+  - `arch/riscv64/user.c` forwards every nonnegative Linux syscall as one
+    special `BUNIX_LINUX_RISCV64_SYSCALL` message and expects action words
+    telling the kernel to perform console write or task exit side effects.
+    The x86_64 path already uses a broad Linux RPC protocol with explicit
+    message types for process registration, exec, VFS, TTY, signals, wait,
+    and fault handling.  The riscv64 path needs a thin arch syscall frontend
+    over that shared protocol, not a parallel action protocol.
+  - `user/include/bunix/syscall.h` currently exposes the riscv64 bridge as
+    public protocol IDs: `BUNIX_LINUX_RISCV64_SYSCALL` plus
+    `BUNIX_LINUX_RISCV64_ACTION_*`.  Those should disappear once the riscv64
+    Linux syscall frontend uses the shared Linux server protocol.
+  - The Makefile has separate hand-written riscv64 module rules for
+    `abi-smoke.user`, `bootstrap.server`, `linux.server`, and static musl
+    hello.  Some target-triple/linker differences are legitimate, but the
+    duplication currently bakes in `user/riscv64-linux` and a smoke-specific
+    boot package instead of a reusable riscv64 server/rootfs packaging path.
+  - `user/riscv64-bootstrap/main.c` is a smoke-only bootstrap.  It logs
+    `bootstrap-riscv64:*`, launches `abi-smoke.user`, launches `linux`, then
+    launches `/bin/musl-hello`.  Alpine needs the normal bootstrap/proc/Linux
+    stack and an init/rootfs path, not this fixed hello sequence.
+  - `arch/riscv64/early.c` still owns many QEMU smoke assertions directly in
+    the boot path: boot layout markers, platform discovery markers, scheduler
+    self-test, timer wait, context-switch self-test, syscall self-test, user
+    mode self-test, boot package parsing, module validation, ELF loader
+    self-test, user-copy self-test, and only then module launch.  These are
+    valuable gates, but the Alpine path needs a cleaner split between
+    always-on boot initialization and test-only diagnostics.
+  - `tools/build-riscv64-bootpkg.sh` and the `RISCV64_BOOTPKG` Makefile rules
+    are an initrd-style smoke carrier containing `bootstrap`, `abi-smoke.user`,
+    `linux`, and `/bin/musl-hello`.  The next Alpine slice needs a riscv64
+    rootfs/module carrier that can deliver the normal server graph and Alpine
+    filesystem content.
+  - `docs/riscv64-port.md` still documents dynamic linking, Alpine rootfs
+    parity, BusyBox, console input, dmesg reads, and real Linux signal/syscall
+    parity as later slices.  These map directly onto this exploration's
+    remaining work and should be updated as each item becomes real.
+- Legitimate architecture boundaries to keep explicit:
+  - riscv64 FDT/SBI/OpenSBI boot entry is not the same as x86_64 EFI
+    Multiboot2, so boot protocol parsing should stay arch-specific even when
+    generic runtime initialization is shared.
+  - riscv64 syscall register mapping, syscall numbers, user trap return,
+    signal frame ABI, TLS/thread-pointer setup, and ELF machine ID are real
+    arch boundaries.
+  - riscv64 user CRT0 and static/dynamic musl toolchain wiring are target
+    specific, but should feed shared server/rootfs packaging once the Linux
+    personality is portable.
+- Next implementation target from the audit:
+  - Keep this exploration focused on reaching the riscv64 Alpine milestone.
+    Larger cleanup work identified by the audit is now tracked as explicit
+    follow-on explorations immediately after this one.
+  - `036-shared-linux-personality-riscv64.txt` owns replacement of the toy
+    riscv64 Linux server with shared Linux server semantics.
+  - `037-riscv64-boot-test-split.txt` owns separating always-on riscv64 boot
+    from test-only smoke diagnostics.
+  - `038-riscv64-server-rootfs-packaging.txt` owns reusable riscv64 server and
+    rootfs packaging for Alpine.
+  - `039-x86-riscv64-dryness-refactor.txt` remains the broader DRYness pass
+    after the targeted riscv64 refactors.
+- `git diff --check` passed after recording the riscv64 cleanup audit.

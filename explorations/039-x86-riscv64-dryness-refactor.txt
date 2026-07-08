@@ -4,8 +4,8 @@ bringup.
 Status:
 
 - Pending.
-- Start this after `035-riscv64-cleanup-alpine-environment.txt` has made the
-  riscv64 path capable of booting a real Alpine-style userspace in QEMU.
+- Start this after `035-riscv64-cleanup-alpine-environment.txt` and the
+  focused riscv64 refactor explorations `036` through `038`.
 
 Problem:
 
@@ -43,10 +43,11 @@ Verification:
 - [ ] `make ARCH=x86_64 all`
 - [ ] `make ARCH=riscv64 all`
 - [ ] Existing x86_64 Alpine/busybox smoke target chosen during the refactor
-- [ ] Existing riscv64 Alpine environment target from exploration 061
+- [ ] Existing riscv64 Alpine environment target from exploration 035
 - [ ] Existing BPI-F3 artifact/smoke helper targets
 
 Progress notes:
 
-- Created as the follow-on exploration requested after riscv64 cleanup and
-  Alpine environment work.
+- Created as the broad follow-on exploration requested after riscv64 cleanup
+  and Alpine environment work, then moved after the focused riscv64 refactor
+  explorations created from the `035` audit.

@@ -1,0 +1,43 @@
+Split riscv64 always-on boot from bringup smoke diagnostics.
+
+Status:
+
+- Pending.
+- Start after the shared Linux personality refactor if the remaining riscv64
+  Alpine work is blocked by boot-path smoke scaffolding.
+
+Problem:
+
+- `arch/riscv64/early.c` still performs many test assertions directly in the
+  normal boot path: boot-layout diagnostics, platform-discovery diagnostics,
+  scheduler self-test, timer wait, context-switch self-test, syscall self-test,
+  U-mode self-test, boot-package parsing, module validation, ELF-loader
+  self-test, and user-copy self-test.
+- These checks are valuable for development, but an Alpine boot path needs a
+  cleaner split between required initialization and opt-in diagnostics.
+
+Tasks:
+
+- [ ] Classify each riscv64 early marker as required boot evidence,
+      hardware/firmware diagnostic, or test-only self-test.
+- [ ] Move test-only checks behind explicit command-line tokens or dedicated
+      test entry helpers while preserving existing smoke target coverage.
+- [ ] Keep platform/FDT diagnostics available for BPI-F3 review logs without
+      forcing them into every future riscv64 Alpine boot.
+- [ ] Ensure scheduler, timer, syscall, user-mode, ELF-loader, and user-copy
+      self-tests still run under narrow `make` targets.
+- [ ] Update `docs/riscv64-port.md` and exploration notes with the new boot
+      marker contract.
+
+Verification:
+
+- [ ] `make ARCH=riscv64 all`
+- [ ] Existing `make test-boot-riscv64-early`
+- [ ] Existing `make test-boot-riscv64-uart-console`
+- [ ] Existing `make test-riscv64-bpi-f3-emulator-gate`
+- [ ] `git diff --check`
+
+Progress notes:
+
+- Created from the audit in
+  `035-riscv64-cleanup-alpine-environment.txt`.

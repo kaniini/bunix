@@ -1,0 +1,43 @@
+Refactor riscv64 server and rootfs packaging for Alpine boot.
+
+Status:
+
+- Pending.
+- Start after the shared Linux personality can run the static riscv64 musl
+  smoke, or earlier if Alpine rootfs artifact work exposes packaging blockers.
+
+Problem:
+
+- The current riscv64 boot package is a smoke carrier containing
+  `bootstrap`, `abi-smoke.user`, `linux`, and `/bin/musl-hello`.
+- Alpine-on-riscv64 needs a reusable carrier for the normal server graph plus
+  rootfs content, not a fixed static-hello package.
+- The Makefile has hand-written riscv64 module rules that duplicate host-side
+  server packaging concerns and bake in the riscv64 stub Linux server.
+
+Tasks:
+
+- [ ] Define the riscv64 Alpine boot artifact shape: boot package modules,
+      block/rootfs image, or another carrier consistent with current Bunix
+      rootfs conventions.
+- [ ] Build riscv64 variants of the normal server graph needed for an Alpine
+      userspace environment.
+- [ ] Add host tooling to prepare a minimal riscv64 Alpine rootfs artifact.
+- [ ] Add a riscv64 QEMU boot target that uses the new artifact and powers off
+      cleanly after a deterministic init/shell smoke.
+- [ ] Keep BPI-F3 artifact generation compatible with the chosen carrier.
+- [ ] Update `docs/riscv64-port.md` with exact artifact paths and operator
+      commands.
+
+Verification:
+
+- [ ] `make ARCH=riscv64 all`
+- [ ] New riscv64 Alpine artifact test
+- [ ] New riscv64 Alpine QEMU boot target
+- [ ] Existing BPI-F3 artifact/smoke helper target
+- [ ] `git diff --check`
+
+Progress notes:
+
+- Created from the audit in
+  `035-riscv64-cleanup-alpine-environment.txt`.

@@ -1,0 +1,47 @@
+Refactor the Linux personality so riscv64 uses the shared userspace server.
+
+Status:
+
+- Pending.
+- Start after `035-riscv64-cleanup-alpine-environment.txt` has completed the
+  initial riscv64 cleanup/audit work needed to keep the port testable.
+
+Problem:
+
+- `user/riscv64-linux/main.c` is a bringup-only server that handles only the
+  static musl hello syscalls and powers off after `exit_group`.
+- The real Linux personality lives in `user/linux/main.c`, but it currently
+  assumes the mature x86_64 syscall frontend and x86_64 server build path.
+- Alpine-on-riscv64 needs the real Linux process, VFS, TTY, signal, wait,
+  exec, mmap, and credential semantics.  Reimplementing those in a second
+  riscv64 server would create the wrong architecture boundary.
+
+Tasks:
+
+- [ ] Split Linux syscall number/register decoding from shared Linux
+      personality semantics.
+- [ ] Define a riscv64 Linux syscall ABI table that maps riscv64 syscall
+      numbers to the shared `BUNIX_LINUX_*` RPC operations.
+- [ ] Build `user/linux/main.c` or a shared Linux server library for riscv64
+      as the module named `linux`.
+- [ ] Delete or retire `user/riscv64-linux/main.c` after the shared server can
+      run the static riscv64 musl smoke.
+- [ ] Remove `BUNIX_LINUX_RISCV64_SYSCALL` and
+      `BUNIX_LINUX_RISCV64_ACTION_*` once no path uses the action protocol.
+- [ ] Add a riscv64 static-musl shared-Linux smoke target that proves the
+      module log identifies the shared Linux server, not the old stub.
+- [ ] Run a narrow x86_64 smoke target to prove the Linux server split did not
+      regress the mature path.
+
+Verification:
+
+- [ ] `make ARCH=riscv64 all`
+- [ ] Existing `make test-boot-riscv64-early`
+- [ ] New riscv64 shared-Linux static-musl smoke target
+- [ ] Narrow x86_64 Linux-server smoke chosen during implementation
+- [ ] `git diff --check`
+
+Progress notes:
+
+- Created from the audit in
+  `035-riscv64-cleanup-alpine-environment.txt`.
