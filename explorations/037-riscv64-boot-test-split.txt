@@ -18,38 +18,66 @@ Problem:
 
 Tasks:
 
-- [ ] Classify each riscv64 early marker as required boot evidence,
+- [x] Classify each riscv64 early marker as required boot evidence,
       hardware/firmware diagnostic, or test-only self-test.
-- [ ] Investigate the UART boot package timeout seen when the normal shared
+- [x] Investigate the UART boot package timeout seen when the normal shared
       `user` server is included.  The default emulator boot path can launch
       `names` and `user`, but the UART package is intentionally kept lean until
       this exploration splits hardware-console smoke from normal server-graph
       boot.
-- [ ] Replace the `riscv64-bootpkg-test` poweroff barrier that waits for
+- [x] Replace the `riscv64-bootpkg-test` poweroff barrier that waits for
       `/bin/rv64-syscall-smoke` and `/bin/musl-hello` with a real test-harness
       completion primitive, likely through proc/wait once the riscv64 server
       graph can support it.
-- [ ] Investigate why riscv64 native `sleep_ns` did not resume the bootstrap
+- [x] Investigate why riscv64 native `sleep_ns` did not resume the bootstrap
       smoke during exploration 035, and either fix the timer/scheduler
       interaction or keep sleep-dependent checks out of the early boot path.
-- [ ] Move test-only checks behind explicit command-line tokens or dedicated
+- [x] Move test-only checks behind explicit command-line tokens or dedicated
       test entry helpers while preserving existing smoke target coverage.
-- [ ] Keep platform/FDT diagnostics available for BPI-F3 review logs without
+- [x] Keep platform/FDT diagnostics available for BPI-F3 review logs without
       forcing them into every future riscv64 Alpine boot.
-- [ ] Ensure scheduler, timer, syscall, user-mode, ELF-loader, and user-copy
+- [x] Ensure scheduler, timer, syscall, user-mode, ELF-loader, and user-copy
       self-tests still run under narrow `make` targets.
-- [ ] Update `docs/riscv64-port.md` and exploration notes with the new boot
+- [x] Update `docs/riscv64-port.md` and exploration notes with the new boot
       marker contract.
 
 Verification:
 
-- [ ] `make ARCH=riscv64 all`
-- [ ] Existing `make test-boot-riscv64-early`
-- [ ] Existing `make test-boot-riscv64-uart-console`
-- [ ] Existing `make test-riscv64-bpi-f3-emulator-gate`
-- [ ] `git diff --check`
+- [x] `make ARCH=riscv64 all`
+- [x] Existing `make test-boot-riscv64-early`
+- [x] Existing `make test-boot-riscv64-uart-console`
+- [x] Existing `make test-riscv64-bpi-f3-emulator-gate`
+- [x] `git diff --check`
 
 Progress notes:
 
 - Created from the audit in
   `035-riscv64-cleanup-alpine-environment.txt`.
+- Marker classification:
+  - Required boot evidence remains unconditional: entry banner, PMM range
+    marker, boot-package magic, boot-package command-line marker, module
+    registration, module ELF validation, server launches, service
+    registrations, proc/VFS/rootfs readiness, Linux smoke completion, and
+    machine/SBI poweroff.
+  - Hardware/firmware diagnostics now require `riscv64-diag`: boot memory
+    layout, initrd/FDT layout, CPU count, SMP parked policy, timebase,
+    stdout/UART details, UART count, and interrupt-controller/routing data.
+  - Test-only self-tests now require `riscv64-selftest`: scheduler worker
+    smoke, timer tick wait, context switch, VM hooks, synthetic syscall frame,
+    U-mode trap return, generic ELF loader, and user-copy checks.
+- The default early and UART packages include `riscv64-diag riscv64-selftest`;
+  the Alpine package intentionally omits them.
+- The old kernel-side riscv64 bootpkg poweroff latch is gone.  The smoke
+  squashfs now contains `/bin/rv64-syscall-smoke` and `/bin/musl-hello`, and
+  the riscv64 bootstrap registers, spawns, and waits for both through proc
+  before logging `bootstrap-riscv64: done` and powering off.
+- The UART package remains lean.  It carries `names`, `bootstrap`, and
+  `abi-smoke.user`; it does not carry or launch the full shared server graph.
+- Native sleep remains out of the early boot path.  Follow-up exploration
+  `067-riscv64-native-sleep-timer-semantics.txt` tracks a proper native
+  sleep/timer audit with a dedicated smoke target.
+- During verification, running riscv64 boot targets in parallel exposed that
+  they share `build/riscv64-serial.log`.  Follow-up exploration
+  `066-riscv64-test-log-isolation.txt` tracks per-target log isolation.
+- Additional package-shape verification:
+  - `make test-riscv64-bootpkg`

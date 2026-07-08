@@ -39,9 +39,9 @@ RISCV64_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg.img
 RISCV64_BOOTPKG_MULTI := $(BUILD_DIR)/riscv64/bootpkg-multi.img
 RISCV64_ALPINE_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg-alpine.img
 RISCV64_UART_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg-uart.img
-RISCV64_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test
+RISCV64_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test riscv64-diag riscv64-selftest
 RISCV64_ALPINE_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test riscv64-alpine-test
-RISCV64_UART_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test riscv64-uart-console
+RISCV64_UART_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test riscv64-uart-console riscv64-diag riscv64-selftest
 RISCV64_BPI_F3_DIR := $(BUILD_DIR)/riscv64/bpi-f3
 RISCV64_BPI_F3_KERNEL := $(RISCV64_BPI_F3_DIR)/bunixos-riscv64.elf
 RISCV64_BPI_F3_BOOTPKG := $(RISCV64_BPI_F3_DIR)/bunix-riscv64.bootpkg
@@ -685,7 +685,7 @@ $(RISCV64_BOOTSTRAP_MODULE): user/crt0-riscv64.S user/riscv64-bootstrap/main.c u
 		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
 		$(BUILD_DIR)/riscv64/user/riscv64-bootstrap.c.o
 
-$(RISCV64_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_PROC_MODULE) $(RISCV64_BLOCK_MODULE) $(RISCV64_VFS_MODULE) $(RISCV64_SQUASHFS_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_SYSCALL_SMOKE_MODULE) $(RISCV64_MUSL_HELLO_MODULE) $(RISCV64_SMOKE_SQUASHFS_IMAGE) tools/build-riscv64-bootpkg.sh
+$(RISCV64_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_PROC_MODULE) $(RISCV64_BLOCK_MODULE) $(RISCV64_VFS_MODULE) $(RISCV64_SQUASHFS_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_SMOKE_SQUASHFS_IMAGE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_SMOKE_SQUASHFS_IMAGE) disk0 \
 		$(RISCV64_NAMES_MODULE) names \
@@ -697,11 +697,9 @@ $(RISCV64_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISCV64_USE
 		$(RISCV64_SQUASHFS_MODULE) squashfs \
 		$(RISCV64_BOOTSTRAP_MODULE) bootstrap \
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
-		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux \
-		$(RISCV64_SYSCALL_SMOKE_MODULE) /bin/rv64-syscall-smoke \
-		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
+		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux
 
-$(RISCV64_BOOTPKG_MULTI): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_PROC_MODULE) $(RISCV64_BLOCK_MODULE) $(RISCV64_VFS_MODULE) $(RISCV64_SQUASHFS_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_SYSCALL_SMOKE_MODULE) $(RISCV64_MUSL_HELLO_MODULE) $(RISCV64_SMOKE_SQUASHFS_IMAGE) tools/build-riscv64-bootpkg.sh
+$(RISCV64_BOOTPKG_MULTI): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_PROC_MODULE) $(RISCV64_BLOCK_MODULE) $(RISCV64_VFS_MODULE) $(RISCV64_SQUASHFS_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_SMOKE_SQUASHFS_IMAGE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_SMOKE_SQUASHFS_IMAGE) disk0 \
 		$(RISCV64_NAMES_MODULE) names \
@@ -713,9 +711,7 @@ $(RISCV64_BOOTPKG_MULTI): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISCV
 		$(RISCV64_SQUASHFS_MODULE) squashfs \
 		$(RISCV64_BOOTSTRAP_MODULE) bootstrap \
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
-		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux \
-		$(RISCV64_SYSCALL_SMOKE_MODULE) /bin/rv64-syscall-smoke \
-		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
+		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux
 
 $(RISCV64_ALPINE_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_PROC_MODULE) $(RISCV64_BLOCK_MODULE) $(RISCV64_VFS_MODULE) $(RISCV64_SQUASHFS_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_ALPINE_SQUASHFS_IMAGE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_ALPINE_KERNEL_CMDLINE)" \
@@ -750,8 +746,6 @@ test-riscv64-bootpkg: $(RISCV64_BOOTPKG) $(RISCV64_BOOTPKG_MULTI)
 	grep -aF "module bootstrap" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module linux" $(RISCV64_BOOTPKG) >/dev/null
-	grep -aF "module /bin/rv64-syscall-smoke" $(RISCV64_BOOTPKG) >/dev/null
-	grep -aF "module /bin/musl-hello" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "cmdline $(RISCV64_KERNEL_CMDLINE)" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module disk0" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module names" $(RISCV64_BOOTPKG_MULTI) >/dev/null
@@ -764,8 +758,6 @@ test-riscv64-bootpkg: $(RISCV64_BOOTPKG) $(RISCV64_BOOTPKG_MULTI)
 	grep -aF "module bootstrap" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module linux" $(RISCV64_BOOTPKG_MULTI) >/dev/null
-	grep -aF "module /bin/rv64-syscall-smoke" $(RISCV64_BOOTPKG_MULTI) >/dev/null
-	grep -aF "module /bin/musl-hello" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 
 $(RISCV64_BPI_F3_MANIFEST): $(RISCV64_KERNEL) $(RISCV64_BOOTPKG) $(RISCV64_UART_BOOTPKG) Makefile
 	mkdir -p $(RISCV64_BPI_F3_DIR)
@@ -1106,8 +1098,8 @@ $(NETCFG_MODULE): $(NETCFG_MODULE_OBJS) user/user.ld Makefile
 $(SYNTHETIC_SQUASHFS_IMAGE): tools/build-synthetic-squashfs-rootfs.sh $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(ROOTFS_SHEBANGTEST) $(ROOTFS_SHEBANGLOOP_A) $(ROOTFS_SHEBANGLOOP_B) $(ROOTFS_SHEBANGBAD) $(FIRST_MODULE) $(ALLOCTEST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(VFORKSTRESS_MODULE) $(EXECOK_MODULE) $(READBIG_MODULE) $(MMAPBIG_MODULE) $(MMAPHUGE_MODULE) $(EXECBIG_MODULE) $(PHDRSTRESS_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(IOVTEST_MODULE) $(FCHMODATTEST_MODULE) $(WAITPGIDTEST_MODULE) $(EXECLONGTEST_MODULE) $(AUXIDTEST_MODULE) $(PATHMAXTEST_MODULE) $(PATHERRTEST_MODULE) $(STATIDTEST_MODULE) $(FCNTLLOCKTEST_MODULE) $(SIGNALTEST_MODULE) $(FAULTTEST_MODULE) $(SYSRACETEST_MODULE) $(SCHEDSTRESS_MODULE) $(UPTIMETEST_MODULE) $(NETTEST_MODULE) $(NETDHCP_MODULE) $(BUSYBOX) $(MUSL_LDSO)
 	BUSYBOX=$(BUSYBOX) MUSL_LDSO=$(MUSL_LDSO) MODULE_DIR=$(BUILD_DIR)/modules sh tools/build-synthetic-squashfs-rootfs.sh $@
 
-$(RISCV64_SMOKE_SQUASHFS_IMAGE): tools/build-riscv64-smoke-rootfs.sh $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO)
-	RISCV64_DYN_HELLO_MODULE=$(RISCV64_DYN_HELLO_MODULE) RISCV64_MUSL_LDSO=$(RISCV64_MUSL_LDSO) sh tools/build-riscv64-smoke-rootfs.sh $@
+$(RISCV64_SMOKE_SQUASHFS_IMAGE): tools/build-riscv64-smoke-rootfs.sh $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO) $(RISCV64_SYSCALL_SMOKE_MODULE) $(RISCV64_MUSL_HELLO_MODULE)
+	RISCV64_DYN_HELLO_MODULE=$(RISCV64_DYN_HELLO_MODULE) RISCV64_MUSL_LDSO=$(RISCV64_MUSL_LDSO) RISCV64_SYSCALL_SMOKE_MODULE=$(RISCV64_SYSCALL_SMOKE_MODULE) RISCV64_MUSL_HELLO_MODULE=$(RISCV64_MUSL_HELLO_MODULE) sh tools/build-riscv64-smoke-rootfs.sh $@
 
 $(ALPINE_SQUASHFS_IMAGE): $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy modules/passwd modules/shadow modules/group
 	ROOTFS_IMAGE_FORMAT=squashfs LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/build-alpine-rootfs.sh $@
@@ -1555,12 +1547,12 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "kernel: starting module server vfs" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "kernel: starting module server squashfs" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "kernel: starting module server linux" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "linux-riscv64: registered task=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "names: register name=linux" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "musl hello argc=1 argv0=/bin/dyn-hello" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootstrap-riscv64: dyn-hello ok" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: syscall-smoke launched" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "bootstrap-riscv64: syscall-smoke ok" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "rv64 syscall smoke ok" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "bootstrap-riscv64: musl-hello launched" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "bootstrap-riscv64: musl-hello ok" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "musl hello argc=1 argv0=/bin/musl-hello" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "native: riscv64 server argc=1 argv0=/bin/abi-smoke.user" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "native: riscv64 syscalls" $(RISCV64_SERIAL_LOG) >/dev/null

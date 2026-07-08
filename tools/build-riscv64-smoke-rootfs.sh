@@ -13,6 +13,14 @@ if [ -n "${RISCV64_DYN_HELLO_MODULE:-}" ]; then
 	cp "$RISCV64_DYN_HELLO_MODULE" "$stage/bin/dyn-hello"
 	chmod 0555 "$stage/bin/dyn-hello"
 fi
+if [ -n "${RISCV64_SYSCALL_SMOKE_MODULE:-}" ]; then
+	cp "$RISCV64_SYSCALL_SMOKE_MODULE" "$stage/bin/rv64-syscall-smoke"
+	chmod 0555 "$stage/bin/rv64-syscall-smoke"
+fi
+if [ -n "${RISCV64_MUSL_HELLO_MODULE:-}" ]; then
+	cp "$RISCV64_MUSL_HELLO_MODULE" "$stage/bin/musl-hello"
+	chmod 0555 "$stage/bin/musl-hello"
+fi
 if [ -n "${RISCV64_MUSL_LDSO:-}" ]; then
 	cp "$RISCV64_MUSL_LDSO" "$stage/lib/ld-musl-riscv64.so.1"
 	chmod 0555 "$stage/lib/ld-musl-riscv64.so.1"

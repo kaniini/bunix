@@ -134,24 +134,6 @@ struct user_ipc_message {
 
 static const char *strace_mode;
 static u64 current_kernel_stack;
-static u8 bootpkg_syscall_smoke_done;
-static u8 bootpkg_musl_hello_done;
-
-static int cstr_eq(const char *left, const char *right)
-{
-	u64 i = 0;
-
-	if (left == 0 || right == 0) {
-		return 0;
-	}
-	while (left[i] != '\0' && right[i] != '\0') {
-		if (left[i] != right[i]) {
-			return 0;
-		}
-		i++;
-	}
-	return left[i] == right[i];
-}
 
 void riscv64_user_enter(u64 entry, u64 stack, u64 kernel_stack)
 	__attribute__((noreturn));
@@ -1433,18 +1415,6 @@ static u64 linux_exit_current(struct ipc_port *linux, struct ipc_port *reply_por
 		ipc_message_release(&reply);
 	}
 	console_printf("linux-riscv64: exit_group status=%u\n", (u32)status);
-	if (kernel_cmdline_has("riscv64-bootpkg-test")) {
-		const char *name = task_name(task_current());
-
-		if (cstr_eq(name, "/bin/rv64-syscall-smoke")) {
-			bootpkg_syscall_smoke_done = 1;
-		} else if (cstr_eq(name, "/bin/musl-hello")) {
-			bootpkg_musl_hello_done = 1;
-		}
-		if (bootpkg_syscall_smoke_done && bootpkg_musl_hello_done) {
-			arch_poweroff();
-		}
-	}
 	thread_exit();
 }
 

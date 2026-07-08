@@ -231,14 +231,17 @@ static void sched_worker_thread(void *arg)
 	thread_exit();
 }
 
-static int generic_services_self_test(u64 fdt)
+static void generic_services_init(u64 fdt)
 {
 	arch_smp_init(fdt);
 	kernel_runtime_memory_init();
 	kernel_runtime_services_init();
 	server_boot_modules_init();
 	kernel_runtime_scheduler_init();
+}
 
+static int scheduler_self_test(void)
+{
 	sched_worker_ran = 0;
 	if (thread_create(task_current(), "rv64-sched-smoke",
 			  sched_worker_thread, 0) == 0) {
@@ -694,45 +697,23 @@ static int generic_elf_loader_self_test(u64 module_start, u64 module_size)
 	return rc == 0 && entry != 0 ? 0 : -1;
 }
 
-void riscv64_early_main(u64 hart_id, u64 fdt)
+static int configure_bootpkg_cmdline(void)
 {
-	struct riscv64_fdt_memory_range memory;
-	struct riscv64_fdt_initrd initrd;
-	u64 module_start = 0;
-	u64 module_size = 0;
+	if (!bootpkg_magic_ok(boot_info.initrd_start, boot_info.initrd_end)) {
+		kernel_cmdline_configure("");
+		return 0;
+	}
+	return bootpkg_configure_cmdline(boot_info.initrd_start,
+					 boot_info.initrd_end);
+}
 
-	boot_info.hart_id = hart_id;
-	boot_info.fdt = fdt;
-	boot_info.phys_base = RISCV64_PHYS_MEM_BASE;
-	boot_info.phys_size = 0;
-	boot_info.kernel_load_base = RISCV64_KERNEL_LOAD_BASE;
-	boot_info.direct_map_base = RISCV64_DIRECT_MAP_BASE;
-	boot_info.direct_map_size = RISCV64_DIRECT_MAP_SIZE;
-	boot_info.user_base = RISCV64_USER_BASE;
-	boot_info.user_limit = RISCV64_USER_LIMIT;
-	boot_info.initrd_start = 0;
-	boot_info.initrd_end = 0;
-	if (riscv64_fdt_scan_memory((const void *)fdt, &memory, 1) == 1) {
-		boot_info.phys_base = memory.base;
-		boot_info.phys_size = memory.size;
-	}
-	if (riscv64_fdt_scan_initrd((const void *)fdt, &initrd) == 0) {
-		boot_info.initrd_start = initrd.start;
-		boot_info.initrd_end = initrd.end;
-	}
+static void riscv64_run_lowlevel_self_tests(u64 fdt)
+{
+	(void)fdt;
 
-	console_init();
-	early_puts("bunixos: riscv64 early bootstrap\n");
-	pmm_bootstrap_from_fdt(fdt);
-	if (pmm_total_page_count() != 0 && pmm_free_page_count() != 0) {
-		early_puts("pmm: riscv64 ranges\n");
-	}
-	boot_layout_smoke(fdt);
-	platform_discovery_smoke(fdt);
-	if (generic_services_self_test(fdt) == 0) {
+	if (scheduler_self_test() == 0) {
 		early_puts("sched: riscv64 thread\n");
 	}
-	arch_interrupts_init();
 	riscv64_timer_set_relative(arch_timer_hz() / 100);
 	arch_interrupts_enable();
 	while (arch_timer_ticks() == 0) {
@@ -756,11 +737,58 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 					      sizeof(user_probe_kernel_stack))) == 0) {
 		early_puts("user: riscv64 mode\n");
 	}
+}
+
+void riscv64_early_main(u64 hart_id, u64 fdt)
+{
+	struct riscv64_fdt_memory_range memory;
+	struct riscv64_fdt_initrd initrd;
+	u64 module_start = 0;
+	u64 module_size = 0;
+	int diag_enabled;
+	int selftest_enabled;
+
+	boot_info.hart_id = hart_id;
+	boot_info.fdt = fdt;
+	boot_info.phys_base = RISCV64_PHYS_MEM_BASE;
+	boot_info.phys_size = 0;
+	boot_info.kernel_load_base = RISCV64_KERNEL_LOAD_BASE;
+	boot_info.direct_map_base = RISCV64_DIRECT_MAP_BASE;
+	boot_info.direct_map_size = RISCV64_DIRECT_MAP_SIZE;
+	boot_info.user_base = RISCV64_USER_BASE;
+	boot_info.user_limit = RISCV64_USER_LIMIT;
+	boot_info.initrd_start = 0;
+	boot_info.initrd_end = 0;
+	if (riscv64_fdt_scan_memory((const void *)fdt, &memory, 1) == 1) {
+		boot_info.phys_base = memory.base;
+		boot_info.phys_size = memory.size;
+	}
+	if (riscv64_fdt_scan_initrd((const void *)fdt, &initrd) == 0) {
+		boot_info.initrd_start = initrd.start;
+		boot_info.initrd_end = initrd.end;
+	}
+
+	console_init();
+	early_puts("bunixos: riscv64 early bootstrap\n");
+	configure_bootpkg_cmdline();
+	diag_enabled = kernel_cmdline_has("riscv64-diag");
+	selftest_enabled = kernel_cmdline_has("riscv64-selftest");
+	pmm_bootstrap_from_fdt(fdt);
+	if (pmm_total_page_count() != 0 && pmm_free_page_count() != 0) {
+		early_puts("pmm: riscv64 ranges\n");
+	}
+	if (diag_enabled) {
+		boot_layout_smoke(fdt);
+		platform_discovery_smoke(fdt);
+	}
+	generic_services_init(fdt);
+	arch_interrupts_init();
+	if (selftest_enabled) {
+		riscv64_run_lowlevel_self_tests(fdt);
+	}
 	if (bootpkg_magic_ok(boot_info.initrd_start, boot_info.initrd_end)) {
 		early_puts("bootpkg: riscv64 initrd\n");
-		if (bootpkg_configure_cmdline(boot_info.initrd_start,
-					      boot_info.initrd_end) == 0 &&
-		    kernel_cmdline_has("riscv64-bootpkg-test")) {
+		if (kernel_cmdline_has("riscv64-bootpkg-test")) {
 			early_puts("cmdline: riscv64 bootpkg\n");
 			if (kernel_cmdline_has("riscv64-uart-console")) {
 				riscv64_console_init_from_fdt((const void *)fdt);
@@ -784,6 +812,7 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 			if (user_copy_self_test() == 0) {
 				early_puts("copy: riscv64 user\n");
 			}
+			riscv64_timer_set_relative(arch_timer_hz() / 100);
 			arch_interrupts_enable();
 			server_start_initial_boot_modules();
 			sched_enable_preemption();

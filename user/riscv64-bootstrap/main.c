@@ -218,9 +218,9 @@ int main(void)
 	const char dyn_fail[] = "bootstrap-riscv64: dyn-hello failed\n";
 	const char alpine_sh_ok[] = "bootstrap-riscv64: alpine sh ok\n";
 	const char alpine_sh_fail[] = "bootstrap-riscv64: alpine sh failed\n";
-	const char syscall_ok[] = "bootstrap-riscv64: syscall-smoke launched\n";
+	const char syscall_ok[] = "bootstrap-riscv64: syscall-smoke ok\n";
 	const char syscall_fail[] = "bootstrap-riscv64: syscall-smoke failed\n";
-	const char hello_ok[] = "bootstrap-riscv64: musl-hello launched\n";
+	const char hello_ok[] = "bootstrap-riscv64: musl-hello ok\n";
 	const char hello_fail[] = "bootstrap-riscv64: musl-hello failed\n";
 	const char done[] = "bootstrap-riscv64: done\n";
 	const int alpine_test = bunix_cmdline_has("riscv64-alpine-test") > 0;
@@ -350,12 +350,23 @@ int main(void)
 		(void)bunix_machine_poweroff(0);
 		return 0;
 	}
-	launch_or_log("/bin/rv64-syscall-smoke", syscall_ok,
-		      sizeof(syscall_ok) - 1, syscall_fail,
-		      sizeof(syscall_fail) - 1);
-	launch_or_log("/bin/musl-hello", hello_ok, sizeof(hello_ok) - 1,
-		      hello_fail, sizeof(hello_fail) - 1);
+	if (proc != 0 && linux != 0 &&
+	    proc_register_exec(proc, "/bin/rv64-syscall-smoke",
+			       "rv64-syscall-smoke", 1) == 0 &&
+	    proc_spawn_wait(proc, "/bin/rv64-syscall-smoke") == 0) {
+		log_line(syscall_ok, sizeof(syscall_ok) - 1);
+	} else {
+		log_line(syscall_fail, sizeof(syscall_fail) - 1);
+	}
+	if (proc != 0 && linux != 0 &&
+	    proc_register_exec(proc, "/bin/musl-hello", "musl-hello", 1) == 0 &&
+	    proc_spawn_wait(proc, "/bin/musl-hello") == 0) {
+		log_line(hello_ok, sizeof(hello_ok) - 1);
+	} else {
+		log_line(hello_fail, sizeof(hello_fail) - 1);
+	}
 
 	log_line(done, sizeof(done) - 1);
+	(void)bunix_machine_poweroff(0);
 	return 0;
 }

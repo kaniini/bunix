@@ -18,26 +18,32 @@ explicit while the port is young.
 - Alpine shell gate: `make test-boot-riscv64-alpine`, using
   `build/riscv64/bootpkg-alpine.img`.
 
-The early boot gate currently verifies:
+The early boot gate currently verifies required boot evidence plus opt-in
+diagnostic/self-test coverage.  The default `test-boot-riscv64-early`
+package carries `riscv64-diag riscv64-selftest`; the Alpine package does not,
+so Alpine boot is not forced to print hardware diagnostics or run destructive
+bringup self-tests.
 
 - OpenSBI reaches the Bunix riscv64 entry point.
 - FDT memory discovery can read the first memory range.
-- Supervisor timer interrupts fire through the riscv64 trap entry.
-- The riscv64 kernel-thread context switch primitive can switch away and back.
+- Under `riscv64-selftest`, supervisor timer interrupts fire through the
+  riscv64 trap entry.
+- Under `riscv64-selftest`, the riscv64 kernel-thread context switch
+  primitive can switch away and back.
 - The riscv64 PMM can initialize from QEMU FDT memory data while reserving
   the low firmware window, kernel image, boot package/initrd, and FDT blob.
-- The riscv64 generic VM hooks can create an Sv39 page-table root, map a
+- Under `riscv64-selftest`, the riscv64 generic VM hooks can create an Sv39 page-table root, map a
   user page, translate it for read/write, remove write permission, unmap it,
   and recursively tear down PMM-backed page-table pages.
-- The native Bunix `ecall` entry contract can decode a synthetic user syscall
+- Under `riscv64-selftest`, the native Bunix `ecall` entry contract can decode a synthetic user syscall
   frame, place the return value in `a0`, and advance `sepc`.
-- A minimal U-mode probe can execute an `ecall`, receive the expected return
+- Under `riscv64-selftest`, a minimal U-mode probe can execute an `ecall`, receive the expected return
   value, and return through a test-only trap continuation on a kernel stack.
 - The riscv64 boot package is visible through the FDT initrd range and starts
   with the expected `BUNIX-RV64-BOOTPKG` header.
 - The packaged `abi-smoke.user` payload can be located and validated as an
   ELF64 little-endian RISC-V user image.
-- Low-level riscv64 user copy helpers can copy from and to the active user
+- Under `riscv64-selftest`, low-level riscv64 user copy helpers can copy from and to the active user
   address space with `sstatus.SUM`, validate Bunix user ranges, and reject
   invalid ranges.
 - The packaged `abi-smoke.user` payload can be loaded by the generic ELF
@@ -47,16 +53,17 @@ The early boot gate currently verifies:
 - The packaged native payload can call the real riscv64 native syscall
   dispatcher for early console writes and `exit`, proving a server-shaped
   userspace payload can report through the native Bunix ABI before poweroff.
-- A static riscv64 musl hello payload packaged as `/bin/musl-hello` can be
-  launched as a scheduler-owned U-mode task, preserve absolute `argv[0]`, use
-  an initial stack with argv/envp plus an `AT_NULL` aux vector terminator, send
-  riscv64 Linux-number syscalls through a riscv64 syscall frontend to the
-  shared userspace `linux` server, register as a Linux process, write through
-  the shared Linux server, and exit cleanly.
-- A static rv64 syscall smoke payload packaged as `/bin/rv64-syscall-smoke`
-  can issue raw Linux `ecall`s for process identity and credential syscalls,
-  write its result through the shared Linux server, and exit cleanly before
-  the final bootpkg poweroff.
+- A static riscv64 musl hello payload installed in the smoke squashfs as
+  `/bin/musl-hello` can be spawned and waited through proc, preserve absolute
+  `argv[0]`, use an initial stack with argv/envp plus an `AT_NULL` aux vector
+  terminator, send riscv64 Linux-number syscalls through a riscv64 syscall
+  frontend to the shared userspace `linux` server, register as a Linux
+  process, write through the shared Linux server, and exit cleanly.
+- A static rv64 syscall smoke payload installed in the smoke squashfs as
+  `/bin/rv64-syscall-smoke` can be spawned and waited through proc, issue raw
+  Linux `ecall`s for process identity and credential syscalls, write its
+  result through the shared Linux server, and exit cleanly before bootstrap
+  powers off the test VM.
 - A dynamic rv64 musl hello payload can run from the mounted squashfs root as
   `/bin/dyn-hello`, loading `/lib/ld-musl-riscv64.so.1` through proc, VFS,
   squashfs, and the shared Linux server.  The gate requires
@@ -74,8 +81,8 @@ builder `tools/build-riscv64-bootpkg.sh` creates a text-header package with
 module records and payloads.  The old `OUT MODULE [NAME]` invocation remains
 valid, and the builder also accepts repeated `MODULE NAME` pairs for ordered
 module/data payloads plus an optional `cmdline` header.  The default QEMU boot
-carrier contains `names`, `user`, `bootstrap`, `abi-smoke.user`, `linux`,
-`/bin/rv64-syscall-smoke`, and `/bin/musl-hello`, while
+carrier contains the `disk0` smoke squashfs plus `names`, `user`,
+`bootstrap`, `abi-smoke.user`, and `linux`, while
 `test-riscv64-bootpkg` also builds a multi-record carrier to prove host-side
 ordering.  The early kernel can parse the package command line through the
 shared `kernel_cmdline_configure()` path used by x86_64, validate the carrier
@@ -232,13 +239,14 @@ userspace and now reaches a controlled dynamic-linker and Alpine shell
 milestone.  The emulator builds the static
 `user/musl-hello/main.c` ELF and the syscall-heavy
 `user/riscv64-syscall-smoke/main.c` ELF with host clang against the musl.cc
-sysroot, packages them as `/bin/musl-hello` and
-`/bin/rv64-syscall-smoke`, launches them as scheduler-owned U-mode tasks, and
+sysroot, stages them in the smoke squashfs as `/bin/musl-hello` and
+`/bin/rv64-syscall-smoke`, spawns and waits them through proc, and
 sends their nonnegative Linux syscalls through a riscv64 syscall frontend to
 the shared userspace Linux server built from `user/linux/main.c`.
 `make test-boot-riscv64-early` now proves the shared server path by requiring
-`names: register name=linux`, `linux-riscv64: registered task=`,
-`rv64 syscall smoke ok`, the musl hello serial marker, and
+`names: register name=linux`, `bootstrap-riscv64: syscall-smoke ok`,
+`rv64 syscall smoke ok`, `bootstrap-riscv64: musl-hello ok`, the musl hello
+serial marker, and
 `linux-riscv64: exit_group status=0`.
 
 The riscv64 syscall frontend maps the observed static hello surface to shared
@@ -265,11 +273,11 @@ that proc uses to create, map, write, clear, and start exec images.  The
 default boot package now carries shared `time` and `proc` modules; the
 riscv64 bootstrap launches time, waits for `BUNIX_SERVICE_TIME` through
 names, and then launches proc with console, names, and time capabilities.
-Proc now executes `/bin/dyn-hello` from a mounted squashfs root so the musl
-loader exercises the Linux/VFS `openat(2)` and `fstat(2)` path.  The current
-frontend covers the observed loader calls with direct switch cases; later
-refactors should convert that into a table-driven riscv64 syscall ABI
-frontend.
+Proc now executes `/bin/dyn-hello`, `/bin/rv64-syscall-smoke`, and
+`/bin/musl-hello` from a mounted squashfs root.  The dynamic musl loader
+exercises the Linux/VFS `openat(2)` and `fstat(2)` path, and the static smoke
+programs use proc wait as the test completion primitive instead of a
+kernel-side poweroff latch.
 
 The first riscv64 VFS/rootfs service graph is now present in the default boot
 package.  The host builds shared-server riscv64 variants for block, VFS,
@@ -280,9 +288,11 @@ make test-riscv64-fs-server-build
 ```
 
 The smoke boot package carries a tiny squashfs image as `disk0`, plus `block`,
-`vfs`, and `squashfs` modules.  The riscv64 bootstrap launches those servers,
-waits for names registrations, sets the squashfs mount path to `/`, and mounts
-it at `/` through VFS.  `make test-boot-riscv64-early` now requires
+`vfs`, and `squashfs` modules.  The image contains `/bin/dyn-hello`,
+`/bin/rv64-syscall-smoke`, `/bin/musl-hello`, `/lib/ld-musl-riscv64.so.1`,
+and a small static `/etc` payload.  The riscv64 bootstrap launches those
+servers, waits for names registrations, sets the squashfs mount path to `/`,
+and mounts it at `/` through VFS.  `make test-boot-riscv64-early` now requires
 `bootstrap-riscv64: block ready`, `bootstrap-riscv64: vfs ready`,
 `bootstrap-riscv64: squashfs ready`, and
 `bootstrap-riscv64: rootfs mounted` before the static Linux smoke tasks run.

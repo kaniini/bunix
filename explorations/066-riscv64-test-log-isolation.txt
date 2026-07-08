@@ -1,0 +1,37 @@
+Isolate riscv64 boot-test serial logs so riscv64 gates can run in parallel.
+
+Status:
+
+- Pending.
+- Start after the existing riscv64 bringup and board-port queue unless test
+  throughput becomes the active bottleneck sooner.
+
+Problem:
+
+- The riscv64 boot targets currently share `$(RISCV64_SERIAL_LOG)`, which is
+  `build/riscv64-serial.log`.
+- Running `make test-boot-riscv64-alpine` and
+  `make test-boot-riscv64-uart-console` concurrently can make one target read
+  the other target's log and fail marker checks even when both guests behaved
+  correctly.
+- This blocks safe parallelization of riscv64 boot shards as the riscv64 test
+  matrix grows.
+
+Tasks:
+
+- [ ] Give each riscv64 boot target its own default serial log path.
+- [ ] Allow callers to override each log path without affecting other riscv64
+      targets.
+- [ ] Update BPI-F3 helper scripts and summaries to consume the correct log
+      for the gate they are checking.
+- [ ] Add a narrow host-side or make-level check that proves two riscv64 boot
+      targets do not write the same log by default.
+- [ ] Update test-efficiency notes with the riscv64 log-isolation contract.
+
+Verification:
+
+- [ ] `make test-boot-riscv64-early`
+- [ ] `make test-boot-riscv64-alpine`
+- [ ] `make test-boot-riscv64-uart-console`
+- [ ] A parallel run of at least two riscv64 boot targets using distinct logs.
+- [ ] `git diff --check`
