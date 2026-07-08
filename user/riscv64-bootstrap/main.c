@@ -1,0 +1,39 @@
+#include <bunix/syscall.h>
+
+static void log_line(const char *text, u64 len)
+{
+	(void)bunix_syscall2(BUNIX_SYSCALL_EARLY_CONSOLE_LOG, (u64)text, len);
+}
+
+static void launch_or_log(const char *name, const char *ok, u64 ok_len,
+			  const char *fail, u64 fail_len)
+{
+	if (bunix_launch_module(name) >= 0) {
+		log_line(ok, ok_len);
+	} else {
+		log_line(fail, fail_len);
+	}
+}
+
+int main(void)
+{
+	const char online[] = "bootstrap-riscv64: online\n";
+	const char abi_ok[] = "bootstrap-riscv64: abi-smoke launched\n";
+	const char abi_fail[] = "bootstrap-riscv64: abi-smoke failed\n";
+	const char linux_ok[] = "bootstrap-riscv64: linux launched\n";
+	const char linux_fail[] = "bootstrap-riscv64: linux failed\n";
+	const char hello_ok[] = "bootstrap-riscv64: musl-hello launched\n";
+	const char hello_fail[] = "bootstrap-riscv64: musl-hello failed\n";
+	const char done[] = "bootstrap-riscv64: done\n";
+
+	log_line(online, sizeof(online) - 1);
+	launch_or_log("abi-smoke.user", abi_ok, sizeof(abi_ok) - 1,
+		      abi_fail, sizeof(abi_fail) - 1);
+	launch_or_log("linux", linux_ok, sizeof(linux_ok) - 1,
+		      linux_fail, sizeof(linux_fail) - 1);
+	launch_or_log("/bin/musl-hello", hello_ok, sizeof(hello_ok) - 1,
+		      hello_fail, sizeof(hello_fail) - 1);
+
+	log_line(done, sizeof(done) - 1);
+	return 0;
+}

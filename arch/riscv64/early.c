@@ -34,8 +34,6 @@ static const char riscv64_bootpkg_magic[] = "BUNIX-RV64-BOOTPKG\n";
 static const char riscv64_bootpkg_module_prefix[] = "module ";
 static const char riscv64_bootpkg_cmdline_prefix[] = "cmdline ";
 static const char riscv64_bootpkg_abi_smoke[] = "abi-smoke.user";
-static const char riscv64_bootpkg_linux[] = "linux";
-static const char riscv64_bootpkg_musl_hello[] = "/bin/musl-hello";
 
 enum {
 	USER_STACK_TOP = 0x800000ULL,
@@ -616,24 +614,13 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 							 module_size) == 0) {
 				early_puts("elf: riscv64 loader\n");
 			}
-			if (server_launch_module(riscv64_bootpkg_abi_smoke) == 0) {
-				sched_run();
-				early_puts("module: riscv64 sched user\n");
-			}
-			if (server_boot_module_registered(riscv64_bootpkg_linux) &&
-			    server_launch_module(riscv64_bootpkg_linux) == 0) {
-				sched_run();
-				early_puts("linux: riscv64 server task\n");
-			}
-			if (server_boot_module_registered(
-				    riscv64_bootpkg_musl_hello) &&
-			    server_launch_module(riscv64_bootpkg_musl_hello) == 0) {
-				sched_run();
-				early_puts("linux: riscv64 musl hello\n");
-			}
 			if (user_copy_self_test() == 0) {
 				early_puts("copy: riscv64 user\n");
 			}
+			arch_interrupts_enable();
+			server_start_initial_boot_modules();
+			sched_enable_preemption();
+			sched_idle_loop();
 		}
 	}
 	early_puts("machine: poweroff\n");

@@ -34,6 +34,7 @@ int main(void)
 	const char online[] = "linux-riscv64-server: online\n";
 	const char write[] = "linux-riscv64-server: write\n";
 	const char exit_group[] = "linux-riscv64-server: exit_group\n";
+	const char poweroff[] = "linux-riscv64-server: poweroff\n";
 	struct bunix_msg message;
 
 	log_line(online, sizeof(online) - 1);
@@ -63,6 +64,8 @@ int main(void)
 		case LINUX_RISCV64_EXIT_GROUP:
 			log_line(exit_group, sizeof(exit_group) - 1);
 			reply_to(&message, 0, BUNIX_LINUX_RISCV64_ACTION_EXIT);
+			log_line(poweroff, sizeof(poweroff) - 1);
+			(void)bunix_machine_poweroff(0);
 			break;
 		case LINUX_RISCV64_SET_TID_ADDRESS:
 			reply_to(&message, message.sender,

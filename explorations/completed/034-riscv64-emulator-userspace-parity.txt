@@ -50,7 +50,7 @@ Tasks:
       map/protect/unmap/translate, activation, and teardown.
 - [x] Add riscv64 copyin/copyout helpers with user-address validation and
       fault behavior suitable for native syscalls and server RPC payloads.
-- [ ] Wire riscv64 user task launch into the normal scheduler/proc/bootstrap
+- [x] Wire riscv64 user task launch into the normal scheduler/proc/bootstrap
       path so native tasks have scheduler-owned lifetime, kernel stacks,
       cleanup, and task IDs like x86_64 tasks.
 - [x] Move the current `abi-smoke.user` payload from the early harness into a
@@ -279,6 +279,38 @@ Verification notes:
 - `make all` passed after adding riscv64 capability IPC and `task_alloc`.
 - `make test-boot` passed after adding riscv64 capability IPC and
   `task_alloc`.
+- Moved the riscv64 QEMU userspace smoke through the normal boot-module
+  bootstrap handoff:
+  - Added a riscv64-native `bootstrap` module that is packaged as the
+    `bootstrap` boot module and launched by `server_start_initial_boot_modules()`.
+  - `riscv64_early_main()` now records the boot package, runs the remaining
+    architecture self-tests, enables interrupts, calls the generic initial
+    boot-module launcher, enables preemption, and enters the scheduler idle
+    loop instead of directly launching `abi-smoke.user`, `linux`, and
+    `/bin/musl-hello` from early kernel code.
+  - The riscv64 bootstrap module launches `abi-smoke.user`, the riscv64
+    linux server, and `/bin/musl-hello`, then exits with normal
+    scheduler-owned task cleanup.
+  - The riscv64 linux server powers off the emulator after serving the static
+    musl hello `exit_group`, keeping the QEMU smoke deterministic without
+    relying on the still-minimal riscv64 userspace timer sleep path.
+  - The QEMU smoke now checks bootstrap-owned launch markers and task-owned
+    execution markers.
+- `make ARCH=riscv64 all` passed after moving riscv64 userspace through the
+  bootstrap handoff.
+- `make test-riscv64-bootpkg` passed after adding the riscv64 bootstrap
+  module to the boot package.
+- `make test-boot-riscv64-early` passed after routing riscv64 userspace
+  through the generic bootstrap handoff.
+- `make test-riscv64-user-abi` passed after routing riscv64 userspace through
+  the generic bootstrap handoff.
+- `make all` passed after routing riscv64 userspace through the generic
+  bootstrap handoff.
+- `make test-boot` passed after routing riscv64 userspace through the generic
+  bootstrap handoff.
+- Full `make test` passed after completing the riscv64 emulator userspace
+  parity exploration:
+  `test-parallel status=done run_id=20260708T090743Z-7741 launched=20 skipped=0`.
 - `make all` passed after adding the SBI console shim.
 - Removed x86-specific assumptions from two generic kernel sources on the
   riscv64 task-launch path:
