@@ -3,7 +3,7 @@ Clean up the riscv64 port and get to an Alpine environment on riscv64.
 Status:
 
 - Active.
-- This exploration pauses `062-riscv64-bpi-f3-board-port.txt`.  BPI-F3
+- This exploration pauses `055-riscv64-bpi-f3-board-port.txt`.  BPI-F3
   hardware proof remains important, but the generic riscv64 port should be
   cleaned up first so board work does not accumulate around temporary
   emulator-only scaffolding.
@@ -84,5 +84,5 @@ Verification:
 
 Progress notes:
 
-- Created as the active exploration when `062-riscv64-bpi-f3-board-port.txt`
+- Created as the active exploration when `055-riscv64-bpi-f3-board-port.txt`
   was paused.
