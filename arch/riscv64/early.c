@@ -18,9 +18,6 @@ static u8 mapped_user_kernel_stack[4096] __attribute__((aligned(16)));
 static u8 mapped_user_image[4 * 4096] __attribute__((aligned(4096)));
 static u8 mapped_user_stack[4096] __attribute__((aligned(4096)));
 static u8 vm_hook_test_page[4096] __attribute__((aligned(4096)));
-static u64 early_root_table[512] __attribute__((aligned(4096)));
-static u64 early_user_l1[512] __attribute__((aligned(4096)));
-static u64 early_user_l0[512] __attribute__((aligned(4096)));
 extern u8 __kernel_start[];
 extern u8 __kernel_end[];
 
@@ -29,7 +26,6 @@ static const char riscv64_bootpkg_module_prefix[] = "module ";
 static const char riscv64_bootpkg_abi_smoke[] = "abi-smoke.user";
 
 enum {
-	SATP_MODE_SV39 = 8ULL << 60,
 	USER_STACK_TOP = 0x800000ULL,
 	USER_STACK_PAGE = USER_STACK_TOP - RISCV64_PAGE_SIZE,
 };
@@ -379,62 +375,56 @@ static int load_user_elf_image(u64 start, u64 size, u64 user_vaddr,
 	return loaded != 0 && *entry != 0 ? 0 : -1;
 }
 
-static u64 pte_table(u64 table)
+static u64 align_down(u64 value, u64 align)
 {
-	return ((table >> RISCV64_PAGE_SHIFT) << 10) | RISCV64_PTE_V;
+	return value & ~(align - 1);
 }
 
-static u64 pte_leaf(u64 phys, u64 flags)
+static u64 align_up(u64 value, u64 align)
 {
-	return ((phys >> RISCV64_PAGE_SHIFT) << 10) | flags;
+	return align_down(value + align - 1, align);
 }
 
-static u64 vpn_index(u64 vaddr, u32 level)
+static int map_identity_window(struct arch_vm_space *space, u64 start, u64 end)
 {
-	return (vaddr >> (RISCV64_PAGE_SHIFT + level * 9)) & 0x1ffULL;
+	start = align_down(start, RISCV64_PAGE_SIZE);
+	end = align_up(end, RISCV64_PAGE_SIZE);
+
+	for (u64 page = start; page < end; page += RISCV64_PAGE_SIZE) {
+		if (arch_vm_map_page(space, page, page, 1, 0) != 0) {
+			return -1;
+		}
+	}
+	return 0;
 }
 
-static void early_vm_map_page(u64 vaddr, u64 phys, u64 flags)
+static int map_payload_space(struct arch_vm_space *space)
 {
-	const u64 l1_index = vpn_index(vaddr, 1);
-	const u64 l0_index = vpn_index(vaddr, 0);
+	const u64 phys_end = boot_info.phys_base + boot_info.phys_size;
 
-	early_user_l1[l1_index] = pte_table((u64)early_user_l0);
-	early_user_l0[l0_index] = pte_leaf(phys, flags);
-}
-
-static void early_vm_enable(void)
-{
-	const u64 identity_flags = RISCV64_PTE_V | RISCV64_PTE_R |
-				   RISCV64_PTE_W | RISCV64_PTE_X |
-				   RISCV64_PTE_A | RISCV64_PTE_D;
-	const u64 user_rx = RISCV64_PTE_V | RISCV64_PTE_R |
-			    RISCV64_PTE_X | RISCV64_PTE_U |
-			    RISCV64_PTE_A | RISCV64_PTE_D;
-	const u64 user_rw = RISCV64_PTE_V | RISCV64_PTE_R |
-			    RISCV64_PTE_W | RISCV64_PTE_U |
-			    RISCV64_PTE_A | RISCV64_PTE_D;
-	const u64 root_ppn = ((u64)early_root_table) >> RISCV64_PAGE_SHIFT;
-
-	memory_zero((u8 *)early_root_table, sizeof(early_root_table));
-	memory_zero((u8 *)early_user_l1, sizeof(early_user_l1));
-	memory_zero((u8 *)early_user_l0, sizeof(early_user_l0));
-
-	early_root_table[vpn_index(RISCV64_PHYS_MEM_BASE, 2)] =
-		pte_leaf(RISCV64_PHYS_MEM_BASE, identity_flags);
-	early_root_table[0] = pte_table((u64)early_user_l1);
+	if (arch_vm_space_init(space) != 0) {
+		return -1;
+	}
+	if (phys_end <= boot_info.phys_base ||
+	    map_identity_window(space, boot_info.phys_base, phys_end) != 0) {
+		arch_vm_space_destroy(space);
+		return -1;
+	}
 	for (u64 offset = 0; offset < sizeof(mapped_user_image);
 	     offset += RISCV64_PAGE_SIZE) {
-		early_vm_map_page(RISCV64_USER_BASE + offset,
-				  (u64)mapped_user_image + offset, user_rx);
+		if (arch_vm_map_page(space, RISCV64_USER_BASE + offset,
+				     (u64)mapped_user_image + offset,
+				     0, 1) != 0) {
+			arch_vm_space_destroy(space);
+			return -1;
+		}
 	}
-	early_vm_map_page(USER_STACK_PAGE, (u64)mapped_user_stack, user_rw);
-
-	__asm__ volatile ("sfence.vma" ::: "memory");
-	__asm__ volatile ("csrw satp, %0" : : "r"(SATP_MODE_SV39 | root_ppn) :
-			  "memory");
-	__asm__ volatile ("sfence.vma" ::: "memory");
-	__asm__ volatile ("fence.i" ::: "memory");
+	if (arch_vm_map_page(space, USER_STACK_PAGE, (u64)mapped_user_stack,
+			     1, 1) != 0) {
+		arch_vm_space_destroy(space);
+		return -1;
+	}
+	return 0;
 }
 
 void riscv64_early_main(u64 hart_id, u64 fdt)
@@ -508,16 +498,22 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 						mapped_user_image,
 						sizeof(mapped_user_image),
 						&module_entry) == 0) {
+				struct arch_vm_space payload_space;
+
 				module_stack = build_user_stack_mapped(
 					mapped_user_stack, USER_STACK_PAGE,
 					"/bin/abi-smoke.user");
-				early_vm_enable();
-				if (riscv64_user_mode_self_test(
-					    module_entry, module_stack,
-					    (u64)(mapped_user_kernel_stack +
-						  sizeof(mapped_user_kernel_stack))) ==
-				    1) {
-					early_puts("vm: riscv64 user exit\n");
+				if (map_payload_space(&payload_space) == 0) {
+					arch_vm_activate(&payload_space);
+					if (riscv64_user_mode_self_test(
+						    module_entry, module_stack,
+						    (u64)(mapped_user_kernel_stack +
+							  sizeof(mapped_user_kernel_stack))) ==
+					    1) {
+						early_puts("vm: riscv64 user exit\n");
+					}
+					arch_vm_activate(0);
+					arch_vm_space_destroy(&payload_space);
 				}
 			}
 		}

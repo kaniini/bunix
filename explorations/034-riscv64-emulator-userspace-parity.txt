@@ -42,7 +42,7 @@ Constraints:
 
 Tasks:
 
-- [ ] Replace the early one-off Sv39 harness with riscv64 implementations of
+- [x] Replace the early one-off Sv39 harness with riscv64 implementations of
       the generic VM hooks needed by task address spaces: page-table creation,
       map/protect/unmap/translate, activation, and teardown.
 - [ ] Add riscv64 copyin/copyout helpers with user-address validation and
@@ -205,3 +205,22 @@ Verification notes:
 - `make test-boot` passed after arch-scoping kernel object paths.
 - `make test-boot-riscv64-early` passed with FDT-backed PMM initialization and
   PMM-backed generic VM page tables.
+- Replaced the packaged `abi-smoke.user` payload's private Sv39 setup with the
+  generic riscv64 VM hooks:
+  - Removed the dedicated early root/L1/L0 page-table arrays and bespoke PTE
+    builder from `arch/riscv64/early.c`.
+  - The payload launcher now creates an `arch_vm_space`, identity-maps the
+    supervisor RAM window needed by the early kernel/trap path, maps the user
+    image and stack at Bunix user addresses, activates that space, then
+    deactivates and destroys it after the payload exits.
+  - This closes the generic VM hook task for page-table creation,
+    map/protect/unmap/translate, activation, and teardown.  The separate work
+    to launch the payload as a normal scheduler/proc-owned task remains open.
+- `make ARCH=riscv64 all` passed after moving the packaged user payload onto
+  the generic VM hooks.
+- `make test-boot-riscv64-early` passed after moving the packaged user payload
+  onto the generic VM hooks.
+- `make test-riscv64-user-abi` passed after moving the packaged user payload
+  onto the generic VM hooks.
+- `make test-riscv64-bootpkg` passed after moving the packaged user payload
+  onto the generic VM hooks.

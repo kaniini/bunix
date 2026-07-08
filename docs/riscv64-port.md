@@ -36,9 +36,9 @@ The early boot gate currently verifies:
 - The packaged `abi-smoke.user` payload can be located and validated as an
   ELF64 little-endian RISC-V user image.
 - The packaged `abi-smoke.user` payload can have its load segments copied into
-  backing pages, mapped at the real Bunix user base `0x400000` with an early
-  Sv39 page table, run in U-mode through the riscv64 crt0, and return via the
-  native Bunix `exit` syscall.
+  backing pages, mapped at the real Bunix user base `0x400000` through the
+  generic riscv64 `arch_vm_*` hooks, run in U-mode through the riscv64 crt0,
+  and return via the native Bunix `exit` syscall.
 - The packaged native payload can call the real riscv64 native syscall
   dispatcher for early console writes and `exit`, proving a server-shaped
   userspace payload can report through the native Bunix ABI before poweroff.
@@ -51,13 +51,15 @@ builder `tools/build-riscv64-bootpkg.sh` creates a text-header package with a
 module record and the current `abi-smoke.user` payload.  The early kernel
 can validate the carrier magic, locate that module record, verify the payload
 is an ELF64 RISC-V image, copy loadable segments into backing pages, map them
-with a minimal Sv39 page table, build a crt0-compatible stack, enter U-mode at
-`0x400000`, and observe native `exit`.
+through a generic riscv64 VM space, build a crt0-compatible stack, enter U-mode
+at `0x400000`, and observe native `exit`.
 
-The current payload Sv39 setup is intentionally an early harness: it
-identity-maps the supervisor RAM window and maps only a small smoke-program
-image window plus one user stack page.  It is enough to prove the real Bunix
-user base works, but not a general task address-space implementation.
+The current payload launcher is still an early harness, but its address space
+is built through the generic riscv64 VM hooks: it identity-maps the supervisor
+RAM window needed by the early kernel/trap path and maps only a small
+smoke-program image window plus one user stack page.  It is enough to prove
+the real Bunix user base works, but not a general task address-space
+implementation.
 
 Riscv64 now also has initial implementations of the generic `arch_vm_*` hooks
 for Sv39 page-table roots, map/protect/unmap/translate, and `satp`
