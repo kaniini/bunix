@@ -24,9 +24,13 @@ Reference facts:
 
 Relationship to generic riscv64 port:
 
-- This exploration depends on `032-riscv64-initial-port.txt` for the generic
+- This exploration depends on `033-riscv64-initial-port.txt` for the generic
   riscv64 architecture skeleton, trap handling, VM, native syscall ABI, and
   initial QEMU smoke path.
+- This exploration must not begin until
+  `034-riscv64-emulator-userspace-parity.txt` is complete.  Generic riscv64
+  userspace, VM, proc/bootstrap launch, and the static musl/Linux-personality
+  smoke must work in QEMU `virt` before BPI-F3 hardware debugging starts.
 - BPI-F3 support should be a board layer under the riscv64 port, not a forked
   architecture path.
 - QEMU tests remain the fast development gate; BPI-F3 hardware tests become

@@ -17,7 +17,7 @@ Problem:
 Scheduling:
 
 - Run this after `030-pci-pcie-server.txt` and before
-  `032-riscv64-initial-port.txt`.
+  `033-riscv64-initial-port.txt`.
 - The first implementation may target deterministic x86_64 QEMU hardware, but
   the protocol split must be transport-neutral enough for device-tree described
   host controllers on riscv64 and future ARM work.
@@ -162,7 +162,7 @@ Progress notes:
   guest poweroff.
 - Planned follow-up class-driver work in
   `051-usb-hid-keyboard-driver.txt` and
-  `052-usb-mass-storage-driver.txt`.
+  `053-usb-mass-storage-driver.txt`.
 - Default boot behavior is unchanged: the USB modules are packaged but not
   launched unless a USB command-line test flag is present.
 
@@ -176,7 +176,7 @@ Open design notes:
 - Follow-up USB work is intentionally split out of this base stack slice:
   HID keyboard/input handling is tracked by `051-usb-hid-keyboard-driver.txt`;
   USB mass storage and block-device integration are tracked by
-  `052-usb-mass-storage-driver.txt`.
+  `053-usb-mass-storage-driver.txt`.
 - Additional later work remains for hubs, hotplug, CDC ACM, USB networking,
   isochronous transfers, suspend/resume, power management, xHCI streams,
   MSI/MSI-X, IOMMU, and platform-host controllers for riscv64/ARM.

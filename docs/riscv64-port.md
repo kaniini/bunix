@@ -34,6 +34,9 @@ The early boot gate currently verifies:
   backing pages, mapped at the real Bunix user base `0x400000` with an early
   Sv39 page table, run in U-mode through the riscv64 crt0, and return via the
   native Bunix `exit` syscall.
+- The packaged native payload can call the real riscv64 native syscall
+  dispatcher for early console writes and `exit`, proving a server-shaped
+  userspace payload can report through the native Bunix ABI before poweroff.
 - The guest exits through SBI poweroff.
 
 ## Boot package
@@ -47,9 +50,9 @@ with a minimal Sv39 page table, build a crt0-compatible stack, enter U-mode at
 `0x400000`, and observe native `exit`.
 
 The current Sv39 setup is intentionally an early harness: it identity-maps the
-supervisor RAM window and maps only the smoke program text page plus one user
-stack page.  It is enough to prove the real Bunix user base works, but not a
-general task address-space implementation.
+supervisor RAM window and maps only a small smoke-program image window plus one
+user stack page.  It is enough to prove the real Bunix user base works, but not
+a general task address-space implementation.
 
 This gives riscv64 a firmware-neutral package handoff separate from
 Multiboot2.  Future rootfs images can ride in the same carrier or replace it
@@ -69,9 +72,10 @@ user ELF with `user/crt0-riscv64.S` and the shared Bunix syscall wrappers.  It
 does not prove runtime U-mode task launch yet.
 
 The early QEMU smoke proves that the trap path can enter U-mode, handle an
-`ecall` on a supervisor stack, and run one packaged crt0 payload at the real
-Bunix user base through an early Sv39 mapping.  This is still an early harness,
-not a native server: there is no general task VM object, copyin/copyout, or
+`ecall` on a supervisor stack, dispatch a small native syscall subset, and run
+one packaged crt0 payload at the real Bunix user base through an early Sv39
+mapping.  This is still an early harness rather than full proc/bootstrap
+integration: there is no general task VM object, copyin/copyout, or
 scheduler-owned user task lifetime in the riscv64 path yet.
 
 ## Linux personality slice
@@ -100,6 +104,15 @@ needed riscv64 Linux musl cross compiler.  Use the external musl.cc
 `riscv64-linux-musl-cross.tgz` toolchain for the later static riscv64 musl
 slice; until that toolchain is installed or vendored, the tree should not add a
 pretend riscv64 musl binary target that cannot produce a real libc-linked ELF.
+
+## Hardware Port Gate
+
+Board-specific riscv64 work, including the Banana Pi BPI-F3 port, is blocked
+until the QEMU `virt` emulator path has full generic riscv64 userspace bringup:
+normal scheduler-owned native task launch, general user VM/copyin/copyout,
+proc/bootstrap integration, and a static riscv64 musl/Linux-personality smoke.
+Hardware debugging should not start while those generic emulator pieces are
+still missing.
 
 ## Unsupported features
 

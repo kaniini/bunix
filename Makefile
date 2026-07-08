@@ -1003,6 +1003,7 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "user: riscv64 mode" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootpkg: riscv64 initrd" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "module: riscv64 user elf" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "native: riscv64 server argc=1 argv0=/bin/abi-smoke.user" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "vm: riscv64 user exit" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 

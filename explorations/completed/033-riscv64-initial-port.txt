@@ -54,7 +54,7 @@ Tasks:
       banner and power off cleanly under QEMU.
 - [x] Bring up trap/interrupt handling and a timer tick with SBI/CLINT/PLIC
       integration appropriate to the chosen machine model.
-- [ ] Bring up task/thread context switching for kernel threads, then native
+- [x] Bring up task/thread context switching for kernel threads, then native
       Bunix userspace server execution with a riscv64 crt0.
 - [x] Define riscv64 Bunix syscall entry for native Bunix programs, including
       negative Bunix syscall IDs and register ABI documentation.
@@ -262,8 +262,8 @@ Progress notes:
     at the real Bunix user base `0x400000`.
   - Early boot builds a minimal Sv39 page table that identity-maps the
     supervisor RAM window and maps just enough user space for the smoke test:
-    one RX text page at `0x400000` backed by a scratch page and one RW user
-    stack page below `0x800000`.
+    a small RX image window at `0x400000` backed by scratch pages and one RW
+    user stack page below `0x800000`.
   - Early boot copies ELF PT_LOAD segments into the backing page, zeros BSS,
     issues `fence.i`, builds an `argc=1` crt0-compatible stack with user
     virtual pointers, enables Sv39, enters U-mode at `0x400000`, and treats
@@ -276,6 +276,23 @@ Progress notes:
   - This is still an early native execution harness, not full server lifetime:
     proc/bootstrap launch, task ownership, general user VM, copyin/copyout,
     and scheduler-owned cleanup remain open.
+- Added a native riscv64 server-shaped syscall smoke:
+  - The packaged `abi-smoke.user` payload now writes
+    `native: riscv64 server argc=1 argv0=/bin/abi-smoke.user` through
+    `BUNIX_SYSCALL_EARLY_CONSOLE_WRITE` before exiting.
+  - `arch/riscv64/user.c` now implements the initial real native syscall
+    subset for riscv64 early userspace: `exit`, `timer_ticks`, and early
+    console write/log.  The dispatcher uses `sstatus.SUM` while copying bytes
+    from user mappings.
+  - The trap path now lets packaged user `exit` pass through
+    `arch_syscall_dispatch()` before using the early test continuation to
+    return to supervisor mode.
+  - `test-boot-riscv64-early` now requires the native userspace console
+    marker before `vm: riscv64 user exit`, proving the crt0 payload made real
+    native Bunix syscalls from U-mode.
+  - General task VM objects, proc/bootstrap launch, copyin/copyout helpers,
+    and scheduler-owned cleanup remain follow-up work outside this initial
+    bringup exploration.
 - Added riscv64 arch skeleton headers and implementations:
   - `arch/riscv64/include/arch/sbi.h` centralizes the early SBI call ABI and
     console putchar helper used by the early payload and power path.
@@ -436,3 +453,19 @@ Verification so far:
   `thread: riscv64 switch` marker.
 - `make all` passed for the default x86_64 target after the context-switch
   change.
+- `make test-riscv64-user-abi` passed after adding the server-shaped native
+  syscall smoke.
+- `make test-riscv64-bootpkg` passed after adding the server-shaped native
+  syscall smoke.
+- `make test-boot-riscv64-early` passed after adding the server-shaped native
+  syscall smoke and now requires
+  `native: riscv64 server argc=1 argv0=/bin/abi-smoke.user`.
+- `make all` passed after adding the server-shaped native syscall smoke.
+- `make test` ran the full parallel suite.  Nineteen shards passed and the
+  `root-tmpfs-chown` x86_64 shell shard failed because the exact marker
+  `linux sigchld self-pipe ok` was not observed before timeout.
+- `make BUNIX_SHELL_PART=root-tmpfs-chown test-shell-part` passed immediately
+  afterwards, indicating the full-suite failure was a transient x86_64
+  shell-marker miss rather than a riscv64 regression.
+- A second `make test` passed the full parallel suite with all 20 shards
+  passing.

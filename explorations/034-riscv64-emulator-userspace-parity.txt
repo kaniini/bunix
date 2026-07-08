@@ -1,0 +1,83 @@
+Finish riscv64 userspace bringup in the QEMU virt emulator before starting
+board-specific hardware work.
+
+Problem:
+
+- The initial riscv64 port proves early boot, timer traps, kernel-thread
+  context switching, U-mode entry, a native syscall ABI, boot-package payload
+  discovery, and one Sv39-backed crt0 payload.
+- That is still an early harness.  It does not yet run scheduler-owned native
+  tasks through the normal proc/bootstrap path, does not have general
+  userspace VM/copyin/copyout on riscv64, and does not run the Linux
+  personality in the emulator.
+- Board bringup should wait until the QEMU `virt` emulator path is genuinely
+  working.  Otherwise hardware debugging will mix platform defects with
+  unfinished generic riscv64 architecture work.
+
+Intended outcome:
+
+- `make run-riscv64-early` or a successor emulator target boots a riscv64
+  kernel under QEMU `virt`, starts scheduler-owned native Bunix userspace
+  tasks, runs at least one native server-shaped payload through the normal
+  launch path, and powers off cleanly.
+- A static riscv64 musl hello binary can be built with the external musl.cc
+  `riscv64-linux-musl-cross.tgz` toolchain, packaged into the riscv64 boot
+  carrier, loaded through the normal proc/VFS/server path, executed by the
+  Linux personality server using riscv64 Linux syscall numbers, and observed
+  in a QEMU smoke test.
+- The BPI-F3 exploration remains blocked until this emulator target is
+  complete and stable.
+
+Constraints:
+
+- Keep hardware/board-specific code out of this exploration.  The target is
+  `qemu-system-riscv64 -machine virt`.
+- Preserve the microkernel shape.  Do not pull VFS, proc, Linux personality,
+  or filesystem policy into the riscv64 kernel path to simplify bringup.
+- Keep x86_64 behavior and tests green while adding riscv64 implementations of
+  existing architecture hooks.
+- Do not fake a riscv64 musl target using headers or libraries that are not
+  actually available.  Use the external musl.cc cross toolchain when the Linux
+  personality slice needs libc.
+
+Tasks:
+
+- [ ] Replace the early one-off Sv39 harness with riscv64 implementations of
+      the generic VM hooks needed by task address spaces: page-table creation,
+      map/protect/unmap/translate, activation, and teardown.
+- [ ] Add riscv64 copyin/copyout helpers with user-address validation and
+      fault behavior suitable for native syscalls and server RPC payloads.
+- [ ] Wire riscv64 user task launch into the normal scheduler/proc/bootstrap
+      path so native tasks have scheduler-owned lifetime, kernel stacks,
+      cleanup, and task IDs like x86_64 tasks.
+- [ ] Move the current `abi-smoke.user` payload from the early harness into a
+      normal native task/server smoke launched from the riscv64 boot package.
+- [ ] Extend the riscv64 boot package format or loader enough to carry the
+      module list, server names, command line, and data payloads required by
+      the normal bootstrap path.
+- [ ] Implement the riscv64 native syscall subset needed by the initial native
+      servers through the same semantic negative Bunix syscall IDs used by
+      x86_64.
+- [ ] Import or configure the musl.cc `riscv64-linux-musl-cross.tgz` toolchain
+      in a reproducible host-tooling path without committing the toolchain
+      blob.
+- [ ] Build a static riscv64 musl hello binary and package it as
+      `/bin/musl-hello` in the riscv64 boot carrier.
+- [ ] Add riscv64 Linux syscall-number dispatch in the Linux personality
+      server for the static musl hello syscall surface.  Do not reuse x86_64
+      Linux syscall numbers.
+- [ ] Add a QEMU riscv64 smoke test that runs the native server smoke and the
+      static musl hello path, checks their serial or dmesg markers, and ends in
+      guest poweroff.
+- [ ] Update `docs/riscv64-port.md` with the emulator-supported feature set,
+      the remaining unsupported features, and the explicit gate that BPI-F3
+      work starts only after the emulator target is stable.
+
+Verification:
+
+- `make test-riscv64-user-abi`
+- `make test-riscv64-bootpkg`
+- `make test-boot-riscv64-early` or the successor full emulator userspace
+  target
+- `make all`
+- Full `make test` before completing the exploration

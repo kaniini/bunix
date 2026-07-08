@@ -66,9 +66,9 @@ u64 arch_timer_hz(void)
 static void riscv64_handle_ecall(struct arch_interrupt_frame *frame)
 {
 	struct arch_syscall_frame syscall_frame;
+	u64 result;
 
-	if ((frame->a7 == RISCV64_TEST_ECALL_RETURN ||
-	     frame->a7 == RISCV64_SYSCALL_EXIT) &&
+	if (frame->a7 == RISCV64_TEST_ECALL_RETURN &&
 	    riscv64_user_test_return_pc != 0) {
 		riscv64_user_test_status = frame->a0;
 		frame->a0 = 0;
@@ -109,7 +109,16 @@ static void riscv64_handle_ecall(struct arch_interrupt_frame *frame)
 	syscall_frame.a[6] = frame->a6;
 	syscall_frame.a[7] = frame->a7;
 
-	frame->a0 = arch_syscall_dispatch(&syscall_frame);
+	result = arch_syscall_dispatch(&syscall_frame);
+	if (frame->a7 == RISCV64_SYSCALL_EXIT &&
+	    riscv64_user_test_return_pc != 0) {
+		riscv64_user_test_status = result;
+		frame->a0 = 0;
+		frame->sepc = riscv64_user_test_return_pc;
+		frame->sstatus |= RISCV64_SSTATUS_SPP;
+		return;
+	}
+	frame->a0 = result;
 	frame->sepc += 4;
 }
 

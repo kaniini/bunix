@@ -13,7 +13,7 @@ static u8 worker_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_kernel_stack[4096] __attribute__((aligned(16)));
 static u8 mapped_user_kernel_stack[4096] __attribute__((aligned(16)));
-static u8 mapped_user_text[4096] __attribute__((aligned(4096)));
+static u8 mapped_user_image[4 * 4096] __attribute__((aligned(4096)));
 static u8 mapped_user_stack[4096] __attribute__((aligned(4096)));
 static u64 early_root_table[512] __attribute__((aligned(4096)));
 static u64 early_user_l1[512] __attribute__((aligned(4096)));
@@ -254,8 +254,8 @@ static u64 build_user_stack_mapped(u8 *stack_phys, u64 stack_vaddr,
 	return stack_vaddr + sp_offset;
 }
 
-static int load_user_elf_page(u64 start, u64 size, u64 user_vaddr,
-			      u8 *backing, u64 backing_size, u64 *entry)
+static int load_user_elf_image(u64 start, u64 size, u64 user_vaddr,
+			       u8 *backing, u64 backing_size, u64 *entry)
 {
 	const u8 *elf = (const u8 *)start;
 	const u32 pt_load = 1;
@@ -342,7 +342,11 @@ static void early_vm_enable(void)
 	early_root_table[vpn_index(RISCV64_PHYS_MEM_BASE, 2)] =
 		pte_leaf(RISCV64_PHYS_MEM_BASE, identity_flags);
 	early_root_table[0] = pte_table((u64)early_user_l1);
-	early_vm_map_page(RISCV64_USER_BASE, (u64)mapped_user_text, user_rx);
+	for (u64 offset = 0; offset < sizeof(mapped_user_image);
+	     offset += RISCV64_PAGE_SIZE) {
+		early_vm_map_page(RISCV64_USER_BASE + offset,
+				  (u64)mapped_user_image + offset, user_rx);
+	}
 	early_vm_map_page(USER_STACK_PAGE, (u64)mapped_user_stack, user_rw);
 
 	__asm__ volatile ("sfence.vma" ::: "memory");
@@ -411,11 +415,11 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 					&module_start, &module_size) == 0 &&
 		    user_elf_is_riscv64(module_start, module_size)) {
 			early_puts("module: riscv64 user elf\n");
-			if (load_user_elf_page(module_start, module_size,
-					       RISCV64_USER_BASE,
-					       mapped_user_text,
-					       sizeof(mapped_user_text),
-					       &module_entry) == 0) {
+			if (load_user_elf_image(module_start, module_size,
+						RISCV64_USER_BASE,
+						mapped_user_image,
+						sizeof(mapped_user_image),
+						&module_entry) == 0) {
 				module_stack = build_user_stack_mapped(
 					mapped_user_stack, USER_STACK_PAGE,
 					"/bin/abi-smoke.user");
