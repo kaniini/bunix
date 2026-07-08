@@ -797,7 +797,16 @@ static u64 native_sys_early_console_log(const struct native_syscall_args *args)
 
 static u64 native_sys_machine_power(const struct native_syscall_args *args)
 {
-	(void)args;
+	const struct task_hw_resource *authority =
+		task_hw_resource_from_handle(task_current(), args->arg0,
+					     TASK_RIGHT_SEND);
+
+	if (authority == 0 ||
+	    authority->type != TASK_HW_RESOURCE_POWER_AUTH ||
+	    (authority->ops & TASK_HW_OP_POWER) == 0) {
+		return (u64)-1;
+	}
+
 	arch_poweroff();
 	return 0;
 }

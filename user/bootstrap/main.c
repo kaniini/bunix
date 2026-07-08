@@ -3379,7 +3379,7 @@ int main(void)
 		}
 		bunix_console_log(usb_synth_ok, sizeof(usb_synth_ok) - 1);
 		bunix_sleep_ns(100000000ull);
-		(void)bunix_machine_poweroff(0);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 		for (;;) {
 		}
 	}
@@ -3407,7 +3407,7 @@ int main(void)
 			"xhci", xhci_caps,
 			sizeof(xhci_caps) / sizeof(xhci_caps[0]));
 		bunix_sleep_ns(1000000000ull);
-		(void)bunix_machine_poweroff(0);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 		for (;;) {
 		}
 	}
@@ -3544,7 +3544,7 @@ int main(void)
 			return 1;
 		}
 		bunix_console_log(ext2_ok, sizeof(ext2_ok) - 1);
-		(void)bunix_machine_poweroff(0);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 		for (;;) {
 		}
 	}
@@ -3567,7 +3567,7 @@ int main(void)
 			return 1;
 		}
 		bunix_console_log(ext2_root_ok, sizeof(ext2_root_ok) - 1);
-		(void)bunix_machine_poweroff(0);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 		for (;;) {
 		}
 	} else {
@@ -3675,6 +3675,7 @@ int main(void)
 		{ console, BUNIX_RIGHT_SEND, 0 },
 		{ vfs_launch, BUNIX_RIGHT_SEND, 0 },
 		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+		{ BUNIX_HANDLE_POWER_AUTH, BUNIX_RIGHT_SEND, 0 },
 	};
 	bunix_launch_module_with_caps("linux", linux_caps,
 				      sizeof(linux_caps) / sizeof(linux_caps[0]));

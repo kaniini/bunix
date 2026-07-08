@@ -4,6 +4,7 @@
 enum {
 	LINUX_HANDLE_VFS = 3,
 	LINUX_HANDLE_NAMES = 4,
+	LINUX_HANDLE_POWER_AUTH = BUNIX_HANDLE_POWER_AUTH,
 	LINUX_EPERM = 1,
 	LINUX_ENOENT = 2,
 	LINUX_E2BIG = 7,
@@ -7710,10 +7711,11 @@ int main(void)
 				break;
 			}
 			if (message.words[2] == LINUX_REBOOT_CMD_POWER_OFF ||
-			    message.words[2] == LINUX_REBOOT_CMD_HALT ||
-			    message.words[2] == LINUX_REBOOT_CMD_RESTART) {
+			     message.words[2] == LINUX_REBOOT_CMD_HALT ||
+			     message.words[2] == LINUX_REBOOT_CMD_RESTART) {
 				reply.words[0] =
-					(u64)bunix_machine_poweroff(0);
+					(u64)bunix_machine_poweroff(
+						LINUX_HANDLE_POWER_AUTH);
 				break;
 			}
 			reply.words[0] = (u64)-LINUX_EINVAL;

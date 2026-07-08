@@ -52,6 +52,8 @@ enum task_hw_resource_type {
 	TASK_HW_RESOURCE_PORT = 1,
 	TASK_HW_RESOURCE_MMIO = 2,
 	TASK_HW_RESOURCE_IRQ = 3,
+	TASK_HW_RESOURCE_POWER_AUTH = 4,
+	TASK_HW_RESOURCE_PCI_AUTH = 5,
 };
 
 enum task_hw_resource_ops {
@@ -60,6 +62,8 @@ enum task_hw_resource_ops {
 	TASK_HW_OP_BIND_IRQ = 1 << 2,
 	TASK_HW_OP_ACK_IRQ = 1 << 3,
 	TASK_HW_OP_MASK_IRQ = 1 << 4,
+	TASK_HW_OP_POWER = 1 << 5,
+	TASK_HW_OP_GRANT = 1 << 6,
 };
 
 enum task_hw_resource_flags {

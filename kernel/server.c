@@ -402,6 +402,14 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 		.base = 0xcf8,
 		.len = 8,
 	};
+	static const struct task_hw_resource power_authority = {
+		.type = TASK_HW_RESOURCE_POWER_AUTH,
+		.ops = TASK_HW_OP_POWER,
+	};
+	static const struct task_hw_resource pci_authority = {
+		.type = TASK_HW_RESOURCE_PCI_AUTH,
+		.ops = TASK_HW_OP_GRANT,
+	};
 
 	if (str_eq(server_name, "names")) {
 		task_grant_port(task, ipc_port_find("console"),
@@ -421,6 +429,7 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 
 	if (str_eq(server_name, "pci")) {
 		task_grant_hw_resource(task, &pci_config_ports, TASK_RIGHT_SEND);
+		task_grant_hw_resource(task, &pci_authority, TASK_RIGHT_SEND);
 		return;
 	}
 
@@ -434,6 +443,8 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 			TASK_RIGHT_SEND | TASK_RIGHT_DUP);
 	task_grant_port(task, ipc_port_find("names"),
 			TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+	task_grant_hw_resource(task, &power_authority,
+			       TASK_RIGHT_SEND | TASK_RIGHT_DUP);
 }
 
 u64 server_launch_module_with_caps(const char *name, struct task *parent,

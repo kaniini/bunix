@@ -4,6 +4,7 @@
 enum {
 	PCI_HANDLE_NAMES = 3,
 	PCI_HANDLE_CONFIG = 4,
+	PCI_HANDLE_AUTH = BUNIX_HANDLE_PCI_AUTH,
 	PCI_CONFIG_ADDRESS = 0,
 	PCI_CONFIG_DATA = 4,
 	PCI_VENDOR_NONE = 0xffff,
@@ -216,7 +217,8 @@ static u64 pci_device_pack(const struct pci_function *func, u64 bar)
 static u64 grant_bar(const struct pci_function *func, u64 bar, u64 offset,
 		     u64 len, u64 ops)
 {
-	const long handle = bunix_hw_pci_bar_grant(pci_device_pack(func, bar),
+	const long handle = bunix_hw_pci_bar_grant(PCI_HANDLE_AUTH,
+						   pci_device_pack(func, bar),
 						   offset, len, ops);
 
 	return handle > 0 ? (u64)handle : 0;
@@ -224,7 +226,8 @@ static u64 grant_bar(const struct pci_function *func, u64 bar, u64 offset,
 
 static u64 grant_irq(const struct pci_function *func)
 {
-	const long handle = bunix_hw_pci_irq_grant(pci_device_pack(func, 0),
+	const long handle = bunix_hw_pci_irq_grant(PCI_HANDLE_AUTH,
+						   pci_device_pack(func, 0),
 						   func->interrupt_line);
 
 	return handle > 0 ? (u64)handle : 0;

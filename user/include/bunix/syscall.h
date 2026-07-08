@@ -550,6 +550,8 @@ enum {
 	BUNIX_HANDLE_CONSOLE = 2,
 	BUNIX_HANDLE_VM = 3,
 	BUNIX_HANDLE_NAMES = 4,
+	BUNIX_HANDLE_POWER_AUTH = 5,
+	BUNIX_HANDLE_PCI_AUTH = 5,
 	BUNIX_AT_STDOUT = 0x62780101,
 	BUNIX_AT_STDERR = 0x62780102,
 	BUNIX_AT_TIME = 0x62780103,
@@ -1312,9 +1314,9 @@ static inline long bunix_vm_stats(struct bunix_vm_stats *stats)
 	return bunix_syscall1(BUNIX_SYSCALL_VM_STATS, (u64)stats);
 }
 
-static inline long bunix_machine_poweroff(u64 code)
+static inline long bunix_machine_poweroff(u64 authority)
 {
-	return bunix_syscall1(BUNIX_SYSCALL_MACHINE_POWER, code);
+	return bunix_syscall1(BUNIX_SYSCALL_MACHINE_POWER, authority);
 }
 
 static inline long bunix_hw_port_in8(u64 handle, u64 offset)
@@ -1347,16 +1349,20 @@ static inline long bunix_hw_port_out32(u64 handle, u64 offset, u64 value)
 	return bunix_syscall3(BUNIX_SYSCALL_HW_PORT_OUT32, handle, offset, value);
 }
 
-static inline long bunix_hw_pci_bar_grant(u64 device, u64 offset, u64 len,
-					  u64 ops)
+static inline long bunix_hw_pci_bar_grant(u64 authority, u64 device,
+					  u64 offset, u64 len, u64 ops)
 {
+	const u64 packed_ops = ((authority & 0xffffffffull) << 32) |
+			       (ops & 0xffffffffull);
+
 	return bunix_syscall4(BUNIX_SYSCALL_HW_PCI_BAR_GRANT, device, offset,
-			      len, ops);
+			      len, packed_ops);
 }
 
-static inline long bunix_hw_pci_irq_grant(u64 device, u64 line)
+static inline long bunix_hw_pci_irq_grant(u64 authority, u64 device, u64 line)
 {
-	return bunix_syscall2(BUNIX_SYSCALL_HW_PCI_IRQ_GRANT, device, line);
+	return bunix_syscall3(BUNIX_SYSCALL_HW_PCI_IRQ_GRANT, device, line,
+			      authority);
 }
 
 static inline long bunix_hw_irq_bind(u64 handle, u64 index, u64 event_port)

@@ -232,7 +232,7 @@ int main(void)
 		      abi_fail, sizeof(abi_fail) - 1);
 	if (uart_console_test) {
 		log_line(done, sizeof(done) - 1);
-		(void)bunix_machine_poweroff(0);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 		return 0;
 	}
 	const struct bunix_launch_cap fs_caps[] = {
@@ -347,7 +347,7 @@ int main(void)
 			log_line(alpine_sh_fail, sizeof(alpine_sh_fail) - 1);
 		}
 		log_line(done, sizeof(done) - 1);
-		(void)bunix_machine_poweroff(0);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 		return 0;
 	}
 	if (proc != 0 && linux != 0 &&
@@ -367,6 +367,6 @@ int main(void)
 	}
 
 	log_line(done, sizeof(done) - 1);
-	(void)bunix_machine_poweroff(0);
+	(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 	return 0;
 }

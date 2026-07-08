@@ -6050,9 +6050,18 @@ static u64 native_sys_vm_stats(const struct native_syscall_args *args)
 
 static u64 native_sys_machine_power(const struct native_syscall_args *args)
 {
-	(void)args;
+	const struct task_hw_resource *authority =
+		task_hw_resource_from_handle(task_current(), args->arg0,
+					     TASK_RIGHT_SEND);
+
+	if (authority == 0 ||
+	    authority->type != TASK_HW_RESOURCE_POWER_AUTH ||
+	    (authority->ops & TASK_HW_OP_POWER) == 0) {
+		return (u64)-1;
+	}
 
 	arch_poweroff();
+	return 0;
 }
 
 enum {
@@ -6195,11 +6204,18 @@ static u64 native_sys_hw_pci_bar_grant(const struct native_syscall_args *args)
 	const u64 offset = args->arg1;
 	const u64 len = args->arg2;
 	const u32 ops = (u32)args->arg3;
+	const u64 authority_handle = args->arg3 >> 32;
+	const struct task_hw_resource *authority =
+		task_hw_resource_from_handle(task_current(), authority_handle,
+					     TASK_RIGHT_SEND);
 	u32 type;
 	u64 base;
 	u64 size;
 
-	if (len == 0 || (ops & ~(TASK_HW_OP_READ | TASK_HW_OP_WRITE)) != 0 ||
+	if (authority == 0 ||
+	    authority->type != TASK_HW_RESOURCE_PCI_AUTH ||
+	    (authority->ops & TASK_HW_OP_GRANT) == 0 ||
+	    len == 0 || (ops & ~(TASK_HW_OP_READ | TASK_HW_OP_WRITE)) != 0 ||
 	    !pci_device_resource_allowed(bus, slot, function) ||
 	    pci_bar_info(bus, slot, function, bar, &type, &base, &size) != 0 ||
 	    offset > size || len > size - offset) {
@@ -6233,11 +6249,18 @@ static u64 native_sys_hw_pci_irq_grant(const struct native_syscall_args *args)
 	const u64 slot = (packed >> 8) & 0x1f;
 	const u64 function = (packed >> 16) & 0x7;
 	const u64 requested_line = args->arg1;
+	const u64 authority_handle = args->arg2;
+	const struct task_hw_resource *authority =
+		task_hw_resource_from_handle(task_current(), authority_handle,
+					     TASK_RIGHT_SEND);
 	const u64 line = pci_config_read8(bus, slot, function, PCI_INTERRUPT_LINE);
 	const u64 pin = pci_config_read8(bus, slot, function, PCI_INTERRUPT_PIN);
 	u32 gsi;
 
-	if (!pci_device_resource_allowed(bus, slot, function) || pin == 0 ||
+	if (authority == 0 ||
+	    authority->type != TASK_HW_RESOURCE_PCI_AUTH ||
+	    (authority->ops & TASK_HW_OP_GRANT) == 0 ||
+	    !pci_device_resource_allowed(bus, slot, function) || pin == 0 ||
 	    line == 0 || line == 0xff ||
 	    (requested_line != 0 && requested_line != line)) {
 		return (u64)-1;

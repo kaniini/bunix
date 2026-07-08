@@ -74,11 +74,11 @@ Regression gate:
 
 Tasks:
 
-- [ ] Build local unprivileged reproducers for poweroff and PCI BAR grant.
-- [ ] Add authority representation and bootstrap grants for privileged power
+- [x] Build local unprivileged reproducers for poweroff and PCI BAR grant.
+- [x] Add authority representation and bootstrap grants for privileged power
       and hardware enumeration operations.
-- [ ] Gate `BUNIX_SYSCALL_MACHINE_POWER` and
+- [x] Gate `BUNIX_SYSCALL_MACHINE_POWER` and
       `BUNIX_SYSCALL_HW_PCI_BAR_GRANT`.
-- [ ] Add regression tests for denied unprivileged calls and authorized
+- [x] Add regression tests for denied unprivileged calls and authorized
       platform/device paths.
 - [ ] Run focused boot/virtio/OpenRC tests, then full `make test`.
