@@ -258,6 +258,27 @@ Verification notes:
     `console_printf()` on riscv64 without pulling in the x86 COM/VGA console.
 - `make ARCH=riscv64 all` passed after adding the SBI console shim.
 - `make test-boot-riscv64-early` passed after adding the SBI console shim.
+- Added riscv64 native syscall and IPC prerequisites for normal user servers:
+  - riscv64 user IPC messages now carry port, buffer, task, and hardware
+    resource capabilities with the same rights validation, retain, and grant
+    semantics used by the x86_64 native syscall path.
+  - `BUNIX_SYSCALL_TASK_ALLOC` is now implemented on riscv64, allowing
+    libbunix allocator arenas to be backed by task VM allocations instead of
+    only early static storage.
+  - This does not close the normal bootstrap-path task by itself, but removes
+    two early-only limitations that would prevent `names`, `bootstrap`, and
+    other native servers from using the shared server contracts.
+- `make ARCH=riscv64 all` passed after adding riscv64 capability IPC and
+  `task_alloc`.
+- `make test-riscv64-user-abi` passed after adding riscv64 capability IPC and
+  `task_alloc`.
+- `make test-riscv64-bootpkg` passed after adding riscv64 capability IPC and
+  `task_alloc`.
+- `make test-boot-riscv64-early` passed after adding riscv64 capability IPC
+  and `task_alloc`.
+- `make all` passed after adding riscv64 capability IPC and `task_alloc`.
+- `make test-boot` passed after adding riscv64 capability IPC and
+  `task_alloc`.
 - `make all` passed after adding the SBI console shim.
 - Removed x86-specific assumptions from two generic kernel sources on the
   riscv64 task-launch path:

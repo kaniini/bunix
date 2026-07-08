@@ -3,6 +3,7 @@
 #include <arch/layout.h>
 #include <arch/power.h>
 #include <arch/sbi.h>
+#include "buffer.h"
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
@@ -22,6 +23,7 @@ enum {
 	SYSCALL_CLOCK_MONOTONIC_NS = -20,
 	SYSCALL_SLEEP_NS = -22,
 	SYSCALL_TASK_ID = -42,
+	SYSCALL_TASK_ALLOC = -44,
 	SYSCALL_EARLY_CONSOLE_WRITE = -54,
 	SYSCALL_EARLY_CONSOLE_LOG = -56,
 	SYSCALL_MACHINE_POWER = -64,
@@ -214,21 +216,58 @@ static int copy_cstr_from_user(char *dst, u64 user_src, u64 capacity)
 static int user_message_to_ipc(const struct user_ipc_message *user_message,
 			       struct ipc_message *message)
 {
-	if (user_message == 0 || message == 0 ||
-	    user_message->cap != 0 || user_message->cap_rights != 0) {
+	if (user_message == 0 || message == 0) {
 		return -1;
 	}
 
 	message->protocol = user_message->protocol;
 	message->type = user_message->type;
 	message->sender = 0;
-	message->cap_rights = 0;
+	message->cap_rights = user_message->cap_rights;
 	message->reply_port = task_port_from_handle(task_current(),
 						    user_message->reply,
 						    TASK_RIGHT_SEND);
 	ipc_port_retain(message->reply_port);
 	message->cap_type = IPC_CAP_NONE;
 	message->cap_object = 0;
+	if (user_message->cap == 0 && user_message->cap_rights != 0) {
+		return -1;
+	}
+
+	if (user_message->cap != 0) {
+		const u32 valid_rights = TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+					 TASK_RIGHT_DUP;
+		const u32 rights = user_message->cap_rights | TASK_RIGHT_DUP;
+		enum task_cap_type type = TASK_CAP_NONE;
+		void *object = 0;
+
+		if ((user_message->cap_rights & ~valid_rights) != 0 ||
+		    user_message->cap_rights == 0 ||
+		    task_export_cap(task_current(), user_message->cap, rights,
+				    &type, &object) != 0) {
+			return -1;
+		}
+
+		message->cap_type = type == TASK_CAP_PORT ? IPC_CAP_PORT :
+			(type == TASK_CAP_BUFFER ? IPC_CAP_BUFFER :
+			 type == TASK_CAP_TASK ? IPC_CAP_TASK :
+			 IPC_CAP_HW_RESOURCE);
+		message->cap_object = object;
+		if (message->cap_type == IPC_CAP_PORT) {
+			ipc_port_retain((struct ipc_port *)message->cap_object);
+		} else if (message->cap_type == IPC_CAP_BUFFER) {
+			buffer_retain((struct shared_buffer *)message->cap_object);
+		} else if (message->cap_type == IPC_CAP_HW_RESOURCE) {
+			if (task_hw_resource_retain(
+				    (const struct task_hw_resource *)
+					    message->cap_object) != 0) {
+				return -1;
+			}
+		} else if (task_retain((struct task *)message->cap_object) != 0) {
+			return -1;
+		}
+	}
+
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
 		message->words[i] = user_message->words[i];
 	}
@@ -241,10 +280,33 @@ static void ipc_message_to_user(const struct ipc_message *message,
 	user_message->protocol = message->protocol;
 	user_message->type = message->type;
 	user_message->sender = message->sender;
-	user_message->cap_rights = 0;
+	user_message->cap_rights = message->cap_rights;
 	user_message->reply = task_grant_port(task_current(), message->reply_port,
 					      TASK_RIGHT_SEND);
 	user_message->cap = 0;
+	if (message->cap_type == IPC_CAP_PORT) {
+		user_message->cap =
+			task_grant_port(task_current(),
+					(struct ipc_port *)message->cap_object,
+					message->cap_rights);
+	} else if (message->cap_type == IPC_CAP_BUFFER) {
+		user_message->cap =
+			task_grant_buffer(task_current(),
+					  (struct shared_buffer *)message->cap_object,
+					  message->cap_rights);
+	} else if (message->cap_type == IPC_CAP_TASK) {
+		user_message->cap =
+			task_grant_task(task_current(),
+					(struct task *)message->cap_object,
+					message->cap_rights);
+	} else if (message->cap_type == IPC_CAP_HW_RESOURCE) {
+		user_message->cap =
+			task_grant_hw_resource(
+				task_current(),
+				(const struct task_hw_resource *)
+					message->cap_object,
+				message->cap_rights);
+	}
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
 		user_message->words[i] = message->words[i];
 	}
@@ -427,6 +489,20 @@ static u64 native_sys_task_id(const struct native_syscall_args *args)
 	return task != 0 ? task_id(task) : (u64)-1;
 }
 
+static u64 native_sys_task_alloc(const struct native_syscall_args *args)
+{
+	u64 alloc_args[4];
+
+	if (args->arg0 == 0 ||
+	    arch_user_copy_from(alloc_args, args->arg0,
+				sizeof(alloc_args)) != 0) {
+		return (u64)-1;
+	}
+	return (u64)server_task_alloc(task_current(), alloc_args[0],
+				      alloc_args[1], alloc_args[2],
+				      (u32)alloc_args[3]);
+}
+
 static u64 native_sys_early_console_write(const struct native_syscall_args *args)
 {
 	early_console_write_user(args->arg0, args->arg1);
@@ -474,6 +550,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	  native_sys_clock_monotonic_ns },
 	{ SYSCALL_SLEEP_NS, "sleep_ns", native_sys_sleep_ns },
 	{ SYSCALL_TASK_ID, "task_id", native_sys_task_id },
+	{ SYSCALL_TASK_ALLOC, "task_alloc", native_sys_task_alloc },
 	{ SYSCALL_EARLY_CONSOLE_WRITE, "early_console_write",
 	  native_sys_early_console_write },
 	{ SYSCALL_EARLY_CONSOLE_LOG, "early_console_log",
