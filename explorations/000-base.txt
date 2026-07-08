@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 044-names-service-registration-authority.txt
+The current exploration is: 044a-names-registration-preauthorization-refactor.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.

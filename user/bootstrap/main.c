@@ -1,6 +1,29 @@
 #include <bunix/alloc.h>
 #include <bunix/libbunix.h>
 
+enum {
+	NAMES_TEST_SERVICE = ('N') | ('T' << 8) | ('S' << 16) | ('T' << 24),
+};
+
+static long claim_names_admin(void)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_CLAIM_ADMIN,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { BUNIX_NAMES_ROOT, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(BUNIX_HANDLE_NAMES, &request, &reply) != 0) {
+		return -1;
+	}
+	return reply.words[0] == 0 ? 0 : -1;
+}
+
 static long register_service_in_namespace(u64 namespace, u64 service, u64 handle)
 {
 	struct bunix_msg request = {
@@ -3288,6 +3311,9 @@ int main(void)
 	};
 
 	bunix_console_log(launching, sizeof(launching) - 1);
+	if (claim_names_admin() != 0) {
+		return 1;
+	}
 	register_service(BUNIX_SERVICE_VM, BUNIX_HANDLE_VM);
 	console = resolve_service(BUNIX_SERVICE_CONSOLE,
 				  BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
@@ -3654,6 +3680,25 @@ int main(void)
 	}
 	if (vfs_read_text(vfs, "/hello.txt", file, sizeof(file)) == 0) {
 		bunix_console_log(file, str_len(file));
+	}
+	if (bunix_cmdline_has("names-auth-test") > 0) {
+		if (register_service(NAMES_TEST_SERVICE, console) != 0) {
+			return 1;
+		}
+		const struct bunix_launch_cap names_test_caps[] = {
+			{ console, BUNIX_RIGHT_SEND, 0 },
+			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+		};
+		if (bunix_launch_module_with_caps(
+			    "names-test", names_test_caps,
+			    sizeof(names_test_caps) /
+				    sizeof(names_test_caps[0])) < 0) {
+			return 1;
+		}
+		bunix_sleep_ns(1000000000ull);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
+		for (;;) {
+		}
 	}
 
 	const char linux_init_exec[] = "bootstrap: linux init exec\n";

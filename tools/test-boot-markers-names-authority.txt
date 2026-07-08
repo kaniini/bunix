@@ -1,0 +1,5 @@
+names: online
+names-test: spoof denied
+names-test: owner refresh ok
+names-test: namespace denied
+names-test: ok

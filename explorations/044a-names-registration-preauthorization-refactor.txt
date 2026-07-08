@@ -1,0 +1,34 @@
+Refactor names registration around preauthorized service claims.
+
+Parent exploration: `044-names-service-registration-authority.txt`
+
+Problem:
+
+- Exploration 044 constrains namespace creation and existing registration
+  replacement, but first registration of an unused root service name remains
+  ambient for any task with names send authority.
+- This is acceptable as a narrow hardening step for 044, but it is not the
+  final OCAP shape: initial publication should be backed by a scoped authority,
+  not by winning a race for a service id.
+
+Desired design:
+
+- Bootstrap or a namespace admin should mint a registration claim for a
+  specific `(namespace, service)` pair.
+- Servers should receive only the claim needed to publish themselves.
+- The names server should accept first registration, owner refresh, and
+  namespace-admin replacement only when the caller presents the appropriate
+  claim or already owns the entry.
+- Resolve/wait authority should remain separate from registration authority.
+
+Tasks:
+
+- [ ] Add an explicit service-registration claim object/protocol.
+- [ ] Have bootstrap preauthorize expected root services before launch.
+- [ ] Pass per-service claims to launched servers instead of ambient root
+      registration authority.
+- [ ] Deny first registration for unclaimed root service names.
+- [ ] Add regression coverage for denied unclaimed first registration, allowed
+      claimed first registration, denied non-owner replacement, and allowed
+      owner refresh.
+- [ ] Run focused names/service boot tests, then full `make test`.

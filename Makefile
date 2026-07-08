@@ -102,6 +102,8 @@ CONSOLE_MODULE := $(BUILD_DIR)/modules/console.server
 CONSOLE_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/console/main.c.o
 NAMES_MODULE := $(BUILD_DIR)/modules/names.server
 NAMES_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/names/main.c.o
+NAMES_TEST_MODULE := $(BUILD_DIR)/modules/names-test.server
+NAMES_TEST_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/names-test/main.c.o
 TIME_MODULE := $(BUILD_DIR)/modules/time.server
 TIME_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/time/main.c.o
 USER_MODULE := $(BUILD_DIR)/modules/user.server
@@ -210,6 +212,7 @@ X86_USER_LD_MODULES := \
 	ALLOCTEST_MODULE \
 	CONSOLE_MODULE \
 	NAMES_MODULE \
+	NAMES_TEST_MODULE \
 	TIME_MODULE \
 	USER_MODULE \
 	LINUX_SERVER_MODULE \
@@ -432,6 +435,7 @@ KERNEL_OBJS := $(KERNEL_SRCS:%=$(BUILD_DIR)/$(ARCH)/%.o)
 USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/console/main.c.o \
 	$(BUILD_DIR)/user/names/main.c.o \
+	$(BUILD_DIR)/user/names-test/main.c.o \
 	$(BUILD_DIR)/user/time/main.c.o \
 	$(BUILD_DIR)/user/user/main.c.o \
 	$(BUILD_DIR)/user/linux/main.c.o \
@@ -1028,7 +1032,7 @@ $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 		$< > $@.tmp
 	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
 
-$(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(USB_BUS_MODULE) $(USB_SYNTH_MODULE) $(XHCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(NAMES_TEST_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(USB_BUS_MODULE) $(USB_SYNTH_MODULE) $(XHCI_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -1039,6 +1043,7 @@ $(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTS
 		"boot/bunixos.kernel=$(KERNEL)" \
 		"modules/console.server=$(CONSOLE_MODULE)" \
 		"modules/names.server=$(NAMES_MODULE)" \
+		"modules/names-test.server=$(NAMES_TEST_MODULE)" \
 		"modules/bootstrap.server=$(BOOTSTRAP_MODULE)" \
 		"modules/time.server=$(TIME_MODULE)" \
 		"modules/user.server=$(USER_MODULE)" \
@@ -1327,11 +1332,15 @@ test-riscv64-proc-server-build: $(RISCV64_PROC_MODULE)
 
 test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-squashfs.txt tools/test-boot-markers-squashfs-up.txt tools/test-boot-markers-alpine-smoke.txt tools/test-boot-markers-alpine-squashfs.txt
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) QEMU_TIMEOUT=$(QEMU_TIMEOUT) \
+		BUNIX_BOOT_PHASE="$(BUNIX_BOOT_PHASE)" BUNIX_BOOT_MARKER="$(BUNIX_BOOT_MARKER)" \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
 
 test-boot-handle-race:
 	$(MAKE) KERNEL_CMDLINE="log=info handle-race-selftest" TEST_BOOT_MARKERS=tools/test-boot-markers-handle-race.txt test-boot
+
+test-names-authority:
+	$(MAKE) KERNEL_CMDLINE="log=info names-auth-test" BUNIX_BOOT_PHASE=marker-poweroff BUNIX_BOOT_MARKER="names-test: ok" TEST_BOOT_MARKERS=tools/test-boot-markers-names-authority.txt test-boot
 
 test-lowmem-isolation: $(EFI_BOOT_APP) tools/test-lib.sh tools/test-command.sh
 	BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \

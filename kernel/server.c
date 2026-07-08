@@ -14,6 +14,7 @@
 
 static const struct server boot_servers[] = {
 	{ "names", 0 },
+	{ "names-test", 0 },
 	{ "consoled", 0 },
 	{ "bootstrap", 0 },
 	{ "time", 0 },

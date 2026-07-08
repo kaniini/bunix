@@ -68,9 +68,30 @@ Regression gate:
 
 Tasks:
 
-- [ ] Build a local service spoofing reproducer.
-- [ ] Add registration/namespace authority model.
-- [ ] Gate register, replacement, and namespace creation.
-- [ ] Add regression tests for denied spoof/replacement and allowed owner
+- [x] Build a local service spoofing reproducer.
+- [x] Add registration/namespace authority model.
+- [x] Gate register, replacement, and namespace creation.
+- [x] Add regression tests for denied spoof/replacement and allowed owner
       refresh.
-- [ ] Run focused service boot tests, then full `make test`.
+- [x] Run focused service boot tests, then full `make test`.
+
+Progress:
+
+- Added a one-shot root namespace admin claim used by bootstrap.
+- Names entries now record the owning sender task id.
+- Existing registration replacement is limited to the current owner or the
+  namespace admin.
+- Namespace creation is limited to the root namespace admin and assigns the new
+  namespace to that admin.
+- Added `names-test.server` as a focused probe.  It receives normal names send
+  authority, proves non-owner replacement is denied, proves owner refresh is
+  allowed for its own service id, and proves namespace creation is denied.
+- Planned `044a-names-registration-preauthorization-refactor.txt` for the
+  remaining design gap: first registration of unclaimed root service names
+  should eventually require an explicit registration claim.
+
+Validation:
+
+- `make test-names-authority` passed.
+- `make test-smoke` passed.
+- `make test` passed with run id `20260708T232846Z-12845`.

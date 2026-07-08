@@ -9,7 +9,13 @@ struct name_entry {
 	u64 namespace;
 	u64 service;
 	u64 handle;
+	u64 owner;
 	unsigned int rights;
+};
+
+struct namespace_entry {
+	u64 namespace;
+	u64 admin;
 };
 
 struct wait_entry {
@@ -20,6 +26,7 @@ struct wait_entry {
 };
 
 static struct bunix_map names;
+static struct bunix_map namespaces;
 static struct bunix_id_table waits;
 static u64 next_namespace = NAMES_ROOT + 1;
 
@@ -50,21 +57,99 @@ static const struct name_entry *resolve_name(u64 namespace, u64 service)
 		bunix_map_get(&names, name_key(namespace, service));
 }
 
+static struct namespace_entry *namespace_find(u64 namespace)
+{
+	return (struct namespace_entry *)bunix_map_get(&namespaces, namespace);
+}
+
+static u64 namespace_admin(u64 namespace)
+{
+	struct namespace_entry *entry = namespace_find(namespace);
+
+	return entry != 0 ? entry->admin : 0;
+}
+
+static long namespace_set_admin(u64 namespace, u64 admin)
+{
+	struct namespace_entry *entry;
+
+	if (namespace == 0 || admin == 0) {
+		return -1;
+	}
+	entry = namespace_find(namespace);
+	if (entry != 0) {
+		entry->admin = admin;
+		return 0;
+	}
+	entry = (struct namespace_entry *)bunix_calloc(1, sizeof(*entry));
+	if (entry == 0) {
+		return -1;
+	}
+	entry->namespace = namespace;
+	entry->admin = admin;
+	if (bunix_map_set(&namespaces, namespace, (u64)entry) != 0) {
+		bunix_free(entry);
+		return -1;
+	}
+	return 0;
+}
+
+static int sender_is_namespace_admin(u64 namespace, u64 sender)
+{
+	const u64 admin = namespace_admin(namespace);
+
+	return admin != 0 && sender == admin;
+}
+
+static long claim_root_admin(const struct bunix_msg *message)
+{
+	if (message->sender == 0 || message->words[0] != NAMES_ROOT ||
+	    namespace_admin(NAMES_ROOT) != 0) {
+		return -1;
+	}
+	return namespace_set_admin(NAMES_ROOT, message->sender);
+}
+
+static long create_namespace(const struct bunix_msg *message, u64 *namespace)
+{
+	u64 created;
+
+	if (namespace == 0 || !sender_is_namespace_admin(NAMES_ROOT,
+							message->sender)) {
+		return -1;
+	}
+	created = next_namespace++;
+	if (namespace_set_admin(created, message->sender) != 0) {
+		return -1;
+	}
+	*namespace = created;
+	return 0;
+}
+
 static long register_name(const struct bunix_msg *message)
 {
 	const u64 namespace = message->words[0];
 	const u64 service = message->words[1];
+	const u64 admin = namespace_admin(namespace);
 	struct name_entry *entry;
 
-	if (namespace == 0 || service == 0 || message->cap == 0 ||
+	if (namespace == 0 || service == 0 || message->sender == 0 ||
+	    message->cap == 0 ||
 	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		return -1;
+	}
+	if (admin == 0 && namespace != NAMES_ROOT) {
 		return -1;
 	}
 
 	entry = (struct name_entry *)
 		bunix_map_get(&names, name_key(namespace, service));
 	if (entry != 0) {
+		if (entry->owner != message->sender && admin != message->sender) {
+			return -1;
+		}
 		entry->handle = message->cap;
+		entry->owner = message->sender;
 		entry->rights = message->cap_rights;
 		return 0;
 	}
@@ -76,6 +161,7 @@ static long register_name(const struct bunix_msg *message)
 	entry->namespace = namespace;
 	entry->service = service;
 	entry->handle = message->cap;
+	entry->owner = message->sender;
 	entry->rights = message->cap_rights;
 	if (bunix_map_set(&names, name_key(namespace, service),
 			  (u64)entry) != 0) {
@@ -141,6 +227,7 @@ int main(void)
 	struct bunix_msg message;
 
 	bunix_map_init(&names);
+	bunix_map_init(&namespaces);
 	bunix_id_table_init(&waits);
 	bunix_console_log(online, sizeof(online) - 1);
 
@@ -163,11 +250,18 @@ int main(void)
 
 		reply.type = message.type;
 		switch (message.type) {
+		case BUNIX_NAMES_CLAIM_ADMIN:
+			reply.words[0] = claim_root_admin(&message) == 0 ?
+					 0 : (u64)-1;
+			break;
 		case BUNIX_NAMES_CREATE_NS:
-			reply.words[0] = 0;
-			reply.words[1] = next_namespace++;
-			bunix_console_log(namespace_created,
-					    sizeof(namespace_created) - 1);
+			if (create_namespace(&message, &reply.words[1]) == 0) {
+				reply.words[0] = 0;
+				bunix_console_log(namespace_created,
+						    sizeof(namespace_created) - 1);
+			} else {
+				reply.words[0] = (u64)-1;
+			}
 			break;
 		case BUNIX_NAMES_REGISTER:
 			if (register_name(&message) == 0) {
