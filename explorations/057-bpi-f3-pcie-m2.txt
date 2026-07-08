@@ -1,0 +1,26 @@
+Bring up BPI-F3 PCIe and M.2 support.
+
+Status:
+
+- Planned.  Start after the PCI/PCIe server exploration and the first BPI-F3
+  hardware boot milestone.
+
+Problem:
+
+- BPI-F3 exposes PCIe/M.2 hardware.  Bunix needs firmware-DT-driven PCIe host
+  bridge discovery, ECAM/config-space access, MSI or legacy interrupt routing,
+  and resource-window management before M.2 devices can be safely enumerated.
+
+Tasks:
+
+- [ ] Capture PCIe host bridge, address window, interrupt, reset, clock, PHY,
+      and regulator DT nodes from BPI-F3.
+- [ ] Confirm whether the firmware exposes ECAM-compatible config space or a
+      vendor-specific access path.
+- [ ] Extend the PCI/PCIe server to consume the BPI-F3 host bridge description.
+- [ ] Bring up read-only PCI config-space enumeration.
+- [ ] Implement resource window allocation and BAR mapping through
+      capabilities.
+- [ ] Bring up interrupt delivery for PCIe devices.
+- [ ] Prove enumeration of a known M.2 endpoint.
+- [ ] Split NVMe, WiFi, or other endpoint drivers into separate explorations.

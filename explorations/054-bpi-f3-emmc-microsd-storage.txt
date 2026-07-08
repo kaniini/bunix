@@ -1,0 +1,30 @@
+Bring up BPI-F3 eMMC and microSD storage as Bunix block devices.
+
+Status:
+
+- Planned.  Start after exploration 035 proves the BPI-F3 first hardware boot
+  milestone and the firmware device tree has been captured from real hardware.
+
+Problem:
+
+- The first BPI-F3 boot uses firmware and removable boot media only to load
+  Bunix artifacts.  A useful board port needs native access to onboard eMMC
+  and microSD so Bunix can mount root filesystems without depending on
+  firmware file loading.
+
+Tasks:
+
+- [ ] Capture the BPI-F3 storage-related DT nodes from the vendor firmware and
+      the pinned Linux DT reference.
+- [ ] Identify the K1 SD/eMMC host controller binding, clocks, resets, IRQs,
+      DMA model, and voltage/pin-control requirements.
+- [ ] Decide whether the first storage slice is polling-only or interrupt
+      driven.
+- [ ] Add a userspace storage-controller server or extend the existing block
+      stack with a K1-compatible SD/eMMC backend.
+- [ ] Expose eMMC and microSD media as block devices through the normal VFS
+      path.
+- [ ] Prove read-only block access with a known test image.
+- [ ] Prove read/write access on disposable media only, with explicit operator
+      warnings.
+- [ ] Add physical-board smoke steps and expected serial/dmesg markers.

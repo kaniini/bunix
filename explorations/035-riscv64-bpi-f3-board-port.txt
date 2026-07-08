@@ -89,7 +89,7 @@ Tasks:
       tick, serial log, and clean poweroff on BPI-F3.
 - [ ] Prove the second hardware milestone: native Bunix servers start and a
       minimal userspace server logs successfully.
-- [ ] Plan follow-up hardware device explorations for eMMC/microSD, USB, dual
+- [x] Plan follow-up hardware device explorations for eMMC/microSD, USB, dual
       GbE, PCIe/M.2, display, WiFi/Bluetooth, and hardware watchdog support.
 
 Progress notes:
@@ -166,3 +166,11 @@ Verification notes:
 - `tools/bpi-f3-smoke.sh --artifact-dir build/riscv64/bpi-f3 --check-log
   build/riscv64-serial.log` passed against the current QEMU `virt` smoke log,
   confirming the log checker matches the emulator-proven first-smoke markers.
+- Added follow-up BPI-F3 hardware device explorations:
+  - `054-bpi-f3-emmc-microsd-storage.txt`
+  - `055-bpi-f3-usb-host-otg.txt`
+  - `056-bpi-f3-dual-gbe-network.txt`
+  - `057-bpi-f3-pcie-m2.txt`
+  - `058-bpi-f3-display-hdmi.txt`
+  - `059-bpi-f3-wifi-bluetooth.txt`
+  - `060-bpi-f3-watchdog-reset.txt`

@@ -1,0 +1,27 @@
+Plan BPI-F3 WiFi and Bluetooth support.
+
+Status:
+
+- Planned.  Start after USB, PCIe/M.2, and core networking are stable enough
+  to identify how the board's wireless hardware is attached.
+
+Problem:
+
+- BPI-F3 variants may expose WiFi/Bluetooth through a module or expansion path
+  that depends on PCIe, SDIO, USB, UART, GPIO, regulators, and firmware blobs.
+  Bunix needs a clear attachment and firmware policy before attempting wireless
+  bringup.
+
+Tasks:
+
+- [ ] Identify the exact WiFi/Bluetooth hardware present on the target board
+      variant.
+- [ ] Capture the relevant DT nodes, GPIOs, regulators, clocks, UART, SDIO,
+      USB, or PCIe attachment data.
+- [ ] Decide project policy for proprietary firmware blobs in userspace or
+      rootfs images.
+- [ ] Bring up Bluetooth UART or USB transport if present.
+- [ ] Bring up WiFi transport after the underlying bus and network stack are
+      stable.
+- [ ] Add observability for radio power, firmware load, link association, and
+      packet counters.

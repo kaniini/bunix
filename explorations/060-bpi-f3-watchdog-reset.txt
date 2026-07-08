@@ -1,0 +1,26 @@
+Bring up BPI-F3 watchdog, reset, and board power controls.
+
+Status:
+
+- Planned.  Start after SBI poweroff/reboot behavior is characterized on real
+  hardware.
+
+Problem:
+
+- First boot relies on firmware SBI shutdown paths.  A robust board port needs
+  to understand K1 watchdog/reset controls so Bunix can recover from hangs,
+  reboot cleanly, and expose watchdog management through a capability-scoped
+  userspace service.
+
+Tasks:
+
+- [ ] Capture watchdog, reset-controller, power-controller, and always-on
+      domain DT nodes from BPI-F3.
+- [ ] Determine which reset/power operations are already provided by OpenSBI
+      and which require native MMIO control.
+- [ ] Add a userspace watchdog/reset service with hardware-resource
+      capabilities rather than direct kernel policy.
+- [ ] Prove watchdog arm, pet, disarm, and expiry behavior on physical
+      hardware using an operator-safe test.
+- [ ] Prove clean reboot and clean poweroff paths.
+- [ ] Add emergency diagnostic logging before watchdog-triggered reset.

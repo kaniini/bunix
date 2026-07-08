@@ -1,0 +1,26 @@
+Plan BPI-F3 HDMI/display bringup.
+
+Status:
+
+- Planned.  Start only after serial, storage, USB, and network bringup are
+  stable enough to make display debugging observable.
+
+Problem:
+
+- HDMI/display support is not needed for the first server/userland milestone,
+  but BPI-F3 exposes display hardware that will eventually need a userspace
+  display driver model, framebuffer or modesetting policy, hotplug handling,
+  and console integration.
+
+Tasks:
+
+- [ ] Capture display pipeline, HDMI, PHY, clock, reset, power-domain, and IRQ
+      DT nodes from real hardware and the pinned Linux DT reference.
+- [ ] Decide whether Bunix first exposes a simple framebuffer, a modesetting
+      server, or both.
+- [ ] Identify a permissively usable register reference strategy, treating GPL
+      BSP code as documentation only.
+- [ ] Add a display server capability model for framebuffer memory and MMIO.
+- [ ] Prove a fixed-mode test pattern on HDMI.
+- [ ] Integrate a framebuffer console only after the serial console path is
+      stable.
