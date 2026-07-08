@@ -48,7 +48,7 @@ Tasks:
 - [x] Add a starvation benchmark with mixed CPU-bound and sleeping/yielding
       workers, verifying that interactive workers keep bounded wake-to-run
       latency.
-- [ ] Add an IPC/server latency benchmark that drives repeated RPCs while
+- [x] Add an IPC/server latency benchmark that drives repeated RPCs while
       background CPU workers are runnable.
 - [ ] Add an interactive shell latency test that runs commands under background
       CPU load and checks bounded command completion using scheduler counters
@@ -105,6 +105,20 @@ Progress notes:
     scheduler counter deltas for future comparisons.
   - The dedicated `scheduler-bench` shard now runs both fairness and
     starvation modes.
+  - Verification:
+    - `make build/modules/schedbench.user`
+    - `BUNIX_TEST_SET=scheduler-bench make test-parallel`
+    - `git diff --check`
+- IPC/server latency benchmark slice:
+  - Extended `/bin/schedbench` with `schedbench ipc`.
+  - The mode keeps CPU-bound workers runnable while repeatedly opening,
+    reading, and closing `/proc/sched_threads`, which drives Linux server,
+    VFS, and procfs RPC paths under scheduler pressure.
+  - The benchmark bounds guest-side round-trip latency, verifies CPU workers
+    still progress, verifies scheduler counters advance, and prints latency
+    sample count, average/max latency, CPU work, and scheduler counter deltas.
+  - The dedicated `scheduler-bench` shard now runs fairness, starvation, and
+    IPC/server latency modes.
   - Verification:
     - `make build/modules/schedbench.user`
     - `BUNIX_TEST_SET=scheduler-bench make test-parallel`

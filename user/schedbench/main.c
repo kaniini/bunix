@@ -19,6 +19,7 @@ enum {
 	BENCH_DURATION_NS = 750000000,
 	SLEEP_INTERVAL_NS = 1000000,
 	MAX_SLEEPER_WAKE_NS = 250000000,
+	MAX_IPC_ROUNDTRIP_NS = 500000000,
 	MAX_FAIRNESS_SKEW = 12,
 };
 
@@ -218,6 +219,33 @@ static int worker_main(int worker, int start_fd, int result_fd)
 	if (write_full(result_fd, &result, sizeof(result)) != 0) {
 		perror("schedbench worker result");
 		return 1;
+	}
+	return 0;
+}
+
+static int read_proc_sched_threads(void)
+{
+	char buf[1024];
+	int fd = open("/proc/sched_threads", O_RDONLY);
+	ssize_t nread;
+
+	if (fd < 0) {
+		perror("schedbench open /proc/sched_threads");
+		return -1;
+	}
+	nread = read(fd, buf, sizeof(buf) - 1);
+	if (close(fd) != 0) {
+		perror("schedbench close /proc/sched_threads");
+		return -1;
+	}
+	if (nread <= 0) {
+		fprintf(stderr, "schedbench empty /proc/sched_threads\n");
+		return -1;
+	}
+	buf[nread] = '\0';
+	if (strstr(buf, "task tid state cpu class priority weight") == 0) {
+		fprintf(stderr, "schedbench bad /proc/sched_threads header\n");
+		return -1;
 	}
 	return 0;
 }
@@ -548,6 +576,138 @@ static int run_starvation(void)
 	return 0;
 }
 
+static int run_ipc(void)
+{
+	int start_pipe[2];
+	int result_pipe[2];
+	pid_t pids[CPU_WORKERS];
+	struct worker_result results[CPU_WORKERS];
+	struct sched_snapshot before;
+	struct sched_snapshot after;
+	unsigned long long deadline;
+	unsigned long long now;
+	unsigned long long samples = 0;
+	unsigned long long total_latency = 0;
+	unsigned long long max_latency = 0;
+	unsigned long long cpu_total = 0;
+	int status;
+
+	if (read_sched_snapshot(&before) != 0) {
+		return 1;
+	}
+	if (pipe(start_pipe) != 0 || pipe(result_pipe) != 0) {
+		perror("schedbench ipc pipe");
+		return 1;
+	}
+
+	for (int worker = 0; worker < CPU_WORKERS; worker++) {
+		pids[worker] = fork();
+		if (pids[worker] < 0) {
+			perror("schedbench ipc fork");
+			return 1;
+		}
+		if (pids[worker] == 0) {
+			close(start_pipe[1]);
+			close(result_pipe[0]);
+			_exit(worker_main(worker, start_pipe[0],
+					  result_pipe[1]));
+		}
+	}
+
+	close(start_pipe[0]);
+	close(result_pipe[1]);
+
+	deadline = monotonic_ns() + BENCH_DURATION_NS;
+	for (int worker = 0; worker < CPU_WORKERS; worker++) {
+		if (write_full(start_pipe[1], &deadline,
+			       sizeof(deadline)) != 0) {
+			perror("schedbench ipc start write");
+			return 1;
+		}
+	}
+	if (close(start_pipe[1]) != 0) {
+		perror("schedbench ipc close start");
+		return 1;
+	}
+
+	now = monotonic_ns();
+	while (now < deadline) {
+		const unsigned long long before_call = monotonic_ns();
+		if (read_proc_sched_threads() != 0) {
+			return 1;
+		}
+		const unsigned long long after_call = monotonic_ns();
+		const unsigned long long elapsed = after_call - before_call;
+
+		if (elapsed > max_latency) {
+			max_latency = elapsed;
+		}
+		total_latency += elapsed;
+		samples++;
+		now = after_call;
+	}
+
+	for (int worker = 0; worker < CPU_WORKERS; worker++) {
+		if (read_full(result_pipe[0], &results[worker],
+			      sizeof(results[worker])) != 0) {
+			perror("schedbench ipc result read");
+			return 1;
+		}
+	}
+	if (close(result_pipe[0]) != 0) {
+		perror("schedbench ipc close result");
+		return 1;
+	}
+
+	for (int worker = 0; worker < CPU_WORKERS; worker++) {
+		if (waitpid(pids[worker], &status, 0) != pids[worker]) {
+			perror("schedbench ipc waitpid");
+			return 1;
+		}
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+			fprintf(stderr, "schedbench ipc worker status=%d\n",
+				status);
+			return 1;
+		}
+		if (results[worker].iterations == 0) {
+			fprintf(stderr, "schedbench ipc empty cpu worker\n");
+			return 1;
+		}
+		cpu_total += results[worker].iterations;
+	}
+
+	if (samples < 4 || max_latency > MAX_IPC_ROUNDTRIP_NS) {
+		fprintf(stderr,
+			"schedbench ipc latency too high samples=%llu max_ns=%llu limit_ns=%u\n",
+			samples, max_latency, MAX_IPC_ROUNDTRIP_NS);
+		return 1;
+	}
+
+	if (read_sched_snapshot(&after) != 0) {
+		return 1;
+	}
+	if (after.switches <= before.switches ||
+	    after.runtime_ticks <= before.runtime_ticks) {
+		fprintf(stderr,
+			"schedbench ipc counters did not advance switches %lu->%lu runtime %lu->%lu\n",
+			before.switches, after.switches,
+			before.runtime_ticks, after.runtime_ticks);
+		return 1;
+	}
+
+	printf("schedbench ipc cpu_workers=%u cpu_total=%llu samples=%llu avg_ns=%llu max_ns=%llu\n",
+	       CPU_WORKERS, cpu_total, samples, total_latency / samples,
+	       max_latency);
+	printf("schedbench ipc counters switches %lu -> %lu runtime %lu -> %lu wakeups %lu -> %lu preemptions %lu -> %lu max_wait %lu -> %lu\n",
+	       before.switches, after.switches,
+	       before.runtime_ticks, after.runtime_ticks,
+	       before.wakeups, after.wakeups,
+	       before.preemptions, after.preemptions,
+	       before.max_wait_ticks, after.max_wait_ticks);
+	printf("schedbench ipc ok\n");
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc == 1 || strcmp(argv[1], "fairness") == 0) {
@@ -556,6 +716,9 @@ int main(int argc, char **argv)
 	if (strcmp(argv[1], "starvation") == 0) {
 		return run_starvation();
 	}
-	fprintf(stderr, "usage: %s [fairness|starvation]\n", argv[0]);
+	if (strcmp(argv[1], "ipc") == 0) {
+		return run_ipc();
+	}
+	fprintf(stderr, "usage: %s [fairness|starvation|ipc]\n", argv[0]);
 	return 2;
 }
