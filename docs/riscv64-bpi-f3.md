@@ -1,8 +1,10 @@
 # riscv64 BPI-F3 bringup notes
 
 This document is the hardware bringup plan for Banana Pi BPI-F3.  It starts
-after the QEMU `virt` riscv64 userspace path is working, so board debugging can
-focus on firmware, FDT, console, timer, interrupt, and shutdown behavior.
+only after the QEMU `virt` riscv64 userspace path is working end-to-end, so
+board debugging can focus on firmware, FDT, console, timer, interrupt, and
+shutdown behavior.  If the emulator path regresses, pause BPI-F3 hardware work
+and repair QEMU `virt` first.
 
 ## Reference set
 
@@ -106,6 +108,7 @@ Verify a captured serial log with:
 ```sh
 tools/bpi-f3-smoke.sh --check-preboot-log bpi-f3-serial.log
 tools/bpi-f3-smoke.sh --check-log bpi-f3-serial.log
+tools/bpi-f3-smoke.sh --classify-log bpi-f3-serial.log
 ```
 
 The initial U-Boot recipe is intentionally a manual command file rather than a
@@ -125,7 +128,9 @@ Operator setup:
 - Run the commands in `boot-bunix-bpi-f3.cmd` by hand.
 - Capture the full serial log and run both
   `tools/bpi-f3-smoke.sh --check-preboot-log bpi-f3-serial.log` and
-  `tools/bpi-f3-smoke.sh --check-log bpi-f3-serial.log`.
+  `tools/bpi-f3-smoke.sh --check-log bpi-f3-serial.log`, then run
+  `tools/bpi-f3-smoke.sh --classify-log bpi-f3-serial.log` to summarize which
+  exploration tasks have supporting evidence and which still need follow-up.
 
 The command recipe intentionally prints U-Boot `bdinfo`, `/chosen`,
 `/aliases`, and `/cpus` before entering Bunix.  Those preboot diagnostics give
@@ -166,6 +171,11 @@ The `fdt: riscv64 ...=...` diagnostic lines are part of the evidence package
 for the still-open hardware tasks: they identify the board CPU count,
 timebase, selected stdout UART, UART MMIO base, and interrupt-controller path
 from the firmware DT.
+
+The classifier output is tab-separated and intentionally conservative.  It
+reports `evidence` only when the captured log contains the markers needed to
+support a task; final task completion still requires reviewing the actual
+serial log and updating the exploration notes.
 
 ## Follow-Up Hardware Work
 

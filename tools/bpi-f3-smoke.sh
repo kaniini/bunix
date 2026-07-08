@@ -13,6 +13,8 @@ commands:
   --check-preboot-log FILE
                       verify captured U-Boot preboot diagnostics
   --check-log FILE   verify a captured serial log has first-smoke markers
+  --classify-log FILE
+                      summarize which exploration hardware tasks FILE supports
   --self-test        run a host-only marker-check self test
 EOF
 }
@@ -36,6 +38,13 @@ require_marker() {
 		echo "missing serial marker: $marker" >&2
 		exit 1
 	fi
+}
+
+has_marker() {
+	log=$1
+	marker=$2
+
+	grep -aF "$marker" "$log" >/dev/null
 }
 
 check_artifacts() {
@@ -107,6 +116,74 @@ check_preboot_log() {
 	printf 'bpi-f3 preboot log ok: %s\n' "$log"
 }
 
+classify_line() {
+	label=$1
+	status=$2
+	detail=$3
+
+	printf '%s\t%s\t%s\n' "$label" "$status" "$detail"
+}
+
+classify_log() {
+	log=$1
+
+	require_file "$log"
+	if has_marker "$log" "fdt: riscv64 stdout-uart" &&
+	    has_marker "$log" "fdt: riscv64 stdout-uart-base=" &&
+	    has_marker "$log" "bunixos: riscv64 early bootstrap"; then
+		classify_line "early-serial" "evidence" \
+			"firmware stdout resolves to a UART and Bunix prints on serial"
+	else
+		classify_line "early-serial" "missing" \
+			"need Bunix boot banner plus stdout UART diagnostics"
+	fi
+
+	if has_marker "$log" "sbi: system reset poweroff" &&
+	    has_marker "$log" "machine: poweroff"; then
+		classify_line "sbi-poweroff" "evidence" \
+			"System Reset poweroff path reached firmware"
+	else
+		classify_line "sbi-poweroff" "missing" \
+			"need machine poweroff plus SBI System Reset marker"
+	fi
+
+	if has_marker "$log" "timer: riscv64 tick" &&
+	    has_marker "$log" "fdt: riscv64 timebase-hz="; then
+		classify_line "timer" "evidence" \
+			"timer tick observed with firmware timebase diagnostic"
+	else
+		classify_line "timer" "missing" \
+			"need timer tick plus timebase diagnostic"
+	fi
+
+	if has_marker "$log" "fdt: riscv64 interrupt-controller" &&
+	    has_marker "$log" "fdt: riscv64 interrupt-controller-path="; then
+		classify_line "interrupt-routing" "evidence" \
+			"firmware interrupt-controller node discovered; routing still needs driver policy"
+	else
+		classify_line "interrupt-routing" "missing" \
+			"need interrupt-controller discovery diagnostics"
+	fi
+
+	if has_marker "$log" "fdt: riscv64 cpu-count="; then
+		classify_line "smp-policy" "evidence" \
+			"firmware CPU count discovered; secondary hart release policy still separate"
+	else
+		classify_line "smp-policy" "missing" \
+			"need CPU count diagnostic"
+	fi
+
+	if has_marker "$log" "bootstrap-riscv64: online" &&
+	    has_marker "$log" "native: riscv64 server argc=1 argv0=/bin/abi-smoke.user" &&
+	    has_marker "$log" "musl hello argc=1 argv0=/bin/musl-hello"; then
+		classify_line "userspace-smoke" "evidence" \
+			"bootstrap, native smoke, linux server, and static musl hello ran"
+	else
+		classify_line "userspace-smoke" "missing" \
+			"need bootstrap plus native and musl hello markers"
+	fi
+}
+
 self_test() {
 	tmp=${TMPDIR:-/tmp}/bunix-bpi-f3-smoke.$$
 	preboot=${TMPDIR:-/tmp}/bunix-bpi-f3-preboot.$$
@@ -149,6 +226,7 @@ fdt print /cpus
 	timebase-frequency = <0x00989680>;
 EOF
 	check_preboot_log "$preboot" >/dev/null
+	classify_log "$tmp" >/dev/null
 	printf 'bpi-f3 smoke self-test ok\n'
 }
 
@@ -188,6 +266,14 @@ while [ $# -gt 0 ]; do
 			exit 2
 		fi
 		check_preboot_log "$2"
+		exit 0
+		;;
+	--classify-log)
+		if [ $# -lt 2 ]; then
+			usage >&2
+			exit 2
+		fi
+		classify_log "$2"
 		exit 0
 		;;
 	--self-test)

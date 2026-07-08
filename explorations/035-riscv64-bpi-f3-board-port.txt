@@ -6,6 +6,10 @@ Status:
   `explorations/completed/`, and passed the full `make test` gate after the
   QEMU `virt` path booted scheduler-owned native userspace plus the static
   riscv64 musl/Linux-personality smoke.
+- Hardware execution is gated on emulator parity.  Do not start new BPI-F3
+  physical-board work unless the QEMU `virt` riscv64 userspace path is known
+  to work end-to-end.  If that emulator path regresses, pause BPI-F3 hardware
+  bringup and repair the emulator path first.
 
 Problem:
 
@@ -40,6 +44,10 @@ Relationship to generic riscv64 port:
   smoke must work end-to-end in QEMU `virt` before BPI-F3 hardware debugging
   starts.  A partial emulator boot, early harness success, or kernel-only
   milestone is not sufficient to unblock this exploration.
+- The same gate remains active during the exploration: any BPI-F3 work that
+  depends on a generic riscv64 facility must first be reproducible in QEMU
+  `virt`; hardware is for board-specific proof, not for debugging generic
+  emulator regressions.
 - BPI-F3 support should be a board layer under the riscv64 port, not a forked
   architecture path.
 - QEMU tests remain the fast development gate; BPI-F3 hardware tests become
@@ -241,3 +249,22 @@ Verification notes:
   diagnostics.
 - `sh -n tools/bpi-f3-smoke.sh` passed after adding U-Boot preboot
   diagnostics.
+- Added `tools/bpi-f3-smoke.sh --classify-log FILE`:
+  - The classifier summarizes a captured serial log into conservative
+    tab-separated evidence rows for early serial, SBI poweroff, timer,
+    interrupt routing, SMP policy, and userspace smoke.
+  - The classifier does not mark exploration tasks complete automatically; it
+    is a review aid for deciding what real BPI-F3 hardware evidence supports.
+- Tightened the BPI-F3 scheduling rule:
+  - BPI-F3 hardware bringup remains downstream of a working QEMU `virt`
+    riscv64 userspace path.
+  - Hardware work should pause if generic emulator parity regresses.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding the BPI-F3 smoke-log
+  classifier.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding the BPI-F3
+  smoke-log classifier.
+- `tools/bpi-f3-smoke.sh --artifact-dir build/riscv64/bpi-f3 --classify-log
+  build/riscv64-serial.log` reported QEMU evidence rows for early serial, SBI
+  poweroff, timer, interrupt-controller discovery, SMP CPU-count discovery,
+  and userspace smoke.
+- `git diff --check` passed after adding the BPI-F3 smoke-log classifier.
