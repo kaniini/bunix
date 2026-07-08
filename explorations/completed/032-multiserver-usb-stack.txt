@@ -229,3 +229,5 @@ Verification so far:
 - `make test-boot-usb`
 - `make test-boot-virtio-blk`
 - `make test-boot`
+- `make test` passed with `test-parallel status=done`, 20 shards launched,
+  and 0 skipped.
