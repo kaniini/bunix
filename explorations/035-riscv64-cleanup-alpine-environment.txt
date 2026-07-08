@@ -205,3 +205,9 @@ Progress notes:
   musl artifacts into the Alpine rootfs.
 - `make test-alpine-rootfs` passed after adding shared Alpine extra-rootfs
   overlay support.
+- Follow-up scan for the next shared-Linux slice found that
+  `user/linux/main.c` registers through `names`, while the current riscv64
+  smoke bootstrap launches only `abi-smoke.user`, `linux`, and
+  `/bin/musl-hello`.  That service-registration dependency is recorded in
+  `036-shared-linux-personality-riscv64.txt` so the shared-server work does
+  not turn into an unplanned broad refactor.

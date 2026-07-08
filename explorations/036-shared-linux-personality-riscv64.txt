@@ -12,9 +12,24 @@ Problem:
   static musl hello syscalls and powers off after `exit_group`.
 - The real Linux personality lives in `user/linux/main.c`, but it currently
   assumes the mature x86_64 syscall frontend and x86_64 server build path.
+- The real Linux personality also registers through the names service, while
+  the current riscv64 smoke path launches only `abi-smoke.user`, `linux`, and
+  `/bin/musl-hello`.  The shared-server slice therefore needs a minimal
+  riscv64 service graph or an explicit temporary registration bridge, not just
+  a source-file swap.
 - Alpine-on-riscv64 needs the real Linux process, VFS, TTY, signal, wait,
   exec, mmap, and credential semantics.  Reimplementing those in a second
   riscv64 server would create the wrong architecture boundary.
+
+Constraints:
+
+- Keep the static riscv64 musl hello smoke deterministic while the full
+  riscv64 Alpine boot graph remains future work.
+- Do not add more semantics to `user/riscv64-linux/main.c`; retire it once the
+  shared server can service the smoke path.
+- Do not fold the broad x86/riscv64 DRYness pass into this exploration.  Any
+  cleanup that is not required for the shared Linux personality belongs in
+  `039-x86-riscv64-dryness-refactor.txt` or a later focused exploration.
 
 Tasks:
 
@@ -24,6 +39,12 @@ Tasks:
       numbers to the shared `BUNIX_LINUX_*` RPC operations.
 - [ ] Build `user/linux/main.c` or a shared Linux server library for riscv64
       as the module named `linux`.
+- [ ] Provide the minimal riscv64 service-registration path needed by the
+      shared Linux server, such as launching `names` before `linux` or adding
+      a tightly scoped temporary bridge that does not become a second names
+      implementation.
+- [ ] Update the riscv64 bootstrap smoke so it waits for the shared Linux
+      server to become usable before launching `/bin/musl-hello`.
 - [ ] Delete or retire `user/riscv64-linux/main.c` after the shared server can
       run the static riscv64 musl smoke.
 - [ ] Remove `BUNIX_LINUX_RISCV64_SYSCALL` and
@@ -45,3 +66,10 @@ Progress notes:
 
 - Created from the audit in
   `035-riscv64-cleanup-alpine-environment.txt`.
+- Follow-up scan during exploration 035 found the main replacement blocker:
+  `user/linux/main.c` calls `register_service(BUNIX_SERVICE_LINUX)`, which
+  talks to `names`, but `user/riscv64-bootstrap/main.c` currently launches no
+  names server.  The old riscv64 stub works because the kernel finds the
+  module task's private port by the name `linux`.  The shared-server slice
+  must make service registration real on riscv64 before the action protocol
+  can be deleted.

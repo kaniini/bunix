@@ -14,6 +14,9 @@ Problem:
   rootfs content, not a fixed static-hello package.
 - The Makefile has hand-written riscv64 module rules that duplicate host-side
   server packaging concerns and bake in the riscv64 stub Linux server.
+- Exploration 035 prepared a host-side riscv64 Alpine rootfs artifact and
+  dynamic-linker overlay artifacts.  This exploration should consume that work
+  rather than rediscovering rootfs construction.
 
 Tasks:
 
@@ -22,7 +25,10 @@ Tasks:
       rootfs conventions.
 - [ ] Build riscv64 variants of the normal server graph needed for an Alpine
       userspace environment.
-- [ ] Add host tooling to prepare a minimal riscv64 Alpine rootfs artifact.
+- [ ] Wire the existing riscv64 Alpine squashfs artifact from exploration 035
+      into the chosen QEMU boot path.
+- [ ] Wire the existing riscv64 dynamic-linker artifacts into the runtime
+      image once the shared Linux personality can execute them.
 - [ ] Add a riscv64 QEMU boot target that uses the new artifact and powers off
       cleanly after a deterministic init/shell smoke.
 - [ ] Keep BPI-F3 artifact generation compatible with the chosen carrier.
@@ -41,3 +47,7 @@ Progress notes:
 
 - Created from the audit in
   `035-riscv64-cleanup-alpine-environment.txt`.
+- Exploration 035 already added `make test-riscv64-alpine-rootfs` and
+  `make test-riscv64-dynamic-linker-artifacts`.  The remaining packaging work
+  is boot integration and normal server graph delivery, not host-side APK
+  rootfs assembly.
