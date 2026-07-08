@@ -48,6 +48,7 @@ Verification:
 - [x] Existing `make test-boot-riscv64-uart-console`
 - [x] Existing `make test-riscv64-bpi-f3-emulator-gate`
 - [x] `git diff --check`
+- [x] Full completion gate: `make test`
 
 Progress notes:
 
@@ -81,3 +82,5 @@ Progress notes:
   `066-riscv64-test-log-isolation.txt` tracks per-target log isolation.
 - Additional package-shape verification:
   - `make test-riscv64-bootpkg`
+- Full completion gate:
+  - `make test` launched 20 shards with 0 skipped and all shards passing.
