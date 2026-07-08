@@ -6064,6 +6064,7 @@ enum {
 	PCI_BAR_IO = 1,
 	PCI_BAR_MEM_TYPE_MASK = 0x6,
 	PCI_BAR_MEM_TYPE_64 = 0x4,
+	PCI_CLASS_SERIAL_USB_XHCI = 0x0c0330,
 };
 
 static u32 pci_config_address(u64 bus, u64 slot, u64 function, u64 offset)
@@ -6106,6 +6107,20 @@ static int pci_device_is_virtio(u64 bus, u64 slot, u64 function)
 	}
 	return (device >= 0x1000 && device <= 0x107f) ||
 	       (device >= 0x1040 && device <= 0x107f);
+}
+
+static int pci_device_resource_allowed(u64 bus, u64 slot, u64 function)
+{
+	const u32 id = pci_config_read32(bus, slot, function, 0);
+	const u32 vendor = id & 0xffff;
+	const u32 class_revision = pci_config_read32(bus, slot, function, 0x08);
+	const u32 class_code = (class_revision >> 8) & 0xffffffu;
+
+	if (vendor == PCI_VENDOR_NONE) {
+		return 0;
+	}
+	return pci_device_is_virtio(bus, slot, function) ||
+	       class_code == PCI_CLASS_SERIAL_USB_XHCI;
 }
 
 static int pci_bar_info(u64 bus, u64 slot, u64 function, u64 bar,
@@ -6185,7 +6200,7 @@ static u64 native_sys_hw_pci_bar_grant(const struct native_syscall_args *args)
 	u64 size;
 
 	if (len == 0 || (ops & ~(TASK_HW_OP_READ | TASK_HW_OP_WRITE)) != 0 ||
-	    !pci_device_is_virtio(bus, slot, function) ||
+	    !pci_device_resource_allowed(bus, slot, function) ||
 	    pci_bar_info(bus, slot, function, bar, &type, &base, &size) != 0 ||
 	    offset > size || len > size - offset) {
 		return (u64)-1;
@@ -6222,7 +6237,7 @@ static u64 native_sys_hw_pci_irq_grant(const struct native_syscall_args *args)
 	const u64 pin = pci_config_read8(bus, slot, function, PCI_INTERRUPT_PIN);
 	u32 gsi;
 
-	if (!pci_device_is_virtio(bus, slot, function) || pin == 0 ||
+	if (!pci_device_resource_allowed(bus, slot, function) || pin == 0 ||
 	    line == 0 || line == 0xff ||
 	    (requested_line != 0 && requested_line != line)) {
 		return (u64)-1;

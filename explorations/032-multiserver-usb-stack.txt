@@ -127,6 +127,12 @@ Progress notes:
 - Added `test-boot-xhci-discovery`, which boots QEMU with a `qemu-xhci` PCI
   function, launches the disabled-by-default `xhci.server`, proves it can
   discover one xHCI controller through `PCI0`, and ends in guest poweroff.
+- Extended the kernel's narrow PCI hardware-resource validation to allow xHCI
+  class-code BAR/IRQ grants in addition to VirtIO devices.
+- `xhci.server` now maps BAR0 through `PCI0`, reads xHCI capability,
+  operational, doorbell, and runtime register offsets, performs a bounded
+  halt/reset sequence, reads root port 0 status, and logs those milestones in
+  `test-boot-xhci-discovery`.
 - Default boot behavior is unchanged: the USB modules are packaged but not
   launched unless a USB command-line test flag is present.
 
@@ -137,6 +143,9 @@ Open design notes:
 - The upper `USB0` constants now name the intended class-driver operations, but
   endpoint capabilities and transfer-completion objects still need full OCAP
   modeling.
+- The first xHCI hardware milestone is partially complete: register mapping,
+  reset, and port-status read are in place, but command ring, event ring, DCBAA,
+  scratchpad handling, interrupter setup, and clean ring shutdown remain open.
 
 USB DMA model:
 
@@ -183,4 +192,5 @@ Verification so far:
 - `make build/modules/usb-bus.server build/modules/usb-synth.server build/modules/xhci.server build/modules/bootstrap.server`
 - `make test-boot-usb-synth`
 - `make test-boot-xhci-discovery`
+- `make test-boot-virtio-blk`
 - `make test-boot`
