@@ -141,6 +141,10 @@ Progress notes:
   port, consumes the port-status-change event, submits `Enable Slot`, observes
   the command-completion event with success, logs the allocated slot, and halts
   the controller before guest poweroff.
+- `xhci.server` now allocates and programs an xHCI input context, output
+  device context, and endpoint-zero transfer ring for the QEMU keyboard,
+  submits `Address Device`, and observes a successful command-completion event
+  for slot 1 in `test-boot-xhci-discovery`.
 - Default boot behavior is unchanged: the USB modules are packaged but not
   launched unless a USB command-line test flag is present.
 
@@ -151,9 +155,10 @@ Open design notes:
 - The upper `USB0` constants now name the intended class-driver operations, but
   endpoint capabilities and transfer-completion objects still need full OCAP
   modeling.
-- The next xHCI enumeration step is `Address Device`: allocate and program
-  input/device contexts, set route/root-port/speed context fields, submit the
-  address-device command, then issue control transfers for descriptors.
+- The next xHCI enumeration step is endpoint-zero control transfers: issue
+  setup/data/status TRBs for `GET_DESCRIPTOR`, update endpoint-zero max packet
+  size from the device descriptor, then read configuration descriptors and set
+  configuration.
 
 USB DMA model:
 

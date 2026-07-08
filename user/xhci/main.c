@@ -38,16 +38,28 @@ enum {
 				  (1 << 23),
 	XHCI_TRB_TYPE_LINK = 6,
 	XHCI_TRB_TYPE_ENABLE_SLOT = 9,
+	XHCI_TRB_TYPE_ADDRESS_DEVICE = 11,
 	XHCI_TRB_TYPE_COMMAND_COMPLETION = 33,
 	XHCI_TRB_TYPE_PORT_STATUS_CHANGE = 34,
 	XHCI_TRB_CYCLE = 1 << 0,
 	XHCI_TRB_TOGGLE_CYCLE = 1 << 1,
 	XHCI_COMPLETION_SUCCESS = 1,
+	XHCI_HCCPARAMS1_CONTEXT_SIZE = 1 << 2,
+	XHCI_SLOT_CONTEXT_ENTRIES_SHIFT = 27,
+	XHCI_SLOT_CONTEXT_ROOT_PORT_SHIFT = 16,
+	XHCI_SLOT_CONTEXT_SPEED_SHIFT = 20,
+	XHCI_EP_TYPE_CONTROL = 4,
+	XHCI_EP0_MAX_PACKET_SIZE = 8,
+	XHCI_EP_CONTEXT_CERR_SHIFT = 1,
+	XHCI_EP_CONTEXT_TYPE_SHIFT = 3,
+	XHCI_EP_CONTEXT_MAX_PACKET_SHIFT = 16,
 	XHCI_WAIT_POLLS = 1000,
 	XHCI_COMMAND_POLLS = 2000,
 	XHCI_PAGE_SIZE = 4096,
 	XHCI_RING_TRBS = 256,
 	XHCI_TRB_SIZE = 16,
+	XHCI_CONTEXT_DWORD_SIZE = 4,
+	XHCI_CONTEXT_COUNT = 32,
 	XHCI_ERST_ENTRIES = 1,
 	XHCI_ERST_ENTRY_SIZE = 16,
 	XHCI_MAX_SCRATCHPADS = 16,
@@ -85,6 +97,15 @@ struct xhci_rings {
 	u64 command_cycle;
 	u64 event_consumer;
 	u64 event_cycle;
+};
+
+struct xhci_device {
+	struct xhci_dma_buffer device_context;
+	struct xhci_dma_buffer input_context;
+	struct xhci_dma_buffer ep0_ring;
+	u64 slot_id;
+	u64 port;
+	u64 speed;
 };
 
 static const unsigned char zeroes[64];
@@ -714,6 +735,119 @@ static int xhci_enable_slot(const struct xhci_controller *controller,
 									-1;
 }
 
+static u64 xhci_context_size(const struct xhci_controller *controller)
+{
+	return (controller->hccparams1 & XHCI_HCCPARAMS1_CONTEXT_SIZE) != 0 ? 64 :
+									   32;
+}
+
+static u64 xhci_context_offset(const struct xhci_controller *controller,
+			       u64 index)
+{
+	return index * xhci_context_size(controller);
+}
+
+static int xhci_setup_ep0_transfer_ring(struct xhci_device *device)
+{
+	const u64 link_offset = device->ep0_ring.offset +
+				(XHCI_RING_TRBS - 1) * XHCI_TRB_SIZE;
+	const u64 link_control = ((u64)XHCI_TRB_TYPE_LINK << 10) |
+				 XHCI_TRB_CYCLE | XHCI_TRB_TOGGLE_CYCLE;
+
+	return buffer_write64(device->ep0_ring.handle, link_offset,
+			      device->ep0_ring.phys) == 0 &&
+		       buffer_write32(device->ep0_ring.handle,
+				      link_offset + 8, 0) == 0 &&
+		       buffer_write32(device->ep0_ring.handle,
+				      link_offset + 12, link_control) == 0 ?
+		       0 :
+		       -1;
+}
+
+static int xhci_prepare_address_device(const struct xhci_controller *controller,
+				       struct xhci_rings *rings,
+				       struct xhci_device *device)
+{
+	const u64 context_size = xhci_context_size(controller);
+	const u64 context_bytes = (XHCI_CONTEXT_COUNT + 1) * context_size;
+	const u64 input_slot = xhci_context_offset(controller, 1);
+	const u64 input_ep0 = xhci_context_offset(controller, 2);
+	const u64 slot0 = 0 * XHCI_CONTEXT_DWORD_SIZE;
+	const u64 slot1 = 1 * XHCI_CONTEXT_DWORD_SIZE;
+	const u64 ep0_0 = 0 * XHCI_CONTEXT_DWORD_SIZE;
+	const u64 ep0_1 = 1 * XHCI_CONTEXT_DWORD_SIZE;
+	const u64 ep0_2 = 2 * XHCI_CONTEXT_DWORD_SIZE;
+	const u64 ep0_4 = 4 * XHCI_CONTEXT_DWORD_SIZE;
+	const u64 slot_dword0 =
+		((device->speed & XHCI_PORTSC_SPEED_MASK)
+		 << XHCI_SLOT_CONTEXT_SPEED_SHIFT) |
+		(1ull << XHCI_SLOT_CONTEXT_ENTRIES_SHIFT);
+	const u64 slot_dword1 =
+		((device->port + 1) << XHCI_SLOT_CONTEXT_ROOT_PORT_SHIFT);
+	const u64 ep0_dword1 =
+		(3ull << XHCI_EP_CONTEXT_CERR_SHIFT) |
+		((u64)XHCI_EP_TYPE_CONTROL << XHCI_EP_CONTEXT_TYPE_SHIFT) |
+		((u64)XHCI_EP0_MAX_PACKET_SIZE
+		 << XHCI_EP_CONTEXT_MAX_PACKET_SHIFT);
+
+	if (device == 0 || device->slot_id == 0 ||
+	    dma_alloc(&device->device_context, XHCI_CONTEXT_COUNT * context_size,
+		      64) != 0 ||
+	    dma_alloc(&device->input_context, context_bytes, 64) != 0 ||
+	    dma_alloc(&device->ep0_ring, XHCI_RING_TRBS * XHCI_TRB_SIZE,
+		      64) != 0 ||
+	    xhci_setup_ep0_transfer_ring(device) != 0 ||
+	    buffer_write64(rings->dcbaa.handle,
+			   rings->dcbaa.offset + device->slot_id * sizeof(u64),
+			   device->device_context.phys) != 0 ||
+	    buffer_write32(device->input_context.handle,
+			   device->input_context.offset + 4, 0x3) != 0 ||
+	    buffer_write32(device->input_context.handle,
+			   device->input_context.offset + input_slot + slot0,
+			   slot_dword0) != 0 ||
+	    buffer_write32(device->input_context.handle,
+			   device->input_context.offset + input_slot + slot1,
+			   slot_dword1) != 0 ||
+	    buffer_write32(device->input_context.handle,
+			   device->input_context.offset + input_ep0 + ep0_0,
+			   0) != 0 ||
+	    buffer_write32(device->input_context.handle,
+			   device->input_context.offset + input_ep0 + ep0_1,
+			   ep0_dword1) != 0 ||
+	    buffer_write64(device->input_context.handle,
+			   device->input_context.offset + input_ep0 + ep0_2,
+			   device->ep0_ring.phys | XHCI_TRB_CYCLE) != 0 ||
+	    buffer_write32(device->input_context.handle,
+			   device->input_context.offset + input_ep0 + ep0_4,
+			   XHCI_EP0_MAX_PACKET_SIZE) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static int xhci_address_device(const struct xhci_controller *controller,
+			       struct xhci_rings *rings,
+			       struct xhci_device *device,
+			       u64 *completion_code)
+{
+	u64 completion_slot = 0;
+	const u64 control = ((u64)XHCI_TRB_TYPE_ADDRESS_DEVICE << 10) |
+			    (device->slot_id << 24);
+
+	if (xhci_prepare_address_device(controller, rings, device) != 0 ||
+	    xhci_write_command_trb(rings, device->input_context.phys, 0,
+				   control) != 0 ||
+	    xhci_ring_command_doorbell(controller) != 0 ||
+	    xhci_wait_command_completion(controller, rings, &completion_slot,
+					 completion_code) != 0) {
+		return -1;
+	}
+	return *completion_code == XHCI_COMPLETION_SUCCESS &&
+		       completion_slot == device->slot_id ?
+		       0 :
+		       -1;
+}
+
 static void log_rings(const struct xhci_rings *rings)
 {
 	char line[160];
@@ -751,6 +885,20 @@ static void log_enable_slot(u64 slot_id, u64 completion_code)
 
 	line[0] = '\0';
 	append_text(line, sizeof(line), &offset, "xhci: enable slot slot=");
+	append_u64(line, sizeof(line), &offset, slot_id);
+	append_text(line, sizeof(line), &offset, " code=");
+	append_u64(line, sizeof(line), &offset, completion_code);
+	append_char(line, sizeof(line), &offset, '\n');
+	bunix_console_log(line, offset);
+}
+
+static void log_address_device(u64 slot_id, u64 completion_code)
+{
+	char line[96];
+	u64 offset = 0;
+
+	line[0] = '\0';
+	append_text(line, sizeof(line), &offset, "xhci: address device slot=");
 	append_u64(line, sizeof(line), &offset, slot_id);
 	append_text(line, sizeof(line), &offset, " code=");
 	append_u64(line, sizeof(line), &offset, completion_code);
@@ -895,9 +1043,32 @@ int main(void)
 								    &rings,
 								    &slot_id,
 								    &code) == 0) {
+								struct xhci_device
+									device = {
+										0
+									};
+
 								log_enable_slot(
 									slot_id,
 									code);
+								device.slot_id =
+									slot_id;
+								device.port = port;
+								device.speed =
+									speed;
+								if (xhci_address_device(
+									    &controller,
+									    &rings,
+									    &device,
+									    &code) == 0) {
+									log_address_device(
+										slot_id,
+										code);
+								} else {
+									log_command_debug(
+										&controller,
+										&rings);
+								}
 							} else {
 								log_command_debug(
 									&controller,
