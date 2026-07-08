@@ -35,6 +35,7 @@ busybox readlink /proc/self/exe && echo PROC_EXE_OK
 busybox cat /proc/stat && echo PROC_STAT_OK
 busybox cat /proc/ipc && echo PROC_IPC_OK
 busybox cat /proc/sched && echo PROC_SCHED_OK
+busybox cat /proc/sched_threads && echo PROC_SCHED_THREADS_OK
 busybox cat /proc/filesystems && echo PROC_FILESYSTEMS_OK
 busybox cat /proc/cpuinfo && echo PROC_CPUINFO_OK
 busybox cat /proc/cmdline > /tmp/proc-cmdline && busybox grep "init=/sbin/init" /tmp/proc-cmdline && echo PROC_CMDLINE_GLOBAL_OK
@@ -113,7 +114,8 @@ check_rootfs_vfs_proc_dev() {
 		DEV_TTYS0_CHAR_OK DEV_CONSOLE_RAW_WRITE_OK
 	wait_for_each_fixed "$log" "procfs content regression missing" 45 220 \
 		"cpu  " "busybox" "direct_delivered " "direct_handoff " \
-		PROC_SCHED_OK "switches " "runq_load "
+		PROC_SCHED_OK PROC_SCHED_THREADS_OK "switches " "runq_load " \
+		"task tid state cpu class priority weight runtime"
 	wait_for_each_fixed "$log" "openrc procfs surface missing" 45 220 \
 		PROC_CMDLINE_GLOBAL_OK PROC_DEVICES_OK PROC_MODULES_OK \
 		PROC_SELF_MOUNTS_OK PROC_PID_MOUNTINFO_OK PROC_PID_CGROUP_OK \

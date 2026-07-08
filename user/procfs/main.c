@@ -41,6 +41,7 @@ enum {
 	PROCFS_KIND_SCHED = 34,
 	PROCFS_KIND_NET_CONFIG = 35,
 	PROCFS_KIND_NET_ARP = 36,
+	PROCFS_KIND_SCHED_THREADS = 37,
 };
 
 static struct bunix_id_table open_files;
@@ -484,6 +485,9 @@ static u64 file_for_path(const char *path, u64 caller_task)
 	}
 	if (str_eq(path, "/proc/sched")) {
 		return make_file(PROCFS_KIND_SCHED, 0);
+	}
+	if (str_eq(path, "/proc/sched_threads")) {
+		return make_file(PROCFS_KIND_SCHED_THREADS, 0);
 	}
 	if (str_eq(path, "/proc/loadavg")) {
 		return make_file(PROCFS_KIND_LOADAVG, 0);
@@ -1397,6 +1401,55 @@ static u64 build_sched(void)
 	return len;
 }
 
+static u64 build_sched_threads(void)
+{
+	u64 len = 0;
+
+	append_str(&len, "task tid state cpu class priority weight runtime wakeups migrations preemptions vruntime deadline runnable_wait wake_pending task_name thread_name\n");
+	for (u64 index = 0;; index++) {
+		struct bunix_sched_thread_info info;
+
+		if (bunix_sched_thread_info(index, &info) != 0) {
+			break;
+		}
+		append_u64(&len, info.task_id);
+		append_char(&len, ' ');
+		append_u64(&len, info.thread_id);
+		append_char(&len, ' ');
+		append_u64(&len, info.state);
+		append_char(&len, ' ');
+		append_u64(&len, info.cpu_id);
+		append_char(&len, ' ');
+		append_u64(&len, info.sched_class);
+		append_char(&len, ' ');
+		append_u64(&len, info.sched_priority);
+		append_char(&len, ' ');
+		append_u64(&len, info.weight);
+		append_char(&len, ' ');
+		append_u64(&len, info.runtime_ticks);
+		append_char(&len, ' ');
+		append_u64(&len, info.wakeups);
+		append_char(&len, ' ');
+		append_u64(&len, info.migrations);
+		append_char(&len, ' ');
+		append_u64(&len, info.preemptions);
+		append_char(&len, ' ');
+		append_u64(&len, info.vruntime);
+		append_char(&len, ' ');
+		append_u64(&len, info.virtual_deadline);
+		append_char(&len, ' ');
+		append_u64(&len, info.runnable_wait_ticks);
+		append_char(&len, ' ');
+		append_u64(&len, info.wake_to_run_pending_ticks);
+		append_char(&len, ' ');
+		append_task_name(&len, info.task_name_words);
+		append_char(&len, ' ');
+		append_task_name(&len, info.thread_name_words);
+		append_char(&len, '\n');
+	}
+	return len;
+}
+
 static u64 build_net_dev(void)
 {
 	u64 len = 0;
@@ -1915,6 +1968,9 @@ static u64 build_file_text(u64 file)
 	case PROCFS_KIND_SCHED:
 		len = build_sched();
 		break;
+	case PROCFS_KIND_SCHED_THREADS:
+		len = build_sched_threads();
+		break;
 	case PROCFS_KIND_NET_DEV:
 		len = build_net_dev();
 		break;
@@ -2056,16 +2112,16 @@ static void stat_reply(const struct bunix_msg *message, struct bunix_msg *reply,
 static const char *proc_dir_entry(u64 index, u64 *type)
 {
 	static const char *names[] = {
-		"kthreads", "uptime", "stat", "ipc", "sched", "loadavg", "meminfo",
-		"filesystems", "cpuinfo", "cmdline", "devices", "modules",
-		"mounts", "net", "self"
+		"kthreads", "uptime", "stat", "ipc", "sched", "sched_threads",
+		"loadavg", "meminfo", "filesystems", "cpuinfo", "cmdline",
+		"devices", "modules", "mounts", "net", "self"
 	};
 	static char pid_name_buf[20];
 	struct proc_info info;
 	const u64 static_count = sizeof(names) / sizeof(names[0]);
 
 	if (index < static_count) {
-		*type = index == 13 || index == 14 ? BUNIX_VFS_TYPE_DIRECTORY :
+		*type = index == 14 || index == 15 ? BUNIX_VFS_TYPE_DIRECTORY :
 				     BUNIX_VFS_TYPE_REGULAR;
 		return names[index];
 	}

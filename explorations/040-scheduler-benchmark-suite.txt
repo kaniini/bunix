@@ -40,7 +40,7 @@ Tasks:
 
 - [ ] Define the scheduler policy RPC/capability model for class, priority,
       weight, and affinity changes without allowing ambient self-promotion.
-- [ ] Expose per-thread scheduler statistics sufficient for fairness and
+- [x] Expose per-thread scheduler statistics sufficient for fairness and
       latency tests, including task/thread IDs that can be correlated with
       Linux PIDs through proc/linux server state.
 - [x] Add a CPU-bound fairness benchmark that runs equal-weight workers and
@@ -78,4 +78,19 @@ Progress notes:
   - Verification:
     - `make build/modules/schedbench.user`
     - `BUNIX_TEST_SET=scheduler-bench make test-parallel`
+    - `git diff --check`
+- Per-thread scheduler statistics slice:
+  - Added a fixed scalar `sched_thread_info` snapshot ABI with task ID, thread
+    ID, state, CPU, scheduler class/priority/weight, runtime, wakeups,
+    migrations, preemptions, virtual runtime/deadline, pending runnable wait,
+    pending wake-to-run latency, and task/thread names.
+  - Added the x86_64 native `sched_thread_info` syscall and exposed the data
+    through procfs as `/proc/sched_threads`.
+  - Kept `/proc/sched` unchanged for existing parsers and tests.
+  - Added rootfs/procfs shard coverage that reads `/proc/sched_threads` and
+    pins the header fields needed by scheduler benchmarks.
+  - Verification:
+    - `make ARCH=x86_64 all`
+    - `make build/modules/procfs.server`
+    - `BUNIX_TEST_SET=rootfs-vfs-proc-dev make test-parallel`
     - `git diff --check`

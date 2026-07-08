@@ -60,6 +60,7 @@ enum {
 	BUNIX_SYSCALL_HW_IRQ_BIND = -104,
 	BUNIX_SYSCALL_HW_IRQ_ACK = -106,
 	BUNIX_SYSCALL_HW_IRQ_MASK = -108,
+	BUNIX_SYSCALL_SCHED_THREAD_INFO = -110,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_SCHED_STATS_CPUS = 8,
@@ -640,6 +641,26 @@ struct bunix_sched_stats {
 	u64 cpu_max_wake_to_run_ticks[BUNIX_SCHED_STATS_CPUS];
 	u64 cpu_runq_load[BUNIX_SCHED_STATS_CPUS];
 	u64 cpu_min_vruntime[BUNIX_SCHED_STATS_CPUS];
+};
+
+struct bunix_sched_thread_info {
+	u64 task_id;
+	u64 thread_id;
+	u64 state;
+	u64 cpu_id;
+	u64 sched_class;
+	u64 sched_priority;
+	u64 weight;
+	u64 runtime_ticks;
+	u64 wakeups;
+	u64 migrations;
+	u64 preemptions;
+	u64 vruntime;
+	u64 virtual_deadline;
+	u64 runnable_wait_ticks;
+	u64 wake_to_run_pending_ticks;
+	u64 task_name_words[2];
+	u64 thread_name_words[2];
 };
 
 struct bunix_vm_stats {
@@ -1277,6 +1298,13 @@ static inline long bunix_ipc_stats(struct bunix_ipc_stats *stats)
 static inline long bunix_sched_stats(struct bunix_sched_stats *stats)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_SCHED_STATS, (u64)stats);
+}
+
+static inline long bunix_sched_thread_info(u64 index,
+					   struct bunix_sched_thread_info *info)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_SCHED_THREAD_INFO, index,
+			      (u64)info);
 }
 
 static inline long bunix_vm_stats(struct bunix_vm_stats *stats)

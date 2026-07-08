@@ -522,6 +522,7 @@ static void sched_reap_thread(struct thread *thread)
 
 	struct task *task = thread->task;
 	const u64 task_flags = spin_lock_irqsave(&task->lock);
+	const u64 thread_flags = spin_lock_irqsave(&thread_table_lock);
 	struct thread **task_link = &task->threads;
 
 	while (*task_link != 0) {
@@ -542,9 +543,6 @@ static void sched_reap_thread(struct thread *thread)
 		task->dead = 1;
 	}
 
-	spin_unlock_irqrestore(&task->lock, task_flags);
-
-	const u64 thread_flags = spin_lock_irqsave(&thread_table_lock);
 	const u32 tid = thread->tid;
 	const char *name = thread->name;
 	const u32 pid = task->pid;
@@ -573,6 +571,7 @@ static void sched_reap_thread(struct thread *thread)
 	thread->preemptions = 0;
 	thread->state = THREAD_EMPTY;
 	spin_unlock_irqrestore(&thread_table_lock, thread_flags);
+	spin_unlock_irqrestore(&task->lock, task_flags);
 
 	console_printf("sched: reap tid=%u task=%u name=%s remaining=%u\n",
 		       tid, pid, name, remaining);
@@ -2111,6 +2110,18 @@ u32 task_id(const struct task *task)
 	return task != 0 ? task->pid : 0;
 }
 
+static void pack_name_words(const char *name, u64 words[2])
+{
+	words[0] = 0;
+	words[1] = 0;
+	if (name == 0) {
+		return;
+	}
+	for (u64 i = 0; i < 16 && name[i] != '\0'; i++) {
+		words[i / 8] |= ((u64)(u8)name[i]) << ((i % 8) * 8);
+	}
+}
+
 int task_info_at(u64 index, u64 *pid_threads_flags, u64 *name_words)
 {
 	u64 seen = 0;
@@ -2124,12 +2135,6 @@ int task_info_at(u64 index, u64 *pid_threads_flags, u64 *name_words)
 			continue;
 		}
 
-		u64 packed_name[2] = { 0, 0 };
-		const char *name = task->name != 0 ? task->name : "";
-
-		for (u64 i = 0; i < 16 && name[i] != '\0'; i++) {
-			packed_name[i / 8] |= ((u64)(u8)name[i]) << ((i % 8) * 8);
-		}
 		if (pid_threads_flags != 0) {
 			*pid_threads_flags = ((u64)task->pid) |
 					     ((u64)task->thread_count << 32) |
@@ -2137,8 +2142,7 @@ int task_info_at(u64 index, u64 *pid_threads_flags, u64 *name_words)
 					     ((u64)task->killing << 49);
 		}
 		if (name_words != 0) {
-			name_words[0] = packed_name[0];
-			name_words[1] = packed_name[1];
+			pack_name_words(task->name, name_words);
 		}
 
 		spin_unlock_irqrestore(&task_table_lock, flags);
@@ -2146,6 +2150,68 @@ int task_info_at(u64 index, u64 *pid_threads_flags, u64 *name_words)
 	}
 
 	spin_unlock_irqrestore(&task_table_lock, flags);
+	return -1;
+}
+
+int sched_thread_info_at(u64 index, struct sched_thread_info *info)
+{
+	u64 seen = 0;
+	const u64 now = timer_ticks();
+	const u64 task_flags = spin_lock_irqsave(&task_table_lock);
+	const u64 thread_flags = spin_lock_irqsave(&thread_table_lock);
+
+	if (info == 0) {
+		spin_unlock_irqrestore(&thread_table_lock, thread_flags);
+		spin_unlock_irqrestore(&task_table_lock, task_flags);
+		return -1;
+	}
+
+	for (struct u64_tree_node *node = u64_tree_first_node(&tasks_by_pid);
+	     node != 0; node = u64_tree_next_node(node)) {
+		struct task *task = (struct task *)node->value;
+
+		for (struct thread *thread = task->threads; thread != 0;
+		     thread = thread->task_next) {
+			if (seen++ != index) {
+				continue;
+			}
+
+			info->task_id = task->pid;
+			info->thread_id = thread->tid;
+			info->state = thread->state;
+			info->cpu_id = thread->cpu_id;
+			info->sched_class = thread->sched_class;
+			info->sched_priority = thread->sched_priority;
+			info->weight = thread->weight;
+			info->runtime_ticks = thread->total_runtime_ticks;
+			info->wakeups = thread->wakeups;
+			info->migrations = thread->migrations;
+			info->preemptions = thread->preemptions;
+			info->vruntime = thread->vruntime;
+			info->virtual_deadline = thread->virtual_deadline;
+			info->runnable_wait_ticks =
+				thread->state == THREAD_READY &&
+						thread->enqueue_tick != 0 &&
+						now >= thread->enqueue_tick ?
+					now - thread->enqueue_tick :
+					0;
+			info->wake_to_run_pending_ticks =
+				thread->wake_ready_tick != 0 &&
+						now >= thread->wake_ready_tick ?
+					now - thread->wake_ready_tick :
+					0;
+			pack_name_words(task->name, info->task_name_words);
+			pack_name_words(thread->name, info->thread_name_words);
+
+			spin_unlock_irqrestore(&thread_table_lock,
+					       thread_flags);
+			spin_unlock_irqrestore(&task_table_lock, task_flags);
+			return 0;
+		}
+	}
+
+	spin_unlock_irqrestore(&thread_table_lock, thread_flags);
+	spin_unlock_irqrestore(&task_table_lock, task_flags);
 	return -1;
 }
 

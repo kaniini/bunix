@@ -105,6 +105,26 @@ struct sched_stats {
 	u64 cpu_min_vruntime[SCHED_STATS_CPUS];
 };
 
+struct sched_thread_info {
+	u64 task_id;
+	u64 thread_id;
+	u64 state;
+	u64 cpu_id;
+	u64 sched_class;
+	u64 sched_priority;
+	u64 weight;
+	u64 runtime_ticks;
+	u64 wakeups;
+	u64 migrations;
+	u64 preemptions;
+	u64 vruntime;
+	u64 virtual_deadline;
+	u64 runnable_wait_ticks;
+	u64 wake_to_run_pending_ticks;
+	u64 task_name_words[2];
+	u64 thread_name_words[2];
+};
+
 enum task_vm_region_kind {
 	TASK_VM_REGION_ELF = 1,
 	TASK_VM_REGION_STACK,
@@ -210,6 +230,7 @@ void sched_wake_sleepers(u64 now);
 void sched_enable_preemption(void);
 void sched_tick(void);
 void sched_stats_snapshot(struct sched_stats *stats);
+int sched_thread_info_at(u64 index, struct sched_thread_info *info);
 void thread_exit(void) __attribute__((noreturn));
 
 u32 task_id(const struct task *task);

@@ -85,6 +85,7 @@ enum {
 	SYSCALL_HW_IRQ_BIND = -104,
 	SYSCALL_HW_IRQ_ACK = -106,
 	SYSCALL_HW_IRQ_MASK = -108,
+	SYSCALL_SCHED_THREAD_INFO = -110,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -6022,6 +6023,18 @@ static u64 native_sys_sched_stats(const struct native_syscall_args *args)
 	       0 : (u64)-1;
 }
 
+static u64 native_sys_sched_thread_info(const struct native_syscall_args *args)
+{
+	struct sched_thread_info info;
+
+	if (args->arg1 == 0 ||
+	    sched_thread_info_at(args->arg0, &info) != 0) {
+		return (u64)-1;
+	}
+	return write_current_user(args->arg1, &info, sizeof(info)) == 0 ?
+	       0 : (u64)-1;
+}
+
 static u64 native_sys_vm_stats(const struct native_syscall_args *args)
 {
 	struct user_vm_stats stats;
@@ -6700,6 +6713,8 @@ static const struct native_syscall_entry native_syscalls[] = {
 	  native_sys_early_console_logs_to_ring },
 	{ SYSCALL_IPC_STATS, "ipc_stats", native_sys_ipc_stats },
 	{ SYSCALL_SCHED_STATS, "sched_stats", native_sys_sched_stats },
+	{ SYSCALL_SCHED_THREAD_INFO, "sched_thread_info",
+	  native_sys_sched_thread_info },
 	{ SYSCALL_VM_STATS, "vm_stats", native_sys_vm_stats },
 	{ SYSCALL_MACHINE_POWER, "machine_power", native_sys_machine_power },
 	{ SYSCALL_HW_PORT_IN8, "hw_port_in8", native_sys_hw_port_in8 },
