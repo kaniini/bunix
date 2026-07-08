@@ -286,6 +286,7 @@ KERNEL_GENERIC_SRCS_x86_64 := \
 	kernel/multiboot2.c \
 	kernel/name.c \
 	kernel/pmm.c \
+	kernel/pmm_multiboot2.c \
 	kernel/sched.c \
 	kernel/slab.c \
 	kernel/server.c \

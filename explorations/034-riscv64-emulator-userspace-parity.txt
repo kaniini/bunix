@@ -134,3 +134,17 @@ Verification notes:
   refactor.
 - `make test-riscv64-bootpkg` passed after the PMM range-initializer
   refactor.
+- Isolated the x86_64 Multiboot2 PMM provider from the generic PMM core:
+  - `kernel/pmm.c` no longer includes Multiboot2 headers or references
+    Multiboot2 callbacks directly.
+  - `kernel/pmm_multiboot2.c` now owns the x86_64 `pmm_init(multiboot_info)`
+    wrapper that collects available and reserved ranges before calling
+    `pmm_init_from_ranges()`.
+  - The x86_64 source list links `kernel/pmm_multiboot2.c`; riscv64 can now
+    link the generic `kernel/pmm.c` allocator later without inheriting x86 boot
+    symbols.
+- `make all` passed after isolating the Multiboot2 PMM provider.
+- `make ARCH=riscv64 all` passed after isolating the Multiboot2 PMM provider.
+- `make test-boot` passed after isolating the Multiboot2 PMM provider.
+- `make test-boot-riscv64-early` passed after isolating the Multiboot2 PMM
+  provider.

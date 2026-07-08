@@ -71,6 +71,8 @@ available/reserved physical ranges, while the existing x86_64 Multiboot2 path
 collects its boot data and calls that shared initializer.  Riscv64 still needs
 to feed FDT memory/initrd/kernel reservations into that API before page tables
 and user frames can come from PMM.
+The Multiboot2 collector now lives outside the PMM core, so riscv64 can link
+the generic allocator without pulling in x86 boot-protocol symbols.
 
 This gives riscv64 a firmware-neutral package handoff separate from
 Multiboot2.  Future rootfs images can ride in the same carrier or replace it
