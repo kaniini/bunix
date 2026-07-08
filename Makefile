@@ -466,7 +466,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-boot test-boot-handle-race test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -1326,6 +1326,9 @@ test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-b
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) QEMU_TIMEOUT=$(QEMU_TIMEOUT) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
+
+test-boot-handle-race:
+	$(MAKE) KERNEL_CMDLINE="log=info handle-race-selftest" TEST_BOOT_MARKERS=tools/test-boot-markers-handle-race.txt test-boot
 
 test-boot-riscv64-early: $(RISCV64_BOOTPKG) tools/test-riscv64-boot.sh tools/check-markers.sh tools/test-riscv64-markers-early.txt
 	$(MAKE) ARCH=riscv64 all

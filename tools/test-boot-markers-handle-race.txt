@@ -1,0 +1,2 @@
+sched: handle lifetime selftest ok
+bootstrap: linux init exec

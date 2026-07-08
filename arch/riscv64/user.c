@@ -318,7 +318,6 @@ static int user_message_to_ipc(const struct user_ipc_message *user_message,
 	message->reply_port = task_port_from_handle(task_current(),
 						    user_message->reply,
 						    TASK_RIGHT_SEND);
-	ipc_port_retain(message->reply_port);
 	message->cap_type = IPC_CAP_NONE;
 	message->cap_object = 0;
 	if (user_message->cap == 0 && user_message->cap_rights != 0) {
@@ -344,19 +343,6 @@ static int user_message_to_ipc(const struct user_ipc_message *user_message,
 			 type == TASK_CAP_TASK ? IPC_CAP_TASK :
 			 IPC_CAP_HW_RESOURCE);
 		message->cap_object = object;
-		if (message->cap_type == IPC_CAP_PORT) {
-			ipc_port_retain((struct ipc_port *)message->cap_object);
-		} else if (message->cap_type == IPC_CAP_BUFFER) {
-			buffer_retain((struct shared_buffer *)message->cap_object);
-		} else if (message->cap_type == IPC_CAP_HW_RESOURCE) {
-			if (task_hw_resource_retain(
-				    (const struct task_hw_resource *)
-					    message->cap_object) != 0) {
-				return -1;
-			}
-		} else if (task_retain((struct task *)message->cap_object) != 0) {
-			return -1;
-		}
 	}
 
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
@@ -498,11 +484,13 @@ static u64 native_sys_ipc_send(const struct native_syscall_args *args)
 				sizeof(user_message)) != 0 ||
 	    user_message_to_ipc(&user_message, &message) != 0) {
 		ipc_message_release(&message);
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 
 	result = ipc_send(port, &message);
 	ipc_message_release(&message);
+	ipc_port_release(port);
 	return (u64)result;
 }
 
@@ -515,15 +503,18 @@ static u64 native_sys_ipc_recv(const struct native_syscall_args *args)
 				      TASK_RIGHT_RECV);
 
 	if (port == 0 || args->arg1 == 0 || ipc_recv(port, &message) != 0) {
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 	ipc_message_to_user(&message, &user_message);
 	if (arch_user_copy_to(args->arg1, &user_message,
 			      sizeof(user_message)) != 0) {
 		ipc_message_release(&message);
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 	ipc_message_release(&message);
+	ipc_port_release(port);
 	return 0;
 }
 
@@ -544,6 +535,7 @@ static u64 native_sys_ipc_call(const struct native_syscall_args *args)
 				sizeof(user_request)) != 0 ||
 	    user_message_to_ipc(&user_request, &message) != 0) {
 		ipc_message_release(&message);
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 
@@ -552,10 +544,12 @@ static u64 native_sys_ipc_call(const struct native_syscall_args *args)
 	ipc_port_retain(message.reply_port);
 	if (ipc_send(port, &message) != 0) {
 		ipc_message_release(&message);
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 	ipc_message_release(&message);
 	if (ipc_recv(reply_port, &reply) != 0) {
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 
@@ -563,9 +557,11 @@ static u64 native_sys_ipc_call(const struct native_syscall_args *args)
 	if (arch_user_copy_to(args->arg2, &user_reply,
 			      sizeof(user_reply)) != 0) {
 		ipc_message_release(&reply);
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 	ipc_message_release(&reply);
+	ipc_port_release(port);
 	return 0;
 }
 
@@ -577,7 +573,12 @@ static u64 native_sys_task_id(const struct native_syscall_args *args)
 		return task_id(task_current());
 	}
 	task = task_from_handle(task_current(), args->arg0, TASK_RIGHT_SEND);
-	return task != 0 ? task_id(task) : (u64)-1;
+	if (task == 0) {
+		return (u64)-1;
+	}
+	const u64 id = task_id(task);
+	task_release(task);
+	return id;
 }
 
 static u64 native_sys_task_create(const struct native_syscall_args *args)
@@ -734,10 +735,12 @@ static u64 native_sys_buffer_read(const struct native_syscall_args *args)
 
 		if (buffer_read(buffer, read_args[1] + done, copy, chunk) != 0 ||
 		    arch_user_copy_to(read_args[2] + done, copy, chunk) != 0) {
+			buffer_release(buffer);
 			return (u64)-1;
 		}
 		done += chunk;
 	}
+	buffer_release(buffer);
 	return 0;
 }
 
@@ -762,10 +765,12 @@ static u64 native_sys_buffer_write(const struct native_syscall_args *args)
 
 		if (arch_user_copy_from(copy, write_args[2] + done, chunk) != 0 ||
 		    buffer_write(buffer, write_args[1] + done, copy, chunk) != 0) {
+			buffer_release(buffer);
 			return (u64)-1;
 		}
 		done += chunk;
 	}
+	buffer_release(buffer);
 	return 0;
 }
 
@@ -804,9 +809,11 @@ static u64 native_sys_machine_power(const struct native_syscall_args *args)
 	if (authority == 0 ||
 	    authority->type != TASK_HW_RESOURCE_POWER_AUTH ||
 	    (authority->ops & TASK_HW_OP_POWER) == 0) {
+		task_hw_resource_release(authority);
 		return (u64)-1;
 	}
 
+	task_hw_resource_release(authority);
 	arch_poweroff();
 	return 0;
 }

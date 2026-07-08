@@ -175,6 +175,7 @@ struct task_vm_region {
 };
 
 void sched_init(void);
+int task_handle_lifetime_selftest(void);
 u32 sched_current_cpu_id(void);
 void sched_secondary_start(u32 cpu_id) __attribute__((noreturn));
 struct task *task_create(const char *name, struct vm_space *vm_space);

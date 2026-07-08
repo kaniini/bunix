@@ -68,10 +68,10 @@ Regression gate:
 
 Tasks:
 
-- [ ] Prove or disprove reachable same-task multithreaded handle races.
-- [ ] Build local close/use race reproducers for port, buffer, task, and
+- [x] Prove or disprove reachable same-task multithreaded handle races.
+- [x] Build local close/use race reproducers for port, buffer, task, and
       hardware-resource handles where reachable.
-- [ ] Convert public handle lookup helpers to retained references or otherwise
+- [x] Convert public handle lookup helpers to retained references or otherwise
       make lifetime rules explicit.
-- [ ] Update all callers and add releases on every path.
+- [x] Update all callers and add releases on every path.
 - [ ] Add regression coverage and run full `make test`.

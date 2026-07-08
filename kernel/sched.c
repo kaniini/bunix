@@ -135,6 +135,9 @@ static struct spinlock sched_stats_lock = SPINLOCK_INIT("sched-stats");
 static struct sched_stats sched_counters;
 
 static int task_handle_retain(enum task_handle_type type, void *object);
+static int task_handle_retain_from_locked_task(struct task *locked_task,
+					       enum task_handle_type type,
+					       void *object);
 static void task_handle_release(enum task_handle_type type, void *object);
 static char *task_name_copy(const char *name);
 
@@ -1105,6 +1108,23 @@ u64 task_grant_task(struct task *owner, struct task *target, u32 rights)
 			owner->handles[i].type = TASK_HANDLE_TASK;
 			owner->handles[i].rights = rights;
 			owner->handles[i].object = target;
+			if (target == owner) {
+				if (target->dead) {
+					owner->handles[i].type =
+						TASK_HANDLE_EMPTY;
+					owner->handles[i].rights = 0;
+					owner->handles[i].object = 0;
+					spin_unlock_irqrestore(&owner->lock,
+							       flags);
+					return 0;
+				}
+				target->ref_count++;
+				console_printf("sched: grant task=%u handle=%u type=task rights=0x%x target=%u\n",
+					       owner->pid, i + 1, rights,
+					       target->pid);
+				spin_unlock_irqrestore(&owner->lock, flags);
+				return i + 1;
+			}
 			const u64 target_flags = spin_lock_irqsave(&target->lock);
 			if (target->dead) {
 				owner->handles[i].type = TASK_HANDLE_EMPTY;
@@ -1242,16 +1262,22 @@ int task_clone_handles(struct task *dst, struct task *src)
 
 struct task *task_from_handle(struct task *owner, u64 handle, u32 rights)
 {
-	if (owner == 0 || handle == 0 || handle > owner->handle_capacity) {
+	if (owner == 0 || handle == 0) {
 		return 0;
 	}
 
 	const u64 flags = spin_lock_irqsave(&owner->lock);
+	if (handle > owner->handle_capacity) {
+		spin_unlock_irqrestore(&owner->lock, flags);
+		return 0;
+	}
 	const struct task_handle task_handle = owner->handles[handle - 1];
 
 	if (task_handle.type != TASK_HANDLE_TASK ||
 	    ((struct task *)task_handle.object)->dead ||
-	    (task_handle.rights & rights) != rights) {
+	    (task_handle.rights & rights) != rights ||
+	    task_handle_retain_from_locked_task(owner, task_handle.type,
+						task_handle.object) != 0) {
 		spin_unlock_irqrestore(&owner->lock, flags);
 		console_printf("sched: task handle denied task=%u handle=%u need=0x%x rights=0x%x\n",
 			       owner->pid, (u32)handle, rights,
@@ -1267,12 +1293,15 @@ struct task *task_from_handle(struct task *owner, u64 handle, u32 rights)
 
 int task_can_inherit_handle(struct task *src, u64 handle, u32 rights)
 {
-	if (src == 0 || handle == 0 || handle > src->handle_capacity ||
-	    rights == 0) {
+	if (src == 0 || handle == 0 || rights == 0) {
 		return -1;
 	}
 
 	const u64 flags = spin_lock_irqsave(&src->lock);
+	if (handle > src->handle_capacity) {
+		spin_unlock_irqrestore(&src->lock, flags);
+		return -1;
+	}
 	const struct task_handle src_handle = src->handles[handle - 1];
 
 	if (src_handle.type == TASK_HANDLE_EMPTY ||
@@ -1291,52 +1320,71 @@ int task_can_inherit_handle(struct task *src, u64 handle, u32 rights)
 u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
 				u32 rights)
 {
-	if (dst == 0 || task_can_inherit_handle(src, handle, rights) != 0) {
+	if (dst == 0 || src == 0 || handle == 0 || rights == 0) {
 		return 0;
 	}
 
 	const u64 flags = spin_lock_irqsave(&src->lock);
+	if (handle > src->handle_capacity) {
+		spin_unlock_irqrestore(&src->lock, flags);
+		return 0;
+	}
 	const struct task_handle src_handle = src->handles[handle - 1];
+
+	if (src_handle.type == TASK_HANDLE_EMPTY ||
+	    (src_handle.rights & TASK_RIGHT_DUP) == 0 ||
+	    (rights & ~src_handle.rights) != 0 ||
+	    task_handle_retain_from_locked_task(src, src_handle.type,
+						src_handle.object) != 0) {
+		spin_unlock_irqrestore(&src->lock, flags);
+		console_printf("sched: inherit denied task=%u handle=%u requested=0x%x rights=0x%x\n",
+			       src->pid, (u32)handle, rights, src_handle.rights);
+		return 0;
+	}
 	spin_unlock_irqrestore(&src->lock, flags);
 
+	u64 granted = 0;
 	if (src_handle.type == TASK_HANDLE_PORT) {
-		return task_grant_port(dst, (struct ipc_port *)src_handle.object,
-				       rights);
-	}
-	if (src_handle.type == TASK_HANDLE_BUFFER) {
-		return task_grant_buffer(dst,
-					 (struct shared_buffer *)src_handle.object,
-					 rights);
-	}
-	if (src_handle.type == TASK_HANDLE_TASK) {
-		return task_grant_task(dst, (struct task *)src_handle.object,
-				       rights);
-	}
-	if (src_handle.type == TASK_HANDLE_HW_RESOURCE) {
-		return task_grant_hw_resource(
+		granted = task_grant_port(dst,
+					  (struct ipc_port *)src_handle.object,
+					  rights);
+	} else if (src_handle.type == TASK_HANDLE_BUFFER) {
+		granted = task_grant_buffer(
+			dst, (struct shared_buffer *)src_handle.object, rights);
+	} else if (src_handle.type == TASK_HANDLE_TASK) {
+		granted = task_grant_task(dst, (struct task *)src_handle.object,
+					  rights);
+	} else if (src_handle.type == TASK_HANDLE_HW_RESOURCE) {
+		granted = task_grant_hw_resource(
 			dst, (const struct task_hw_resource *)src_handle.object,
 			rights);
 	}
 
-	return 0;
+	task_handle_release(src_handle.type, src_handle.object);
+	return granted;
 }
 
 int task_export_cap(struct task *task, u64 handle, u32 rights,
 		    enum task_cap_type *type, void **object)
 {
-	if (task == 0 || handle == 0 || handle > task->handle_capacity ||
-	    type == 0 || object == 0) {
+	if (task == 0 || handle == 0 || type == 0 || object == 0) {
 		return -1;
 	}
 
 	const u64 flags = spin_lock_irqsave(&task->lock);
+	if (handle > task->handle_capacity) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		return -1;
+	}
 	const struct task_handle task_handle = task->handles[handle - 1];
 
 	if ((task_handle.type != TASK_HANDLE_PORT &&
 	     task_handle.type != TASK_HANDLE_BUFFER &&
 	     task_handle.type != TASK_HANDLE_TASK &&
 	     task_handle.type != TASK_HANDLE_HW_RESOURCE) ||
-	    (task_handle.rights & rights) != rights) {
+	    (task_handle.rights & rights) != rights ||
+	    task_handle_retain_from_locked_task(task, task_handle.type,
+						task_handle.object) != 0) {
 		spin_unlock_irqrestore(&task->lock, flags);
 		console_printf("sched: cap denied task=%u handle=%u need=0x%x rights=0x%x\n",
 			       task->pid, (u32)handle, rights,
@@ -1356,15 +1404,21 @@ int task_export_cap(struct task *task, u64 handle, u32 rights,
 struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
 				       u32 rights)
 {
-	if (task == 0 || handle == 0 || handle > task->handle_capacity) {
+	if (task == 0 || handle == 0) {
 		return 0;
 	}
 
 	const u64 flags = spin_lock_irqsave(&task->lock);
+	if (handle > task->handle_capacity) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		return 0;
+	}
 	const struct task_handle task_handle = task->handles[handle - 1];
 
 	if (task_handle.type != TASK_HANDLE_PORT ||
-	    (task_handle.rights & rights) != rights) {
+	    (task_handle.rights & rights) != rights ||
+	    task_handle_retain_from_locked_task(task, task_handle.type,
+						task_handle.object) != 0) {
 		spin_unlock_irqrestore(&task->lock, flags);
 		console_printf("sched: handle denied task=%u handle=%u need=0x%x rights=0x%x\n",
 			       task->pid, (u32)handle, rights,
@@ -1381,15 +1435,21 @@ struct ipc_port *task_port_from_handle(struct task *task, u64 handle,
 struct shared_buffer *task_buffer_from_handle(struct task *task, u64 handle,
 					      u32 rights)
 {
-	if (task == 0 || handle == 0 || handle > task->handle_capacity) {
+	if (task == 0 || handle == 0) {
 		return 0;
 	}
 
 	const u64 flags = spin_lock_irqsave(&task->lock);
+	if (handle > task->handle_capacity) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		return 0;
+	}
 	const struct task_handle task_handle = task->handles[handle - 1];
 
 	if (task_handle.type != TASK_HANDLE_BUFFER ||
-	    (task_handle.rights & rights) != rights) {
+	    (task_handle.rights & rights) != rights ||
+	    task_handle_retain_from_locked_task(task, task_handle.type,
+						task_handle.object) != 0) {
 		spin_unlock_irqrestore(&task->lock, flags);
 		console_printf("sched: buffer handle denied task=%u handle=%u need=0x%x rights=0x%x\n",
 			       task->pid, (u32)handle, rights,
@@ -1407,15 +1467,21 @@ const struct task_hw_resource *task_hw_resource_from_handle(struct task *task,
 							    u64 handle,
 							    u32 rights)
 {
-	if (task == 0 || handle == 0 || handle > task->handle_capacity) {
+	if (task == 0 || handle == 0) {
 		return 0;
 	}
 
 	const u64 flags = spin_lock_irqsave(&task->lock);
+	if (handle > task->handle_capacity) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		return 0;
+	}
 	const struct task_handle task_handle = task->handles[handle - 1];
 
 	if (task_handle.type != TASK_HANDLE_HW_RESOURCE ||
-	    (task_handle.rights & rights) != rights) {
+	    (task_handle.rights & rights) != rights ||
+	    task_handle_retain_from_locked_task(task, task_handle.type,
+						task_handle.object) != 0) {
 		spin_unlock_irqrestore(&task->lock, flags);
 		console_printf("sched: hw handle denied task=%u handle=%u need=0x%x rights=0x%x\n",
 			       task->pid, (u32)handle, rights,
@@ -1478,6 +1544,18 @@ static int task_handle_retain(enum task_handle_type type, void *object)
 	}
 	if (type == TASK_HANDLE_TASK) {
 		struct task *task = (struct task *)object;
+
+		if (task == task_current()) {
+			const u64 flags = spin_lock_irqsave(&task->lock);
+
+			if (task->dead) {
+				spin_unlock_irqrestore(&task->lock, flags);
+				return -1;
+			}
+			task->ref_count++;
+			spin_unlock_irqrestore(&task->lock, flags);
+			return 0;
+		}
 		const u64 flags = spin_lock_irqsave(&task->lock);
 
 		if (task->dead) {
@@ -1495,6 +1573,22 @@ static int task_handle_retain(enum task_handle_type type, void *object)
 	return -1;
 }
 
+static int task_handle_retain_from_locked_task(struct task *locked_task,
+					       enum task_handle_type type,
+					       void *object)
+{
+	if (type == TASK_HANDLE_TASK && object == locked_task) {
+		struct task *task = (struct task *)object;
+
+		if (task == 0 || task->dead) {
+			return -1;
+		}
+		task->ref_count++;
+		return 0;
+	}
+	return task_handle_retain(type, object);
+}
+
 static void task_handle_release(enum task_handle_type type, void *object)
 {
 	if (type == TASK_HANDLE_PORT) {
@@ -1507,6 +1601,82 @@ static void task_handle_release(enum task_handle_type type, void *object)
 		task_hw_resource_release(
 			(const struct task_hw_resource *)object);
 	}
+}
+
+int task_handle_lifetime_selftest(void)
+{
+	struct task *owner = task_create("handle-selftest", vm_kernel_space());
+	struct task *target = task_create("handle-selftest-target",
+					  vm_kernel_space());
+	struct ipc_port *port = ipc_port_create_private("handle-selftest");
+	struct shared_buffer *buffer = buffer_create(16);
+	struct task_hw_resource *resource =
+		(struct task_hw_resource *)slab_zalloc(sizeof(*resource));
+	enum task_cap_type cap_type = TASK_CAP_NONE;
+	void *cap_object = 0;
+	u64 handle;
+
+	if (owner == 0 || target == 0 || port == 0 || buffer == 0 ||
+	    resource == 0) {
+		return -1;
+	}
+
+	handle = task_grant_port(owner, port, TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+	port = task_port_from_handle(owner, handle, TASK_RIGHT_SEND);
+	if (port == 0 || task_close_handle(owner, handle) != 0 ||
+	    ipc_port_id(port) == 0) {
+		ipc_port_release(port);
+		return -1;
+	}
+	ipc_port_release(port);
+
+	handle = task_grant_buffer(owner, buffer,
+				   TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+				   TASK_RIGHT_DUP);
+	buffer_release(buffer);
+	buffer = task_buffer_from_handle(owner, handle, TASK_RIGHT_SEND);
+	if (buffer == 0 || task_export_cap(owner, handle,
+					   TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+					   &cap_type, &cap_object) != 0 ||
+	    cap_type != TASK_CAP_BUFFER ||
+	    task_close_handle(owner, handle) != 0 ||
+	    buffer_write(buffer, 0, "ok", 2) != 0 ||
+	    buffer_id(buffer) == 0) {
+		buffer_release(buffer);
+		task_handle_release(TASK_HANDLE_BUFFER, cap_object);
+		return -1;
+	}
+	buffer_release(buffer);
+	task_handle_release(TASK_HANDLE_BUFFER, cap_object);
+
+	handle = task_grant_task(owner, target, TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+	target = task_from_handle(owner, handle, TASK_RIGHT_SEND);
+	if (target == 0 || task_close_handle(owner, handle) != 0 ||
+	    task_id(target) == 0) {
+		task_release(target);
+		return -1;
+	}
+	task_release(target);
+
+	resource->type = TASK_HW_RESOURCE_MMIO;
+	resource->ops = TASK_HW_OP_READ;
+	resource->flags = TASK_HW_RESOURCE_OWNED;
+	resource->ref_count = 0;
+	resource->base = 0x1000;
+	resource->len = 0x1000;
+	handle = task_grant_hw_resource(owner, resource, TASK_RIGHT_SEND);
+	resource = (struct task_hw_resource *)task_hw_resource_from_handle(
+		owner, handle, TASK_RIGHT_SEND);
+	if (resource == 0 || task_close_handle(owner, handle) != 0 ||
+	    resource->type != TASK_HW_RESOURCE_MMIO ||
+	    resource->base != 0x1000 || resource->len != 0x1000) {
+		task_hw_resource_release(resource);
+		return -1;
+	}
+	task_hw_resource_release(resource);
+
+	console_printf("sched: handle lifetime selftest ok\n");
+	return 0;
 }
 
 static void task_remove_from_list(struct task *task)

@@ -534,8 +534,10 @@ int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
 {
 	struct task *task = task_from_handle(parent, task_handle,
 					    TASK_RIGHT_SEND);
+	int result = -1;
 	if (task == 0 || src == 0 || filesz > memsz ||
 	    vaddr + memsz < vaddr) {
+		task_release(task);
 		return -1;
 	}
 
@@ -550,7 +552,7 @@ int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
 		const u64 copy_end = min_u64(page_end_addr, vaddr + filesz);
 
 		if (frame.addr == 0) {
-			return -1;
+			goto out;
 		}
 
 		mem_zero((u8 *)frame.addr, VM_PAGE_SIZE);
@@ -564,7 +566,7 @@ int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
 		}
 		if (vm_map_user_page(space, page, frame, writable) != 0) {
 			vm_rpc_free_frame(frame);
-			return -1;
+			goto out;
 		}
 	}
 
@@ -573,9 +575,12 @@ int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
 		       (u32)memsz);
 	if (task_add_vm_region(task, page_start, page_end - page_start,
 			       writable, TASK_VM_REGION_ELF) != 0) {
-		return -1;
+		goto out;
 	}
-	return 0;
+	result = 0;
+out:
+	task_release(task);
+	return result;
 }
 
 int server_task_write(struct task *parent, u64 task_handle, u64 vaddr,
@@ -584,15 +589,18 @@ int server_task_write(struct task *parent, u64 task_handle, u64 vaddr,
 	struct task *task = task_from_handle(parent, task_handle,
 					    TASK_RIGHT_SEND);
 	if (task == 0 || src == 0 || vaddr + len < vaddr) {
+		task_release(task);
 		return -1;
 	}
 
 	if (vm_write_user(task_vm_space(task), vaddr, src, len) != 0) {
+		task_release(task);
 		return -1;
 	}
 
 	console_printf("kernel: task write task=%u vaddr=%p len=%u\n",
 		       task_id(task), (const void *)vaddr, (u32)len);
+	task_release(task);
 	return 0;
 }
 
@@ -609,11 +617,18 @@ int server_task_alloc_kind(struct task *parent, u64 task_handle, u64 vaddr,
 	struct task *task = task_handle == 0 ? parent :
 			    task_from_handle(parent, task_handle,
 					     TASK_RIGHT_SEND);
+	const int release_task = task_handle != 0;
 	if (task == 0 || len == 0 || vaddr + len < vaddr) {
+		if (release_task) {
+			task_release(task);
+		}
 		return -1;
 	}
 
 	if (vm_alloc_user_range(task_vm_space(task), vaddr, len, writable) != 0) {
+		if (release_task) {
+			task_release(task);
+		}
 		return -1;
 	}
 
@@ -623,7 +638,13 @@ int server_task_alloc_kind(struct task *parent, u64 task_handle, u64 vaddr,
 			       align_up(vaddr + len, VM_PAGE_SIZE) -
 			       align_down(vaddr, VM_PAGE_SIZE),
 			       writable, kind) != 0) {
+		if (release_task) {
+			task_release(task);
+		}
 		return -1;
+	}
+	if (release_task) {
+		task_release(task);
 	}
 	return 0;
 }
@@ -633,20 +654,25 @@ int server_task_clone_range(struct task *parent, u64 dst_handle,
 {
 	struct task *dst = task_from_handle(parent, dst_handle, TASK_RIGHT_SEND);
 	struct task *src = task_from_handle(parent, src_handle, TASK_RIGHT_SEND);
+	int result = -1;
 
 	if (dst == 0 || src == 0 || len == 0 || vaddr + len < vaddr) {
-		return -1;
+		goto out;
 	}
 
 	if (vm_clone_user_range(task_vm_space(dst), task_vm_space(src),
 				vaddr, len, writable) != 0) {
-		return -1;
+		goto out;
 	}
 
 	console_printf("kernel: task clone dst=%u src=%u vaddr=%p len=%u writable=%u\n",
 		       task_id(dst), task_id(src), (const void *)vaddr,
 		       (u32)len, writable);
-	return 0;
+	result = 0;
+out:
+	task_release(dst);
+	task_release(src);
+	return result;
 }
 
 int server_task_grant(struct task *parent, u64 task_handle, u64 handle,
@@ -659,8 +685,11 @@ int server_task_grant(struct task *parent, u64 task_handle, u64 handle,
 		return -1;
 	}
 
-	return task_grant_inherited_handle(task, parent, handle, rights) == 0 ?
-	       -1 : 0;
+	const int result =
+		task_grant_inherited_handle(task, parent, handle, rights) == 0 ?
+		-1 : 0;
+	task_release(task);
+	return result;
 }
 
 int server_task_start(struct task *parent, u64 task_handle, u64 entry)
@@ -677,6 +706,7 @@ int server_task_start(struct task *parent, u64 task_handle, u64 entry)
 
 	struct task_start *start = slab_alloc(sizeof(*start));
 	if (start == 0) {
+		task_release(task);
 		return -1;
 	}
 	start->entry = entry;
@@ -686,8 +716,10 @@ int server_task_start(struct task *parent, u64 task_handle, u64 entry)
 		       (const void *)entry);
 	if (thread_create(task, task_name(task), task_entry_thread, start) == 0) {
 		slab_free(start);
+		task_release(task);
 		return -1;
 	}
+	task_release(task);
 	return 0;
 }
 
@@ -697,11 +729,13 @@ int server_task_start_at(struct task *parent, u64 task_handle, u64 entry,
 	struct task *task = task_from_handle(parent, task_handle,
 					    TASK_RIGHT_SEND);
 	if (task == 0 || stack == 0) {
+		task_release(task);
 		return -1;
 	}
 
 	struct task_start *start = slab_alloc(sizeof(*start));
 	if (start == 0) {
+		task_release(task);
 		return -1;
 	}
 	start->entry = entry;
@@ -712,8 +746,10 @@ int server_task_start_at(struct task *parent, u64 task_handle, u64 entry,
 		       (const void *)stack);
 	if (thread_create(task, task_name(task), task_entry_thread, start) == 0) {
 		slab_free(start);
+		task_release(task);
 		return -1;
 	}
+	task_release(task);
 	return 0;
 }
 
@@ -725,7 +761,9 @@ int server_task_kill(struct task *parent, u64 task_handle)
 		return -1;
 	}
 
-	return task_kill(task);
+	const int result = task_kill(task);
+	task_release(task);
+	return result;
 }
 
 int server_task_clear(struct task *parent, u64 task_handle)
@@ -736,27 +774,31 @@ int server_task_clear(struct task *parent, u64 task_handle)
 	if (task == 0) {
 		return -1;
 	}
+	int result = -1;
 
 	while (task_vm_region_count(task) != 0) {
 		const struct task_vm_region *region = task_vm_region_at(task, 0);
 
 		if (region == 0) {
-			return -1;
+			goto out;
 		}
 
 		const u64 base = region->base;
 		const u64 len = region->len;
 
 		if (vm_unmap_user_range(task_vm_space(task), base, len) != 0) {
-			return -1;
+			goto out;
 		}
 		if (task_remove_vm_region(task, base, len) != 0) {
-			return -1;
+			goto out;
 		}
 	}
 
 	task_clear_vm_regions(task);
-	return 0;
+	result = 0;
+out:
+	task_release(task);
+	return result;
 }
 
 struct task *server_task_fork_current_stopped(

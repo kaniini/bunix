@@ -43,6 +43,13 @@ void kernel_main(u32 magic, u64 multiboot_info)
 	kernel_runtime_services_init();
 	kernel_runtime_boot_modules_init();
 	kernel_runtime_scheduler_init();
+	if (kernel_cmdline_has("handle-race-selftest") &&
+	    task_handle_lifetime_selftest() != 0) {
+		console_printf("sched: handle lifetime selftest failed\n");
+		for (;;) {
+			__asm__ volatile ("hlt");
+		}
+	}
 	arch_smp_release_aps();
 	server_start_boot_modules(multiboot_info);
 	sched_enable_preemption();

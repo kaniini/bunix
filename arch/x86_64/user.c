@@ -407,7 +407,6 @@ static int user_message_to_ipc(const struct user_ipc_message *user_message,
 	message->reply_port = task_port_from_handle(task_current(),
 						    user_message->reply,
 						    TASK_RIGHT_SEND);
-	ipc_port_retain(message->reply_port);
 	message->cap_type = IPC_CAP_NONE;
 	message->cap_object = 0;
 	if (user_message->cap == 0 && user_message->cap_rights != 0) {
@@ -437,19 +436,6 @@ static int user_message_to_ipc(const struct user_ipc_message *user_message,
 			 type == TASK_CAP_TASK ? IPC_CAP_TASK :
 			 IPC_CAP_HW_RESOURCE);
 		message->cap_object = object;
-		if (message->cap_type == IPC_CAP_PORT) {
-			ipc_port_retain((struct ipc_port *)message->cap_object);
-		} else if (message->cap_type == IPC_CAP_BUFFER) {
-			buffer_retain((struct shared_buffer *)message->cap_object);
-		} else if (message->cap_type == IPC_CAP_HW_RESOURCE) {
-			if (task_hw_resource_retain(
-				    (const struct task_hw_resource *)
-					    message->cap_object) != 0) {
-				return -1;
-			}
-		} else if (task_retain((struct task *)message->cap_object) != 0) {
-			return -1;
-		}
 	}
 
 	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
@@ -5698,8 +5684,14 @@ static u64 native_sys_task_id(const struct native_syscall_args *args)
 {
 	struct task *task =
 		task_from_handle(task_current(), args->arg0, TASK_RIGHT_SEND);
+	u64 id;
 
-	return task != 0 ? task_id(task) : (u64)-1;
+	if (task == 0) {
+		return (u64)-1;
+	}
+	id = task_id(task);
+	task_release(task);
+	return id;
 }
 
 static u64 native_sys_task_info(const struct native_syscall_args *args)
@@ -5861,11 +5853,13 @@ static u64 native_sys_buffer_read(const struct native_syscall_args *sys_args)
 		    write_current_user(args[2] + done, syscall_copy_buffer,
 				       chunk) != 0) {
 			spin_unlock_irqrestore(&syscall_copy_lock, flags);
+			buffer_release(buffer);
 			return (u64)-1;
 		}
 		done += chunk;
 	}
 	spin_unlock_irqrestore(&syscall_copy_lock, flags);
+	buffer_release(buffer);
 	return 0;
 }
 
@@ -5902,6 +5896,7 @@ static u64 native_sys_buffer_write(const struct native_syscall_args *sys_args)
 		done += chunk;
 	}
 	spin_unlock_irqrestore(&syscall_copy_lock, flags);
+	buffer_release(buffer);
 	return result;
 }
 
@@ -5914,7 +5909,9 @@ static u64 native_sys_buffer_phys(const struct native_syscall_args *args)
 	if (buffer == 0) {
 		return (u64)-1;
 	}
-	return buffer_phys(buffer);
+	const u64 phys = buffer_phys(buffer);
+	buffer_release(buffer);
+	return phys;
 }
 
 static u64 native_sys_port_create(const struct native_syscall_args *args)
@@ -6057,9 +6054,11 @@ static u64 native_sys_machine_power(const struct native_syscall_args *args)
 	if (authority == 0 ||
 	    authority->type != TASK_HW_RESOURCE_POWER_AUTH ||
 	    (authority->ops & TASK_HW_OP_POWER) == 0) {
+		task_hw_resource_release(authority);
 		return (u64)-1;
 	}
 
+	task_hw_resource_release(authority);
 	arch_poweroff();
 	return 0;
 }
@@ -6219,8 +6218,10 @@ static u64 native_sys_hw_pci_bar_grant(const struct native_syscall_args *args)
 	    !pci_device_resource_allowed(bus, slot, function) ||
 	    pci_bar_info(bus, slot, function, bar, &type, &base, &size) != 0 ||
 	    offset > size || len > size - offset) {
+		task_hw_resource_release(authority);
 		return (u64)-1;
 	}
+	task_hw_resource_release(authority);
 
 	struct task_hw_resource *resource =
 		(struct task_hw_resource *)slab_alloc(sizeof(*resource));
@@ -6263,8 +6264,10 @@ static u64 native_sys_hw_pci_irq_grant(const struct native_syscall_args *args)
 	    !pci_device_resource_allowed(bus, slot, function) || pin == 0 ||
 	    line == 0 || line == 0xff ||
 	    (requested_line != 0 && requested_line != line)) {
+		task_hw_resource_release(authority);
 		return (u64)-1;
 	}
+	task_hw_resource_release(authority);
 
 	gsi = (u32)line;
 	(void)arch_smp_irq_override((u32)line, &gsi, 0);
@@ -6304,6 +6307,7 @@ static int hw_irq_validate(u64 handle, u64 index, u32 op,
 	    index >= resource->len ||
 	    resource->base + index < resource->base ||
 	    resource->base + index > 0xffffffffull) {
+		task_hw_resource_release(resource);
 		return -1;
 	}
 
@@ -6323,9 +6327,14 @@ static u64 native_sys_hw_irq_bind(const struct native_syscall_args *args)
 	if (port == 0 ||
 	    hw_irq_validate(args->arg0, args->arg1, TASK_HW_OP_BIND_IRQ,
 			    &resource, &gsi) != 0) {
+		ipc_port_release(port);
 		return (u64)-1;
 	}
-	return arch_irq_bind(gsi, resource->flags, port) == 0 ? 0 : (u64)-1;
+	const u64 result =
+		arch_irq_bind(gsi, resource->flags, port) == 0 ? 0 : (u64)-1;
+	task_hw_resource_release(resource);
+	ipc_port_release(port);
+	return result;
 }
 
 static u64 native_sys_hw_irq_ack(const struct native_syscall_args *args)
@@ -6338,6 +6347,7 @@ static u64 native_sys_hw_irq_ack(const struct native_syscall_args *args)
 		return (u64)-1;
 	}
 	(void)resource;
+	task_hw_resource_release(resource);
 	return arch_irq_ack(gsi) == 0 ? 0 : (u64)-1;
 }
 
@@ -6351,6 +6361,7 @@ static u64 native_sys_hw_irq_mask(const struct native_syscall_args *args)
 		return (u64)-1;
 	}
 	(void)resource;
+	task_hw_resource_release(resource);
 	return arch_irq_mask(gsi, args->arg2 != 0) == 0 ? 0 : (u64)-1;
 }
 
@@ -6369,10 +6380,12 @@ static int hw_port_validate(u64 handle, u64 offset, u64 width, u32 op,
 	    offset + width > resource->len ||
 	    resource->base + offset < resource->base ||
 	    resource->base + offset > 0xffff) {
+		task_hw_resource_release(resource);
 		return -1;
 	}
 
 	*port = (u16)(resource->base + offset);
+	task_hw_resource_release(resource);
 	return 0;
 }
 
@@ -6459,6 +6472,7 @@ static int hw_mmio_validate(u64 handle, u64 offset, u64 width, u32 op,
 	    offset + width < offset ||
 	    offset + width > resource->len ||
 	    resource->base + offset < resource->base) {
+		task_hw_resource_release(resource);
 		return -1;
 	}
 
@@ -6469,11 +6483,13 @@ static int hw_mmio_validate(u64 handle, u64 offset, u64 width, u32 op,
 	for (u64 page = first_page; page <= last_page; page += VM_PAGE_SIZE) {
 		if (vm_map_kernel_page(page, page,
 				       op == TASK_HW_OP_WRITE ? 1 : 0) != 0) {
+			task_hw_resource_release(resource);
 			return -1;
 		}
 	}
 
 	*addr = (volatile void *)phys;
+	task_hw_resource_release(resource);
 	return 0;
 }
 
@@ -6582,10 +6598,12 @@ static u64 native_sys_ipc_send(const struct native_syscall_args *args)
 	struct ipc_port *port =
 		task_port_from_handle(task_current(), args->arg0,
 				      TASK_RIGHT_SEND);
+	u64 result;
 
-	if (args->arg1 == 0 ||
+	if (port == 0 || args->arg1 == 0 ||
 	    read_current_user(args->arg1, &user_message,
 			      sizeof(user_message)) != 0) {
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 
@@ -6593,12 +6611,14 @@ static u64 native_sys_ipc_send(const struct native_syscall_args *args)
 
 	if (user_message_to_ipc(&user_message, &message) != 0) {
 		ipc_message_release(&message);
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 
-	const int result = ipc_send(port, &message);
+	result = (u64)ipc_send(port, &message);
 	ipc_message_release(&message);
-	return (u64)result;
+	ipc_port_release(port);
+	return result;
 }
 
 static u64 native_sys_ipc_recv(const struct native_syscall_args *args)
@@ -6608,8 +6628,10 @@ static u64 native_sys_ipc_recv(const struct native_syscall_args *args)
 		task_port_from_handle(task_current(), args->arg0,
 				      TASK_RIGHT_RECV);
 	struct ipc_message message;
+	u64 result;
 
-	if (args->arg1 == 0 || ipc_recv(port, &message) != 0) {
+	if (port == 0 || args->arg1 == 0 || ipc_recv(port, &message) != 0) {
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 
@@ -6617,10 +6639,13 @@ static u64 native_sys_ipc_recv(const struct native_syscall_args *args)
 	if (write_current_user(args->arg1, &user_message,
 			       sizeof(user_message)) != 0) {
 		ipc_message_release(&message);
+		ipc_port_release(port);
 		return (u64)-1;
 	}
+	result = 0;
 	ipc_message_release(&message);
-	return 0;
+	ipc_port_release(port);
+	return result;
 }
 
 static u64 native_sys_ipc_try_recv(const struct native_syscall_args *args)
@@ -6630,12 +6655,19 @@ static u64 native_sys_ipc_try_recv(const struct native_syscall_args *args)
 		task_port_from_handle(task_current(), args->arg0,
 				      TASK_RIGHT_RECV);
 	struct ipc_message message;
-	const int result = ipc_try_recv(port, &message);
+	int result;
 
-	if (args->arg1 == 0 || result < 0) {
+	if (port == 0 || args->arg1 == 0) {
+		ipc_port_release(port);
+		return (u64)-1;
+	}
+	result = ipc_try_recv(port, &message);
+	if (result < 0) {
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 	if (result > 0) {
+		ipc_port_release(port);
 		return 1;
 	}
 
@@ -6643,9 +6675,11 @@ static u64 native_sys_ipc_try_recv(const struct native_syscall_args *args)
 	if (write_current_user(args->arg1, &user_message,
 			       sizeof(user_message)) != 0) {
 		ipc_message_release(&message);
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 	ipc_message_release(&message);
+	ipc_port_release(port);
 	return 0;
 }
 
@@ -6664,11 +6698,13 @@ static u64 native_sys_ipc_call(const struct native_syscall_args *args)
 	    reply_port == 0 ||
 	    read_current_user(args->arg1, &user_request,
 			      sizeof(user_request)) != 0) {
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 
 	if (user_message_to_ipc(&user_request, &message) != 0) {
 		ipc_message_release(&message);
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 
@@ -6677,10 +6713,12 @@ static u64 native_sys_ipc_call(const struct native_syscall_args *args)
 	ipc_port_retain(message.reply_port);
 	if (ipc_send(port, &message) != 0) {
 		ipc_message_release(&message);
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 	ipc_message_release(&message);
 	if (ipc_recv(reply_port, &reply) != 0) {
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 
@@ -6688,9 +6726,11 @@ static u64 native_sys_ipc_call(const struct native_syscall_args *args)
 	if (write_current_user(args->arg2, &user_reply,
 			       sizeof(user_reply)) != 0) {
 		ipc_message_release(&reply);
+		ipc_port_release(port);
 		return (u64)-1;
 	}
 	ipc_message_release(&reply);
+	ipc_port_release(port);
 	return 0;
 }
 
