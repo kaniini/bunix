@@ -274,10 +274,10 @@ After the first serial/poweroff smoke, bring up hardware in this order:
 
 Follow-up exploration files:
 
-- `054-bpi-f3-emmc-microsd-storage.txt`
-- `055-bpi-f3-usb-host-otg.txt`
-- `056-bpi-f3-dual-gbe-network.txt`
-- `057-bpi-f3-pcie-m2.txt`
-- `058-bpi-f3-display-hdmi.txt`
-- `059-bpi-f3-wifi-bluetooth.txt`
-- `060-bpi-f3-watchdog-reset.txt`
+- `055-bpi-f3-emmc-microsd-storage.txt`
+- `056-bpi-f3-usb-host-otg.txt`
+- `057-bpi-f3-dual-gbe-network.txt`
+- `058-bpi-f3-pcie-m2.txt`
+- `059-bpi-f3-display-hdmi.txt`
+- `060-bpi-f3-wifi-bluetooth.txt`
+- `061-bpi-f3-watchdog-reset.txt`

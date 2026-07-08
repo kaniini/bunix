@@ -2,7 +2,13 @@ Target the riscv64 port to boot on Banana Pi BPI-F3 hardware.
 
 Status:
 
-- Active.  `034-riscv64-emulator-userspace-parity.txt` is complete, moved to
+- Paused.  Hardware proof remains open, but this exploration is intentionally
+  deferred while the riscv64 generic port is cleaned up enough to boot an
+  Alpine environment in QEMU.  Resume this exploration after
+  `035-riscv64-cleanup-alpine-environment.txt` and
+  `036-x86-riscv64-dryness-refactor.txt` have reduced the riscv64-only
+  bringup scaffolding.
+- `034-riscv64-emulator-userspace-parity.txt` is complete, moved to
   `explorations/completed/`, and passed the full `make test` gate after the
   QEMU `virt` path booted scheduler-owned native userspace plus the static
   riscv64 musl/Linux-personality smoke.
@@ -179,13 +185,13 @@ Verification notes:
   build/riscv64-serial.log` passed against the current QEMU `virt` smoke log,
   confirming the log checker matches the emulator-proven first-smoke markers.
 - Added follow-up BPI-F3 hardware device explorations:
-  - `054-bpi-f3-emmc-microsd-storage.txt`
-  - `055-bpi-f3-usb-host-otg.txt`
-  - `056-bpi-f3-dual-gbe-network.txt`
-  - `057-bpi-f3-pcie-m2.txt`
-  - `058-bpi-f3-display-hdmi.txt`
-  - `059-bpi-f3-wifi-bluetooth.txt`
-  - `060-bpi-f3-watchdog-reset.txt`
+  - `055-bpi-f3-emmc-microsd-storage.txt`
+  - `056-bpi-f3-usb-host-otg.txt`
+  - `057-bpi-f3-dual-gbe-network.txt`
+  - `058-bpi-f3-pcie-m2.txt`
+  - `059-bpi-f3-display-hdmi.txt`
+  - `060-bpi-f3-wifi-bluetooth.txt`
+  - `061-bpi-f3-watchdog-reset.txt`
 - Added modern SBI reset support to the riscv64 power path:
   - `arch_poweroff()` and `arch_reboot()` now prefer the SBI System Reset
     extension and fall back to legacy shutdown if the firmware extension is

@@ -1,0 +1,88 @@
+Clean up the riscv64 port and get to an Alpine environment on riscv64.
+
+Status:
+
+- Active.
+- This exploration pauses `062-riscv64-bpi-f3-board-port.txt`.  BPI-F3
+  hardware proof remains important, but the generic riscv64 port should be
+  cleaned up first so board work does not accumulate around temporary
+  emulator-only scaffolding.
+- The next exploration after this one is
+  `036-x86-riscv64-dryness-refactor.txt`, which should remove broader
+  duplication once riscv64 can boot a real Alpine-style environment.
+
+Problem:
+
+- The riscv64 path can boot QEMU `virt`, run scheduler-owned native userspace,
+  launch a tiny Linux-personality smoke server, and run a static riscv64 musl
+  hello binary.
+- The riscv64 Linux server is still a small architecture-specific stub rather
+  than the real Linux personality used by x86_64.
+- The riscv64 boot package and runtime path still contain bringup-era special
+  cases that are acceptable for smoke tests but not for an Alpine environment.
+- Alpine-on-riscv64 should be proved in QEMU before returning to BPI-F3
+  hardware so board debugging does not hide generic architecture defects.
+
+Target outcome:
+
+- `make run` remains x86_64-focused unless intentionally changed elsewhere.
+- A dedicated riscv64 QEMU target boots an Alpine-style riscv64 rootfs or
+  rootfs image far enough to start the normal Bunix bootstrap/proc/Linux
+  stack and enter an Alpine userspace init path.
+- The riscv64 Linux personality is no longer a separate toy server for the
+  static hello smoke; it either reuses the shared Linux server implementation
+  or has a thin arch syscall frontend over shared Linux semantics.
+- The riscv64 test suite has narrow gates that prove static musl smoke,
+  dynamic-loader/openat/fstat behavior, and Alpine init-shell progress before
+  the full image path is considered usable.
+
+Constraints:
+
+- Do not regress the existing x86_64 Alpine/busybox/OpenRC flow.
+- Do not require BPI-F3 hardware for this exploration.
+- Keep riscv64 BPI-F3 artifact generation working while this exploration is
+  active, but do not close BPI-F3 hardware tasks without real board logs.
+- Prefer shared Linux-personality code over growing `user/riscv64-linux`.
+- Keep architecture-specific syscall ABI details explicit and table-driven
+  where possible.
+
+Tasks:
+
+- [ ] Audit the current riscv64 user/kernel/server path and list all places
+      where riscv64 uses a bringup-only implementation instead of the shared
+      x86_64 path.
+- [ ] Replace the separate `user/riscv64-linux` server with a shared Linux
+      personality build, or split the current x86_64 Linux server so riscv64
+      can use shared Linux semantics behind a riscv64 syscall ABI frontend.
+- [ ] Define riscv64 Linux syscall dispatch boundaries: syscall number table,
+      argument register mapping, return/error convention, and arch-specific
+      process/thread entry details.
+- [ ] Add riscv64 tests for the shared Linux server using the existing static
+      musl hello smoke and at least one additional syscall-heavy static test.
+- [ ] Add riscv64 dynamic-linker smoke coverage for the musl loader path,
+      including `openat(2)` and correct `fstat(2)` behavior.
+- [ ] Build or prepare a minimal riscv64 Alpine rootfs artifact using the
+      existing project rootfs conventions where possible.
+- [ ] Add a riscv64 QEMU boot target for the Alpine environment with clear
+      serial markers and a clean poweroff condition.
+- [ ] Prove an initial Alpine userspace milestone on riscv64: init path
+      starts, `/bin/sh` or an equivalent shell can run a small command, and
+      the log identifies the riscv64 Linux server as the shared implementation
+      rather than the old stub.
+- [ ] Update docs and exploration notes with exact commands, markers, and
+      known limitations.
+
+Verification:
+
+- [ ] `make ARCH=riscv64 all`
+- [ ] Existing `make test-boot-riscv64-early`
+- [ ] Existing `make test-boot-riscv64-uart-console`
+- [ ] New riscv64 shared-Linux-server smoke target
+- [ ] New riscv64 Alpine environment boot target
+- [ ] A narrow x86_64 smoke proving the shared Linux server refactor did not
+      break the existing x86_64 path
+
+Progress notes:
+
+- Created as the active exploration when `062-riscv64-bpi-f3-board-port.txt`
+  was paused.

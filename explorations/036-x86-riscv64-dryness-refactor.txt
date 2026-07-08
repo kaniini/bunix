@@ -1,0 +1,52 @@
+Refactor x86_64 and riscv64 code for general DRYness after riscv64 Alpine
+bringup.
+
+Status:
+
+- Pending.
+- Start this after `035-riscv64-cleanup-alpine-environment.txt` has made the
+  riscv64 path capable of booting a real Alpine-style userspace in QEMU.
+
+Problem:
+
+- x86_64 is the mature architecture path and riscv64 was brought up
+  incrementally through focused smoke tests.
+- Some duplication is useful while an architecture is young, but once riscv64
+  can run an Alpine environment, duplicated kernel lifecycle, syscall
+  forwarding, server packaging, rootfs boot, and test orchestration logic
+  should be collapsed into shared abstractions.
+- The goal is not aesthetic deduplication; it is to make future architecture
+  ports and board work cheaper without hiding architecture-specific behavior.
+
+Tasks:
+
+- [ ] Audit x86_64/riscv64 duplication across kernel entry, runtime init,
+      boot module handling, user entry, syscall forwarding, server packaging,
+      rootfs image wiring, and QEMU test targets.
+- [ ] Identify which differences are architectural contracts and which are
+      accidental bringup duplication.
+- [ ] Create shared helpers for generic lifecycle and boot-module sequencing
+      where both architectures already agree.
+- [ ] Move Linux-personality syscall forwarding into a shared registry or
+      dispatch layer with arch-specific ABI tables.
+- [ ] Unify server module build/package rules where the only difference is
+      target triple, crt0, or linker mode.
+- [ ] Unify common QEMU test harness behavior while preserving architecture
+      machine, firmware, and shutdown differences.
+- [ ] Update documentation to describe the architecture boundary explicitly:
+      what belongs in `arch/*`, what belongs in generic kernel code, and what
+      belongs in userspace servers.
+- [ ] Keep BPI-F3 artifacts and x86_64 Alpine boot tests passing throughout.
+
+Verification:
+
+- [ ] `make ARCH=x86_64 all`
+- [ ] `make ARCH=riscv64 all`
+- [ ] Existing x86_64 Alpine/busybox smoke target chosen during the refactor
+- [ ] Existing riscv64 Alpine environment target from exploration 061
+- [ ] Existing BPI-F3 artifact/smoke helper targets
+
+Progress notes:
+
+- Created as the follow-on exploration requested after riscv64 cleanup and
+  Alpine environment work.
