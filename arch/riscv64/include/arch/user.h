@@ -35,6 +35,8 @@ void arch_user_set_fs_base(u64 fs_base);
 void arch_user_enter(u64 entry, u64 stack) __attribute__((noreturn));
 void arch_user_resume(const struct arch_syscall_frame *frame)
 	__attribute__((noreturn));
+int arch_user_copy_from(void *dst, u64 user_src, u64 len);
+int arch_user_copy_to(u64 user_dst, const void *src, u64 len);
 u64 arch_syscall_dispatch(struct arch_syscall_frame *frame);
 int riscv64_user_mode_self_test(u64 entry, u64 user_stack, u64 kernel_stack);
 void riscv64_user_ecall_probe(void);

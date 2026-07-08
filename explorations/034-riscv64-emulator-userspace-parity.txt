@@ -45,7 +45,7 @@ Tasks:
 - [x] Replace the early one-off Sv39 harness with riscv64 implementations of
       the generic VM hooks needed by task address spaces: page-table creation,
       map/protect/unmap/translate, activation, and teardown.
-- [ ] Add riscv64 copyin/copyout helpers with user-address validation and
+- [x] Add riscv64 copyin/copyout helpers with user-address validation and
       fault behavior suitable for native syscalls and server RPC payloads.
 - [ ] Wire riscv64 user task launch into the normal scheduler/proc/bootstrap
       path so native tasks have scheduler-owned lifetime, kernel stacks,
@@ -194,9 +194,9 @@ Verification notes:
     `pmm_page_alloc()`.
   - `arch_vm_space_destroy()` recursively frees page-table pages with
     `pmm_page_free_addr()`.
-  - The current packaged `abi-smoke.user` loader still has its own one-off
-    early Sv39 setup, so the first task remains open until that payload moves
-    to normal task/server launch or the harness is deleted.
+  - At this point, the packaged `abi-smoke.user` loader still had its own
+    one-off early Sv39 setup; a later slice replaced that setup with the
+    generic VM hooks.
 - `make all` passed after arch-scoping kernel object paths and linking riscv64
   PMM.
 - `make ARCH=riscv64 all` passed after linking PMM into riscv64.
@@ -224,3 +224,23 @@ Verification notes:
   onto the generic VM hooks.
 - `make test-riscv64-bootpkg` passed after moving the packaged user payload
   onto the generic VM hooks.
+- Added low-level riscv64 user copy helpers:
+  - `arch_user_copy_from()` and `arch_user_copy_to()` validate Bunix user
+    ranges with `riscv64_user_addr_valid()`, set `sstatus.SUM` only around the
+    byte copy, restore the prior `sstatus`, and return `-1` for invalid
+    ranges.
+  - The early native console syscall path now reads user text through
+    `arch_user_copy_from()` instead of dereferencing user pointers directly.
+  - The current helpers operate on the active address space.  Scheduler-owned
+    task launch will layer normal `vm_read_user()`/`vm_write_user()` paths on
+    top of task `vm_space` objects for unmapped-page handling when riscv64
+    joins the normal proc/server path.
+  - The riscv64 early boot smoke now runs a copy self-test under the active
+    payload VM space: copyout to user stack, copyin back, byte comparison, and
+    invalid-range rejection.
+  - `test-boot-riscv64-early` now requires the `copy: riscv64 user` marker.
+- `make ARCH=riscv64 all` passed after adding riscv64 user copy helpers.
+- `make test-boot-riscv64-early` passed with the user copy smoke marker.
+- `make test-riscv64-user-abi` passed after adding riscv64 user copy helpers.
+- `make test-riscv64-bootpkg` passed after adding riscv64 user copy helpers.
+- `make all` passed after adding riscv64 user copy helpers.

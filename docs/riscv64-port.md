@@ -35,6 +35,9 @@ The early boot gate currently verifies:
   with the expected `BUNIX-RV64-BOOTPKG` header.
 - The packaged `abi-smoke.user` payload can be located and validated as an
   ELF64 little-endian RISC-V user image.
+- Low-level riscv64 user copy helpers can copy from and to the active user
+  address space with `sstatus.SUM`, validate Bunix user ranges, and reject
+  invalid ranges.
 - The packaged `abi-smoke.user` payload can have its load segments copied into
   backing pages, mapped at the real Bunix user base `0x400000` through the
   generic riscv64 `arch_vm_*` hooks, run in U-mode through the riscv64 crt0,
@@ -66,8 +69,17 @@ for Sv39 page-table roots, map/protect/unmap/translate, and `satp`
 activation.  These hooks allocate and free page-table pages through the
 generic PMM after the emulator kernel initializes PMM from FDT memory data.
 They are suitable for emulator bringup tests, but scheduler-owned userspace
-still needs task lifetime integration and copyin/copyout before the early
-payload harness can be removed.
+still needs task lifetime integration before the early payload harness can be
+removed.
+
+Riscv64 has low-level active-address-space copy helpers for early native
+syscalls: `arch_user_copy_from()` and `arch_user_copy_to()` validate the Bunix
+user range, set `sstatus.SUM` only around the byte copy, restore the previous
+status, and return an error for invalid ranges.  The early native console
+syscall now uses those helpers instead of directly dereferencing user memory.
+Full scheduler-owned task launch still needs to route normal syscall/RPC
+copies through task `vm_space` objects so unmapped-page failures are reported
+through `vm_read_user()`/`vm_write_user()` rather than by direct access.
 
 The PMM has been split enough to support multiple boot protocols:
 `pmm_init_from_ranges()` initializes the generic page allocator from
@@ -150,8 +162,9 @@ The initial riscv64 port intentionally does not support:
 - SMP or secondary hart startup.
 - FPU, vector, or signal context save/restore.
 - Native server task launch through proc/bootstrap.
-- Copyin/copyout, VM server integration, and normal task address-space
-  lifetime wiring.
+- VM server integration and normal task address-space lifetime wiring.
+- Task-owned user-copy integration for unmapped-page fault reporting through
+  `vm_read_user()`/`vm_write_user()`.
 - Linux signal frames or riscv64-specific Linux syscall parity.
 - Dynamic linking and `ld-musl-riscv64.so.1`.
 - VirtIO MMIO devices, block storage, networking, or Alpine rootfs boot.

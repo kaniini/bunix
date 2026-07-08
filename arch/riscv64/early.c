@@ -307,6 +307,16 @@ static void memory_zero(u8 *dest, u64 size)
 	}
 }
 
+static int memory_equal(const u8 *left, const u8 *right, u64 size)
+{
+	for (u64 i = 0; i < size; i++) {
+		if (left[i] != right[i]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
 static u64 build_user_stack_mapped(u8 *stack_phys, u64 stack_vaddr,
 				   const char *argv0)
 {
@@ -427,6 +437,32 @@ static int map_payload_space(struct arch_vm_space *space)
 	return 0;
 }
 
+static int user_copy_self_test(void)
+{
+	static const u8 expected[] = { 'r', 'v', '6', '4', '-', 'c', 'o', 'p', 'y' };
+	u8 actual[sizeof(expected)];
+	const u64 user_addr = USER_STACK_PAGE + 128;
+
+	memory_zero(actual, sizeof(actual));
+	if (arch_user_copy_to(user_addr, expected, sizeof(expected)) != 0) {
+		return -1;
+	}
+	if (arch_user_copy_from(actual, user_addr, sizeof(actual)) != 0) {
+		return -1;
+	}
+	if (!memory_equal(actual, expected, sizeof(expected))) {
+		return -1;
+	}
+	if (arch_user_copy_from(actual, 0, sizeof(actual)) == 0) {
+		return -1;
+	}
+	if (arch_user_copy_to(RISCV64_USER_LIMIT - 1, expected,
+			      sizeof(expected)) == 0) {
+		return -1;
+	}
+	return 0;
+}
+
 void riscv64_early_main(u64 hart_id, u64 fdt)
 {
 	struct riscv64_fdt_memory_range memory;
@@ -505,6 +541,9 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 					"/bin/abi-smoke.user");
 				if (map_payload_space(&payload_space) == 0) {
 					arch_vm_activate(&payload_space);
+					if (user_copy_self_test() == 0) {
+						early_puts("copy: riscv64 user\n");
+					}
 					if (riscv64_user_mode_self_test(
 						    module_entry, module_stack,
 						    (u64)(mapped_user_kernel_stack +
