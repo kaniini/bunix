@@ -48,8 +48,9 @@ The early boot gate currently verifies:
 - A static riscv64 musl hello payload packaged as `/bin/musl-hello` can be
   launched as a scheduler-owned U-mode task, preserve absolute `argv[0]`, use
   an initial stack with argv/envp plus an `AT_NULL` aux vector terminator, send
-  riscv64 Linux-number syscalls to a userspace `linux` server, and exit
-  cleanly.
+  riscv64 Linux-number syscalls through a riscv64 syscall frontend to the
+  shared userspace `linux` server, register as a Linux process, write through
+  the shared Linux server, and exit cleanly.
 - The guest exits through SBI poweroff.
 
 ## Boot package
@@ -211,21 +212,26 @@ The first riscv64 Linux-personality target is a static rv64 musl hello program,
 not BusyBox or dynamic linking.  The emulator now builds the static
 `user/musl-hello/main.c` ELF with host clang against the musl.cc sysroot,
 packages it as `/bin/musl-hello`, launches it as a scheduler-owned U-mode
-task, sends its nonnegative Linux syscalls to a userspace riscv64 `linux`
-server over `LINX` IPC, and checks its serial marker from
-`make test-boot-riscv64-early`.
+task, and sends its nonnegative Linux syscalls through a riscv64 syscall
+frontend to the shared userspace Linux server built from `user/linux/main.c`.
+`make test-boot-riscv64-early` now proves the shared server path by requiring
+`names: register name=linux`, `linux-riscv64: registered task=`, the musl hello
+serial marker, and `linux-riscv64: exit_group status=0`.
 
-The riscv64 server path is intentionally small.  The boot carrier packages
-`user/riscv64-linux/main.c` as module `linux`, launches it before
-`/bin/musl-hello`, and verifies `linux-riscv64-server: online`,
-`linux-riscv64-server: write`, and `linux-riscv64-server: exit_group`.
-The server decodes riscv64 Linux syscall numbers for the observed static hello
-surface: `set_tid_address`, `write`, `exit`, and `exit_group`.  It replies with
-an action code, and the trap path performs low-level current-task mechanics
-that are not yet exposed to userspace, such as copying approved console output
-from the faulting task's address space and terminating the current thread after
-an approved exit.  Do not reuse x86_64 Linux syscall numbers for this server
-path.
+The riscv64 syscall frontend maps the observed static hello surface to shared
+Linux server messages: riscv64 `write` becomes shared `BUNIX_LINUX_WRITE`,
+`exit` and `exit_group` become shared `BUNIX_LINUX_EXIT_GROUP`, and
+`set_tid_address` is answered by the current scheduler thread ID.  During the
+`riscv64-bootpkg-test` smoke, stdout/stderr writes are also mirrored to the
+early SBI console because the package still omits the real console server.
+That early-console mirror is a smoke-test aid, not the future Alpine console
+model.
+
+The old `user/riscv64-linux/main.c` stub still exists for the narrower UART
+smoke package, and the riscv64 syscall frontend explicitly selects that
+legacy action protocol when the command line contains `riscv64-uart-console`.
+The default riscv64 boot package no longer uses that stub for the static musl
+hello path.
 
 The generic initial stack seeds `argc`, `argv[0]`, a null argv terminator, a
 null envp terminator, and an `AT_NULL` auxv terminator.  The auxv terminator is

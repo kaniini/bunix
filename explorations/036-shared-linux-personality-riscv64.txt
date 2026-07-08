@@ -37,9 +37,9 @@ Tasks:
       personality semantics.
 - [ ] Define a riscv64 Linux syscall ABI table that maps riscv64 syscall
       numbers to the shared `BUNIX_LINUX_*` RPC operations.
-- [ ] Build `user/linux/main.c` or a shared Linux server library for riscv64
+- [x] Build `user/linux/main.c` or a shared Linux server library for riscv64
       as the module named `linux`.
-- [ ] Provide the minimal riscv64 service-registration path needed by the
+- [x] Provide the minimal riscv64 service-registration path needed by the
       shared Linux server, such as launching `names` before `linux` or adding
       a tightly scoped temporary bridge that does not become a second names
       implementation.
@@ -80,3 +80,9 @@ Progress notes:
   translating riscv64 Linux syscalls into the shared `BUNIX_LINUX_*` protocol;
   it should not re-open the broad boot-package refactor except where required
   to make the shared Linux server become usable.
+- Exploration 035 has replaced the default static-musl boot path's `linux`
+  module with the shared `user/linux/main.c` build and added a narrow riscv64
+  syscall frontend for the observed static hello surface.  Remaining work here
+  is to broaden the table beyond static hello, retire the UART package's old
+  stub dependency, delete the `BUNIX_LINUX_RISCV64_*` action protocol after no
+  path uses it, and add syscall-heavy/dynamic-loader runtime coverage.

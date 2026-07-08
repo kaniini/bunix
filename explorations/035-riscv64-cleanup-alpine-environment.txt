@@ -270,3 +270,34 @@ Progress notes:
   off cleanly.
 - `make test-boot-riscv64-uart-console` passed with the UART boot package kept
   as a narrow SBI/UART smoke package.
+- Replaced the default riscv64 static-musl Linux path with the shared Linux
+  server implementation:
+  - The default and multi-record riscv64 boot packages now package
+    `build/riscv64/modules/linux-shared.server` as module `linux`.
+  - `arch/riscv64/user.c` translates the observed riscv64 static hello syscall
+    surface into shared Linux protocol messages instead of sending the old
+    `BUNIX_LINUX_RISCV64_SYSCALL` action wrapper.
+  - The riscv64 frontend lazily registers the current Bunix task with the
+    shared Linux server using the task ID as the requested Linux PID, forwards
+    `write` through shared-buffer IPC, handles `set_tid_address`, and forwards
+    `exit`/`exit_group` to shared `BUNIX_LINUX_EXIT_GROUP`.
+  - The rv64 boot-package test still mirrors stdout/stderr writes to the early
+    SBI console and powers off after `exit_group`; those are command-line-gated
+    smoke aids until the normal console/proc/rootfs server graph is present.
+  - The shared Linux server now uses non-blocking names resolution for optional
+    proc notifications, avoiding a deadlock in partial server graphs where
+    `proc` is intentionally absent.
+  - The old `user/riscv64-linux` stub remains only for the narrower UART smoke
+    package until the boot-test split can own that path.  The riscv64 syscall
+    frontend selects the legacy action protocol only when the command line
+    contains `riscv64-uart-console`.
+- `make ARCH=riscv64 all` passed after adding the shared Linux syscall
+  frontend and the UART legacy branch.
+- `make test-riscv64-shared-linux-server-build` passed after switching the
+  default package toward the shared Linux server.
+- `make build/modules/linux.server` passed after making optional proc
+  notifications non-blocking when proc is absent.
+- `make test-boot-riscv64-early` passed with the default package using shared
+  `user/linux/main.c` as module `linux`.
+- `make test-boot-riscv64-uart-console` passed with the command-line-gated
+  legacy stub path preserved for that narrower package.

@@ -601,11 +601,12 @@ static long register_service(u64 service)
 	return reply.words[0] == 0 ? 0 : -1;
 }
 
-static u64 resolve_service(u64 service, unsigned int rights)
+static u64 resolve_service_type(u64 service, unsigned int rights,
+				unsigned int type)
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_NAMES,
-		.type = BUNIX_NAMES_WAIT,
+		.type = type,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply = 0,
@@ -622,9 +623,20 @@ static u64 resolve_service(u64 service, unsigned int rights)
 	return reply.cap;
 }
 
+static u64 resolve_service(u64 service, unsigned int rights)
+{
+	return resolve_service_type(service, rights, BUNIX_NAMES_WAIT);
+}
+
+static u64 try_resolve_service(u64 service, unsigned int rights)
+{
+	return resolve_service_type(service, rights, BUNIX_NAMES_RESOLVE);
+}
+
 static void notify_proc_exit(u64 linux_pid, u64 status, u64 kill_task)
 {
-	const u64 proc = resolve_service(BUNIX_SERVICE_PROC, BUNIX_RIGHT_SEND);
+	const u64 proc = try_resolve_service(BUNIX_SERVICE_PROC,
+					     BUNIX_RIGHT_SEND);
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_PROC,
 		.type = BUNIX_PROC_EXIT,
@@ -643,7 +655,8 @@ static void notify_proc_exit(u64 linux_pid, u64 status, u64 kill_task)
 static void notify_proc_register_linux(u64 linux_pid, u64 bunix_task,
 				       u64 parent_linux_pid)
 {
-	const u64 proc = resolve_service(BUNIX_SERVICE_PROC, BUNIX_RIGHT_SEND);
+	const u64 proc = try_resolve_service(BUNIX_SERVICE_PROC,
+					     BUNIX_RIGHT_SEND);
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_PROC,
 		.type = BUNIX_PROC_REGISTER_LINUX,

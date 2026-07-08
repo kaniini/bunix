@@ -557,23 +557,23 @@ $(RISCV64_BOOTSTRAP_MODULE): user/crt0-riscv64.S user/riscv64-bootstrap/main.c u
 		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
 		$(BUILD_DIR)/riscv64/user/riscv64-bootstrap.c.o
 
-$(RISCV64_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
+$(RISCV64_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_NAMES_MODULE) names \
 		$(RISCV64_USER_MODULE) user \
 		$(RISCV64_BOOTSTRAP_MODULE) bootstrap \
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
-		$(RISCV64_LINUX_SERVER_MODULE) linux \
+		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux \
 		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
 
-$(RISCV64_BOOTPKG_MULTI): $(RISCV64_NAMES_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
+$(RISCV64_BOOTPKG_MULTI): $(RISCV64_NAMES_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_USER_ABI_MODULE) disk0 \
 		$(RISCV64_NAMES_MODULE) names \
 		$(RISCV64_USER_MODULE) user \
 		$(RISCV64_BOOTSTRAP_MODULE) bootstrap \
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
-		$(RISCV64_LINUX_SERVER_MODULE) linux \
+		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux \
 		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
 
 $(RISCV64_UART_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
@@ -1355,18 +1355,18 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "kernel: starting module server names" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "names: register name=bootstrap" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "names: register name=user" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "names: register name=linux" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootstrap-riscv64: online" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootstrap-riscv64: abi-smoke launched" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootstrap-riscv64: linux launched" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "kernel: starting module server linux" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "linux-riscv64: registered task=" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootstrap-riscv64: musl-hello launched" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "linux-riscv64-server: online" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "linux-riscv64-server: write" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "linux-riscv64-server: exit_group" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "musl hello argc=1 argv0=/bin/musl-hello" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "native: riscv64 server argc=1 argv0=/bin/abi-smoke.user" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "native: riscv64 syscalls" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootstrap-riscv64: done" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "linux-riscv64-server: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "linux-riscv64: exit_group status=0" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "sbi: system reset poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 
