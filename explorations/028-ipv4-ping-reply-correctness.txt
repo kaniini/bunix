@@ -10,11 +10,16 @@ Problem:
   ~ # ping -c 4 4.2.2.1
   PING 4.2.2.1 (4.2.2.1): 56 data bytes
   64 bytes from 0.0.0.0: seq=0 ttl=96 time=300.000 ms
+  ping: recvfrom: Resource temporarily unavailable
+  ping: recvfrom: Resource temporarily unavailable
+  ping: recvfrom: Resource temporarily unavailable
   ```
 
 - There should be four replies for `ping -c 4 4.2.2.1`.
 - Each reply should report the actual remote source address, `4.2.2.1`, not
   `0.0.0.0`.
+- The remaining three receives currently time out with `EAGAIN`, reported by
+  BusyBox as `ping: recvfrom: Resource temporarily unavailable`.
 - The bad source address suggests the receive path, ICMP echo reply parsing,
   IPv4 header source extraction, socket address reporting, checksum handling,
   NAT-facing metadata, or userspace `recvfrom`/`recvmsg` address copyout is
@@ -60,6 +65,8 @@ Investigation targets:
   and any BusyBox ping-specific socket mode.
 - Check whether only the first reply is delivered, whether later replies are
   dropped, or whether BusyBox exits after one malformed reply.
+- Determine why the second through fourth `recvfrom(2)` calls return `EAGAIN`
+  instead of receiving replies.
 
 Tasks:
 
