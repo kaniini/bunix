@@ -244,3 +244,15 @@ Verification notes:
 - `make test-riscv64-user-abi` passed after adding riscv64 user copy helpers.
 - `make test-riscv64-bootpkg` passed after adding riscv64 user copy helpers.
 - `make all` passed after adding riscv64 user copy helpers.
+- Added an SBI-backed riscv64 implementation of the `console.h` kernel
+  surface:
+  - `arch/riscv64/console.c` provides `console_putc()`, `console_write*()`,
+    `console_printf()`, and hex/format helpers over legacy SBI putchar.
+  - Input and log-ring read APIs intentionally return empty results for now;
+    the full console server/TTY stack remains a later riscv64 userspace
+    milestone.
+  - This keeps generic scheduler/server code able to link against
+    `console_printf()` on riscv64 without pulling in the x86 COM/VGA console.
+- `make ARCH=riscv64 all` passed after adding the SBI console shim.
+- `make test-boot-riscv64-early` passed after adding the SBI console shim.
+- `make all` passed after adding the SBI console shim.

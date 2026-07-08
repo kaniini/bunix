@@ -81,6 +81,12 @@ Full scheduler-owned task launch still needs to route normal syscall/RPC
 copies through task `vm_space` objects so unmapped-page failures are reported
 through `vm_read_user()`/`vm_write_user()` rather than by direct access.
 
+The riscv64 kernel also has an SBI-backed implementation of the `console.h`
+surface for early emulator bringup.  It supports output and `console_printf()`
+formatting over legacy SBI putchar so generic scheduler/server code can link
+without the x86 COM/VGA console.  Input and dmesg-ring reads are stubbed empty
+until the real console server and TTY stack are brought up on riscv64.
+
 The PMM has been split enough to support multiple boot protocols:
 `pmm_init_from_ranges()` initializes the generic page allocator from
 available/reserved physical ranges, the x86_64 Multiboot2 path collects its
@@ -165,6 +171,7 @@ The initial riscv64 port intentionally does not support:
 - VM server integration and normal task address-space lifetime wiring.
 - Task-owned user-copy integration for unmapped-page fault reporting through
   `vm_read_user()`/`vm_write_user()`.
+- Console input and dmesg-ring reads from the riscv64 SBI console shim.
 - Linux signal frames or riscv64-specific Linux syscall parity.
 - Dynamic linking and `ld-musl-riscv64.so.1`.
 - VirtIO MMIO devices, block storage, networking, or Alpine rootfs boot.
