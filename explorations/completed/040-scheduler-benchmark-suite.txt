@@ -178,3 +178,9 @@ Progress notes:
   - Verification:
     - code search for affinity/migration policy surfaces
     - `git diff --check`
+- Final verification:
+  - Full test suite passed after the scheduler benchmark suite, per-thread
+    scheduler stats, policy model, comparison reporting, and future
+    affinity/migration explorations were in place.
+  - Verification:
+    - `make test`
