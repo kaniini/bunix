@@ -50,7 +50,7 @@ Tasks:
 - [x] Define the riscv64 kernel virtual-memory layout, page-table flags,
       physical memory discovery, direct map policy, and userspace address
       limits.
-- [ ] Implement enough boot and early memory initialization to print a kernel
+- [x] Implement enough boot and early memory initialization to print a kernel
       banner and power off cleanly under QEMU.
 - [ ] Bring up trap/interrupt handling and a timer tick with SBI/CLINT/PLIC
       integration appropriate to the chosen machine model.
@@ -127,6 +127,13 @@ Progress notes:
 - With the Clang path, `make ARCH=riscv64 all` compiles every riscv64 object
   currently in the source list and now fails only at the missing linker
   boundary because `riscv64-alpine-linux-musl-ld` is not installed.
+- After installing riscv64 system QEMU and the Alpine riscv64 linker, the
+  early riscv64 kernel links and boots under QEMU.  `test-boot-riscv64-early`
+  now verifies the OpenSBI direct kernel path prints
+  `bunixos: riscv64 early bootstrap`, prints `machine: poweroff`, and exits
+  via guest poweroff.
+- Tightened `arch/riscv64/linker.ld` with explicit RX/R/RW program headers so
+  the riscv64 kernel no longer links with a RWX LOAD segment.
 - Added riscv64 arch skeleton headers and implementations:
   - `arch/riscv64/include/arch/sbi.h` centralizes the early SBI call ABI and
     console putchar helper used by the early payload and power path.
@@ -221,3 +228,10 @@ Verification so far:
   and failed at missing `riscv64-alpine-linux-musl-ld`.
 - `make all` passed for the default x86_64 target after changing riscv64
   tool defaults.
+- `command -v qemu-system-riscv64` found `/usr/bin/qemu-system-riscv64`.
+- `command -v riscv64-alpine-linux-musl-ld` found
+  `/usr/bin/riscv64-alpine-linux-musl-ld`.
+- `make ARCH=riscv64 all` passed and linked `build/riscv64/bunixos.kernel`.
+- `make test-boot-riscv64-early` passed.
+- `make all` passed for the default x86_64 target after the riscv64 linker
+  script change.
