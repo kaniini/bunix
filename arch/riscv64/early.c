@@ -153,6 +153,30 @@ static int generic_services_self_test(u64 fdt)
 	return sched_worker_ran == 1 ? 0 : -1;
 }
 
+static void platform_discovery_smoke(u64 fdt)
+{
+	struct riscv64_fdt_platform platform;
+
+	if (riscv64_fdt_scan_platform((const void *)fdt, &platform) != 0) {
+		return;
+	}
+	if (platform.cpu_count != 0) {
+		early_puts("fdt: riscv64 cpus\n");
+	}
+	if (platform.timebase_frequency != 0) {
+		early_puts("fdt: riscv64 timer\n");
+	}
+	if (platform.stdout_path[0] != '\0') {
+		early_puts("fdt: riscv64 stdout\n");
+	}
+	if (platform.uart_count != 0) {
+		early_puts("fdt: riscv64 uart\n");
+	}
+	if (platform.interrupt_controller_count != 0) {
+		early_puts("fdt: riscv64 interrupt-controller\n");
+	}
+}
+
 static int vm_hook_self_test(void)
 {
 	struct arch_vm_space space;
@@ -565,6 +589,7 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	if (pmm_total_page_count() != 0 && pmm_free_page_count() != 0) {
 		early_puts("pmm: riscv64 ranges\n");
 	}
+	platform_discovery_smoke(fdt);
 	if (generic_services_self_test(fdt) == 0) {
 		early_puts("sched: riscv64 thread\n");
 	}

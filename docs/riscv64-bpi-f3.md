@@ -122,8 +122,12 @@ the U-Boot `/chosen` setup before adding kernel-side board constants.
 
 After the first serial/poweroff smoke, bring up hardware in this order:
 
-- Confirm `stdout-path` and the K1 UART binding, then add an early native UART
-  backend under the riscv64 board layer.
+- Confirm that the firmware FDT properties discovered by the QEMU smoke also
+  appear on BPI-F3: CPU hart IDs, `/cpus/timebase-frequency`,
+  `/chosen/stdout-path`, UART-compatible nodes, interrupt-controller nodes,
+  memory ranges, and `/chosen/linux,initrd-*`.
+- Confirm the K1 UART binding and then add an early native UART backend under
+  the riscv64 board layer.
 - Confirm SBI timer and poweroff/reboot behavior on the vendor OpenSBI.
 - Identify the interrupt-controller path from the vendor DT and BSP: PLIC,
   AIA, or vendor-specific routing.

@@ -69,7 +69,7 @@ Tasks:
       or U-Boot-loaded ELF, with command-line and module-payload strategy.
 - [x] Add a BPI-F3 board profile under the riscv64 build/test configuration
       without changing the generic QEMU `virt` profile.
-- [ ] Implement firmware device-tree parsing sufficient to discover memory,
+- [x] Implement firmware device-tree parsing sufficient to discover memory,
       CPU harts, UART, interrupt controller, timer source, chosen stdout path,
       and initrd/module locations.
 - [ ] Bring up early serial console on the BPI-F3 using firmware-provided
@@ -127,3 +127,24 @@ Verification notes:
   profile.
 - `make test-boot-riscv64-early` passed after adding the first BPI-F3 board
   artifact profile, confirming the generic QEMU `virt` path was unchanged.
+- Added a bounded riscv64 firmware platform FDT discovery pass:
+  - `riscv64_fdt_scan_platform()` discovers CPU hart IDs, `/cpus`
+    `timebase-frequency`, `/chosen/stdout-path`, UART-compatible nodes,
+    interrupt-controller nodes, and first `reg` ranges for device nodes.
+  - The existing riscv64 FDT paths already discover memory ranges and
+    `/chosen/linux,initrd-start`/`linux,initrd-end`, and the riscv64 boot
+    package parser already records module locations for the normal bootstrap
+    path.
+  - The QEMU `virt` smoke now requires markers for discovered CPUs, timer
+    source, stdout path, UART, and interrupt-controller data before starting
+    userspace.
+  - This completes the firmware-DT discovery requirement for the first BPI-F3
+    hardware smoke without adding K1-specific register constants yet.
+- `make ARCH=riscv64 all` passed after adding firmware platform FDT
+  discovery.
+- `make test-boot-riscv64-early` passed after adding firmware platform FDT
+  discovery and markers.
+- `make test-riscv64-bpi-f3-artifacts` passed after adding firmware platform
+  FDT discovery.
+- `make test-riscv64-bootpkg` passed after adding firmware platform FDT
+  discovery.
