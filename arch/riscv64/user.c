@@ -66,24 +66,6 @@ enum {
 	LINUX_RISCV64_MUNMAP = 215,
 	LINUX_RISCV64_MMAP = 222,
 	LINUX_RISCV64_MPROTECT = 226,
-	LINUX_SHARED_READ = 0,
-	LINUX_SHARED_GETPID = 39,
-	LINUX_SHARED_GETUID = 102,
-	LINUX_SHARED_GETGID = 104,
-	LINUX_SHARED_GETEUID = 107,
-	LINUX_SHARED_GETEGID = 108,
-	LINUX_SHARED_GETPPID = 110,
-	LINUX_SHARED_WRITE = 1,
-	LINUX_SHARED_CLOSE = 3,
-	LINUX_SHARED_FSTAT = 5,
-	LINUX_SHARED_MMAP = 9,
-	LINUX_SHARED_SET_TID_ADDRESS = 218,
-	LINUX_SHARED_GETTID = 186,
-	LINUX_SHARED_REGISTER_PROCESS = 1000,
-	LINUX_SHARED_EXIT_GROUP = 231,
-	LINUX_SHARED_OPENAT = 257,
-	LINUX_SHARED_READLINKAT = 267,
-	LINUX_SHARED_NEWFSTATAT = 262,
 	LINUX_ENOMEM = 12,
 	LINUX_EFAULT = 14,
 	LINUX_EINVAL = 22,
@@ -977,7 +959,7 @@ static u64 linux_register_current(struct ipc_port *linux,
 	const u32 current_task = task_id(task_current());
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_LINX,
-		.type = LINUX_SHARED_REGISTER_PROCESS,
+		.type = LINUX_MSG_REGISTER_PROCESS,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply_port = reply_port,
@@ -1017,7 +999,7 @@ static u64 linux_write_one(struct ipc_port *linux, struct ipc_port *reply_port,
 	struct shared_buffer *buffer;
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_LINX,
-		.type = LINUX_SHARED_WRITE,
+		.type = LINUX_MSG_WRITE,
 		.sender = 0,
 		.cap_rights = TASK_RIGHT_RECV | TASK_RIGHT_DUP,
 		.reply_port = reply_port,
@@ -1184,9 +1166,9 @@ static u64 linux_forward_user_buffer(struct ipc_port *linux,
 	}
 	const u64 result = reply.words[0];
 	if (copy_out && (i64)result >= 0) {
-		u64 out_len = type == LINUX_SHARED_READ ||
-				      type == LINUX_SHARED_MMAP ||
-				      type == LINUX_SHARED_READLINKAT ?
+		u64 out_len = type == LINUX_MSG_READ ||
+				      type == LINUX_MSG_MMAP ||
+				      type == LINUX_MSG_READLINKAT ?
 				      result : len;
 
 		if (out_len > len) {
@@ -1263,7 +1245,7 @@ static u64 linux_forward_path_output(struct ipc_port *linux,
 	}
 	const u64 result = reply.words[0];
 	if ((i64)result >= 0) {
-		u64 copy_len = type == LINUX_SHARED_READLINKAT ? result :
+		u64 copy_len = type == LINUX_MSG_READLINKAT ? result :
 			       out_len;
 
 		if (copy_len > out_len) {
@@ -1316,7 +1298,7 @@ static int linux_mmap_file_into_task(struct task *task, struct ipc_port *linux,
 					  LINUX_MAX_SYSCALL_BUFFER);
 		struct ipc_message request = {
 			.protocol = USER_FOURCC_LINX,
-			.type = LINUX_SHARED_MMAP,
+			.type = LINUX_MSG_MMAP,
 			.sender = 0,
 			.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
 			.reply_port = reply_port,
@@ -1497,7 +1479,7 @@ static u64 linux_exit_current(struct ipc_port *linux, struct ipc_port *reply_por
 	const u32 current_task = task_id(task_current());
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_LINX,
-		.type = LINUX_SHARED_EXIT_GROUP,
+		.type = LINUX_MSG_EXIT_GROUP,
 		.sender = 0,
 		.cap_rights = 0,
 		.reply_port = reply_port,
@@ -1540,39 +1522,39 @@ struct riscv64_linux_syscall {
 
 static const struct riscv64_linux_syscall riscv64_linux_syscalls[] = {
 	{ LINUX_RISCV64_OPENAT, RISCV64_LINUX_OP_OPENAT,
-	  LINUX_SHARED_OPENAT },
+	  LINUX_MSG_OPENAT },
 	{ LINUX_RISCV64_CLOSE, RISCV64_LINUX_OP_CLOSE,
-	  LINUX_SHARED_CLOSE },
+	  LINUX_MSG_CLOSE },
 	{ LINUX_RISCV64_READ, RISCV64_LINUX_OP_READ,
-	  LINUX_SHARED_READ },
+	  LINUX_MSG_READ },
 	{ LINUX_RISCV64_WRITE, RISCV64_LINUX_OP_WRITE,
-	  LINUX_SHARED_WRITE },
+	  LINUX_MSG_WRITE },
 	{ LINUX_RISCV64_READLINKAT, RISCV64_LINUX_OP_READLINKAT,
-	  LINUX_SHARED_READLINKAT },
+	  LINUX_MSG_READLINKAT },
 	{ LINUX_RISCV64_NEWFSTATAT, RISCV64_LINUX_OP_NEWFSTATAT,
-	  LINUX_SHARED_NEWFSTATAT },
+	  LINUX_MSG_NEWFSTATAT },
 	{ LINUX_RISCV64_FSTAT, RISCV64_LINUX_OP_FSTAT,
-	  LINUX_SHARED_FSTAT },
+	  LINUX_MSG_FSTAT },
 	{ LINUX_RISCV64_EXIT, RISCV64_LINUX_OP_EXIT,
-	  LINUX_SHARED_EXIT_GROUP },
+	  LINUX_MSG_EXIT_GROUP },
 	{ LINUX_RISCV64_EXIT_GROUP, RISCV64_LINUX_OP_EXIT,
-	  LINUX_SHARED_EXIT_GROUP },
+	  LINUX_MSG_EXIT_GROUP },
 	{ LINUX_RISCV64_SET_TID_ADDRESS, RISCV64_LINUX_OP_SET_TID_ADDRESS,
 	  0 },
 	{ LINUX_RISCV64_GETPID, RISCV64_LINUX_OP_SCALAR,
-	  LINUX_SHARED_GETPID },
+	  LINUX_MSG_GETPID },
 	{ LINUX_RISCV64_GETPPID, RISCV64_LINUX_OP_SCALAR,
-	  LINUX_SHARED_GETPPID },
+	  LINUX_MSG_GETPPID },
 	{ LINUX_RISCV64_GETUID, RISCV64_LINUX_OP_SCALAR,
-	  LINUX_SHARED_GETUID },
+	  LINUX_MSG_GETUID },
 	{ LINUX_RISCV64_GETEUID, RISCV64_LINUX_OP_SCALAR,
-	  LINUX_SHARED_GETEUID },
+	  LINUX_MSG_GETEUID },
 	{ LINUX_RISCV64_GETGID, RISCV64_LINUX_OP_SCALAR,
-	  LINUX_SHARED_GETGID },
+	  LINUX_MSG_GETGID },
 	{ LINUX_RISCV64_GETEGID, RISCV64_LINUX_OP_SCALAR,
-	  LINUX_SHARED_GETEGID },
+	  LINUX_MSG_GETEGID },
 	{ LINUX_RISCV64_GETTID, RISCV64_LINUX_OP_SCALAR,
-	  LINUX_SHARED_GETTID },
+	  LINUX_MSG_GETTID },
 	{ LINUX_RISCV64_BRK, RISCV64_LINUX_OP_BRK, 0 },
 	{ LINUX_RISCV64_MUNMAP, RISCV64_LINUX_OP_MUNMAP, 0 },
 	{ LINUX_RISCV64_MMAP, RISCV64_LINUX_OP_MMAP, 0 },

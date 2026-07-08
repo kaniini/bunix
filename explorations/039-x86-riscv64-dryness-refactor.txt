@@ -186,3 +186,14 @@ Progress notes:
   - Verification:
     - `make test-boot-riscv64-early test-boot-riscv64-alpine test-boot-riscv64-uart-console`
     - `git diff --check`
+- Shared Linux message ID slice:
+  - Added explicit `LINUX_MSG_*` protocol IDs to `kernel/linux_abi.h` for the
+    Linux server message types shared by the x86_64 and riscv64 frontends.
+  - Converted the riscv64 frontend away from local `LINUX_SHARED_*` aliases so
+    its syscall table names the shared `LINX` protocol operation directly.
+  - This is incremental progress toward a shared Linux syscall registry; the
+    architecture-local dispatch and marshalling code still remains.
+  - Verification:
+    - `make ARCH=riscv64 all`
+    - `make ARCH=x86_64 all`
+    - `make test-boot-riscv64-alpine`
