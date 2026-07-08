@@ -25,7 +25,7 @@ Tasks:
       rootfs conventions.
 - [ ] Build riscv64 variants of the normal server graph needed for an Alpine
       userspace environment.
-- [ ] Launch riscv64 `time` and `proc` with the same handle layout expected by
+- [x] Launch riscv64 `time` and `proc` with the same handle layout expected by
       the shared x86_64 bootstrap before attempting proc-managed exec or
       dynamic-loader smoke.
 - [ ] Wire the existing riscv64 Alpine squashfs artifact from exploration 035
@@ -58,3 +58,7 @@ Progress notes:
   task syscall primitives required by proc's exec path.  This exploration owns
   packaging and launching proc in the riscv64 server graph with the required
   time/VFS/rootfs services.
+- Exploration 035 has now launched `time` and `proc` in the default riscv64
+  boot package and proved both register through names.  The remaining
+  packaging work is the VFS/rootfs side of the graph plus a deterministic
+  dynamic-loader or Alpine userspace boot target.

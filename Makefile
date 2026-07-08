@@ -59,6 +59,7 @@ RISCV64_MUSL_LDSO := $(BUILD_DIR)/riscv64/modules/ld-musl-riscv64.so.1
 RISCV64_LINUX_SERVER_MODULE := $(BUILD_DIR)/riscv64/modules/linux.server
 RISCV64_SHARED_LINUX_SERVER_MODULE := $(BUILD_DIR)/riscv64/modules/linux-shared.server
 RISCV64_NAMES_MODULE := $(BUILD_DIR)/riscv64/modules/names.server
+RISCV64_TIME_MODULE := $(BUILD_DIR)/riscv64/modules/time.server
 RISCV64_USER_MODULE := $(BUILD_DIR)/riscv64/modules/user.server
 RISCV64_PROC_MODULE := $(BUILD_DIR)/riscv64/modules/proc.server
 RISCV64_BOOTSTRAP_MODULE := $(BUILD_DIR)/riscv64/modules/bootstrap.server
@@ -542,6 +543,21 @@ $(RISCV64_NAMES_MODULE): user/crt0-riscv64.S user/names/main.c user/user.ld user
 		$(BUILD_DIR)/riscv64/user/names.c.o
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
+$(RISCV64_TIME_MODULE): user/crt0-riscv64.S user/time/main.c user/user.ld user/include/bunix/syscall.h Makefile
+	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
+	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
+		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
+		-fno-pic -fno-pie -fno-builtin -Iuser/include \
+		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
+	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
+		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
+		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
+		-c user/time/main.c -o $(BUILD_DIR)/riscv64/user/time.c.o
+	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
+		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
+		$(BUILD_DIR)/riscv64/user/time.c.o
+	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
+
 $(RISCV64_USER_MODULE): user/crt0-riscv64.S user/user/main.c user/user.ld user/include/bunix/syscall.h user/include/bunix/alloc.h user/include/bunix/id_table.h Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
@@ -586,21 +602,25 @@ $(RISCV64_BOOTSTRAP_MODULE): user/crt0-riscv64.S user/riscv64-bootstrap/main.c u
 		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
 		$(BUILD_DIR)/riscv64/user/riscv64-bootstrap.c.o
 
-$(RISCV64_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_SYSCALL_SMOKE_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
+$(RISCV64_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_PROC_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_SYSCALL_SMOKE_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_NAMES_MODULE) names \
+		$(RISCV64_TIME_MODULE) time \
 		$(RISCV64_USER_MODULE) user \
+		$(RISCV64_PROC_MODULE) proc \
 		$(RISCV64_BOOTSTRAP_MODULE) bootstrap \
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
 		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux \
 		$(RISCV64_SYSCALL_SMOKE_MODULE) /bin/rv64-syscall-smoke \
 		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
 
-$(RISCV64_BOOTPKG_MULTI): $(RISCV64_NAMES_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_SYSCALL_SMOKE_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
+$(RISCV64_BOOTPKG_MULTI): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_PROC_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_SYSCALL_SMOKE_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_USER_ABI_MODULE) disk0 \
 		$(RISCV64_NAMES_MODULE) names \
+		$(RISCV64_TIME_MODULE) time \
 		$(RISCV64_USER_MODULE) user \
+		$(RISCV64_PROC_MODULE) proc \
 		$(RISCV64_BOOTSTRAP_MODULE) bootstrap \
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
 		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux \
@@ -619,7 +639,9 @@ test-riscv64-bootpkg: $(RISCV64_BOOTPKG) $(RISCV64_BOOTPKG_MULTI)
 	grep -aF "BUNIX-RV64-BOOTPKG" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "cmdline $(RISCV64_KERNEL_CMDLINE)" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module names" $(RISCV64_BOOTPKG) >/dev/null
+	grep -aF "module time" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module user" $(RISCV64_BOOTPKG) >/dev/null
+	grep -aF "module proc" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module bootstrap" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module linux" $(RISCV64_BOOTPKG) >/dev/null
@@ -628,7 +650,9 @@ test-riscv64-bootpkg: $(RISCV64_BOOTPKG) $(RISCV64_BOOTPKG_MULTI)
 	grep -aF "cmdline $(RISCV64_KERNEL_CMDLINE)" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module disk0" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module names" $(RISCV64_BOOTPKG_MULTI) >/dev/null
+	grep -aF "module time" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module user" $(RISCV64_BOOTPKG_MULTI) >/dev/null
+	grep -aF "module proc" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module bootstrap" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module linux" $(RISCV64_BOOTPKG_MULTI) >/dev/null
@@ -1390,10 +1414,15 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "copy: riscv64 user" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "kernel: starting module server names" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "names: register name=bootstrap" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "names: register name=time" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "names: register name=user" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "names: register name=proc" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "names: register name=linux" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootstrap-riscv64: online" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootstrap-riscv64: abi-smoke launched" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "bootstrap-riscv64: time launched" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "bootstrap-riscv64: time ready" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "bootstrap-riscv64: proc launched" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootstrap-riscv64: linux launched" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "kernel: starting module server linux" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "linux-riscv64: registered task=" $(RISCV64_SERIAL_LOG) >/dev/null

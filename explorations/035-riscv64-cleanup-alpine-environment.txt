@@ -308,6 +308,29 @@ Progress notes:
     - `make build/modules/proc.server`
     - `make test-boot-riscv64-early`
     - `make test-smoke`
+- Staged the next normal riscv64 server graph pieces in the default boot
+  package:
+  - `build/riscv64/modules/time.server` now builds from the shared
+    `user/time/main.c` server and is packaged as module `time`.
+  - The default and multi-record riscv64 boot packages now include both
+    `time` and the shared `proc` server.
+  - `user/riscv64-bootstrap/main.c` launches `time`, waits for
+    `BUNIX_SERVICE_TIME` through the names service using `BUNIX_NAMES_WAIT`,
+    then launches `proc` with console, names, and time capabilities matching
+    the handle layout expected by the shared proc server.
+  - The early riscv64 boot smoke now requires
+    `bootstrap-riscv64: time launched`, `bootstrap-riscv64: time ready`,
+    `bootstrap-riscv64: proc launched`, `names: register name=time`, and
+    `names: register name=proc`.
+  - This gets the shared proc server alive in the riscv64 smoke graph, but
+    it still does not execute `/bin/dyn-hello`; dynamic-loader runtime
+    coverage still needs the VFS/rootfs service graph.
+  - Verification for this server-graph slice:
+    - `git diff --check`
+    - `make test-riscv64-bootpkg`
+    - `make ARCH=riscv64 all`
+    - `make test-boot-riscv64-early`
+    - `make test-riscv64-proc-server-build`
   - The UART boot package intentionally remains lean.  Including the normal
     `user` server there exposed a UART-only timeout after names handled the
     user service registration.  That is not part of the Alpine milestone

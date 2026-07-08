@@ -246,11 +246,13 @@ hello path.
 The shared `proc` server now has initial riscv64 build coverage.  When built
 for riscv64, it accepts `EM_RISCV` ELF images instead of x86_64 images, and
 the riscv64 native syscall frontend exposes the low-level task primitives
-that proc uses to create, map, write, clear, and start exec images.  This is
-not runtime dynamic-linker coverage yet: proc still needs to be launched in a
-normal riscv64 server graph with time, VFS, and rootfs services before
-`/bin/dyn-hello` can exercise the musl loader's `openat(2)` and `fstat(2)`
-path.
+that proc uses to create, map, write, clear, and start exec images.  The
+default boot package now carries shared `time` and `proc` modules; the
+riscv64 bootstrap launches time, waits for `BUNIX_SERVICE_TIME` through
+names, and then launches proc with console, names, and time capabilities.
+This is not runtime dynamic-linker coverage yet: proc still needs a VFS and
+rootfs service graph before `/bin/dyn-hello` can exercise the musl loader's
+`openat(2)` and `fstat(2)` path.
 
 The generic initial stack seeds `argc`, `argv[0]`, a null argv terminator, a
 null envp terminator, and an `AT_NULL` auxv terminator.  The auxv terminator is
