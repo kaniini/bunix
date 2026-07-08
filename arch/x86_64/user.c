@@ -8,6 +8,7 @@
 #include "cmdline.h"
 #include "console.h"
 #include "ipc.h"
+#include "linux_abi.h"
 #include "sched.h"
 #include "slab.h"
 #include "spinlock.h"
@@ -313,9 +314,6 @@ enum {
 	LINUX_MMAP_BASE = 0x10000000,
 	LINUX_MMAP_LIMIT = 0x20000000,
 	LINUX_EXEC_MAX_POINTERS = LINUX_EXEC_MAX_STRING_BYTES / 8,
-	LINUX_PROT_READ = 0x1,
-	LINUX_PROT_WRITE = 0x2,
-	LINUX_PROT_EXEC = 0x4,
 	LINUX_MAP_PRIVATE = 0x2,
 	LINUX_MAP_FIXED = 0x10,
 	LINUX_MAP_ANONYMOUS = 0x20,
@@ -506,22 +504,6 @@ static u64 align_down(u64 value, u64 align)
 static u64 align_up(u64 value, u64 align)
 {
 	return align_down(value + align - 1, align);
-}
-
-static u32 linux_prot_to_task(u64 prot)
-{
-	u32 task_prot = 0;
-
-	if ((prot & LINUX_PROT_READ) != 0) {
-		task_prot |= TASK_VM_PROT_READ;
-	}
-	if ((prot & LINUX_PROT_WRITE) != 0) {
-		task_prot |= TASK_VM_PROT_WRITE;
-	}
-	if ((prot & LINUX_PROT_EXEC) != 0) {
-		task_prot |= TASK_VM_PROT_EXEC;
-	}
-	return task_prot;
 }
 
 static u32 linux_map_flags_to_task(u64 flags)

@@ -149,3 +149,14 @@ Progress notes:
     - `make ARCH=x86_64 all`
     - `make test-riscv64-bootpkg test-boot-riscv64-early`
     - `make test-smoke`
+- Shared Linux ABI helper slice:
+  - Moved the duplicated Linux `PROT_*` to Bunix task VM permission mapping
+    into `kernel/linux_abi.h`.
+  - x86_64 and riscv64 mmap/mprotect paths now use the same
+    `linux_prot_to_task()` helper.
+  - This is a small first step toward the shared Linux syscall registry; the
+    larger forwarding table and marshalling helpers remain architecture-local.
+  - Verification:
+    - `make ARCH=x86_64 all`
+    - `make ARCH=riscv64 all`
+    - `make test-boot-riscv64-alpine`
