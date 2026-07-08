@@ -43,7 +43,7 @@ Tasks:
 - [ ] Expose per-thread scheduler statistics sufficient for fairness and
       latency tests, including task/thread IDs that can be correlated with
       Linux PIDs through proc/linux server state.
-- [ ] Add a CPU-bound fairness benchmark that runs equal-weight workers and
+- [x] Add a CPU-bound fairness benchmark that runs equal-weight workers and
       verifies bounded runtime skew.
 - [ ] Add a starvation benchmark with mixed CPU-bound and sleeping/yielding
       workers, verifying that interactive workers keep bounded wake-to-run
@@ -60,3 +60,22 @@ Tasks:
       verify they run on allowed CPUs, and verify invalid masks are rejected.
 - [ ] Add comparison reporting for key shards and scheduler benchmarks so
       future scheduler changes can see runtime/counter deltas.
+
+Progress notes:
+
+- CPU-bound fairness benchmark slice:
+  - Added `/bin/schedbench` as a static musl Linux-personality benchmark in
+    the synthetic rootfs.
+  - Its first mode, `schedbench fairness`, forks equal CPU-bound workers,
+    starts them from one guest-side monotonic deadline, compares completed work
+    counters, rejects zero work and gross runtime skew, and verifies
+    `/proc/sched` switch/runtime counters advance.
+  - Added a dedicated `scheduler-bench` shell shard so scheduler benchmark
+    work can run independently of broad tmpfs/VFS shards.
+  - The benchmark prints stable comparison data:
+    total iterations, min/max worker iterations, skew, switch/runtime/wakeup/
+    preemption deltas, max wait, max wake-to-run, and active CPU count.
+  - Verification:
+    - `make build/modules/schedbench.user`
+    - `BUNIX_TEST_SET=scheduler-bench make test-parallel`
+    - `git diff --check`

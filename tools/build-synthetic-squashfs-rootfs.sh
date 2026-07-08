@@ -87,7 +87,7 @@ for name in first alloctest ipcstress login lxtest getdentstest vforkstress \
 	execok readbig mmapbig mmaphuge execbig phdrstress musl-hello dyn-hello \
 	fputest iovtest fchmodattest waitpgidtest execlongtest auxidtest \
 	pathmaxtest patherrtest statidtest fcntllocktest sysracetest \
-	signaltest faulttest schedstress uptimetest nettest; do
+	signaltest faulttest schedstress schedbench uptimetest nettest; do
 	install_file "/bin/$name" "$module_dir/$name.user" 0555
 done
 install_file /sbin/bunix-udhcpc-script "$module_dir/bunix-udhcpc-script.user" 0555
