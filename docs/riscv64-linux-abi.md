@@ -73,8 +73,9 @@ The first shared-server riscv64 smoke should support at least:
 
 Dynamic-linker coverage now exercises the syscalls observed from
 `ld-musl-riscv64.so.1`, especially `openat(2)` and correct `fstat(2)`
-behavior.  The current implementation is still switch-based; the next cleanup
-step is to move those mappings into a table-driven frontend boundary.
+behavior.  The current frontend uses `riscv64_linux_syscalls[]` to map Linux
+syscall numbers to shared Linux protocol operations and keeps the
+architecture-specific marshalling in the riscv64 frontend.
 
 ## Refactor rule
 

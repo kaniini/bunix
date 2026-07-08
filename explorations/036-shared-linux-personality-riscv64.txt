@@ -33,11 +33,11 @@ Constraints:
 
 Tasks:
 
-- [ ] Split Linux syscall number/register decoding from shared Linux
+- [x] Split Linux syscall number/register decoding from shared Linux
       personality semantics.
-- [ ] Define a riscv64 Linux syscall ABI table that maps riscv64 syscall
+- [x] Define a riscv64 Linux syscall ABI table that maps riscv64 syscall
       numbers to the shared `BUNIX_LINUX_*` RPC operations.
-- [ ] Replace the ad hoc riscv64 dynamic-loader syscall forwarding helpers
+- [x] Replace the ad hoc riscv64 dynamic-loader syscall forwarding helpers
       added during exploration 035 with the table-driven frontend boundary.
 - [x] Build `user/linux/main.c` or a shared Linux server library for riscv64
       as the module named `linux`.
@@ -55,7 +55,7 @@ Tasks:
       module log identifies the shared Linux server, not the old stub.
 - [x] Keep the exploration-035 dynamic-loader smoke passing while deleting
       the temporary action protocol and old riscv64 Linux stub.
-- [ ] Run a narrow x86_64 smoke target to prove the Linux server split did not
+- [x] Run a narrow x86_64 smoke target to prove the Linux server split did not
       regress the mature path.
 
 Verification:
@@ -63,8 +63,8 @@ Verification:
 - [x] `make ARCH=riscv64 all`
 - [x] Existing `make test-boot-riscv64-early`
 - [x] New riscv64 shared-Linux static-musl smoke target
-- [ ] Narrow x86_64 Linux-server smoke chosen during implementation
-- [ ] `git diff --check`
+- [x] Narrow x86_64 Linux-server smoke chosen during implementation
+- [x] `git diff --check`
 
 Progress notes:
 
@@ -112,3 +112,17 @@ Progress notes:
   - `make test-boot-riscv64-uart-console`
   - `make test-boot-riscv64-alpine`
   - `make test-boot-riscv64-early`
+- Replaced the remaining ad hoc riscv64 Linux syscall dispatch switch with an
+  explicit `riscv64_linux_syscalls[]` map:
+  - The table maps riscv64 Linux syscall numbers to a small frontend operation
+    kind plus the shared Linux protocol message type where one applies.
+  - The operation switch now handles architecture-specific buffer marshalling,
+    VM effects, and task exit without embedding syscall numbers in the
+    dispatch logic.
+  - This keeps the x86_64 and riscv64 Linux personality boundary clear:
+    riscv64 decodes `a7` and marshals user memory; `user/linux/main.c` owns
+    process, fd, VFS, credential, wait, and TTY semantics.
+- Verification for the table-driven frontend slice:
+  - `make ARCH=riscv64 all`
+  - `make test-boot-riscv64-early`
+  - `make test-boot-riscv64-alpine`
