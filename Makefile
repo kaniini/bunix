@@ -43,6 +43,7 @@ RISCV64_MUSLCC_GCC := $(RISCV64_MUSLCC_PREFIX)/bin/riscv64-linux-musl-gcc
 RISCV64_MUSLCC_SYSROOT := $(RISCV64_MUSLCC_PREFIX)/riscv64-linux-musl
 RISCV64_MUSLCC_GCC_LIBDIR := $(RISCV64_MUSLCC_PREFIX)/lib/gcc/riscv64-linux-musl/11.2.1
 RISCV64_MUSL_HELLO_MODULE := $(BUILD_DIR)/riscv64/modules/musl-hello.user
+RISCV64_LINUX_SERVER_MODULE := $(BUILD_DIR)/riscv64/modules/linux.server
 BOOTSTRAP_MODULE := $(BUILD_DIR)/modules/bootstrap.server
 USER_CRT0_OBJ := $(BUILD_DIR)/user/crt0.S.o
 BOOTSTRAP_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o
@@ -445,25 +446,43 @@ $(RISCV64_MUSL_HELLO_MODULE): user/musl-hello/main.c $(RISCV64_MUSLCC_GCC) Makef
 		-O2 -g $< -o $@
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
-$(RISCV64_BOOTPKG): $(RISCV64_USER_ABI_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
+$(RISCV64_LINUX_SERVER_MODULE): user/crt0-riscv64.S user/riscv64-linux/main.c user/user.ld user/include/bunix/syscall.h Makefile
+	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
+	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
+		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
+		-fno-pic -fno-pie -fno-builtin -Iuser/include \
+		-c user/crt0-riscv64.S -o $(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o
+	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
+		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
+		-fno-pic -fno-pie -fno-builtin -Iuser/include -Wall -Wextra -Werror \
+		-c user/riscv64-linux/main.c -o $(BUILD_DIR)/riscv64/user/riscv64-linux.c.o
+	$(RISCV64_LD) -m elf64lriscv -nostdlib -T user/user.ld -o $@ \
+		$(BUILD_DIR)/riscv64/user/crt0-riscv64.S.o \
+		$(BUILD_DIR)/riscv64/user/riscv64-linux.c.o
+
+$(RISCV64_BOOTPKG): $(RISCV64_USER_ABI_MODULE) $(RISCV64_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
+		$(RISCV64_LINUX_SERVER_MODULE) linux \
 		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
 
-$(RISCV64_BOOTPKG_MULTI): $(RISCV64_USER_ABI_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
+$(RISCV64_BOOTPKG_MULTI): $(RISCV64_USER_ABI_MODULE) $(RISCV64_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_KERNEL_CMDLINE)" \
 		$(RISCV64_USER_ABI_MODULE) disk0 \
 		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
+		$(RISCV64_LINUX_SERVER_MODULE) linux \
 		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
 
 test-riscv64-bootpkg: $(RISCV64_BOOTPKG) $(RISCV64_BOOTPKG_MULTI)
 	grep -aF "BUNIX-RV64-BOOTPKG" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "cmdline $(RISCV64_KERNEL_CMDLINE)" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG) >/dev/null
+	grep -aF "module linux" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module /bin/musl-hello" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "cmdline $(RISCV64_KERNEL_CMDLINE)" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module disk0" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG_MULTI) >/dev/null
+	grep -aF "module linux" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module /bin/musl-hello" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 
 $(BOOTSTRAP_MODULE): $(BOOTSTRAP_MODULE_OBJS) user/user.ld Makefile
@@ -1076,6 +1095,10 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "module: riscv64 user elf" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "elf: riscv64 loader" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "module: riscv64 sched user" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "linux: riscv64 server task" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "linux-riscv64-server: online" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "linux-riscv64-server: write" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "linux-riscv64-server: exit_group" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "musl hello argc=1 argv0=/bin/musl-hello" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "linux: riscv64 musl hello" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "copy: riscv64 user" $(RISCV64_SERIAL_LOG) >/dev/null

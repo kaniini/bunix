@@ -47,9 +47,9 @@ The early boot gate currently verifies:
   userspace payload can report through the native Bunix ABI before poweroff.
 - A static riscv64 musl hello payload packaged as `/bin/musl-hello` can be
   launched as a scheduler-owned U-mode task, preserve absolute `argv[0]`, use
-  an initial stack with argv/envp plus an `AT_NULL` aux vector terminator, call
-  the early riscv64 Linux-number bridge for `set_tid_address`, `write`, and
-  `exit_group`, and exit cleanly.
+  an initial stack with argv/envp plus an `AT_NULL` aux vector terminator, send
+  riscv64 Linux-number syscalls to a userspace `linux` server, and exit
+  cleanly.
 - The guest exits through SBI poweroff.
 
 ## Boot package
@@ -59,14 +59,14 @@ builder `tools/build-riscv64-bootpkg.sh` creates a text-header package with
 module records and payloads.  The old `OUT MODULE [NAME]` invocation remains
 valid, and the builder also accepts repeated `MODULE NAME` pairs for ordered
 module/data payloads plus an optional `cmdline` header.  The default QEMU boot
-carrier contains `abi-smoke.user` and `/bin/musl-hello`, while
+carrier contains `abi-smoke.user`, `linux`, and `/bin/musl-hello`, while
 `test-riscv64-bootpkg` also builds a multi-record carrier to prove host-side
 ordering.  The early kernel can parse the package command line through the
 shared `kernel_cmdline_configure()` path used by x86_64, validate the carrier
 magic, locate module records, verify RISC-V user ELF payloads, register them
 with the generic module registry, launch them with `server_launch_module()`,
-build a crt0/libc-compatible stack, enter U-mode, and observe native or early
-Linux-number `exit` through scheduler task teardown.
+build a crt0/libc-compatible stack, enter U-mode, and observe native or
+Linux-personality-server-approved `exit` through scheduler task teardown.
 
 Riscv64 now also has initial implementations of the generic `arch_vm_*` hooks
 for Sv39 page-table roots, map/protect/unmap/translate, and `satp`
@@ -165,12 +165,16 @@ Native Bunix syscalls on rv64 use `ecall`:
 
 The current riscv64 native dispatcher is table-driven and uses the same
 negative Bunix IDs as x86_64 for the implemented subset: `exit`,
-`timer_ticks`, `launch_module`, `boot_module_read`, `clock_monotonic_ns`,
+`timer_ticks`, `launch_module`, `port_create`, `ipc_send`, `ipc_recv`,
+`ipc_call`, `handle_close`, `boot_module_read`, `clock_monotonic_ns`,
 `sleep_ns`, `task_id`, `early_console_write`, `early_console_log`, and
 `machine_power`.  The QEMU smoke proves the U-mode `abi-smoke.user` payload
 can call `task_id(0)`, timer ticks, monotonic clock, early console write/log,
 and `exit` through that path.  `boot_module_read` is present for modules with
-attached data payloads, but `abi-smoke.user` does not currently have one.
+attached data payloads, but `abi-smoke.user` does not currently have one.  The
+IPC subset is enough for the riscv64 `linux` server to receive scalar `LINX`
+messages and reply through a reply port; capability-bearing messages remain a
+broader server-graph requirement.
 
 The build smoke target `make test-riscv64-user-abi` links a freestanding rv64
 user ELF with `user/crt0-riscv64.S` and the shared Bunix syscall wrappers.  It
@@ -180,24 +184,30 @@ does not boot QEMU by itself; runtime launch is covered by
 The early QEMU smoke proves that the trap path can enter U-mode, handle an
 `ecall` on a supervisor stack, dispatch a small native syscall subset, and run
 one packaged crt0 payload at the real Bunix user base through a scheduler-owned
-task and generic VM space.  Full proc/bootstrap integration and routing Linux
-syscalls through the userspace Linux personality server remain later riscv64
-slices.
+task and generic VM space.  Full proc/bootstrap integration and the broader
+Linux personality server graph remain later riscv64 slices.
 
 ## Linux personality slice
 
 The first riscv64 Linux-personality target is a static rv64 musl hello program,
 not BusyBox or dynamic linking.  The emulator now builds the static
 `user/musl-hello/main.c` ELF with host clang against the musl.cc sysroot,
-packages it as `/bin/musl-hello`, launches it as a scheduler-owned U-mode task,
-and checks its serial marker from `make test-boot-riscv64-early`.
+packages it as `/bin/musl-hello`, launches it as a scheduler-owned U-mode
+task, sends its nonnegative Linux syscalls to a userspace riscv64 `linux`
+server over `LINX` IPC, and checks its serial marker from
+`make test-boot-riscv64-early`.
 
-That path is intentionally an early bridge.  Non-negative riscv64 Linux
-syscall numbers are decoded in `arch/riscv64/user.c` for the observed static
-hello surface: `set_tid_address`, `write`, `exit`, and `exit_group`.  The final
-design still needs those calls to route through the userspace Linux
-personality server as RPCs.  Do not reuse x86_64 Linux syscall numbers for
-that server path.
+The riscv64 server path is intentionally small.  The boot carrier packages
+`user/riscv64-linux/main.c` as module `linux`, launches it before
+`/bin/musl-hello`, and verifies `linux-riscv64-server: online`,
+`linux-riscv64-server: write`, and `linux-riscv64-server: exit_group`.
+The server decodes riscv64 Linux syscall numbers for the observed static hello
+surface: `set_tid_address`, `write`, `exit`, and `exit_group`.  It replies with
+an action code, and the trap path performs low-level current-task mechanics
+that are not yet exposed to userspace, such as copying approved console output
+from the faulting task's address space and terminating the current thread after
+an approved exit.  Do not reuse x86_64 Linux syscall numbers for this server
+path.
 
 The generic initial stack seeds `argc`, `argv[0]`, a null argv terminator, a
 null envp terminator, and an `AT_NULL` auxv terminator.  The auxv terminator is
@@ -218,8 +228,9 @@ real libc-linked ELF.  The musl.cc driver in that archive is an i386 binary
 on this host, so the Bunix build uses host clang plus the musl.cc sysroot,
 crt objects, libc, and libgcc support directory to produce the static
 `build/riscv64/modules/musl-hello.user` ELF.  The riscv64 boot package carries
-that payload under the package name `/bin/musl-hello`; executing it through
-the userspace Linux personality server is a later slice.
+that payload under the package name `/bin/musl-hello`; the current static
+hello execution path goes through the userspace riscv64 Linux server described
+above.
 
 ## Hardware Port Gate
 

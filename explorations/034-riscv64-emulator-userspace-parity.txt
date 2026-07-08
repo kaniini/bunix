@@ -66,7 +66,7 @@ Tasks:
       blob.
 - [x] Build a static riscv64 musl hello binary and package it as
       `/bin/musl-hello` in the riscv64 boot carrier.
-- [ ] Add riscv64 Linux syscall-number dispatch in the Linux personality
+- [x] Add riscv64 Linux syscall-number dispatch in the Linux personality
       server for the static musl hello syscall surface.  Do not reuse x86_64
       Linux syscall numbers.
 - [x] Add a QEMU riscv64 smoke test that runs the native server smoke and the
@@ -500,18 +500,14 @@ Verification notes:
     terminator, a null envp terminator, and an `AT_NULL` auxv terminator.
     Static musl startup walks through argv/envp into auxv, so omitting the
     auxv terminator let it run off the mapped stack top on riscv64.
-  - `arch/riscv64/user.c` now decodes the riscv64 Linux syscall numbers used
-    by the first static musl hello smoke: `write`, `exit`, `exit_group`, and
-    `set_tid_address`.
   - `test-boot-riscv64-early` now launches `/bin/musl-hello` after the native
     ABI smoke and requires the `musl hello argc=1 argv0=/bin/musl-hello`
     marker plus `linux: riscv64 musl hello`.
   - The test ends in guest poweroff after launching the native
     scheduler-owned server smoke, launching the static musl hello payload,
     reaping both tasks, and running the riscv64 copyin/copyout smoke.
-  - This is deliberately still an early bridge.  The exploration item for
-    dispatch through the userspace Linux personality server remains open until
-    riscv64 can launch the real server graph and route these calls as RPCs.
+  - This was deliberately still an early bridge.  A later slice moved the
+    static hello Linux-number policy into a userspace riscv64 Linux server.
 - `make all` passed after adding the early static-musl execution bridge.
 - `make ARCH=riscv64 all` passed after adding the early static-musl execution
   bridge.
@@ -525,3 +521,36 @@ Verification notes:
   covering the x86_64 boot path.
 - Confirmed the BPI-F3 board port remains gated: do not begin BPI-F3 hardware
   work until the QEMU `virt` riscv64 emulator userspace path fully works.
+- Added a userspace riscv64 Linux personality smoke server for the static
+  musl hello surface:
+  - `user/riscv64-linux/main.c` builds as `build/riscv64/modules/linux.server`
+    with the riscv64 native crt0, is packaged into the QEMU boot carrier as
+    module `linux`, and launches before `/bin/musl-hello`.
+  - The riscv64 native syscall table now includes the IPC primitives needed by
+    that server path: `ipc_send`, `ipc_recv`, `ipc_call`, `port_create`, and
+    `handle_close`.  The initial conversion supports scalar messages and reply
+    ports, which is enough for the static hello server; capability-bearing
+    messages remain a later broader server-graph requirement.
+  - Nonnegative riscv64 Linux syscalls now become `LINX` IPC messages of type
+    `BUNIX_LINUX_RISCV64_SYSCALL` rather than being interpreted entirely in
+    `arch/riscv64/user.c`.
+  - The userspace server decodes riscv64 Linux syscall numbers for the observed
+    static musl hello surface: `set_tid_address`, `write`, `exit`, and
+    `exit_group`.  It replies with a small action code; the trap path still
+    performs low-level current-task mechanics such as copying approved console
+    output from the faulting task's address space and terminating the current
+    thread after an approved exit.
+  - This closes the static-hello Linux-personality-server dispatch item.  It
+    does not close the full proc/bootstrap/server-graph parity items.
+- `make ARCH=riscv64 all` passed after adding the userspace riscv64 Linux
+  server.
+- `make test-boot-riscv64-early` passed and now checks
+  `linux-riscv64-server: online`, `linux-riscv64-server: write`, and
+  `linux-riscv64-server: exit_group`.
+- `make test-riscv64-user-abi` passed after adding the userspace riscv64
+  Linux server.
+- `make test-riscv64-bootpkg` passed and now verifies the packaged `linux`
+  module in both riscv64 boot carriers.
+- `make all` passed after the shared syscall header change.
+- `make test-boot` passed after the shared syscall header change, covering the
+  x86_64 boot path.

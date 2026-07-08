@@ -4,6 +4,7 @@
 #include <arch/power.h>
 #include <arch/sbi.h>
 #include "console.h"
+#include "ipc.h"
 #include "sched.h"
 #include "server.h"
 #include "timer.h"
@@ -12,6 +13,11 @@ enum {
 	SYSCALL_EXIT = -2,
 	SYSCALL_TIMER_TICKS = -4,
 	SYSCALL_LAUNCH_MODULE = -8,
+	SYSCALL_PORT_CREATE = -10,
+	SYSCALL_IPC_SEND = -12,
+	SYSCALL_IPC_RECV = -13,
+	SYSCALL_IPC_CALL = -14,
+	SYSCALL_HANDLE_CLOSE = -16,
 	SYSCALL_BOOT_MODULE_READ = -18,
 	SYSCALL_CLOCK_MONOTONIC_NS = -20,
 	SYSCALL_SLEEP_NS = -22,
@@ -23,6 +29,12 @@ enum {
 	LINUX_RISCV64_EXIT = 93,
 	LINUX_RISCV64_EXIT_GROUP = 94,
 	LINUX_RISCV64_SET_TID_ADDRESS = 96,
+	LINUX_RISCV64_RPC_SYSCALL = 1010,
+	LINUX_RISCV64_ACTION_NONE = 0,
+	LINUX_RISCV64_ACTION_WRITE = 1,
+	LINUX_RISCV64_ACTION_EXIT = 2,
+	USER_FOURCC_LINX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
+	USER_IPC_WORDS = 4,
 	RISCV64_SSTATUS_SUM = 1ULL << 18,
 	RISCV64_USER_COPY_CHUNK = 256,
 	RISCV64_MAX_CSTR = 256,
@@ -40,6 +52,16 @@ struct native_syscall_entry {
 	i64 number;
 	const char *name;
 	u64 (*fn)(const struct native_syscall_args *args);
+};
+
+struct user_ipc_message {
+	u32 protocol;
+	u32 type;
+	u32 sender;
+	u32 cap_rights;
+	u64 reply;
+	u64 cap;
+	u64 words[USER_IPC_WORDS];
 };
 
 static const char *strace_mode;
@@ -189,6 +211,45 @@ static int copy_cstr_from_user(char *dst, u64 user_src, u64 capacity)
 	return -1;
 }
 
+static int user_message_to_ipc(const struct user_ipc_message *user_message,
+			       struct ipc_message *message)
+{
+	if (user_message == 0 || message == 0 ||
+	    user_message->cap != 0 || user_message->cap_rights != 0) {
+		return -1;
+	}
+
+	message->protocol = user_message->protocol;
+	message->type = user_message->type;
+	message->sender = 0;
+	message->cap_rights = 0;
+	message->reply_port = task_port_from_handle(task_current(),
+						    user_message->reply,
+						    TASK_RIGHT_SEND);
+	ipc_port_retain(message->reply_port);
+	message->cap_type = IPC_CAP_NONE;
+	message->cap_object = 0;
+	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
+		message->words[i] = user_message->words[i];
+	}
+	return 0;
+}
+
+static void ipc_message_to_user(const struct ipc_message *message,
+				struct user_ipc_message *user_message)
+{
+	user_message->protocol = message->protocol;
+	user_message->type = message->type;
+	user_message->sender = message->sender;
+	user_message->cap_rights = 0;
+	user_message->reply = task_grant_port(task_current(), message->reply_port,
+					      TASK_RIGHT_SEND);
+	user_message->cap = 0;
+	for (u64 i = 0; i < USER_IPC_WORDS; i++) {
+		user_message->words[i] = message->words[i];
+	}
+}
+
 static u64 native_sys_exit(const struct native_syscall_args *args)
 {
 	console_printf("syscall: exit status=%u\n", (u32)args->arg0);
@@ -233,6 +294,23 @@ static u64 native_sys_launch_module(const struct native_syscall_args *args)
 					      args->arg2);
 }
 
+static u64 native_sys_port_create(const struct native_syscall_args *args)
+{
+	char name[RISCV64_MAX_CSTR];
+
+	if (copy_cstr_from_user(name, args->arg0, sizeof(name)) != 0) {
+		return (u64)-1;
+	}
+	return task_grant_port(task_current(), ipc_port_create_private(name),
+			       TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+			       TASK_RIGHT_DUP);
+}
+
+static u64 native_sys_handle_close(const struct native_syscall_args *args)
+{
+	return (u64)task_close_handle(task_current(), args->arg0);
+}
+
 static u64 native_sys_boot_module_read(const struct native_syscall_args *args)
 {
 	u8 buffer[RISCV64_USER_COPY_CHUNK];
@@ -250,6 +328,91 @@ static u64 native_sys_boot_module_read(const struct native_syscall_args *args)
 		}
 		done += chunk;
 	}
+	return 0;
+}
+
+static u64 native_sys_ipc_send(const struct native_syscall_args *args)
+{
+	struct user_ipc_message user_message;
+	struct ipc_message message = { 0 };
+	struct ipc_port *port =
+		task_port_from_handle(task_current(), args->arg0,
+				      TASK_RIGHT_SEND);
+	int result;
+
+	if (port == 0 || args->arg1 == 0 ||
+	    arch_user_copy_from(&user_message, args->arg1,
+				sizeof(user_message)) != 0 ||
+	    user_message_to_ipc(&user_message, &message) != 0) {
+		ipc_message_release(&message);
+		return (u64)-1;
+	}
+
+	result = ipc_send(port, &message);
+	ipc_message_release(&message);
+	return (u64)result;
+}
+
+static u64 native_sys_ipc_recv(const struct native_syscall_args *args)
+{
+	struct user_ipc_message user_message;
+	struct ipc_message message;
+	struct ipc_port *port =
+		task_port_from_handle(task_current(), args->arg0,
+				      TASK_RIGHT_RECV);
+
+	if (port == 0 || args->arg1 == 0 || ipc_recv(port, &message) != 0) {
+		return (u64)-1;
+	}
+	ipc_message_to_user(&message, &user_message);
+	if (arch_user_copy_to(args->arg1, &user_message,
+			      sizeof(user_message)) != 0) {
+		ipc_message_release(&message);
+		return (u64)-1;
+	}
+	ipc_message_release(&message);
+	return 0;
+}
+
+static u64 native_sys_ipc_call(const struct native_syscall_args *args)
+{
+	struct user_ipc_message user_request;
+	struct user_ipc_message user_reply;
+	struct ipc_message message = { 0 };
+	struct ipc_message reply;
+	struct ipc_port *port =
+		task_port_from_handle(task_current(), args->arg0,
+				      TASK_RIGHT_SEND);
+	struct ipc_port *reply_port = task_reply_port(task_current());
+
+	if (port == 0 || reply_port == 0 || args->arg1 == 0 ||
+	    args->arg2 == 0 ||
+	    arch_user_copy_from(&user_request, args->arg1,
+				sizeof(user_request)) != 0 ||
+	    user_message_to_ipc(&user_request, &message) != 0) {
+		ipc_message_release(&message);
+		return (u64)-1;
+	}
+
+	ipc_port_release(message.reply_port);
+	message.reply_port = reply_port;
+	ipc_port_retain(message.reply_port);
+	if (ipc_send(port, &message) != 0) {
+		ipc_message_release(&message);
+		return (u64)-1;
+	}
+	ipc_message_release(&message);
+	if (ipc_recv(reply_port, &reply) != 0) {
+		return (u64)-1;
+	}
+
+	ipc_message_to_user(&reply, &user_reply);
+	if (arch_user_copy_to(args->arg2, &user_reply,
+			      sizeof(user_reply)) != 0) {
+		ipc_message_release(&reply);
+		return (u64)-1;
+	}
+	ipc_message_release(&reply);
 	return 0;
 }
 
@@ -300,6 +463,11 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_EXIT, "exit", native_sys_exit },
 	{ SYSCALL_TIMER_TICKS, "timer_ticks", native_sys_timer_ticks },
 	{ SYSCALL_LAUNCH_MODULE, "launch_module", native_sys_launch_module },
+	{ SYSCALL_PORT_CREATE, "port_create", native_sys_port_create },
+	{ SYSCALL_IPC_SEND, "ipc_send", native_sys_ipc_send },
+	{ SYSCALL_IPC_RECV, "ipc_recv", native_sys_ipc_recv },
+	{ SYSCALL_IPC_CALL, "ipc_call", native_sys_ipc_call },
+	{ SYSCALL_HANDLE_CLOSE, "handle_close", native_sys_handle_close },
 	{ SYSCALL_BOOT_MODULE_READ, "boot_module_read",
 	  native_sys_boot_module_read },
 	{ SYSCALL_CLOCK_MONOTONIC_NS, "clock_monotonic_ns",
@@ -324,38 +492,60 @@ static const struct native_syscall_entry *native_syscall_lookup(i64 number)
 	return 0;
 }
 
-static u64 linux_riscv64_write(u64 fd, u64 user_buffer, u64 len)
-{
-	if (fd != 1 && fd != 2) {
-		return (u64)-1;
-	}
-	early_console_write_user(user_buffer, len);
-	return len;
-}
-
 static u64 linux_riscv64_syscall_dispatch(struct arch_syscall_frame *frame)
 {
-	switch (frame->number) {
-	case LINUX_RISCV64_WRITE:
-		return linux_riscv64_write(frame->a[0], frame->a[1],
-					   frame->a[2]);
-	case LINUX_RISCV64_EXIT:
-	case LINUX_RISCV64_EXIT_GROUP:
+	struct ipc_port *linux = ipc_port_find("linux");
+	struct ipc_port *reply_port = task_reply_port(task_current());
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = LINUX_RISCV64_RPC_SYSCALL,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { frame->number, frame->arg0, frame->arg1,
+			   frame->arg2 },
+	};
+	struct ipc_message reply;
+	u64 result;
+
+	if (linux == 0 || reply_port == 0 ||
+	    ipc_send(linux, &request) != 0 ||
+	    ipc_recv(reply_port, &reply) != 0) {
+		console_printf("linux-riscv64: server unavailable syscall=%u pc=%p\n",
+			       (u32)frame->number,
+			       (const void *)frame->user_pc);
+		return (u64)-1;
+	}
+
+	result = reply.words[0];
+	if (reply.words[1] == LINUX_RISCV64_ACTION_WRITE &&
+	    frame->number == LINUX_RISCV64_WRITE && (i64)result > 0) {
+		early_console_write_user(frame->arg1, result);
+	} else if (reply.words[1] == LINUX_RISCV64_ACTION_EXIT &&
+		   (frame->number == LINUX_RISCV64_EXIT ||
+		    frame->number == LINUX_RISCV64_EXIT_GROUP)) {
 		console_printf("linux-riscv64: exit status=%u\n",
-			       (u32)frame->a[0]);
+			       (u32)frame->arg0);
+		ipc_message_release(&reply);
 		thread_exit();
-	case LINUX_RISCV64_SET_TID_ADDRESS:
-		return task_id(task_current());
-	default:
+	}
+	if ((i64)result < 0 &&
+	    frame->number != LINUX_RISCV64_WRITE &&
+	    frame->number != LINUX_RISCV64_EXIT &&
+	    frame->number != LINUX_RISCV64_EXIT_GROUP &&
+	    frame->number != LINUX_RISCV64_SET_TID_ADDRESS) {
 		console_printf("linux-riscv64: unknown syscall=%u pc=%p arg0=%p arg1=%p arg2=%p arg3=%p\n",
 			       (u32)frame->number,
 			       (const void *)frame->user_pc,
-			       (const void *)frame->a[0],
-			       (const void *)frame->a[1],
-			       (const void *)frame->a[2],
-			       (const void *)frame->a[3]);
-		return (u64)-1;
+			       (const void *)frame->arg0,
+			       (const void *)frame->arg1,
+			       (const void *)frame->arg2,
+			       (const void *)frame->arg3);
 	}
+	ipc_message_release(&reply);
+	return result;
 }
 
 u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
