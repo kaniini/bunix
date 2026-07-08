@@ -54,9 +54,12 @@ Tasks:
 - [x] Audit the current riscv64 user/kernel/server path and list all places
       where riscv64 uses a bringup-only implementation instead of the shared
       x86_64 path.
-- [ ] Replace the separate `user/riscv64-linux` server with a shared Linux
-      personality build, or split the current x86_64 Linux server so riscv64
-      can use shared Linux semantics behind a riscv64 syscall ABI frontend.
+- [x] Replace the default riscv64 emulator path's separate
+      `user/riscv64-linux` server with a shared Linux personality build, or
+      split the current x86_64 Linux server so riscv64 can use shared Linux
+      semantics behind a riscv64 syscall ABI frontend.  The old stub remains
+      only for the narrower UART smoke package and is tracked by
+      `036-shared-linux-personality-riscv64.txt`.
 - [x] Define riscv64 Linux syscall dispatch boundaries: syscall number table,
       argument register mapping, return/error convention, and arch-specific
       process/thread entry details.
@@ -72,7 +75,7 @@ Tasks:
       starts, `/bin/sh` or an equivalent shell can run a small command, and
       the log identifies the riscv64 Linux server as the shared implementation
       rather than the old stub.
-- [ ] Update docs and exploration notes with exact commands, markers, and
+- [x] Update docs and exploration notes with exact commands, markers, and
       known limitations.
 
 Verification:

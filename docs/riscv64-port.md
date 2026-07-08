@@ -15,6 +15,8 @@ explicit while the port is young.
   discovered through `/chosen/linux,initrd-start` and
   `/chosen/linux,initrd-end` in the FDT.
 - Test gate: `make test-boot-riscv64-early`.
+- Alpine shell gate: `make test-boot-riscv64-alpine`, using
+  `build/riscv64/bootpkg-alpine.img`.
 
 The early boot gate currently verifies:
 
@@ -55,6 +57,14 @@ The early boot gate currently verifies:
   can issue raw Linux `ecall`s for process identity and credential syscalls,
   write its result through the shared Linux server, and exit cleanly before
   the final bootpkg poweroff.
+- A dynamic rv64 musl hello payload can run from the mounted squashfs root as
+  `/bin/dyn-hello`, loading `/lib/ld-musl-riscv64.so.1` through proc, VFS,
+  squashfs, and the shared Linux server.  The gate requires
+  `musl hello argc=1 argv0=/bin/dyn-hello` and
+  `bootstrap-riscv64: dyn-hello ok`.
+- The Alpine boot gate mounts a riscv64 Alpine squashfs, runs `/bin/dyn-hello`,
+  spawns Alpine `/bin/sh -c 'echo BUNIX_RISCV64_ALPINE_SH_OK'` through
+  proc/Linux, and exits through SBI poweroff after the marker appears.
 - The guest exits through SBI poweroff.
 
 ## Boot package
@@ -124,7 +134,8 @@ early harness for that payload has been removed.
 The default riscv64 boot package now carries the shared `names` and `user`
 servers, and the generic initial boot-module starter launches `names` before
 the riscv64 bootstrap.  The bootstrap then launches `user` with console and
-names send capabilities before launching the temporary riscv64 `linux` stub.
+names send capabilities before launching the shared Linux server as module
+`linux`.
 The current smoke checks the `names` launch marker plus real
 `names: register name=bootstrap` and `names: register name=user` service
 effects.  The package still omits the normal console server, so ordinary
@@ -191,8 +202,10 @@ The current riscv64 native dispatcher is table-driven and uses the same
 negative Bunix IDs as x86_64 for the implemented subset: `exit`,
 `timer_ticks`, `launch_module`, `port_create`, `ipc_send`, `ipc_recv`,
 `ipc_call`, `handle_close`, `boot_module_read`, `clock_monotonic_ns`,
-`sleep_ns`, `task_id`, `early_console_write`, `early_console_log`, and
-`machine_power`.  The QEMU smoke proves the U-mode `abi-smoke.user` payload
+`sleep_ns`, the low-level task exec primitives used by proc, buffer
+create/read/write, `cmdline_has`, `task_id`, `early_console_write`,
+`early_console_log`, and `machine_power`.  The QEMU smoke proves the U-mode
+`abi-smoke.user` payload
 can call `task_id(0)`, timer ticks, monotonic clock, early console write/log,
 and `exit` through that path.  `boot_module_read` is present for modules with
 attached data payloads, but `abi-smoke.user` does not currently have one.  The
@@ -208,13 +221,15 @@ does not boot QEMU by itself; runtime launch is covered by
 The early QEMU smoke proves that the trap path can enter U-mode, handle an
 `ecall` on a supervisor stack, dispatch a small native syscall subset, and run
 one packaged crt0 payload at the real Bunix user base through a scheduler-owned
-task and generic VM space.  Full proc/bootstrap integration and the broader
-Linux personality server graph remain later riscv64 slices.
+task and generic VM space.  The main QEMU path now also launches the shared
+time, user, proc, VFS, squashfs, and Linux servers; fuller boot packaging and
+cleanup are tracked by the follow-on riscv64 refactor explorations.
 
 ## Linux personality slice
 
-The first riscv64 Linux-personality target is static rv64 musl userspace, not
-BusyBox or dynamic linking.  The emulator now builds the static
+The first riscv64 Linux-personality target began with static rv64 musl
+userspace and now reaches a controlled dynamic-linker and Alpine shell
+milestone.  The emulator builds the static
 `user/musl-hello/main.c` ELF and the syscall-heavy
 `user/riscv64-syscall-smoke/main.c` ELF with host clang against the musl.cc
 sysroot, packages them as `/bin/musl-hello` and
@@ -250,9 +265,11 @@ that proc uses to create, map, write, clear, and start exec images.  The
 default boot package now carries shared `time` and `proc` modules; the
 riscv64 bootstrap launches time, waits for `BUNIX_SERVICE_TIME` through
 names, and then launches proc with console, names, and time capabilities.
-This is not runtime dynamic-linker coverage yet: proc still needs to execute
-`/bin/dyn-hello` from a mounted rootfs so the musl loader can exercise the
-Linux/VFS `openat(2)` and `fstat(2)` path.
+Proc now executes `/bin/dyn-hello` from a mounted squashfs root so the musl
+loader exercises the Linux/VFS `openat(2)` and `fstat(2)` path.  The current
+frontend covers the observed loader calls with direct switch cases; later
+refactors should convert that into a table-driven riscv64 syscall ABI
+frontend.
 
 The first riscv64 VFS/rootfs service graph is now present in the default boot
 package.  The host builds shared-server riscv64 variants for block, VFS,
@@ -269,17 +286,17 @@ it at `/` through VFS.  `make test-boot-riscv64-early` now requires
 `bootstrap-riscv64: block ready`, `bootstrap-riscv64: vfs ready`,
 `bootstrap-riscv64: squashfs ready`, and
 `bootstrap-riscv64: rootfs mounted` before the static Linux smoke tasks run.
-This is still a synthetic rootfs smoke; Alpine boot integration and
-proc-managed `/bin/dyn-hello` execution remain the next runtime milestones.
+The default early target still uses a synthetic rootfs smoke.  The separate
+Alpine target swaps in the riscv64 Alpine squashfs artifact and proves a shell
+command under Alpine userspace.
 
 The generic initial stack seeds `argc`, `argv[0]`, a null argv terminator, a
 null envp terminator, and an `AT_NULL` auxv terminator.  The auxv terminator is
 required even for the simple static musl smoke because musl startup walks past
 envp into auxv before reaching `main()`.
 
-Dynamic linking, Alpine rootfs boot parity, and BusyBox execution are later
-riscv64 slices.  The host can now prepare a minimal riscv64 Alpine squashfs
-artifact with:
+Full OpenRC boot parity and interactive login are later riscv64 slices.  The
+host can now prepare a minimal riscv64 Alpine squashfs artifact with:
 
 ```
 make test-riscv64-alpine-rootfs
@@ -287,8 +304,7 @@ make test-riscv64-alpine-rootfs
 
 That target uses `APK_ARCH=riscv64`, builds a pure Alpine rootfs without
 x86_64 Bunix user overlays, and records `ttyS0::respawn:/bin/sh` as a
-temporary init command.  It proves host-side riscv64 Alpine artifact creation;
-it does not yet prove that Bunix can boot the artifact.
+temporary init command.
 
 The host can also prepare the first dynamic-linker artifacts:
 
@@ -300,9 +316,18 @@ That target builds `build/riscv64/modules/dyn-hello.user` with interpreter
 `/lib/ld-musl-riscv64.so.1` and stages the musl loader content as
 `build/riscv64/modules/ld-musl-riscv64.so.1`.  The riscv64 Alpine rootfs
 builder overlays those files into `/bin` and `/lib` when they are supplied.
-Runtime dynamic-linker coverage still requires the shared riscv64 Linux
-personality path so `ld-musl-riscv64.so.1` can perform `openat(2)` and
-`fstat(2)` successfully.
+Runtime dynamic-linker coverage is now part of `make test-boot-riscv64-early`
+and `make test-boot-riscv64-alpine`.  The Alpine target additionally proves:
+
+```sh
+make test-boot-riscv64-alpine
+```
+
+The required serial markers are `bootstrap-riscv64: rootfs mounted`,
+`bootstrap-riscv64: linux ready`,
+`musl hello argc=1 argv0=/bin/dyn-hello`,
+`BUNIX_RISCV64_ALPINE_SH_OK`, `bootstrap-riscv64: alpine sh ok`, and SBI
+poweroff.
 
 The current host has riscv64 binutils and QEMU, but Alpine does not ship the
 needed riscv64 Linux musl cross compiler.  Use `make
@@ -322,13 +347,12 @@ above.
 
 ## Hardware Port Gate
 
-Board-specific riscv64 work, including the Banana Pi BPI-F3 port, is blocked
-until the QEMU `virt` emulator path has full generic riscv64 userspace bringup:
-normal scheduler-owned native task launch, general user VM/copyin/copyout,
-proc/bootstrap integration, and static riscv64 musl/Linux-personality-server
-smoke.
-Hardware debugging should not start while those generic emulator pieces are
-still missing.
+Board-specific riscv64 work, including the Banana Pi BPI-F3 port, remains
+behind the QEMU `virt` emulator path.  The emulator now has proc/bootstrap,
+shared-Linux, dynamic-loader, and Alpine shell smoke coverage; full OpenRC,
+interactive login, VirtIO, and board-specific drivers still need separate
+work.  Keep board artifact generation working, but do not close board
+hardware proof items from emulator output alone.
 
 ## Unsupported features
 
@@ -336,16 +360,15 @@ The initial riscv64 port intentionally does not support:
 
 - SMP or secondary hart startup.
 - FPU, vector, or signal context save/restore.
-- Native server task launch through proc/bootstrap.
-- Full native server graph launch through bootstrap/proc.
+- Full OpenRC boot and interactive login on riscv64.
 - VM server integration beyond bootstrap-created task address spaces.
 - Task-owned user-copy integration for unmapped-page fault reporting through
   `vm_read_user()`/`vm_write_user()`.
 - Console input and dmesg-ring reads from the riscv64 SBI console shim.
 - Linux signal frames or riscv64-specific Linux syscall parity beyond the
-  early static-musl bridge.
-- Dynamic linking and `ld-musl-riscv64.so.1`.
-- VirtIO MMIO devices, block storage, networking, or Alpine rootfs boot.
+  current smoke syscall surface.
+- VirtIO MMIO devices, block storage beyond the boot-package-backed block
+  server, networking, or persistent disks.
 - PCI, USB, ACPI, or board-specific device enumeration.
 - External interrupt routing through PLIC or AIA.
 
