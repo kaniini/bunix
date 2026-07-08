@@ -28,12 +28,12 @@ Constraints:
 
 Tasks:
 
-- [ ] Inventory existing IRQ resource handles, arch interrupt controller code,
+- [x] Inventory existing IRQ resource handles, arch interrupt controller code,
       ACPI MADT parsing, PCI interrupt metadata, and any devfs/driver event
       protocols from the TTY driver work.
-- [ ] Define a generic userspace IRQ API: bind, wait/receive event, mask,
+- [x] Define a generic userspace IRQ API: bind, wait/receive event, mask,
       unmask, acknowledge, close, and error semantics.
-- [ ] Decide the first x86_64 routing path for VirtIO PCI interrupts: legacy
+- [x] Decide the first x86_64 routing path for VirtIO PCI interrupts: legacy
       INTx via IOAPIC, MSI, or MSI-X.  Prefer the smallest path that can be made
       correct and later extended.
 - [ ] Extend `virtio-bus.server` discovery/resource records to expose usable IRQ
@@ -50,3 +50,80 @@ Tasks:
       driver uses polling versus IRQ mode.
 - [ ] Document the ARM porting shape for the same IRQ API with GIC and VirtIO
       MMIO interrupt resources.
+
+Inventory notes:
+
+- `user/include/bunix/syscall.h` and `kernel/sched.h` already reserve
+  `BUNIX_HW_RESOURCE_IRQ`/`TASK_HW_RESOURCE_IRQ` plus `BIND_IRQ`, `ACK_IRQ`,
+  and `MASK_IRQ` op bits, and the device resource enum already has
+  `BUNIX_DEV_RESOURCE_IRQ`.  These are declarations only; no syscall
+  implementation currently binds or waits on an IRQ resource.
+- Hardware resource handles currently carry only `type`, `ops`, `base`, and
+  `len`.  `task_grant_hw_resource()` and `task_hw_resource_from_handle()`
+  provide capability-scoped ownership checks that the IRQ API can reuse.
+- `arch/x86_64/interrupts.c` installs exception vectors, the legacy PIT on
+  vector 32, scheduler IPI vector 64, and LAPIC timer vector 65.  Unknown
+  interrupt vectors currently log and halt.  There is no IOAPIC setup, IRQ
+  vector allocation, or userspace IRQ event delivery yet.
+- `arch/x86_64/smp.c` parses ACPI MADT only for Local APIC entries and LAPIC
+  address.  It does not parse IOAPIC or interrupt source override entries.
+- `virtio-bus.server` scans PCI bus 0 through config ports, enables IO/MMIO/bus
+  master, grants BAR subresources for modern VirtIO capabilities, records
+  common/notify/ISR/device config resources, and implements
+  `BUNIX_DEV_ACK_INTERRUPT` by reading the VirtIO ISR byte.
+- `virtio-bus.server` does not currently expose PCI interrupt line/pin, MSI,
+  MSI-X tables, or any IRQ resource in its `BUNIX_DEV_GET_RESOURCE` records.
+- `virtio-blk.server` submits requests, notifies queue 0, then polls the used
+  ring for up to `VIRTIO_BLK_COMPLETION_POLLS` with 1ms sleeps.  This is the
+  bounded polling path the exploration needs to replace for interrupt mode.
+- The userspace console driver has a driver registration helper and polls COM1
+  input; it does not provide a reusable kernel-delivered event/wait protocol.
+
+Driver-facing IRQ API decision:
+
+- IRQ resources should be first-class hardware resources granted through the
+  existing handle table.  A granted IRQ resource should carry an architecture
+  IRQ identity in `base`, a count in `len` for contiguous IRQ ranges, and
+  `BIND_IRQ | ACK_IRQ | MASK_IRQ` op bits describing allowed operations.
+- The native syscall/API surface should be:
+  - `bunix_hw_irq_bind(resource, index, event_port)`: bind one IRQ from the
+    resource range to the caller's IPC port.  Binding masks the line until the
+    caller explicitly unmasks it, preventing events from racing ahead of driver
+    initialization.
+  - `bunix_hw_irq_mask(resource, index, masked)`: mask or unmask the line.
+  - `bunix_hw_irq_ack(resource, index)`: acknowledge the kernel interrupt
+    controller state after the driver has drained device state.
+  - Close semantics: closing the IRQ resource or event port unbinds the line,
+    masks it, and drops any pending event.
+- Events should be ordinary IPC messages sent to the bound port with protocol
+  `BUNIX_PROTO_HW` and type `BUNIX_HW_EVENT_IRQ`.  Words should include the IRQ
+  number, a monotonically increasing delivery count, a coalesced count, and an
+  architecture-specific status word.  No capability is attached to events.
+- Coalescing semantics: if an interrupt arrives while an event is already
+  pending or the line is masked waiting for acknowledgement, increment a
+  coalesced counter and keep the line masked.  The driver must drain the device
+  and call both the device-specific acknowledgement (`BUNIX_DEV_ACK_INTERRUPT`
+  for VirtIO ISR) and the generic IRQ acknowledgement before unmasking.
+- Error semantics: invalid handle, missing op bit, out-of-range index, already
+  bound IRQ, or wrong event port should return `-1` from native syscalls and
+  `BUNIX_DEV_ERR_*` from any device-server mediated RPCs.
+
+First x86_64 routing decision:
+
+- Use legacy PCI INTx routed through IOAPIC first.  This matches the current
+  QEMU modern `virtio-blk-pci`/`virtio-net-pci` devices without requiring
+  MSI/MSI-X capability programming, and it keeps the initial driver-facing API
+  close to an interrupt line abstraction that can later map to GIC SPI lines.
+- Required x86_64 work:
+  - Extend MADT parsing to record IOAPIC entries and interrupt source
+    overrides.
+  - Add an IRQ/vector allocator for device lines, separate from exceptions,
+    PIT, scheduler IPI, and LAPIC timer vectors.
+  - Program IOAPIC redirection entries for the chosen GSI with masked/unmasked
+    state and level/trigger/polarity from MADT override metadata where present.
+  - Dispatch device vectors to the generic IRQ binding table, send/coalesce the
+    userspace event, mask the line until acknowledgement, and EOI the LAPIC.
+- VirtIO PCI discovery should read PCI interrupt pin/line for initial INTx
+  metadata, then map it to a GSI using the deterministic QEMU PCI topology and
+  MADT/ACPI routing data available in the first implementation.  MSI/MSI-X
+  remains future work after the INTx path proves the userspace event model.
