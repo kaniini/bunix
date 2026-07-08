@@ -990,6 +990,7 @@ test-boot-riscv64-early:
 	grep -aF "bunixos: riscv64 early bootstrap" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "timer: riscv64 tick" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "thread: riscv64 switch" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "syscall: riscv64 ecall" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 
 test-boot-ext2: $(EXT2_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-ext2.txt

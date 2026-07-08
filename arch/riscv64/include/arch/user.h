@@ -3,6 +3,14 @@
 
 #include "types.h"
 
+/*
+ * Native Bunix syscall ABI for rv64:
+ * - a7 carries the signed syscall number.  Bunix-native syscall IDs remain
+ *   negative; non-negative numbers are reserved for the Linux personality.
+ * - a0-a3 carry the first four 64-bit arguments.
+ * - a0 carries the return value after ecall.
+ * - ecall advances sepc by 4 before returning to userspace.
+ */
 struct arch_syscall_frame {
 	u64 number;
 	u64 arg0;

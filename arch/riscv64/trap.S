@@ -50,6 +50,11 @@ riscv64_trap_entry:
 	mv a0, sp
 	call arch_interrupt_dispatch
 
+	ld t0, 16(sp)
+	csrw sepc, t0
+	ld t0, 24(sp)
+	csrw sstatus, t0
+
 	ld ra, 40(sp)
 	ld gp, 48(sp)
 	ld tp, 56(sp)

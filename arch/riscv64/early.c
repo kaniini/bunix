@@ -80,6 +80,9 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	if (context_switch_self_test() == 0) {
 		early_puts("thread: riscv64 switch\n");
 	}
+	if (riscv64_syscall_entry_self_test() == 0) {
+		early_puts("syscall: riscv64 ecall\n");
+	}
 	early_puts("machine: poweroff\n");
 	(void)riscv64_sbi_call1(RISCV64_SBI_LEGACY_SHUTDOWN, 0);
 

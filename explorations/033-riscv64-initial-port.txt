@@ -56,7 +56,7 @@ Tasks:
       integration appropriate to the chosen machine model.
 - [ ] Bring up task/thread context switching for kernel threads, then native
       Bunix userspace server execution with a riscv64 crt0.
-- [ ] Define riscv64 Bunix syscall entry for native Bunix programs, including
+- [x] Define riscv64 Bunix syscall entry for native Bunix programs, including
       negative Bunix syscall IDs and register ABI documentation.
 - [ ] Decide the riscv64 Linux-personality ABI slice: static riscv64 musl ELF
       loading first, then enough Linux syscalls for a `musl-hello` equivalent.
@@ -173,6 +173,25 @@ Progress notes:
   - This only proves the userspace object ABI at build time; supervisor trap
     dispatch for user `ecall`, user page-table activation, and runtime native
     server execution remain open.
+- Defined the riscv64 native syscall entry contract:
+  - `arch/riscv64/include/arch/user.h` documents the rv64 native ABI:
+    negative Bunix syscall number in `a7`, arguments in `a0` through `a3`,
+    return value in `a0`, and `sepc` advanced past the 4-byte `ecall`.
+  - `arch/riscv64/trap.S` now reloads `sepc` and `sstatus` after C trap
+    dispatch so exception handlers can safely advance or adjust the return
+    frame.
+  - `arch/riscv64/include/arch/interrupts.h` now exposes the full saved
+    register frame to C, matching the assembly save area.
+  - `arch_interrupt_dispatch()` recognizes user and supervisor `ecall` causes,
+    builds an `arch_syscall_frame`, dispatches through
+    `arch_syscall_dispatch()`, writes the return value to saved `a0`, and
+    advances `sepc`.
+  - The riscv64 early boot smoke now runs a synthetic user-`ecall` frame test
+    and prints `syscall: riscv64 ecall` when frame decoding, return placement,
+    and `sepc` advancement behave as expected.
+  - This completes the syscall-entry contract, but native userspace task
+    launch, page-table activation, and full native syscall implementation are
+    still part of the open native server execution task.
 - Added riscv64 arch skeleton headers and implementations:
   - `arch/riscv64/include/arch/sbi.h` centralizes the early SBI call ABI and
     console putchar helper used by the early payload and power path.
@@ -278,6 +297,12 @@ Verification so far:
 - `make all` passed for the default x86_64 target after the native ABI smoke
   was added.
 - `git diff --check` passed after the native ABI smoke was added.
+- `make test-boot-riscv64-early` passed after adding the syscall-entry trap
+  dispatch and now requires the `syscall: riscv64 ecall` marker.
+- `make test-riscv64-user-abi` passed after adding the syscall-entry trap
+  dispatch.
+- `make all` passed for the default x86_64 target after adding the
+  syscall-entry trap dispatch.
 - `make ARCH=riscv64 all` passed and linked `build/riscv64/bunixos.kernel`.
 - `make test-boot-riscv64-early` passed.
 - `make all` passed for the default x86_64 target after the riscv64 linker
