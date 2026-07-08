@@ -174,3 +174,20 @@ Verification notes:
   - `058-bpi-f3-display-hdmi.txt`
   - `059-bpi-f3-wifi-bluetooth.txt`
   - `060-bpi-f3-watchdog-reset.txt`
+- Added modern SBI reset support to the riscv64 power path:
+  - `arch_poweroff()` and `arch_reboot()` now prefer the SBI System Reset
+    extension and fall back to legacy shutdown if the firmware extension is
+    unavailable or returns.
+  - The riscv64 QEMU smoke now requires the `sbi: system reset poweroff`
+    marker, and the BPI-F3 smoke-log checker requires the same marker for the
+    physical-board run.
+  - This improves the BPI-F3 firmware-facing shutdown path, but the
+    poweroff/reboot task remains open until real BPI-F3 serial logs prove the
+    behavior on vendor OpenSBI.
+- `make ARCH=riscv64 all` passed after adding SBI System Reset support.
+- `make test-boot-riscv64-early` passed after adding SBI System Reset support.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding SBI System
+  Reset support.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding SBI System Reset support.
+- `tools/bpi-f3-smoke.sh --artifact-dir build/riscv64/bpi-f3 --check-log
+  build/riscv64-serial.log` passed after adding SBI System Reset support.

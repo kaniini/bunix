@@ -78,6 +78,7 @@ check_log() {
 	require_marker "$log" "native: riscv64 server argc=1 argv0=/bin/abi-smoke.user"
 	require_marker "$log" "musl hello argc=1 argv0=/bin/musl-hello"
 	require_marker "$log" "machine: poweroff"
+	require_marker "$log" "sbi: system reset poweroff"
 	printf 'bpi-f3 smoke log ok: %s\n' "$log"
 }
 
@@ -100,6 +101,7 @@ bootstrap-riscv64: online
 native: riscv64 server argc=1 argv0=/bin/abi-smoke.user
 musl hello argc=1 argv0=/bin/musl-hello
 machine: poweroff
+sbi: system reset poweroff
 EOF
 	check_log "$tmp" >/dev/null
 	printf 'bpi-f3 smoke self-test ok\n'

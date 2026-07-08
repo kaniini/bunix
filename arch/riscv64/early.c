@@ -1,6 +1,7 @@
 #include <arch/boot.h>
 #include <arch/fdt.h>
 #include <arch/interrupts.h>
+#include <arch/power.h>
 #include <arch/sbi.h>
 #include <arch/smp.h>
 #include <arch/thread.h>
@@ -648,8 +649,7 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 			sched_idle_loop();
 		}
 	}
-	early_puts("machine: poweroff\n");
-	(void)riscv64_sbi_call1(RISCV64_SBI_LEGACY_SHUTDOWN, 0);
+	arch_poweroff();
 
 	for (;;) {
 		__asm__ volatile ("wfi");

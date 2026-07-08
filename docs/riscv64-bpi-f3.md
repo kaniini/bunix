@@ -141,6 +141,7 @@ Expected first milestone serial markers:
 - `native: riscv64 server argc=1 argv0=/bin/abi-smoke.user`
 - `musl hello argc=1 argv0=/bin/musl-hello`
 - `machine: poweroff`
+- `sbi: system reset poweroff`
 
 If the firmware FDT does not provide the same initrd properties as QEMU, fix
 the U-Boot `/chosen` setup before adding kernel-side board constants.
@@ -155,7 +156,9 @@ After the first serial/poweroff smoke, bring up hardware in this order:
   memory ranges, and `/chosen/linux,initrd-*`.
 - Confirm the K1 UART binding and then add an early native UART backend under
   the riscv64 board layer.
-- Confirm SBI timer and poweroff/reboot behavior on the vendor OpenSBI.
+- Confirm SBI timer and poweroff/reboot behavior on the vendor OpenSBI.  The
+  riscv64 power path now prefers the SBI System Reset extension and falls back
+  to legacy shutdown if that extension returns.
 - Identify the interrupt-controller path from the vendor DT and BSP: PLIC,
   AIA, or vendor-specific routing.
 - Decide whether the first SMP hardware milestone stays `SMP=1` or releases
