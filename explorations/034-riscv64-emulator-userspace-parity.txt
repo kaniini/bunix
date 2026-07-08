@@ -109,3 +109,28 @@ Verification notes:
   `vm: riscv64 hooks`.
 - `make test-riscv64-user-abi` passed after adding the VM hooks.
 - `make test-riscv64-bootpkg` passed after adding the VM hooks.
+- Refactored PMM initialization toward riscv64 FDT memory support:
+  - `kernel/pmm.h` now exposes `pmm_init_from_ranges()` plus explicit
+    available and reserved physical range types.
+  - `kernel/pmm.c` now has a shared range-based initializer that counts
+    available pages, chooses metadata storage outside reserved ranges, imports
+    free pages, reserves boot/kernel/module ranges, and initializes the same
+    allocator state used by existing callers.
+  - The x86_64 `pmm_init(multiboot_info)` path now collects Multiboot2 memory
+    map and module reservations into fixed boot-time arrays, then calls the
+    shared range initializer.  This preserves the current x86 boot contract
+    while removing the PMM core's hard dependency on Multiboot2-shaped input.
+  - Riscv64 is not wired to this API yet.  The next step is to build
+    available/reserved ranges from FDT memory, kernel image, boot package, and
+    firmware reservations, then link the generic PMM into the riscv64 kernel
+    path so Sv39 page tables can stop using the early fixed arena.
+- `make all` passed after the PMM range-initializer refactor.
+- `make ARCH=riscv64 all` passed after the PMM range-initializer refactor.
+- `make test-boot` passed after the PMM range-initializer refactor, proving
+  the x86_64 Multiboot2 wrapper still boots.
+- `make test-boot-riscv64-early` passed after the PMM range-initializer
+  refactor.
+- `make test-riscv64-user-abi` passed after the PMM range-initializer
+  refactor.
+- `make test-riscv64-bootpkg` passed after the PMM range-initializer
+  refactor.

@@ -65,6 +65,13 @@ They are suitable for emulator bringup tests, but scheduler-owned userspace
 still needs PMM-backed table allocation, task lifetime integration, and
 copyin/copyout before the early payload harness can be removed.
 
+The PMM has been split enough to support a future riscv64 memory provider:
+`pmm_init_from_ranges()` can initialize the generic page allocator from
+available/reserved physical ranges, while the existing x86_64 Multiboot2 path
+collects its boot data and calls that shared initializer.  Riscv64 still needs
+to feed FDT memory/initrd/kernel reservations into that API before page tables
+and user frames can come from PMM.
+
 This gives riscv64 a firmware-neutral package handoff separate from
 Multiboot2.  Future rootfs images can ride in the same carrier or replace it
 with a stricter binary table once the riscv64 bootstrap/proc path exists.

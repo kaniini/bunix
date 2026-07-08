@@ -7,15 +7,25 @@ enum {
 	MULTIBOOT_MEMORY_AVAILABLE = 1,
 	LOW_USER_IMAGE_START = 0x400000,
 	LOW_USER_IMAGE_END = 0x1000000,
+	PMM_MAX_BOOT_RANGES = 128,
+	PMM_MAX_RESERVED_RANGES = 256,
 };
 
 extern char __kernel_start[];
 extern char __kernel_end[];
 
-struct module_overlap_ctx {
-	u64 start;
-	u64 end;
-	u32 overlap;
+struct range_collect_ctx {
+	struct pmm_memory_range *ranges;
+	u64 capacity;
+	u64 count;
+	u32 overflow;
+};
+
+struct reserve_collect_ctx {
+	struct pmm_reserved_range *ranges;
+	u64 capacity;
+	u64 count;
+	u32 overflow;
 };
 
 static struct pmm_page *pages;
@@ -84,113 +94,146 @@ static void page_list_remove(struct pmm_page *page)
 	}
 }
 
-static void import_mmap_entry(const struct multiboot2_mmap_entry *entry,
-			      void *ctx)
+static void add_available_page(u64 addr)
 {
-	(void)ctx;
-
-	if (entry->type != MULTIBOOT_MEMORY_AVAILABLE) {
-		return;
-	}
-
-	u64 start = align_up(entry->base, PMM_PAGE_SIZE);
-	const u64 end = align_down(entry->base + entry->length, PMM_PAGE_SIZE);
-
-	while (start < end && total_pages < page_capacity) {
-		pages[total_pages].addr = start;
+	if (total_pages < page_capacity) {
+		pages[total_pages].addr = addr;
 		pages[total_pages].is_free = 0;
 		pages[total_pages].next = 0;
 		page_list_push(&pages[total_pages]);
 		total_pages++;
+	}
+}
+
+static void import_available_range(const struct pmm_memory_range *range)
+{
+	u64 start;
+	u64 end;
+
+	if (range == 0 || range->length == 0 ||
+	    range->base + range->length < range->base) {
+		return;
+	}
+
+	start = align_up(range->base, PMM_PAGE_SIZE);
+	end = align_down(range->base + range->length, PMM_PAGE_SIZE);
+
+	while (start < end) {
+		add_available_page(start);
 		start += PMM_PAGE_SIZE;
 	}
 }
 
-static void count_mmap_entry(const struct multiboot2_mmap_entry *entry,
-			     void *ctx)
+static u64 count_available_pages(const struct pmm_memory_range *available,
+				 u64 available_count)
 {
-	u64 *count = (u64 *)ctx;
+	u64 count = 0;
+
+	for (u64 i = 0; i < available_count; i++) {
+		const struct pmm_memory_range *range = &available[i];
+
+		if (range->length == 0 ||
+		    range->base + range->length < range->base) {
+			continue;
+		}
+
+		const u64 start = align_up(range->base, PMM_PAGE_SIZE);
+		const u64 end = align_down(range->base + range->length,
+					   PMM_PAGE_SIZE);
+
+		if (end > start) {
+			count += (end - start) / PMM_PAGE_SIZE;
+		}
+	}
+	return count;
+}
+
+static int range_is_reserved_by_list(u64 start, u64 end,
+				     const struct pmm_reserved_range *reserved,
+				     u64 reserved_count)
+{
+	for (u64 i = 0; i < reserved_count; i++) {
+		if (ranges_overlap(start, end, reserved[i].start,
+				   reserved[i].end)) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static u64 find_metadata_storage_from_ranges(
+	const struct pmm_memory_range *available, u64 available_count,
+	const struct pmm_reserved_range *reserved, u64 reserved_count,
+	u64 page_count)
+{
+	const u64 bytes = align_up(page_count * sizeof(struct pmm_page),
+				   PMM_PAGE_SIZE);
+
+	for (u64 i = 0; i < available_count; i++) {
+		const struct pmm_memory_range *range = &available[i];
+		u64 start;
+		u64 end;
+
+		if (range->length == 0 ||
+		    range->base + range->length < range->base) {
+			continue;
+		}
+
+		start = align_up(range->base, PMM_PAGE_SIZE);
+		end = align_down(range->base + range->length, PMM_PAGE_SIZE);
+
+		while (start < end && bytes <= end - start) {
+			if (!range_is_reserved_by_list(start, start + bytes,
+						       reserved,
+						       reserved_count)) {
+				metadata_start = start;
+				metadata_end = start + bytes;
+				return start;
+			}
+			start += PMM_PAGE_SIZE;
+		}
+	}
+	return 0;
+}
+
+static void collect_available_mmap(const struct multiboot2_mmap_entry *entry,
+				   void *ctx)
+{
+	struct range_collect_ctx *collect = (struct range_collect_ctx *)ctx;
 
 	if (entry->type != MULTIBOOT_MEMORY_AVAILABLE) {
 		return;
 	}
-
-	const u64 start = align_up(entry->base, PMM_PAGE_SIZE);
-	const u64 end = align_down(entry->base + entry->length, PMM_PAGE_SIZE);
-
-	if (end > start) {
-		*count += (end - start) / PMM_PAGE_SIZE;
-	}
-}
-
-static void check_module_overlap(const struct multiboot2_module *module,
-				 void *ctx)
-{
-	struct module_overlap_ctx *overlap =
-		(struct module_overlap_ctx *)ctx;
-
-	if (ranges_overlap(overlap->start, overlap->end,
-			   module->start, module->end)) {
-		overlap->overlap = 1;
-	}
-}
-
-static int range_is_reserved(u64 start, u64 end, u64 multiboot_info)
-{
-	struct module_overlap_ctx overlap = {
-		.start = start,
-		.end = end,
-		.overlap = 0,
-	};
-
-	if (ranges_overlap(start, end, 0, 0x100000) ||
-	    ranges_overlap(start, end, (u64)__kernel_start,
-			   (u64)__kernel_end) ||
-	    ranges_overlap(start, end, multiboot_info,
-			   multiboot_info + multiboot2_total_size(multiboot_info)) ||
-	    ranges_overlap(start, end, LOW_USER_IMAGE_START,
-			   LOW_USER_IMAGE_END)) {
-		return 1;
-	}
-
-	multiboot2_for_each_module(multiboot_info, check_module_overlap,
-				   &overlap);
-	return overlap.overlap != 0;
-}
-
-static void find_metadata_entry(const struct multiboot2_mmap_entry *entry,
-				void *ctx)
-{
-	u64 *state = (u64 *)ctx;
-	const u64 multiboot_info = state[0];
-	const u64 bytes = state[1];
-
-	if (state[2] != 0 || entry->type != MULTIBOOT_MEMORY_AVAILABLE) {
+	if (collect->count >= collect->capacity) {
+		collect->overflow = 1;
 		return;
 	}
 
-	u64 start = align_up(entry->base, PMM_PAGE_SIZE);
-	const u64 end = align_down(entry->base + entry->length, PMM_PAGE_SIZE);
-
-	while (start < end && bytes <= end - start) {
-		if (!range_is_reserved(start, start + bytes, multiboot_info)) {
-			state[2] = start;
-			return;
-		}
-		start += PMM_PAGE_SIZE;
-	}
+	collect->ranges[collect->count++] =
+		(struct pmm_memory_range){ .base = entry->base,
+					   .length = entry->length };
 }
 
-static u64 find_metadata_storage(u64 multiboot_info, u64 page_count)
+static void collect_reserved_range(struct reserve_collect_ctx *collect,
+				   u64 start, u64 end)
 {
-	const u64 bytes = align_up(page_count * sizeof(struct pmm_page),
-				   PMM_PAGE_SIZE);
-	u64 state[3] = { multiboot_info, bytes, 0 };
+	if (start >= end) {
+		return;
+	}
+	if (collect->count >= collect->capacity) {
+		collect->overflow = 1;
+		return;
+	}
+	collect->ranges[collect->count++] =
+		(struct pmm_reserved_range){ .start = start, .end = end };
+}
 
-	multiboot2_for_each_mmap(multiboot_info, find_metadata_entry, state);
-	metadata_start = state[2];
-	metadata_end = state[2] + bytes;
-	return state[2];
+static void collect_reserved_module(const struct multiboot2_module *module,
+				    void *ctx)
+{
+	struct reserve_collect_ctx *collect = (struct reserve_collect_ctx *)ctx;
+
+	collect_reserved_range(collect, module->start, module->end);
 }
 
 static void reserve_range(u64 start, u64 end)
@@ -226,17 +269,11 @@ static void reserve_range(u64 start, u64 end)
 	}
 }
 
-static void reserve_module(const struct multiboot2_module *module, void *ctx)
+void pmm_init_from_ranges(const struct pmm_memory_range *available,
+			  u64 available_count,
+			  const struct pmm_reserved_range *reserved,
+			  u64 reserved_count)
 {
-	(void)ctx;
-
-	reserve_range(module->start, module->end);
-}
-
-void pmm_init(u64 multiboot_info)
-{
-	u64 detected_pages = 0;
-
 	total_pages = 0;
 	free_pages_count = 0;
 	free_pages = 0;
@@ -245,32 +282,75 @@ void pmm_init(u64 multiboot_info)
 	metadata_start = 0;
 	metadata_end = 0;
 
-	multiboot2_for_each_mmap(multiboot_info, count_mmap_entry,
-				 &detected_pages);
-	pages = (struct pmm_page *)find_metadata_storage(multiboot_info,
-							 detected_pages);
+	const u64 detected_pages =
+		count_available_pages(available, available_count);
+	pages = (struct pmm_page *)find_metadata_storage_from_ranges(
+		available, available_count, reserved, reserved_count,
+		detected_pages);
 	if (pages == 0 || metadata_end <= metadata_start) {
 		console_printf("pmm: metadata allocation failed pages=%u\n",
 			       (u32)detected_pages);
 		for (;;) {
-			__asm__ volatile ("cli; hlt");
 		}
 	}
 	page_capacity = detected_pages;
 	mem_zero(pages, metadata_end - metadata_start);
 
-	multiboot2_for_each_mmap(multiboot_info, import_mmap_entry, 0);
+	for (u64 i = 0; i < available_count; i++) {
+		import_available_range(&available[i]);
+	}
 
-	reserve_range(0, 0x100000);
-	reserve_range((u64)__kernel_start, (u64)__kernel_end);
-	reserve_range(multiboot_info, multiboot_info + multiboot2_total_size(multiboot_info));
-	multiboot2_for_each_module(multiboot_info, reserve_module, 0);
-	reserve_range(LOW_USER_IMAGE_START, LOW_USER_IMAGE_END);
+	for (u64 i = 0; i < reserved_count; i++) {
+		reserve_range(reserved[i].start, reserved[i].end);
+	}
 	reserve_range(metadata_start, metadata_end);
 
 	console_printf("pmm: pages total=%u free=%u metadata=%p-%p\n",
 		       (u32)total_pages, (u32)free_pages_count,
 		       (const void *)metadata_start, (const void *)metadata_end);
+}
+
+void pmm_init(u64 multiboot_info)
+{
+	struct pmm_memory_range available[PMM_MAX_BOOT_RANGES];
+	struct pmm_reserved_range reserved[PMM_MAX_RESERVED_RANGES];
+	struct range_collect_ctx available_collect = {
+		.ranges = available,
+		.capacity = PMM_MAX_BOOT_RANGES,
+		.count = 0,
+		.overflow = 0,
+	};
+	struct reserve_collect_ctx reserved_collect = {
+		.ranges = reserved,
+		.capacity = PMM_MAX_RESERVED_RANGES,
+		.count = 0,
+		.overflow = 0,
+	};
+
+	multiboot2_for_each_mmap(multiboot_info, collect_available_mmap,
+				 &available_collect);
+
+	collect_reserved_range(&reserved_collect, 0, 0x100000);
+	collect_reserved_range(&reserved_collect, (u64)__kernel_start,
+			       (u64)__kernel_end);
+	collect_reserved_range(&reserved_collect, multiboot_info,
+			       multiboot_info +
+				       multiboot2_total_size(multiboot_info));
+	collect_reserved_range(&reserved_collect, LOW_USER_IMAGE_START,
+			       LOW_USER_IMAGE_END);
+	multiboot2_for_each_module(multiboot_info, collect_reserved_module,
+				   &reserved_collect);
+
+	if (available_collect.overflow || reserved_collect.overflow) {
+		console_printf("pmm: too many boot ranges available=%u reserved=%u\n",
+			       (u32)available_collect.count,
+			       (u32)reserved_collect.count);
+		for (;;) {
+		}
+	}
+
+	pmm_init_from_ranges(available, available_collect.count,
+			     reserved, reserved_collect.count);
 }
 
 struct pmm_page *pmm_page_alloc(void)

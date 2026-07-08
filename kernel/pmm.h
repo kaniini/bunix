@@ -13,7 +13,21 @@ struct pmm_page {
 	struct pmm_page *next;
 };
 
+struct pmm_memory_range {
+	u64 base;
+	u64 length;
+};
+
+struct pmm_reserved_range {
+	u64 start;
+	u64 end;
+};
+
 void pmm_init(u64 multiboot_info);
+void pmm_init_from_ranges(const struct pmm_memory_range *available,
+			  u64 available_count,
+			  const struct pmm_reserved_range *reserved,
+			  u64 reserved_count);
 struct pmm_page *pmm_page_alloc(void);
 u64 pmm_pages_alloc_contiguous(u64 count);
 void pmm_page_free(struct pmm_page *page);
