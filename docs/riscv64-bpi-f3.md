@@ -157,6 +157,16 @@ Expected first milestone serial markers:
 
 - `bunixos: riscv64 early bootstrap`
 - `pmm: riscv64 ranges`
+- `boot: riscv64 memory-base=...`
+- `boot: riscv64 memory-size=...`
+- `boot: riscv64 kernel-start=...`
+- `boot: riscv64 kernel-end=...`
+- `boot: riscv64 initrd-start=...`
+- `boot: riscv64 initrd-end=...`
+- `boot: riscv64 initrd-size=...`
+- `boot: riscv64 fdt-start=...`
+- `boot: riscv64 fdt-end=...`
+- `boot: riscv64 fdt-size=...`
 - `fdt: riscv64 cpus`
 - `fdt: riscv64 cpu-count=...`
 - `smp: riscv64 discovered-harts=...`
@@ -202,6 +212,8 @@ serial log and updating the exploration notes.
 
 The summary output is also tab-separated.  It extracts the board-specific
 values that must be reviewed before closing the remaining hardware tasks:
+`memory-base`, `memory-size`, `kernel-start`, `kernel-end`, `initrd-start`,
+`initrd-end`, `initrd-size`, `fdt-start`, `fdt-end`, `fdt-size`,
 `cpu-count`, `smp-discovered-harts`, `smp-started-harts`, `smp-boot-hart`,
 `smp-secondary-policy`, `timebase-hz`, `stdout-path`, `stdout-resolved`,
 `stdout-uart-base`, `uart-count`, `interrupt-controller-path`,

@@ -79,6 +79,16 @@ check_log() {
 	require_file "$log"
 	require_marker "$log" "bunixos: riscv64 early bootstrap"
 	require_marker "$log" "pmm: riscv64 ranges"
+	require_marker "$log" "boot: riscv64 memory-base="
+	require_marker "$log" "boot: riscv64 memory-size="
+	require_marker "$log" "boot: riscv64 kernel-start="
+	require_marker "$log" "boot: riscv64 kernel-end="
+	require_marker "$log" "boot: riscv64 initrd-start="
+	require_marker "$log" "boot: riscv64 initrd-end="
+	require_marker "$log" "boot: riscv64 initrd-size="
+	require_marker "$log" "boot: riscv64 fdt-start="
+	require_marker "$log" "boot: riscv64 fdt-end="
+	require_marker "$log" "boot: riscv64 fdt-size="
 	require_marker "$log" "fdt: riscv64 cpus"
 	require_marker "$log" "fdt: riscv64 cpu-count="
 	require_marker "$log" "smp: riscv64 discovered-harts="
@@ -155,6 +165,16 @@ summarize_log() {
 	log=$1
 
 	require_file "$log"
+	summary_line "memory-base" "$(marker_value "$log" "boot: riscv64 memory-base=")"
+	summary_line "memory-size" "$(marker_value "$log" "boot: riscv64 memory-size=")"
+	summary_line "kernel-start" "$(marker_value "$log" "boot: riscv64 kernel-start=")"
+	summary_line "kernel-end" "$(marker_value "$log" "boot: riscv64 kernel-end=")"
+	summary_line "initrd-start" "$(marker_value "$log" "boot: riscv64 initrd-start=")"
+	summary_line "initrd-end" "$(marker_value "$log" "boot: riscv64 initrd-end=")"
+	summary_line "initrd-size" "$(marker_value "$log" "boot: riscv64 initrd-size=")"
+	summary_line "fdt-start" "$(marker_value "$log" "boot: riscv64 fdt-start=")"
+	summary_line "fdt-end" "$(marker_value "$log" "boot: riscv64 fdt-end=")"
+	summary_line "fdt-size" "$(marker_value "$log" "boot: riscv64 fdt-size=")"
 	summary_line "cpu-count" "$(marker_value "$log" "fdt: riscv64 cpu-count=")"
 	summary_line "smp-discovered-harts" \
 		"$(marker_value "$log" "smp: riscv64 discovered-harts=")"
@@ -251,6 +271,16 @@ self_test() {
 	cat >"$tmp" <<EOF
 bunixos: riscv64 early bootstrap
 pmm: riscv64 ranges
+boot: riscv64 memory-base=0x80000000
+boot: riscv64 memory-size=0x8000000
+boot: riscv64 kernel-start=0x80200000
+boot: riscv64 kernel-end=0x80300000
+boot: riscv64 initrd-start=0x84000000
+boot: riscv64 initrd-end=0x84010000
+boot: riscv64 initrd-size=0x10000
+boot: riscv64 fdt-start=0x87e00000
+boot: riscv64 fdt-end=0x87e01000
+boot: riscv64 fdt-size=0x1000
 fdt: riscv64 cpus
 fdt: riscv64 cpu-count=1
 smp: riscv64 discovered-harts=1
@@ -293,6 +323,7 @@ fdt print /cpus
 EOF
 	check_preboot_log "$preboot" >/dev/null
 	classify_log "$tmp" >/dev/null
+	summarize_log "$tmp" | grep -aF "initrd-size	0x10000" >/dev/null
 	summarize_log "$tmp" | grep -aF "smp-secondary-policy	parked" >/dev/null
 	summarize_log "$tmp" | grep -aF "stdout-resolved	/soc/serial@10000000" >/dev/null
 	summarize_log "$tmp" | grep -aF "interrupt-controller-path	/soc/interrupt-controller@c000000" >/dev/null

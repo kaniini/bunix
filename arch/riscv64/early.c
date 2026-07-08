@@ -177,6 +177,29 @@ static void pmm_bootstrap_from_fdt(u64 fdt)
 	pmm_init_from_ranges(available, available_count, reserved, reserved_count);
 }
 
+static void boot_layout_smoke(u64 fdt)
+{
+	const u64 fdt_size = riscv64_fdt_total_size((const void *)fdt);
+
+	early_put_kv_hex("boot: riscv64 memory-base=", boot_info.phys_base);
+	early_put_kv_hex("boot: riscv64 memory-size=", boot_info.phys_size);
+	early_put_kv_hex("boot: riscv64 kernel-start=", (u64)__kernel_start);
+	early_put_kv_hex("boot: riscv64 kernel-end=", (u64)__kernel_end);
+	if (boot_info.initrd_end > boot_info.initrd_start) {
+		early_put_kv_hex("boot: riscv64 initrd-start=",
+				 boot_info.initrd_start);
+		early_put_kv_hex("boot: riscv64 initrd-end=",
+				 boot_info.initrd_end);
+		early_put_kv_hex("boot: riscv64 initrd-size=",
+				 boot_info.initrd_end - boot_info.initrd_start);
+	}
+	if (fdt_size != 0) {
+		early_put_kv_hex("boot: riscv64 fdt-start=", fdt);
+		early_put_kv_hex("boot: riscv64 fdt-end=", fdt + fdt_size);
+		early_put_kv_hex("boot: riscv64 fdt-size=", fdt_size);
+	}
+}
+
 static void worker_thread_main(void)
 {
 	worker_switched = 1;
@@ -705,6 +728,7 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	if (pmm_total_page_count() != 0 && pmm_free_page_count() != 0) {
 		early_puts("pmm: riscv64 ranges\n");
 	}
+	boot_layout_smoke(fdt);
 	platform_discovery_smoke(fdt);
 	if (generic_services_self_test(fdt) == 0) {
 		early_puts("sched: riscv64 thread\n");

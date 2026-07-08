@@ -319,3 +319,14 @@ Verification notes:
   for discovered harts, started harts, boot hart, and secondary policy.
 - `git diff --check` passed after adding first-milestone SMP policy
   diagnostics.
+- Added boot-layout diagnostics:
+  - The riscv64 early smoke now prints memory base/size, kernel start/end,
+    initrd start/end/size, and FDT start/end/size.
+  - The BPI-F3 smoke summary extracts those values so real hardware logs can
+    prove the memory map and module/FDT handoff without hand-parsing the full
+    serial capture.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding boot-layout diagnostics.
+- `make test-riscv64-bpi-f3-emulator-gate` passed after adding boot-layout
+  diagnostics and printed QEMU `virt` summary rows for memory, kernel,
+  initrd, and FDT ranges.
+- `git diff --check` passed after adding boot-layout diagnostics.

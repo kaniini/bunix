@@ -1166,6 +1166,16 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "timer: riscv64 tick" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "thread: riscv64 switch" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "pmm: riscv64 ranges" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "boot: riscv64 memory-base=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "boot: riscv64 memory-size=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "boot: riscv64 kernel-start=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "boot: riscv64 kernel-end=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "boot: riscv64 initrd-start=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "boot: riscv64 initrd-end=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "boot: riscv64 initrd-size=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "boot: riscv64 fdt-start=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "boot: riscv64 fdt-end=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "boot: riscv64 fdt-size=" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 cpus" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 cpu-count=" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "smp: riscv64 discovered-harts=" $(RISCV64_SERIAL_LOG) >/dev/null
