@@ -330,3 +330,13 @@ Verification notes:
   diagnostics and printed QEMU `virt` summary rows for memory, kernel,
   initrd, and FDT ranges.
 - `git diff --check` passed after adding boot-layout diagnostics.
+- Added `tools/bpi-f3-smoke.sh --review-log FILE`:
+  - The command runs the U-Boot preboot checker, Bunix smoke checker,
+    classifier, and summary extractor in one pass over a captured serial log.
+  - The operator workflow now prefers the review command for physical-board
+    captures while keeping the individual phase commands available for
+    debugging.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding the BPI-F3 review command.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding the BPI-F3
+  review command.
+- `git diff --check` passed after adding the BPI-F3 review command.

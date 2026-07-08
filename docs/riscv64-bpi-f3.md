@@ -117,6 +117,14 @@ tools/bpi-f3-smoke.sh --print-uboot
 Verify a captured serial log with:
 
 ```sh
+tools/bpi-f3-smoke.sh --review-log bpi-f3-serial.log
+```
+
+The review command runs the checks below and then prints the classifier and
+summary tables.  The individual commands are also available when debugging a
+specific phase:
+
+```sh
 tools/bpi-f3-smoke.sh --check-preboot-log bpi-f3-serial.log
 tools/bpi-f3-smoke.sh --check-log bpi-f3-serial.log
 tools/bpi-f3-smoke.sh --classify-log bpi-f3-serial.log
@@ -138,12 +146,12 @@ Operator setup:
 - Copy the generated Bunix BPI-F3 artifacts to the first boot partition.
 - Stop at the U-Boot prompt.
 - Run the commands in `boot-bunix-bpi-f3.cmd` by hand.
-- Capture the full serial log and run both
-  `tools/bpi-f3-smoke.sh --check-preboot-log bpi-f3-serial.log` and
-  `tools/bpi-f3-smoke.sh --check-log bpi-f3-serial.log`, then run
-  `tools/bpi-f3-smoke.sh --classify-log bpi-f3-serial.log` to summarize which
-  exploration tasks have supporting evidence and which still need follow-up.
-- Run `tools/bpi-f3-smoke.sh --summarize-log bpi-f3-serial.log` and record the
+- Capture the full serial log and run
+  `tools/bpi-f3-smoke.sh --review-log bpi-f3-serial.log`.
+- Record the review output:
+  which exploration tasks have supporting evidence, which still need follow-up,
+  and the summary values listed below.
+- In particular, record the
   CPU count, timebase, firmware stdout path, resolved UART, UART MMIO base,
   UART count, interrupt-controller path/compatible/count, and selected
   interrupt-routing path/compatible in the exploration notes.

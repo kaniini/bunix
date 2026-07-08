@@ -17,6 +17,7 @@ commands:
                       summarize which exploration hardware tasks FILE supports
   --summarize-log FILE
                       extract board-relevant values from a captured log
+  --review-log FILE  run preboot check, smoke check, classifier, and summary
   --self-test        run a host-only marker-check self test
 EOF
 }
@@ -200,6 +201,17 @@ summarize_log() {
 		"$(marker_value "$log" "fdt: riscv64 interrupt-routing-compatible=")"
 }
 
+review_log() {
+	log=$1
+
+	check_preboot_log "$log"
+	check_log "$log"
+	printf 'bpi-f3 classification:\n'
+	classify_log "$log"
+	printf 'bpi-f3 summary:\n'
+	summarize_log "$log"
+}
+
 classify_log() {
 	log=$1
 
@@ -266,8 +278,9 @@ classify_log() {
 self_test() {
 	tmp=${TMPDIR:-/tmp}/bunix-bpi-f3-smoke.$$
 	preboot=${TMPDIR:-/tmp}/bunix-bpi-f3-preboot.$$
+	review=${TMPDIR:-/tmp}/bunix-bpi-f3-review.$$
 
-	trap 'rm -f "$tmp" "$preboot"' EXIT HUP INT TERM
+	trap 'rm -f "$tmp" "$preboot" "$review"' EXIT HUP INT TERM
 	cat >"$tmp" <<EOF
 bunixos: riscv64 early bootstrap
 pmm: riscv64 ranges
@@ -322,6 +335,8 @@ fdt print /cpus
 	timebase-frequency = <0x00989680>;
 EOF
 	check_preboot_log "$preboot" >/dev/null
+	cat "$preboot" "$tmp" > "$review"
+	review_log "$review" | grep -aF "bpi-f3 summary:" >/dev/null
 	classify_log "$tmp" >/dev/null
 	summarize_log "$tmp" | grep -aF "initrd-size	0x10000" >/dev/null
 	summarize_log "$tmp" | grep -aF "smp-secondary-policy	parked" >/dev/null
@@ -383,6 +398,14 @@ while [ $# -gt 0 ]; do
 			exit 2
 		fi
 		summarize_log "$2"
+		exit 0
+		;;
+	--review-log)
+		if [ $# -lt 2 ]; then
+			usage >&2
+			exit 2
+		fi
+		review_log "$2"
 		exit 0
 		;;
 	--self-test)
