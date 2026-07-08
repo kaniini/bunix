@@ -3,12 +3,15 @@
 #include <arch/interrupts.h>
 #include <arch/sbi.h>
 #include <arch/thread.h>
+#include <arch/user.h>
 
 static struct riscv64_boot_info boot_info;
 static struct arch_thread_context boot_context;
 static struct arch_thread_context worker_context;
 static volatile u32 worker_switched;
 static u8 worker_stack[4096] __attribute__((aligned(16)));
+static u8 user_probe_stack[4096] __attribute__((aligned(16)));
+static u8 user_probe_kernel_stack[4096] __attribute__((aligned(16)));
 
 const struct riscv64_boot_info *riscv64_boot_info(void)
 {
@@ -82,6 +85,13 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	}
 	if (riscv64_syscall_entry_self_test() == 0) {
 		early_puts("syscall: riscv64 ecall\n");
+	}
+	if (riscv64_user_mode_self_test((u64)riscv64_user_ecall_probe,
+					(u64)(user_probe_stack +
+					      sizeof(user_probe_stack)),
+					(u64)(user_probe_kernel_stack +
+					      sizeof(user_probe_kernel_stack))) == 0) {
+		early_puts("user: riscv64 mode\n");
 	}
 	early_puts("machine: poweroff\n");
 	(void)riscv64_sbi_call1(RISCV64_SBI_LEGACY_SHUTDOWN, 0);

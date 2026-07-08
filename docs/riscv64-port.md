@@ -21,6 +21,8 @@ The early boot gate currently verifies:
 - The riscv64 kernel-thread context switch primitive can switch away and back.
 - The native Bunix `ecall` entry contract can decode a synthetic user syscall
   frame, place the return value in `a0`, and advance `sepc`.
+- A minimal U-mode probe can execute an `ecall`, receive the expected return
+  value, and return through a test-only trap continuation on a kernel stack.
 - The guest exits through SBI poweroff.
 
 ## Native Bunix ABI
@@ -35,6 +37,11 @@ Native Bunix syscalls on rv64 use `ecall`:
 The build smoke target `make test-riscv64-user-abi` links a freestanding rv64
 user ELF with `user/crt0-riscv64.S` and the shared Bunix syscall wrappers.  It
 does not prove runtime U-mode task launch yet.
+
+The early QEMU smoke does prove that the trap path can enter U-mode and handle
+an `ecall` on a supervisor stack.  This is still a probe, not a native server:
+there is no ELF/module handoff, user address-space activation, copyin/copyout,
+or scheduler-owned user task lifetime in the riscv64 path yet.
 
 ## Linux personality slice
 
@@ -68,7 +75,7 @@ The initial riscv64 port intentionally does not support:
 
 - SMP or secondary hart startup.
 - FPU, vector, or signal context save/restore.
-- Native U-mode task entry with a kernel-stack trap transition.
+- Native server task launch through proc/bootstrap.
 - User page-table activation, copyin/copyout, or VM server integration.
 - Linux signal frames or riscv64-specific Linux syscall parity.
 - Dynamic linking and `ld-musl-riscv64.so.1`.

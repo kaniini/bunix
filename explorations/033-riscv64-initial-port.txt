@@ -192,6 +192,22 @@ Progress notes:
   - This completes the syscall-entry contract, but native userspace task
     launch, page-table activation, and full native syscall implementation are
     still part of the open native server execution task.
+- Added the first real riscv64 U-mode execution probe:
+  - `arch/riscv64/trap.S` now uses `sscratch` to distinguish supervisor traps
+    from user traps.  Supervisor execution keeps `sscratch = 0`; U-mode entry
+    seeds it with the kernel stack top.
+  - User traps switch to the kernel stack before saving the trap frame, record
+    the interrupted user stack in the frame, and restore either a supervisor
+    stack or the user stack depending on the saved `sstatus.SPP` return mode.
+  - `arch_user_enter()` now transitions through `sret` instead of halting.
+  - The early boot smoke enters a tiny U-mode probe, executes a normal native
+    Bunix `ecall`, verifies the expected return, then uses a test-only armed
+    ecall to return to a supervisor continuation.
+  - `test-boot-riscv64-early` now requires the `user: riscv64 mode` marker.
+  - This proves U-mode execution and kernel-stack ecall handling, but it is
+    still not native server launch: riscv64 ELF/module handoff, user page-table
+    activation, copyin/copyout, and scheduler-owned user task lifetime remain
+    open.
 - Documented the riscv64 Linux-personality slice in `docs/riscv64-port.md`:
   - The first Linux target is a static rv64 musl ELF for
     `user/musl-hello/main.c`, loaded through the proc/VFS/server path once
@@ -324,6 +340,12 @@ Verification so far:
   dispatch.
 - `make all` passed for the default x86_64 target after adding the
   syscall-entry trap dispatch.
+- `make test-boot-riscv64-early` passed after adding the U-mode probe and now
+  requires the `user: riscv64 mode` marker before guest poweroff.
+- `cat build/riscv64-serial.log` showed the marker sequence
+  `bunixos: riscv64 early bootstrap`, `timer: riscv64 tick`,
+  `thread: riscv64 switch`, `syscall: riscv64 ecall`,
+  `user: riscv64 mode`, and `machine: poweroff`.
 - `command -v riscv64-alpine-linux-musl-gcc` failed; the riscv64 musl compiler
   wrapper is absent from `PATH`.
 - `find /usr/riscv64-alpine-linux-musl -maxdepth 4 -type f` found riscv64
