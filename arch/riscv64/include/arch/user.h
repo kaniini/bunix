@@ -27,6 +27,16 @@ struct arch_syscall_frame {
 	u64 a[8];
 };
 
+static inline u64 arch_syscall_frame_ip(const struct arch_syscall_frame *frame)
+{
+	return frame != 0 ? frame->user_pc : 0;
+}
+
+static inline u64 arch_syscall_frame_sp(const struct arch_syscall_frame *frame)
+{
+	return frame != 0 ? frame->user_sp : 0;
+}
+
 void arch_user_init(void);
 void arch_user_set_strace_mode(const char *mode);
 void arch_user_init_cpu(u32 cpu_id);

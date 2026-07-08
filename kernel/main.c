@@ -4,6 +4,7 @@
 #include "ipc.h"
 #include "multiboot2.h"
 #include "name.h"
+#include "pmm.h"
 #include "sched.h"
 #include "server.h"
 #include "slab.h"
@@ -120,7 +121,8 @@ void kernel_main(u32 magic, u64 multiboot_info)
 
 	configure_boot_options(multiboot_info);
 	multiboot2_dump(multiboot_info);
-	vm_init(multiboot_info);
+	pmm_init(multiboot_info);
+	vm_init();
 	slab_init();
 	buffer_init();
 	vm_self_test();

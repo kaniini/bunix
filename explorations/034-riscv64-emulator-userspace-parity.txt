@@ -272,3 +272,31 @@ Verification notes:
 - `make test-boot-riscv64-early` passed after the scheduler/VM portability
   hooks.
 - `make test-boot` passed after the scheduler/VM portability hooks.
+- Linked the core generic scheduler/proc/server support code into the
+  riscv64 emulator kernel:
+  - `KERNEL_GENERIC_SRCS_riscv64` now includes buffer, ELF, IPC, names,
+    scheduler, slab, server, timer, generic VM, and the in-kernel VM server.
+  - Added freestanding `memcpy()` and `memset()` definitions in
+    `kernel/string.c` for compiler-emitted copies/zeroes in freestanding
+    generic code.
+  - Split VM initialization so the x86 boot path calls `pmm_init()` before
+    generic `vm_init()`, keeping `kernel/vm.c` free of Multiboot PMM symbols.
+  - Split boot-module recording so `kernel/server.c` records generic module
+    triples while new `kernel/server_multiboot2.c` owns x86 Multiboot module
+    enumeration.  Riscv64 boot-package parsing can feed
+    `server_record_boot_module()` later without linking Multiboot2.
+  - Added arch syscall-frame IP/SP accessors so generic fork logging in
+    `server.c` no longer names x86 `user_rip`/`user_rsp`.
+  - The generic services now link into `build/riscv64/bunixos.kernel`, but
+    `riscv64_early_main()` still runs the early harness and has not yet
+    initialized the scheduler or launched `abi-smoke.user` through
+    proc/bootstrap.
+- `make ARCH=riscv64 all` passed with the generic service set linked into the
+  riscv64 kernel.
+- `make test-boot-riscv64-early` passed with the generic service set linked
+  into the riscv64 kernel.
+- `make all` passed after splitting VM init and Multiboot module enumeration.
+- `make test-boot` passed after splitting VM init and Multiboot module
+  enumeration.
+- `make test-riscv64-user-abi` passed after linking the generic service set.
+- `make test-riscv64-bootpkg` passed after linking the generic service set.

@@ -20,7 +20,7 @@ struct vm_space {
 	struct arch_vm_space arch;
 };
 
-void vm_init(u64 multiboot_info);
+void vm_init(void);
 
 struct vm_space *vm_kernel_space(void);
 struct vm_space *vm_rpc_create_space(const char *owner);

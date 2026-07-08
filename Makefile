@@ -291,13 +291,26 @@ KERNEL_GENERIC_SRCS_x86_64 := \
 	kernel/sched.c \
 	kernel/slab.c \
 	kernel/server.c \
+	kernel/server_multiboot2.c \
 	kernel/spinlock.c \
+	kernel/string.c \
 	kernel/timer.c \
 	kernel/vm.c \
 	servers/vm/vm.c
 KERNEL_GENERIC_SRCS_riscv64 := \
+	kernel/buffer.c \
+	kernel/elf.c \
+	kernel/ipc.c \
+	kernel/name.c \
 	kernel/pmm.c \
-	kernel/spinlock.c
+	kernel/sched.c \
+	kernel/slab.c \
+	kernel/server.c \
+	kernel/spinlock.c \
+	kernel/string.c \
+	kernel/timer.c \
+	kernel/vm.c \
+	servers/vm/vm.c
 KERNEL_GENERIC_SRCS := $(KERNEL_GENERIC_SRCS_$(ARCH))
 KERNEL_SRCS := \
 	$(KERNEL_ARCH_SRCS) \

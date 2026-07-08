@@ -93,6 +93,16 @@ instead of x86 `cli`/`sti`/`hlt`, and `kernel/vm.c` logs `arch_vm_root()`
 instead of naming x86 `cr3`.  These are compile gates only; the normal
 scheduler/proc/bootstrap path is not linked into the riscv64 kernel yet.
 
+The riscv64 kernel now links the core generic service support code needed by
+that path: buffer, ELF, IPC, names, scheduler, slab, server, timer, generic VM,
+and the in-kernel VM server.  VM initialization is boot-protocol-neutral, with
+the x86 boot path initializing Multiboot PMM before calling generic `vm_init()`.
+Boot-module recording is also generic: `kernel/server.c` accepts name/start/end
+module records, while x86 Multiboot enumeration lives in
+`kernel/server_multiboot2.c`.  Riscv64 still needs to initialize these services
+from the early boot path and feed boot-package records before the packaged
+payload can launch through scheduler/proc/bootstrap.
+
 The PMM has been split enough to support multiple boot protocols:
 `pmm_init_from_ranges()` initializes the generic page allocator from
 available/reserved physical ranges, the x86_64 Multiboot2 path collects its

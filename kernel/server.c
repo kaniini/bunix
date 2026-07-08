@@ -1,7 +1,6 @@
 #include "console.h"
 #include "elf.h"
 #include "ipc.h"
-#include "multiboot2.h"
 #include "name.h"
 #include "pmm.h"
 #include "sched.h"
@@ -269,22 +268,22 @@ static void mem_zero(u8 *dst, u64 len)
 	}
 }
 
-static u64 copy_boot_module(const struct multiboot2_module *module,
+static u64 copy_boot_module(const char *name, u64 start, u64 end,
 			    const char *kind)
 {
-	const u64 size = module->end - module->start;
+	const u64 size = end - start;
 	const u64 pages = align_up(size, PMM_PAGE_SIZE) / PMM_PAGE_SIZE;
 	const u64 copy = pmm_pages_alloc_contiguous(pages);
 
 	if (copy == 0) {
 		console_printf("kernel: failed to copy %s module %s size=%u\n",
-			       kind, module->cmdline, (u32)size);
+			       kind, name, (u32)size);
 		return 0;
 	}
 
-	mem_copy((u8 *)copy, (const u8 *)module->start, size);
+	mem_copy((u8 *)copy, (const u8 *)start, size);
 	console_printf("kernel: copied %s module %s image=%p-%p size=%u\n",
-		       kind, module->cmdline, (const void *)copy,
+		       kind, name, (const void *)copy,
 		       (const void *)(copy + size), (u32)size);
 	return copy;
 }
@@ -762,8 +761,8 @@ int server_task_start_fork(struct task *child,
 
 	console_printf("kernel: task fork parent=%u child=%u rip=%p rsp=%p\n",
 		       task_id(parent), task_id(child),
-		       (const void *)frame->user_rip,
-		       (const void *)frame->user_rsp);
+		       (const void *)arch_syscall_frame_ip(frame),
+		       (const void *)arch_syscall_frame_sp(frame));
 	if (thread_create(child, task_name(child), fork_entry_thread, start) == 0) {
 		slab_free(start);
 		return -1;
@@ -815,25 +814,22 @@ int server_boot_module_read(u64 offset, void *buffer, u64 len)
 	return 0;
 }
 
-static void record_boot_module(const struct multiboot2_module *module, void *ctx)
+void server_record_boot_module(const char *name, u64 module_start, u64 module_end)
 {
-	(void)ctx;
-
-	const struct server *server = find_boot_server(module->cmdline);
+	const struct server *server = find_boot_server(name);
 	if (server == 0) {
-		if (str_eq(module->cmdline, "disk0") ||
-		    str_eq(module->cmdline, "ext2disk")) {
+		if (str_eq(name, "disk0") || str_eq(name, "ext2disk")) {
 			struct boot_data_module *data =
-				str_eq(module->cmdline, "disk0") ?
-				&disk0_module : &ext2disk_module;
+				str_eq(name, "disk0") ? &disk0_module :
+							&ext2disk_module;
 			const char *server_name =
-				str_eq(module->cmdline, "disk0") ?
-				"block" : "ext2";
-			const u64 copy = copy_boot_module(module, "data");
-			const u64 size = module->end - module->start;
+				str_eq(name, "disk0") ? "block" : "ext2";
+			const u64 copy = copy_boot_module(
+				name, module_start, module_end, "data");
+			const u64 size = module_end - module_start;
 
-			data->name = module->cmdline;
-			data->start = copy != 0 ? copy : module->start;
+			data->name = name;
+			data->start = copy != 0 ? copy : module_start;
 			data->end = data->start + size;
 			console_printf("kernel: recorded data module %s image=%p-%p size=%u\n",
 				       data->name, (const void *)data->start,
@@ -848,12 +844,13 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 			return;
 		}
 
-		console_printf("kernel: ignoring unknown module %s\n", module->cmdline);
+		console_printf("kernel: ignoring unknown module %s\n", name);
 		return;
 	}
 
-	const u64 size = module->end - module->start;
-	const u64 copy = copy_boot_module(module, "server");
+	const u64 size = module_end - module_start;
+	const u64 copy = copy_boot_module(name, module_start, module_end,
+					  "server");
 	struct module_server_start *start =
 		(struct module_server_start *)slab_zalloc(sizeof(*start));
 	if (start == 0) {
@@ -861,7 +858,7 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 		return;
 	}
 	start->server = server;
-	start->image_start = copy != 0 ? copy : module->start;
+	start->image_start = copy != 0 ? copy : module_start;
 	start->image_end = start->image_start + size;
 	start->data_start = 0;
 	start->data_end = 0;
@@ -888,14 +885,17 @@ static void record_boot_module(const struct multiboot2_module *module, void *ctx
 		       (const void *)start->image_end);
 }
 
-void server_start_boot_modules(u64 multiboot_info)
+void server_boot_modules_init(void)
 {
 	struct ipc_port *console_port = ipc_port_create("console");
 
 	tree_init(&module_starts_by_name);
 	name_service_register("console", NAME_SERVICE_IPC_PORT,
 			      (u64)console_port);
-	multiboot2_for_each_module(multiboot_info, record_boot_module, 0);
+}
+
+void server_start_initial_boot_modules(void)
+{
 	server_launch_module("vm");
 	sched_run();
 	server_launch_module("names");

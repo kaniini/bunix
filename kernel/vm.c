@@ -11,9 +11,8 @@ static struct u64_tree spaces_by_id;
 static u32 next_space_id = 1;
 static struct spinlock vm_spaces_lock = SPINLOCK_INIT("vm-spaces");
 
-void vm_init(u64 multiboot_info)
+void vm_init(void)
 {
-	pmm_init(multiboot_info);
 	arch_vm_kernel_space_init(&kernel_space.arch);
 	u64_tree_init(&spaces_by_id);
 	kernel_space.id = 0;
