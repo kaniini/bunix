@@ -11,6 +11,9 @@ explicit while the port is young.
 - Firmware handoff: QEMU's default OpenSBI path loading the Bunix supervisor
   ELF with `-kernel`.
 - Kernel image: `build/riscv64/bunixos.kernel`.
+- Boot package: `build/riscv64/bootpkg.img`, passed with QEMU `-initrd` and
+  discovered through `/chosen/linux,initrd-start` and
+  `/chosen/linux,initrd-end` in the FDT.
 - Test gate: `make test-boot-riscv64-early`.
 
 The early boot gate currently verifies:
@@ -23,7 +26,21 @@ The early boot gate currently verifies:
   frame, place the return value in `a0`, and advance `sepc`.
 - A minimal U-mode probe can execute an `ecall`, receive the expected return
   value, and return through a test-only trap continuation on a kernel stack.
+- The riscv64 boot package is visible through the FDT initrd range and starts
+  with the expected `BUNIX-RV64-BOOTPKG` header.
 - The guest exits through SBI poweroff.
+
+## Boot package
+
+The first riscv64 module/rootfs carrier is a QEMU initrd image.  The host-side
+builder `tools/build-riscv64-bootpkg.sh` creates a text-header package with a
+module record and the current `abi-smoke.user` payload.  The early kernel only
+validates the carrier magic today; parsing the module table and mapping
+payloads into native tasks is part of the native server launch work.
+
+This gives riscv64 a firmware-neutral package handoff separate from
+Multiboot2.  Future rootfs images can ride in the same carrier or replace it
+with a stricter binary table once the riscv64 bootstrap/proc path exists.
 
 ## Native Bunix ABI
 

@@ -60,7 +60,7 @@ Tasks:
       negative Bunix syscall IDs and register ABI documentation.
 - [x] Decide the riscv64 Linux-personality ABI slice: static riscv64 musl ELF
       loading first, then enough Linux syscalls for a `musl-hello` equivalent.
-- [ ] Add riscv64 rootfs/module packaging rules and QEMU smoke tests that end
+- [x] Add riscv64 rootfs/module packaging rules and QEMU smoke tests that end
       in guest poweroff.
 - [x] Add documentation for unsupported riscv64 features after initial bringup:
       SMP, FPU/vector context, signals, dynamic linking, VirtIO MMIO devices,
@@ -229,6 +229,23 @@ Progress notes:
   with kernel-stack trap transitions, user page tables, Linux signal/syscall
   parity, dynamic linking, VirtIO MMIO, networking, Alpine rootfs boot, PCI,
   USB, ACPI, board enumeration, and external interrupt routing.
+- Added initial riscv64 module/rootfs packaging rules:
+  - `tools/build-riscv64-bootpkg.sh` creates a `BUNIX-RV64-BOOTPKG` image
+    containing a text module record and the current riscv64 `abi-smoke.user`
+    payload.
+  - `$(RISCV64_BOOTPKG)` builds `build/riscv64/bootpkg.img`, and
+    `test-riscv64-bootpkg` verifies the package header and module record.
+  - `run-riscv64-early` and `test-boot-riscv64-early` now pass that image via
+    QEMU `-initrd`.
+  - The riscv64 FDT scanner now extracts `/chosen/linux,initrd-start` and
+    `/chosen/linux,initrd-end`; early boot records the range in boot info and
+    validates the package magic.
+  - `test-boot-riscv64-early` now requires `bootpkg: riscv64 initrd` before
+    `machine: poweroff`, proving the package handoff and poweroff path in one
+    QEMU smoke.
+  - The package is only a carrier at this stage.  Parsing the package table,
+    mapping payloads into native tasks, and carrying a real rootfs are left to
+    the native server execution path.
 - Added riscv64 arch skeleton headers and implementations:
   - `arch/riscv64/include/arch/sbi.h` centralizes the early SBI call ABI and
     console putchar helper used by the early payload and power path.
@@ -351,6 +368,15 @@ Verification so far:
 - `find /usr/riscv64-alpine-linux-musl -maxdepth 4 -type f` found riscv64
   binutils but did not find musl libc headers or libraries for a real static
   riscv64 musl build.
+- `make test-riscv64-bootpkg` passed and verified the boot package header plus
+  `abi-smoke.user` module record.
+- `make test-boot-riscv64-early` passed after adding QEMU `-initrd` packaging
+  and now requires the `bootpkg: riscv64 initrd` marker before guest poweroff.
+- `cat build/riscv64-serial.log` showed the marker sequence
+  `bunixos: riscv64 early bootstrap`, `timer: riscv64 tick`,
+  `thread: riscv64 switch`, `syscall: riscv64 ecall`,
+  `user: riscv64 mode`, `bootpkg: riscv64 initrd`, and
+  `machine: poweroff`.
 - `make ARCH=riscv64 all` passed and linked `build/riscv64/bunixos.kernel`.
 - `make test-boot-riscv64-early` passed.
 - `make all` passed for the default x86_64 target after the riscv64 linker

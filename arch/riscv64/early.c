@@ -13,6 +13,8 @@ static u8 worker_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_kernel_stack[4096] __attribute__((aligned(16)));
 
+static const char riscv64_bootpkg_magic[] = "BUNIX-RV64-BOOTPKG\n";
+
 const struct riscv64_boot_info *riscv64_boot_info(void)
 {
 	return &boot_info;
@@ -53,9 +55,26 @@ static int context_switch_self_test(void)
 	return worker_switched == 1 ? 0 : -1;
 }
 
+static int bootpkg_magic_ok(u64 start, u64 end)
+{
+	const char *image = (const char *)start;
+	const u64 magic_len = sizeof(riscv64_bootpkg_magic) - 1;
+
+	if (start == 0 || end <= start || end - start < magic_len) {
+		return 0;
+	}
+	for (u64 i = 0; i < magic_len; i++) {
+		if (image[i] != riscv64_bootpkg_magic[i]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
 void riscv64_early_main(u64 hart_id, u64 fdt)
 {
 	struct riscv64_fdt_memory_range memory;
+	struct riscv64_fdt_initrd initrd;
 
 	boot_info.hart_id = hart_id;
 	boot_info.fdt = fdt;
@@ -66,9 +85,15 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	boot_info.direct_map_size = RISCV64_DIRECT_MAP_SIZE;
 	boot_info.user_base = RISCV64_USER_BASE;
 	boot_info.user_limit = RISCV64_USER_LIMIT;
+	boot_info.initrd_start = 0;
+	boot_info.initrd_end = 0;
 	if (riscv64_fdt_scan_memory((const void *)fdt, &memory, 1) == 1) {
 		boot_info.phys_base = memory.base;
 		boot_info.phys_size = memory.size;
+	}
+	if (riscv64_fdt_scan_initrd((const void *)fdt, &initrd) == 0) {
+		boot_info.initrd_start = initrd.start;
+		boot_info.initrd_end = initrd.end;
 	}
 
 	early_puts("bunixos: riscv64 early bootstrap\n");
@@ -92,6 +117,9 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 					(u64)(user_probe_kernel_stack +
 					      sizeof(user_probe_kernel_stack))) == 0) {
 		early_puts("user: riscv64 mode\n");
+	}
+	if (bootpkg_magic_ok(boot_info.initrd_start, boot_info.initrd_end)) {
+		early_puts("bootpkg: riscv64 initrd\n");
 	}
 	early_puts("machine: poweroff\n");
 	(void)riscv64_sbi_call1(RISCV64_SBI_LEGACY_SHUTDOWN, 0);

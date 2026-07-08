@@ -69,6 +69,16 @@ static int node_is_memory(const char *name)
 	return name[i] == '\0' || name[i] == '@';
 }
 
+static u64 read_prop_cells(const u8 *data, u32 len)
+{
+	const u32 count = len / sizeof(u32);
+
+	if (len == 0 || (len % sizeof(u32)) != 0 || count > 2) {
+		return 0;
+	}
+	return read_cells((const u32 *)data, count);
+}
+
 int riscv64_fdt_scan_memory(const void *fdt,
 			    struct riscv64_fdt_memory_range *ranges,
 			    u32 capacity)
@@ -176,6 +186,103 @@ int riscv64_fdt_scan_memory(const void *fdt,
 
 		if (token == FDT_END) {
 			return (int)found;
+		}
+
+		return -1;
+	}
+
+	return -1;
+}
+
+int riscv64_fdt_scan_initrd(const void *fdt,
+			    struct riscv64_fdt_initrd *initrd)
+{
+	const struct fdt_header *header = (const struct fdt_header *)fdt;
+	u32 depth = 0;
+	u32 in_chosen = 0;
+	u32 found_start = 0;
+	u32 found_end = 0;
+	u64 cursor;
+	u64 struct_end;
+	const char *strings;
+
+	if (fdt == 0 || initrd == 0 || be32(&header->magic) != FDT_MAGIC) {
+		return -1;
+	}
+
+	initrd->start = 0;
+	initrd->end = 0;
+	cursor = (u64)fdt + be32(&header->off_dt_struct);
+	struct_end = cursor + be32(&header->size_dt_struct);
+	strings = (const char *)fdt + be32(&header->off_dt_strings);
+
+	while (cursor + sizeof(u32) <= struct_end) {
+		const u32 token = be32((const void *)cursor);
+		cursor += sizeof(u32);
+
+		if (token == FDT_BEGIN_NODE) {
+			const char *name = (const char *)cursor;
+
+			if (depth == 1 && str_eq(name, "chosen")) {
+				in_chosen = depth + 1;
+			}
+			while (cursor < struct_end &&
+			       *(const char *)cursor != '\0') {
+				cursor++;
+			}
+			cursor = align4(cursor + 1);
+			depth++;
+			continue;
+		}
+
+		if (token == FDT_END_NODE) {
+			if (in_chosen == depth) {
+				in_chosen = 0;
+			}
+			if (depth > 0) {
+				depth--;
+			}
+			continue;
+		}
+
+		if (token == FDT_PROP) {
+			u32 len;
+			u32 nameoff;
+			const char *name;
+			const u8 *data;
+
+			if (cursor + 2 * sizeof(u32) > struct_end) {
+				return -1;
+			}
+			len = be32((const void *)cursor);
+			nameoff = be32((const void *)(cursor + sizeof(u32)));
+			cursor += 2 * sizeof(u32);
+			if (cursor + len > struct_end) {
+				return -1;
+			}
+			data = (const u8 *)cursor;
+			name = strings + nameoff;
+
+			if (in_chosen != 0 &&
+			    str_eq(name, "linux,initrd-start")) {
+				initrd->start = read_prop_cells(data, len);
+				found_start = initrd->start != 0;
+			} else if (in_chosen != 0 &&
+				   str_eq(name, "linux,initrd-end")) {
+				initrd->end = read_prop_cells(data, len);
+				found_end = initrd->end != 0;
+			}
+			cursor = align4(cursor + len);
+			continue;
+		}
+
+		if (token == FDT_NOP) {
+			continue;
+		}
+
+		if (token == FDT_END) {
+			return found_start != 0 && found_end != 0 &&
+			       initrd->end > initrd->start ? 0 : -1;
 		}
 
 		return -1;
