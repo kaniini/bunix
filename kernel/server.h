@@ -23,6 +23,7 @@ void server_start_all(void);
 void server_start_boot_modules(u64 multiboot_info);
 void server_boot_modules_init(void);
 void server_record_boot_module(const char *name, u64 start, u64 end);
+int server_boot_module_registered(const char *name);
 void server_start_initial_boot_modules(void);
 int server_launch_module(const char *name);
 u64 server_launch_module_with_caps(const char *name, struct task *parent,

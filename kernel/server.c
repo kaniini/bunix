@@ -40,6 +40,7 @@ static const struct server boot_servers[] = {
 	{ "netcfg", 0 },
 	{ "vfs", 0 },
 	{ "ping", 0 },
+	{ "abi-smoke.user", 0 },
 	{ "vm", vm_server_start },
 };
 
@@ -883,6 +884,11 @@ void server_record_boot_module(const char *name, u64 module_start, u64 module_en
 	console_printf("kernel: recorded module server %s image=%p-%p\n",
 		       server->name, (const void *)start->image_start,
 		       (const void *)start->image_end);
+}
+
+int server_boot_module_registered(const char *name)
+{
+	return module_start_find(name) != 0 ? 1 : 0;
 }
 
 void server_boot_modules_init(void)

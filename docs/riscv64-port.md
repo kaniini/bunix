@@ -99,16 +99,19 @@ and the in-kernel VM server.  VM initialization is boot-protocol-neutral, with
 the x86 boot path initializing Multiboot PMM before calling generic `vm_init()`.
 Boot-module recording is also generic: `kernel/server.c` accepts name/start/end
 module records, while x86 Multiboot enumeration lives in
-`kernel/server_multiboot2.c`.  Riscv64 still needs to feed boot-package
-records into this generic recorder before the packaged payload can launch
-through scheduler/proc/bootstrap.
+`kernel/server_multiboot2.c`.  The riscv64 early emulator path now initializes
+the generic boot-module registry and feeds package `module` records into
+`server_record_boot_module()`.  The current smoke records `abi-smoke.user` as
+a known native module and requires the `module: riscv64 registered` marker.
+The packaged payload still launches through the early harness until
+architecture-aware generic ELF loading and scheduler-owned U-mode launch are
+in place.
 
 The early riscv64 emulator path now initializes those generic services after
 PMM bringup and proves scheduler-owned kernel thread lifetime: it creates a
 kernel thread through `thread_create()`, runs it with `sched_run()`, and
 observes it exit through `thread_exit()`.  This is not yet scheduler-owned
-U-mode launch; boot-package records still need to be fed into the generic
-server recorder and the `abi-smoke.user` payload still runs through the early
+U-mode launch; the `abi-smoke.user` payload still runs through the early
 payload launcher.
 
 The PMM has been split enough to support multiple boot protocols:

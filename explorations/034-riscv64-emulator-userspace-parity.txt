@@ -313,9 +313,9 @@ Verification notes:
     `thread_exit()` back to the scheduler.
   - `test-boot-riscv64-early` now requires the `sched: riscv64 thread`
     marker.
-  - This proves scheduler-owned kernel thread lifetime on riscv64.  It does
-    not yet launch a scheduler-owned U-mode task or feed boot-package modules
-    into `server_record_boot_module()`.
+  - This proved scheduler-owned kernel thread lifetime on riscv64.  At that
+    point it did not yet launch a scheduler-owned U-mode task or feed
+    boot-package modules into `server_record_boot_module()`.
 - `make ARCH=riscv64 all` passed after adding the scheduler-owned thread
   smoke.
 - `make test-boot-riscv64-early` passed with the scheduler-owned thread
@@ -327,3 +327,32 @@ Verification notes:
   smoke.
 - `make test-riscv64-bootpkg` passed after adding the scheduler-owned thread
   smoke.
+- Fed riscv64 boot-package module records into the generic boot-module
+  registry:
+  - Added `abi-smoke.user` as a known native boot module name in the generic
+    server table.
+  - Added `server_boot_module_registered()` so arch bringup smokes can verify
+    generic registration without reaching into the registry internals.
+  - The riscv64 early path now calls `server_boot_modules_init()` after IPC and
+    names are initialized, walks boot-package `module` headers, and calls
+    `server_record_boot_module()` with name/start/end triples.
+  - The legacy early `bootpkg_find_module()` path now tracks module payload
+    order instead of assuming the requested module is the first payload, so
+    the early harness remains valid as the carrier grows beyond one module.
+  - `test-boot-riscv64-early` now requires the `module: riscv64 registered`
+    marker.
+  - This proves the package can feed the normal module registry.  It does not
+    yet launch `abi-smoke.user` through `server_launch_module()` because the
+    shared ELF loader currently accepts only x86_64 images and
+    scheduler-owned riscv64 U-mode launch still needs a dedicated slice.
+- `make ARCH=riscv64 all` passed after wiring boot-package records into the
+  generic registry.
+- `make all` passed after wiring boot-package records into the generic
+  registry.
+- `make test-boot-riscv64-early` passed with the registered-module marker.
+- `make test-riscv64-user-abi` passed after wiring boot-package records into
+  the generic registry.
+- `make test-riscv64-bootpkg` passed after wiring boot-package records into
+  the generic registry.
+- `make test-boot` passed after adding the generic `abi-smoke.user` module
+  name and registration probe.

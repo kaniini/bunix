@@ -11,6 +11,7 @@
 #include "name.h"
 #include "pmm.h"
 #include "sched.h"
+#include "server.h"
 #include "slab.h"
 #include "vm.h"
 #include "../servers/vm/vm_server.h"
@@ -140,6 +141,7 @@ static int generic_services_self_test(u64 fdt)
 	ipc_init();
 	name_service_init();
 	vm_server_init();
+	server_boot_modules_init();
 	sched_init();
 
 	sched_worker_ran = 0;
@@ -241,8 +243,11 @@ static int bootpkg_find_module(u64 start, u64 end, const char *wanted,
 	const u64 wanted_len = cstr_len(wanted);
 	u64 cursor = sizeof(riscv64_bootpkg_magic) - 1;
 	u64 payload = 0;
+	u64 payload_size = 0;
+	u64 found_payload_offset = 0;
 	u64 found_start = 0;
 	u64 found_size = 0;
+	u32 matched = 0;
 
 	while (start + cursor < end) {
 		u64 line = cursor;
@@ -268,19 +273,131 @@ static int bootpkg_find_module(u64 start, u64 end, const char *wanted,
 				&used);
 
 			if (used != 0) {
+				found_payload_offset = payload_size;
 				found_size = size;
+				matched = 1;
+			}
+		}
+		if (line_end - line > prefix_len &&
+		    cstr_eq_len(image + line, riscv64_bootpkg_module_prefix,
+				prefix_len)) {
+			u64 name_end = line + prefix_len;
+			u64 used = 0;
+			u64 size = 0;
+
+			while (name_end < line_end && image[name_end] != ' ') {
+				name_end++;
+			}
+			if (name_end < line_end) {
+				size = parse_decimal(image + name_end + 1,
+						     line_end - name_end - 1,
+						     &used);
+			}
+			if (used != 0) {
+				if (payload_size + size < payload_size) {
+					return -1;
+				}
+				payload_size += size;
 			}
 		}
 		cursor = line_end + 1;
 	}
 
-	if (payload == 0 || found_size == 0 || start + payload + found_size > end) {
+	if (payload == 0 || matched == 0 ||
+	    found_payload_offset + found_size < found_payload_offset ||
+	    start + payload + found_payload_offset + found_size > end) {
 		return -1;
 	}
-	found_start = start + payload;
+	found_start = start + payload + found_payload_offset;
 	*module_start = found_start;
 	*module_size = found_size;
 	return 0;
+}
+
+static int bootpkg_module_line(const char *line, u64 len, char *name,
+			       u64 name_capacity, u64 *size)
+{
+	const u64 prefix_len = cstr_len(riscv64_bootpkg_module_prefix);
+	u64 name_end = prefix_len;
+	u64 used = 0;
+
+	if (len <= prefix_len ||
+	    !cstr_eq_len(line, riscv64_bootpkg_module_prefix, prefix_len)) {
+		return -1;
+	}
+	while (name_end < len && line[name_end] != ' ') {
+		name_end++;
+	}
+	if (name_end == prefix_len || name_end >= len ||
+	    name_end - prefix_len >= name_capacity) {
+		return -1;
+	}
+	for (u64 i = 0; i < name_end - prefix_len; i++) {
+		name[i] = line[prefix_len + i];
+	}
+	name[name_end - prefix_len] = '\0';
+	*size = parse_decimal(line + name_end + 1, len - name_end - 1, &used);
+	return used != 0 ? 0 : -1;
+}
+
+static int bootpkg_payload_offset(u64 start, u64 end, u64 *payload_offset)
+{
+	const char *image = (const char *)start;
+	u64 cursor = sizeof(riscv64_bootpkg_magic) - 1;
+
+	while (start + cursor < end) {
+		u64 line_end = cursor;
+
+		while (start + line_end < end && image[line_end] != '\n') {
+			line_end++;
+		}
+		if (line_end == cursor) {
+			*payload_offset = line_end + 1;
+			return start + *payload_offset <= end ? 0 : -1;
+		}
+		cursor = line_end + 1;
+	}
+	return -1;
+}
+
+static int bootpkg_record_modules(u64 start, u64 end)
+{
+	const char *image = (const char *)start;
+	u64 cursor = sizeof(riscv64_bootpkg_magic) - 1;
+	u64 payload_offset = 0;
+	u64 payload_cursor = 0;
+	u32 recorded = 0;
+
+	if (bootpkg_payload_offset(start, end, &payload_offset) != 0) {
+		return -1;
+	}
+	payload_cursor = payload_offset;
+	while (start + cursor < end) {
+		u64 line = cursor;
+		u64 line_end = cursor;
+		char name[64];
+		u64 size = 0;
+
+		while (start + line_end < end && image[line_end] != '\n') {
+			line_end++;
+		}
+		if (line_end == line) {
+			break;
+		}
+		if (bootpkg_module_line(image + line, line_end - line,
+					name, sizeof(name), &size) == 0) {
+			if (size == 0 || payload_cursor + size < payload_cursor ||
+			    start + payload_cursor + size > end) {
+				return -1;
+			}
+			server_record_boot_module(name, start + payload_cursor,
+						  start + payload_cursor + size);
+			payload_cursor += size;
+			recorded++;
+		}
+		cursor = line_end + 1;
+	}
+	return recorded != 0 ? 0 : -1;
 }
 
 static u16 read_le16(const u8 *data)
@@ -564,6 +681,11 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	}
 	if (bootpkg_magic_ok(boot_info.initrd_start, boot_info.initrd_end)) {
 		early_puts("bootpkg: riscv64 initrd\n");
+		if (bootpkg_record_modules(boot_info.initrd_start,
+					   boot_info.initrd_end) == 0 &&
+		    server_boot_module_registered(riscv64_bootpkg_abi_smoke)) {
+			early_puts("module: riscv64 registered\n");
+		}
 		if (bootpkg_find_module(boot_info.initrd_start,
 					boot_info.initrd_end,
 					riscv64_bootpkg_abi_smoke,
