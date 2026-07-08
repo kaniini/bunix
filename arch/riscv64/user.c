@@ -10,6 +10,7 @@
 #include "sched.h"
 #include "server.h"
 #include "slab.h"
+#include "spinlock.h"
 #include "timer.h"
 #include "vm.h"
 
@@ -909,6 +910,85 @@ static int linux_forward_message(struct ipc_port *linux,
 	       ipc_recv(reply_port, reply) == 0 ? 0 : -1;
 }
 
+struct riscv64_linux_frontend_task {
+	u32 task_id;
+	u32 linux_pid;
+	struct riscv64_linux_frontend_task *next;
+};
+
+static struct spinlock linux_frontend_lock = SPINLOCK_INIT("rv64-linux-fe");
+static struct riscv64_linux_frontend_task *linux_frontend_tasks;
+
+static struct riscv64_linux_frontend_task *linux_frontend_find_locked(
+	u32 task_id)
+{
+	for (struct riscv64_linux_frontend_task *state = linux_frontend_tasks;
+	     state != 0; state = state->next) {
+		if (state->task_id == task_id) {
+			return state;
+		}
+	}
+	return 0;
+}
+
+static int linux_frontend_is_registered(u32 task_id)
+{
+	const u64 flags = spin_lock_irqsave(&linux_frontend_lock);
+	const int registered = linux_frontend_find_locked(task_id) != 0;
+
+	spin_unlock_irqrestore(&linux_frontend_lock, flags);
+	return registered;
+}
+
+static int linux_frontend_record(u32 task_id, u32 linux_pid)
+{
+	struct riscv64_linux_frontend_task *state;
+	u64 flags = spin_lock_irqsave(&linux_frontend_lock);
+
+	if (linux_frontend_find_locked(task_id) != 0) {
+		spin_unlock_irqrestore(&linux_frontend_lock, flags);
+		return 0;
+	}
+	spin_unlock_irqrestore(&linux_frontend_lock, flags);
+
+	state = slab_zalloc(sizeof(*state));
+	if (state == 0) {
+		return -1;
+	}
+	state->task_id = task_id;
+	state->linux_pid = linux_pid;
+
+	flags = spin_lock_irqsave(&linux_frontend_lock);
+	if (linux_frontend_find_locked(task_id) != 0) {
+		spin_unlock_irqrestore(&linux_frontend_lock, flags);
+		slab_free(state);
+		return 0;
+	}
+	state->next = linux_frontend_tasks;
+	linux_frontend_tasks = state;
+	spin_unlock_irqrestore(&linux_frontend_lock, flags);
+	return 0;
+}
+
+static void linux_frontend_forget(u32 task_id)
+{
+	const u64 flags = spin_lock_irqsave(&linux_frontend_lock);
+	struct riscv64_linux_frontend_task **link = &linux_frontend_tasks;
+
+	while (*link != 0) {
+		struct riscv64_linux_frontend_task *state = *link;
+
+		if (state->task_id == task_id) {
+			*link = state->next;
+			spin_unlock_irqrestore(&linux_frontend_lock, flags);
+			slab_free(state);
+			return;
+		}
+		link = &state->next;
+	}
+	spin_unlock_irqrestore(&linux_frontend_lock, flags);
+}
+
 static u64 linux_register_current(struct ipc_port *linux,
 				  struct ipc_port *reply_port)
 {
@@ -925,6 +1005,9 @@ static u64 linux_register_current(struct ipc_port *linux,
 	};
 	struct ipc_message reply;
 
+	if (linux_frontend_is_registered(current_task)) {
+		return 0;
+	}
 	if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
 		return (u64)-LINUX_ENOSYS;
 	}
@@ -932,11 +1015,14 @@ static u64 linux_register_current(struct ipc_port *linux,
 		console_printf("linux-riscv64: registered task=%u pid=%u\n",
 			       current_task, (u32)reply.words[0]);
 		ipc_message_release(&reply);
-		return 0;
+		return linux_frontend_record(current_task, (u32)reply.words[0]) ==
+			       0 ?
+			0 : (u64)-LINUX_ENOMEM;
 	}
 	if ((i64)reply.words[0] == -LINUX_EINVAL) {
 		ipc_message_release(&reply);
-		return 0;
+		return linux_frontend_record(current_task, 0) == 0 ?
+			0 : (u64)-LINUX_ENOMEM;
 	}
 	const u64 result = reply.words[0];
 	ipc_message_release(&reply);
@@ -1426,6 +1512,7 @@ static u64 linux_mprotect_current(u64 addr, u64 size, u64 linux_prot)
 static u64 linux_exit_current(struct ipc_port *linux, struct ipc_port *reply_port,
 			      u64 status)
 {
+	const u32 current_task = task_id(task_current());
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_LINX,
 		.type = LINUX_SHARED_EXIT_GROUP,
@@ -1441,6 +1528,7 @@ static u64 linux_exit_current(struct ipc_port *linux, struct ipc_port *reply_por
 	if (linux_forward_message(linux, reply_port, &request, &reply) == 0) {
 		ipc_message_release(&reply);
 	}
+	linux_frontend_forget(current_task);
 	console_printf("linux-riscv64: exit_group status=%u\n", (u32)status);
 	thread_exit();
 }

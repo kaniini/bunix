@@ -32,7 +32,7 @@ Tasks:
 - [x] Replace the riscv64 dynamic-loader smoke's temporary `mprotect(2)`
       success stub with real VM permission updates shared with the x86_64
       Linux mmap/mprotect semantics.
-- [ ] Replace the temporary riscv64 frontend behavior that re-sends
+- [x] Replace the temporary riscv64 frontend behavior that re-sends
       `BUNIX_LINUX_REGISTER_PROCESS` before forwarded scalar syscalls with
       per-task Linux frontend state.  This must support concurrent riscv64
       Linux tasks without a fixed single-task cache.
@@ -94,5 +94,21 @@ Progress notes:
     poweroff.
   - Verification:
     - `make ARCH=riscv64 all`
+    - `make test-boot-riscv64-alpine`
+    - `git diff --check`
+- Riscv64 Linux frontend-state slice:
+  - Added a protected per-task frontend-state list keyed by Bunix task ID so
+    positive Linux syscalls do not resend `BUNIX_LINUX_REGISTER_PROCESS` after
+    the current task is known to the Linux server.
+  - Preserved the current proc/Linux ownership path by caching a one-time
+    `-EINVAL` "already registered" response instead of retrying it on every
+    forwarded syscall.
+  - Linux `exit_group` now drops the frontend entry before the task exits.
+  - Added exploration 068 for generic task-exit cleanup hooks so future
+    frontend-owned task state can be released on non-Linux-exit paths without
+    expanding this DRYness slice.
+  - Verification:
+    - `make ARCH=riscv64 all`
+    - `make test-boot-riscv64-early`
     - `make test-boot-riscv64-alpine`
     - `git diff --check`
