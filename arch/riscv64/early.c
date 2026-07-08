@@ -25,9 +25,6 @@ static volatile u32 sched_worker_ran;
 static u8 worker_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_stack[4096] __attribute__((aligned(16)));
 static u8 user_probe_kernel_stack[4096] __attribute__((aligned(16)));
-static u8 mapped_user_kernel_stack[4096] __attribute__((aligned(16)));
-static u8 mapped_user_image[4 * 4096] __attribute__((aligned(4096)));
-static u8 mapped_user_stack[4096] __attribute__((aligned(4096)));
 static u8 vm_hook_test_page[4096] __attribute__((aligned(4096)));
 extern u8 __kernel_start[];
 extern u8 __kernel_end[];
@@ -416,12 +413,6 @@ static u64 read_le64(const u8 *data)
 	return value;
 }
 
-static u32 read_le32(const u8 *data)
-{
-	return (u32)data[0] | ((u32)data[1] << 8) |
-	       ((u32)data[2] << 16) | ((u32)data[3] << 24);
-}
-
 static int user_elf_is_riscv64(u64 start, u64 size)
 {
 	const u8 *elf = (const u8 *)start;
@@ -449,20 +440,6 @@ static int user_elf_is_riscv64(u64 start, u64 size)
 	return 1;
 }
 
-static void memory_copy(u8 *dest, const u8 *src, u64 size)
-{
-	for (u64 i = 0; i < size; i++) {
-		dest[i] = src[i];
-	}
-}
-
-static void memory_zero(u8 *dest, u64 size)
-{
-	for (u64 i = 0; i < size; i++) {
-		dest[i] = 0;
-	}
-}
-
 static int memory_equal(const u8 *left, const u8 *right, u64 size)
 {
 	for (u64 i = 0; i < size; i++) {
@@ -473,150 +450,31 @@ static int memory_equal(const u8 *left, const u8 *right, u64 size)
 	return 1;
 }
 
-static u64 build_user_stack_mapped(u8 *stack_phys, u64 stack_vaddr,
-				   const char *argv0)
-{
-	const char *src = argv0;
-	const u64 argv0_len = cstr_len(argv0) + 1;
-	u64 sp_offset = RISCV64_PAGE_SIZE;
-	u64 string_offset;
-	u64 *words;
-
-	sp_offset -= argv0_len;
-	string_offset = sp_offset;
-	for (u64 i = 0; i < argv0_len; i++) {
-		stack_phys[string_offset + i] = src[i];
-	}
-	sp_offset &= ~15ULL;
-	sp_offset -= 4 * sizeof(u64);
-	words = (u64 *)(stack_phys + sp_offset);
-	words[0] = 1;
-	words[1] = stack_vaddr + string_offset;
-	words[2] = 0;
-	words[3] = 0;
-	return stack_vaddr + sp_offset;
-}
-
-static int load_user_elf_image(u64 start, u64 size, u64 user_vaddr,
-			       u8 *backing, u64 backing_size, u64 *entry)
-{
-	const u8 *elf = (const u8 *)start;
-	const u32 pt_load = 1;
-	const u64 phoff = read_le64(elf + 32);
-	const u16 phentsize = read_le16(elf + 54);
-	const u16 phnum = read_le16(elf + 56);
-	u32 loaded = 0;
-
-	if (!user_elf_is_riscv64(start, size) || phentsize < 56) {
-		return -1;
-	}
-	if (phoff + (u64)phentsize * phnum > size) {
-		return -1;
-	}
-	memory_zero(backing, backing_size);
-
-	for (u16 i = 0; i < phnum; i++) {
-		const u8 *ph = elf + phoff + (u64)i * phentsize;
-		const u32 type = read_le32(ph);
-		const u64 offset = read_le64(ph + 8);
-		const u64 vaddr = read_le64(ph + 16);
-		const u64 filesz = read_le64(ph + 32);
-		const u64 memsz = read_le64(ph + 40);
-		const u64 page_offset = vaddr - user_vaddr;
-
-		if (type != pt_load) {
-			continue;
-		}
-		if (vaddr < user_vaddr || page_offset > backing_size ||
-		    memsz < filesz || page_offset + memsz > backing_size ||
-		    offset + filesz > size) {
-			return -1;
-		}
-		memory_copy(backing + page_offset, elf + offset, filesz);
-		loaded = 1;
-	}
-
-	__asm__ volatile ("fence.i" ::: "memory");
-	*entry = read_le64(elf + 24);
-	return loaded != 0 && *entry != 0 ? 0 : -1;
-}
-
-static u64 align_down(u64 value, u64 align)
-{
-	return value & ~(align - 1);
-}
-
-static u64 align_up(u64 value, u64 align)
-{
-	return align_down(value + align - 1, align);
-}
-
-static int map_identity_window(struct arch_vm_space *space, u64 start, u64 end)
-{
-	start = align_down(start, RISCV64_PAGE_SIZE);
-	end = align_up(end, RISCV64_PAGE_SIZE);
-
-	for (u64 page = start; page < end; page += RISCV64_PAGE_SIZE) {
-		if (arch_vm_map_page(space, page, page, 1, 0) != 0) {
-			return -1;
-		}
-	}
-	return 0;
-}
-
-static int map_payload_space(struct arch_vm_space *space)
-{
-	const u64 phys_end = boot_info.phys_base + boot_info.phys_size;
-
-	if (arch_vm_space_init(space) != 0) {
-		return -1;
-	}
-	if (phys_end <= boot_info.phys_base ||
-	    map_identity_window(space, boot_info.phys_base, phys_end) != 0) {
-		arch_vm_space_destroy(space);
-		return -1;
-	}
-	for (u64 offset = 0; offset < sizeof(mapped_user_image);
-	     offset += RISCV64_PAGE_SIZE) {
-		if (arch_vm_map_page(space, RISCV64_USER_BASE + offset,
-				     (u64)mapped_user_image + offset,
-				     0, 1) != 0) {
-			arch_vm_space_destroy(space);
-			return -1;
-		}
-	}
-	if (arch_vm_map_page(space, USER_STACK_PAGE, (u64)mapped_user_stack,
-			     1, 1) != 0) {
-		arch_vm_space_destroy(space);
-		return -1;
-	}
-	return 0;
-}
-
 static int user_copy_self_test(void)
 {
 	static const u8 expected[] = { 'r', 'v', '6', '4', '-', 'c', 'o', 'p', 'y' };
 	u8 actual[sizeof(expected)];
 	const u64 user_addr = USER_STACK_PAGE + 128;
+	struct vm_space *space = vm_server_bootstrap_space("rv64-copy-smoke");
+	int ok = 0;
 
-	memory_zero(actual, sizeof(actual));
-	if (arch_user_copy_to(user_addr, expected, sizeof(expected)) != 0) {
+	for (u64 i = 0; i < sizeof(actual); i++) {
+		actual[i] = 0;
+	}
+	if (space == 0 ||
+	    vm_alloc_user_page(space, USER_STACK_PAGE, 1).addr == 0) {
 		return -1;
 	}
-	if (arch_user_copy_from(actual, user_addr, sizeof(actual)) != 0) {
-		return -1;
-	}
-	if (!memory_equal(actual, expected, sizeof(expected))) {
-		return -1;
-	}
-	if (arch_user_copy_from(actual, 0, sizeof(actual)) == 0) {
-		return -1;
-	}
-	if (arch_user_copy_to(RISCV64_USER_LIMIT - 1, expected,
-			      sizeof(expected)) == 0) {
-		return -1;
-	}
-	return 0;
+	vm_rpc_activate_space(space);
+	ok = arch_user_copy_to(user_addr, expected, sizeof(expected)) == 0 &&
+	     arch_user_copy_from(actual, user_addr, sizeof(actual)) == 0 &&
+	     memory_equal(actual, expected, sizeof(expected)) &&
+	     arch_user_copy_from(actual, 0, sizeof(actual)) != 0 &&
+	     arch_user_copy_to(RISCV64_USER_LIMIT - 1, expected,
+			       sizeof(expected)) != 0;
+	vm_rpc_activate_space(vm_kernel_space());
+	vm_rpc_destroy_space(space);
+	return ok ? 0 : -1;
 }
 
 static int generic_elf_loader_self_test(u64 module_start, u64 module_size)
@@ -640,8 +498,6 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 	struct riscv64_fdt_initrd initrd;
 	u64 module_start = 0;
 	u64 module_size = 0;
-	u64 module_entry = 0;
-	u64 module_stack = 0;
 
 	boot_info.hart_id = hart_id;
 	boot_info.fdt = fdt;
@@ -712,31 +568,12 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 							 module_size) == 0) {
 				early_puts("elf: riscv64 loader\n");
 			}
-			if (load_user_elf_image(module_start, module_size,
-						RISCV64_USER_BASE,
-						mapped_user_image,
-						sizeof(mapped_user_image),
-						&module_entry) == 0) {
-				struct arch_vm_space payload_space;
-
-				module_stack = build_user_stack_mapped(
-					mapped_user_stack, USER_STACK_PAGE,
-					"/bin/abi-smoke.user");
-				if (map_payload_space(&payload_space) == 0) {
-					arch_vm_activate(&payload_space);
-					if (user_copy_self_test() == 0) {
-						early_puts("copy: riscv64 user\n");
-					}
-					if (riscv64_user_mode_self_test(
-						    module_entry, module_stack,
-						    (u64)(mapped_user_kernel_stack +
-							  sizeof(mapped_user_kernel_stack))) ==
-					    1) {
-						early_puts("vm: riscv64 user exit\n");
-					}
-					arch_vm_activate(0);
-					arch_vm_space_destroy(&payload_space);
-				}
+			if (server_launch_module(riscv64_bootpkg_abi_smoke) == 0) {
+				sched_run();
+				early_puts("module: riscv64 sched user\n");
+			}
+			if (user_copy_self_test() == 0) {
+				early_puts("copy: riscv64 user\n");
 			}
 		}
 	}

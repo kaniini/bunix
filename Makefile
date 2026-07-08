@@ -1033,9 +1033,9 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "module: riscv64 registered" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "module: riscv64 user elf" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "elf: riscv64 loader" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "module: riscv64 sched user" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "copy: riscv64 user" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "native: riscv64 server argc=1 argv0=/bin/abi-smoke.user" $(RISCV64_SERIAL_LOG) >/dev/null
-	grep -aF "vm: riscv64 user exit" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 
 test-boot-ext2: $(EXT2_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-ext2.txt

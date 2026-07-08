@@ -53,7 +53,7 @@ Tasks:
 - [ ] Wire riscv64 user task launch into the normal scheduler/proc/bootstrap
       path so native tasks have scheduler-owned lifetime, kernel stacks,
       cleanup, and task IDs like x86_64 tasks.
-- [ ] Move the current `abi-smoke.user` payload from the early harness into a
+- [x] Move the current `abi-smoke.user` payload from the early harness into a
       normal native task/server smoke launched from the riscv64 boot package.
 - [ ] Extend the riscv64 boot package format or loader enough to carry the
       module list, server names, command line, and data payloads required by
@@ -377,3 +377,31 @@ Verification notes:
   architecture-aware.
 - `make test-boot` passed after making the generic ELF loader
   architecture-aware.
+- Moved `abi-smoke.user` onto the normal scheduler-owned module launch path:
+  - Generic module launch now seeds a minimal initial stack with
+    `argc=1`, `argv[0]="/bin/<module>"`, a null argv terminator, and a null
+    envp terminator instead of only writing `argc=0`.
+  - Riscv64 task address spaces now include supervisor-only identity mappings
+    for the QEMU RAM window so kernel launch/trap code can keep running while
+    a task VM space is active.
+  - Riscv64 native `exit` now terminates the current scheduler thread through
+    `thread_exit()` on the real syscall path; the early U-mode self-test keeps
+    its explicit return hook.
+  - The riscv64 early boot path now calls
+    `server_launch_module("abi-smoke.user")`, runs the scheduler, observes the
+    native marker from the launched task, reaps and destroys the task, and
+    requires the `module: riscv64 sched user` marker.
+  - Removed the old static mapped-image/stack early harness for
+    `abi-smoke.user`.  The copyin/copyout smoke now uses a temporary generic
+    VM server space instead of piggybacking on that harness.
+- `make ARCH=riscv64 all` passed after moving `abi-smoke.user` to the
+  scheduler-owned module launch path.
+- `make all` passed after moving `abi-smoke.user` to the scheduler-owned
+  module launch path.
+- `make test-boot-riscv64-early` passed after removing the old early payload
+  harness and requiring the scheduler-owned module marker.
+- `make test-riscv64-user-abi` passed after moving `abi-smoke.user` to the
+  scheduler-owned module launch path.
+- `make test-riscv64-bootpkg` passed after moving `abi-smoke.user` to the
+  scheduler-owned module launch path.
+- `make test-boot` passed after changing generic module launch stack seeding.

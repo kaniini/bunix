@@ -79,6 +79,8 @@ static int str_eq(const char *left, const char *right);
 static const struct server *find_boot_server(const char *name);
 static struct module_server_start *module_start_find(const char *name);
 static void grant_bootstrap_caps(struct task *task, const char *server_name);
+static int seed_initial_stack(struct vm_space *space, const char *name,
+			      u64 stack_top, u64 *stack);
 static u64 align_up(u64 value, u64 align);
 
 void server_start_all(void)
@@ -200,15 +202,12 @@ static u64 launch_user_image(const char *name, struct task *parent,
 				 USER_STACK_PAGES * VM_PAGE_SIZE, 1,
 				 TASK_VM_REGION_STACK);
 
-	const u64 argc = 0;
-	if (vm_write_user(space, USER_STACK_TOP - sizeof(argc), &argc,
-			  sizeof(argc)) != 0) {
+	if (seed_initial_stack(space, name, USER_STACK_TOP, &start->stack) != 0) {
 		console_printf("kernel: failed to seed stack for %s\n", name);
 		return (u64)-1;
 	}
 
 	start->space = space;
-	start->stack = USER_STACK_TOP - sizeof(argc);
 
 	if (thread_create(task, name, module_server_thread, start) == 0) {
 		console_printf("kernel: failed to create server thread %s\n",
@@ -255,6 +254,16 @@ static int str_eq(const char *left, const char *right)
 	return *left == *right;
 }
 
+static u64 str_len(const char *text)
+{
+	u64 len = 0;
+
+	while (text[len] != '\0') {
+		len++;
+	}
+	return len;
+}
+
 static void mem_copy(u8 *dst, const u8 *src, u64 len)
 {
 	for (u64 i = 0; i < len; i++) {
@@ -297,6 +306,47 @@ static u64 align_down(u64 value, u64 align)
 static u64 align_up(u64 value, u64 align)
 {
 	return (value + align - 1) & ~(align - 1);
+}
+
+static int seed_initial_stack(struct vm_space *space, const char *name,
+			      u64 stack_top, u64 *stack)
+{
+	char argv0[96];
+	const char prefix[] = "/bin/";
+	const u64 prefix_len = sizeof(prefix) - 1;
+	const u64 name_len = str_len(name);
+	const u64 argv0_len = prefix_len + name_len + 1;
+	u64 string_addr;
+	u64 sp;
+	u64 words[4];
+
+	if (space == 0 || name == 0 || stack == 0 ||
+	    argv0_len > sizeof(argv0)) {
+		return -1;
+	}
+	for (u64 i = 0; i < prefix_len; i++) {
+		argv0[i] = prefix[i];
+	}
+	for (u64 i = 0; i < name_len; i++) {
+		argv0[prefix_len + i] = name[i];
+	}
+	argv0[prefix_len + name_len] = '\0';
+
+	string_addr = stack_top - argv0_len;
+	if (vm_write_user(space, string_addr, argv0, argv0_len) != 0) {
+		return -1;
+	}
+	sp = string_addr & ~15ULL;
+	sp -= sizeof(words);
+	words[0] = 1;
+	words[1] = string_addr;
+	words[2] = 0;
+	words[3] = 0;
+	if (vm_write_user(space, sp, words, sizeof(words)) != 0) {
+		return -1;
+	}
+	*stack = sp;
+	return 0;
 }
 
 static u64 min_u64(u64 left, u64 right)

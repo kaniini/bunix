@@ -97,6 +97,14 @@ static void riscv64_handle_ecall(struct arch_interrupt_frame *frame)
 		frame->sstatus |= RISCV64_SSTATUS_SPP;
 		return;
 	}
+	if (frame->a7 == RISCV64_SYSCALL_EXIT &&
+	    riscv64_user_test_return_pc != 0) {
+		riscv64_user_test_status = frame->a0;
+		frame->a0 = 0;
+		frame->sepc = riscv64_user_test_return_pc;
+		frame->sstatus |= RISCV64_SSTATUS_SPP;
+		return;
+	}
 
 	syscall_frame.number = frame->a7;
 	syscall_frame.arg0 = frame->a0;
@@ -131,14 +139,6 @@ static void riscv64_handle_ecall(struct arch_interrupt_frame *frame)
 	syscall_frame.a[7] = frame->a7;
 
 	result = arch_syscall_dispatch(&syscall_frame);
-	if (frame->a7 == RISCV64_SYSCALL_EXIT &&
-	    riscv64_user_test_return_pc != 0) {
-		riscv64_user_test_status = result;
-		frame->a0 = 0;
-		frame->sepc = riscv64_user_test_return_pc;
-		frame->sstatus |= RISCV64_SSTATUS_SPP;
-		return;
-	}
 	frame->a0 = result;
 	frame->sepc += 4;
 }

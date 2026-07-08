@@ -1,3 +1,4 @@
+#include <arch/boot.h>
 #include <arch/vm.h>
 #include "pmm.h"
 
@@ -10,6 +11,8 @@ enum {
 
 static u64 pte_phys(u64 pte);
 static int pte_table_valid(u64 pte);
+static int map_supervisor_identity_window(struct arch_vm_space *space,
+					  u64 start, u64 end);
 
 static void zero_table(u64 *table)
 {
@@ -175,6 +178,7 @@ void arch_vm_kernel_space_init(struct arch_vm_space *space)
 int arch_vm_space_init(struct arch_vm_space *space)
 {
 	u64 *root;
+	const struct riscv64_boot_info *boot_info;
 
 	if (space == 0) {
 		return -1;
@@ -187,6 +191,14 @@ int arch_vm_space_init(struct arch_vm_space *space)
 	}
 
 	space->root_table = (u64)root;
+	boot_info = riscv64_boot_info();
+	if (boot_info != 0 && boot_info->phys_size != 0 &&
+	    map_supervisor_identity_window(
+		    space, boot_info->phys_base,
+		    boot_info->phys_base + boot_info->phys_size) != 0) {
+		arch_vm_space_destroy(space);
+		return -1;
+	}
 	return 0;
 }
 
@@ -222,6 +234,20 @@ int arch_vm_map_page(struct arch_vm_space *space, u64 vaddr, u64 phys,
 
 	l0[vpn_index(vaddr, 0)] = pte_leaf(phys, writable, user);
 	flush_vma();
+	return 0;
+}
+
+static int map_supervisor_identity_window(struct arch_vm_space *space,
+					  u64 start, u64 end)
+{
+	start &= ~(RISCV64_PAGE_SIZE - 1);
+	end = (end + RISCV64_PAGE_SIZE - 1) & ~(RISCV64_PAGE_SIZE - 1);
+
+	for (u64 page = start; page < end; page += RISCV64_PAGE_SIZE) {
+		if (arch_vm_map_page(space, page, page, 1, 0) != 0) {
+			return -1;
+		}
+	}
 	return 0;
 }
 

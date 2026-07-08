@@ -2,6 +2,7 @@
 #include <arch/interrupts.h>
 #include <arch/layout.h>
 #include <arch/sbi.h>
+#include "sched.h"
 
 enum {
 	RISCV64_SYSCALL_EXIT = -2,
@@ -140,7 +141,7 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 	}
 	switch ((long)frame->number) {
 	case RISCV64_SYSCALL_EXIT:
-		return frame->arg0;
+		thread_exit();
 	case RISCV64_SYSCALL_TIMER_TICKS:
 		return arch_timer_ticks();
 	case RISCV64_SYSCALL_EARLY_CONSOLE_WRITE:
