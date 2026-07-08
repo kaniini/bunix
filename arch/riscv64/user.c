@@ -11,6 +11,7 @@
 #include "server.h"
 #include "slab.h"
 #include "timer.h"
+#include "vm.h"
 
 enum {
 	SYSCALL_EXIT = -2,
@@ -41,7 +42,13 @@ enum {
 	SYSCALL_EARLY_CONSOLE_LOG = -56,
 	SYSCALL_MACHINE_POWER = -64,
 	SYSCALL_TASK_CLEAR = -66,
+	LINUX_RISCV64_OPENAT = 56,
+	LINUX_RISCV64_CLOSE = 57,
+	LINUX_RISCV64_READ = 63,
 	LINUX_RISCV64_WRITE = 64,
+	LINUX_RISCV64_READLINKAT = 78,
+	LINUX_RISCV64_NEWFSTATAT = 79,
+	LINUX_RISCV64_FSTAT = 80,
 	LINUX_RISCV64_EXIT = 93,
 	LINUX_RISCV64_EXIT_GROUP = 94,
 	LINUX_RISCV64_SET_TID_ADDRESS = 96,
@@ -52,9 +59,14 @@ enum {
 	LINUX_RISCV64_GETGID = 176,
 	LINUX_RISCV64_GETEGID = 177,
 	LINUX_RISCV64_GETTID = 178,
+	LINUX_RISCV64_BRK = 214,
+	LINUX_RISCV64_MUNMAP = 215,
+	LINUX_RISCV64_MMAP = 222,
+	LINUX_RISCV64_MPROTECT = 226,
 	LINUX_RISCV64_RPC_SYSCALL = 1010,
 	LINUX_RISCV64_ACTION_WRITE = 1,
 	LINUX_RISCV64_ACTION_EXIT = 2,
+	LINUX_SHARED_READ = 0,
 	LINUX_SHARED_GETPID = 39,
 	LINUX_SHARED_GETUID = 102,
 	LINUX_SHARED_GETGID = 104,
@@ -62,14 +74,34 @@ enum {
 	LINUX_SHARED_GETEGID = 108,
 	LINUX_SHARED_GETPPID = 110,
 	LINUX_SHARED_WRITE = 1,
+	LINUX_SHARED_CLOSE = 3,
+	LINUX_SHARED_FSTAT = 5,
+	LINUX_SHARED_MMAP = 9,
 	LINUX_SHARED_SET_TID_ADDRESS = 218,
 	LINUX_SHARED_GETTID = 186,
 	LINUX_SHARED_REGISTER_PROCESS = 1000,
 	LINUX_SHARED_EXIT_GROUP = 231,
+	LINUX_SHARED_OPENAT = 257,
+	LINUX_SHARED_READLINKAT = 267,
+	LINUX_SHARED_NEWFSTATAT = 262,
 	LINUX_ENOMEM = 12,
 	LINUX_EFAULT = 14,
 	LINUX_EINVAL = 22,
+	LINUX_EBADF = 9,
 	LINUX_ENOSYS = 38,
+	LINUX_INITIAL_BRK = 0x900000,
+	LINUX_MAX_BRK = 0x10000000,
+	LINUX_MMAP_BASE = 0x10000000,
+	LINUX_MMAP_LIMIT = 0x20000000,
+	LINUX_MAP_FIXED_MIN = 0x10000,
+	LINUX_PROT_READ = 0x1,
+	LINUX_PROT_WRITE = 0x2,
+	LINUX_PROT_EXEC = 0x4,
+	LINUX_MAP_PRIVATE = 0x2,
+	LINUX_MAP_FIXED = 0x10,
+	LINUX_MAP_ANONYMOUS = 0x20,
+	LINUX_STAT_SIZE = 144,
+	LINUX_MAX_SHARED_BUFFER = 1024 * 1024,
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
 	USER_FOURCC_LINX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
 	USER_IPC_WORDS = 4,
@@ -195,6 +227,48 @@ static u64 min_u64(u64 left, u64 right)
 	return left < right ? left : right;
 }
 
+static u64 align_down(u64 value, u64 align)
+{
+	return value & ~(align - 1);
+}
+
+static u64 align_up(u64 value, u64 align)
+{
+	return align_down(value + align - 1, align);
+}
+
+static u32 linux_prot_to_task(u64 prot)
+{
+	u32 task_prot = 0;
+
+	if ((prot & LINUX_PROT_READ) != 0) {
+		task_prot |= TASK_VM_PROT_READ;
+	}
+	if ((prot & LINUX_PROT_WRITE) != 0) {
+		task_prot |= TASK_VM_PROT_WRITE;
+	}
+	if ((prot & LINUX_PROT_EXEC) != 0) {
+		task_prot |= TASK_VM_PROT_EXEC;
+	}
+	return task_prot;
+}
+
+static u32 linux_map_flags_to_task(u64 flags)
+{
+	u32 task_flags = 0;
+
+	if ((flags & LINUX_MAP_PRIVATE) != 0) {
+		task_flags |= TASK_VM_MAP_PRIVATE;
+	}
+	if ((flags & LINUX_MAP_ANONYMOUS) != 0) {
+		task_flags |= TASK_VM_MAP_ANONYMOUS;
+	}
+	if ((flags & LINUX_MAP_FIXED) != 0) {
+		task_flags |= TASK_VM_MAP_FIXED;
+	}
+	return task_flags;
+}
+
 static int user_copy_args_valid(const void *kernel, u64 user, u64 len)
 {
 	if (len == 0) {
@@ -265,6 +339,24 @@ static int copy_cstr_from_user(char *dst, u64 user_src, u64 capacity)
 	}
 	dst[capacity - 1] = '\0';
 	return -1;
+}
+
+static u64 user_cstr_len_limited(u64 user_src, u64 max_len)
+{
+	char c;
+
+	if (user_src == 0) {
+		return max_len + 1;
+	}
+	for (u64 i = 0; i < max_len; i++) {
+		if (arch_user_copy_from(&c, user_src + i, 1) != 0) {
+			return max_len + 1;
+		}
+		if (c == '\0') {
+			return i;
+		}
+	}
+	return max_len + 1;
 }
 
 static int user_message_to_ipc(const struct user_ipc_message *user_message,
@@ -956,6 +1048,362 @@ static u64 linux_forward_scalar(struct ipc_port *linux,
 	return result;
 }
 
+static u64 linux_forward_words(struct ipc_port *linux,
+			       struct ipc_port *reply_port, u32 type,
+			       u64 word0, u64 word1, u64 word2, u64 word3)
+{
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = type,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { word0, word1, word2, word3 },
+	};
+	struct ipc_message reply;
+
+	if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+		return (u64)-LINUX_ENOSYS;
+	}
+	const u64 result = reply.words[0];
+	ipc_message_release(&reply);
+	return result;
+}
+
+static u64 linux_forward_user_buffer(struct ipc_port *linux,
+				     struct ipc_port *reply_port,
+				     u32 type, u32 rights,
+				     u64 user_buffer, u64 len,
+				     u64 word0, u64 word1,
+				     u64 word2, u64 word3,
+				     int copy_in, int copy_out)
+{
+	struct shared_buffer *buffer;
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = type,
+		.sender = 0,
+		.cap_rights = rights,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_BUFFER,
+		.cap_object = 0,
+		.words = { word0, word1, word2, word3 },
+	};
+	struct ipc_message reply;
+	u8 copy[RISCV64_USER_COPY_CHUNK];
+
+	if (len != 0 && user_buffer == 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	if (len > LINUX_MAX_SHARED_BUFFER) {
+		return (u64)-LINUX_EINVAL;
+	}
+	buffer = buffer_create(len == 0 ? 1 : len);
+	if (buffer == 0) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	if (copy_in) {
+		for (u64 done = 0; done < len;) {
+			const u64 chunk = min_u64(len - done, sizeof(copy));
+
+			if (arch_user_copy_from(copy, user_buffer + done,
+						chunk) != 0 ||
+			    buffer_write(buffer, done, copy, chunk) != 0) {
+				buffer_release(buffer);
+				return (u64)-LINUX_EFAULT;
+			}
+			done += chunk;
+		}
+	}
+	request.cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	const u64 result = reply.words[0];
+	if (copy_out && (i64)result >= 0) {
+		u64 out_len = type == LINUX_SHARED_READ ||
+				      type == LINUX_SHARED_MMAP ||
+				      type == LINUX_SHARED_READLINKAT ?
+				      result : len;
+
+		if (out_len > len) {
+			out_len = len;
+		}
+		for (u64 done = 0; done < out_len;) {
+			const u64 chunk = min_u64(out_len - done,
+						  sizeof(copy));
+
+			if (buffer_read(buffer, done, copy, chunk) != 0 ||
+			    arch_user_copy_to(user_buffer + done, copy,
+					      chunk) != 0) {
+				ipc_message_release(&reply);
+				buffer_release(buffer);
+				return (u64)-LINUX_EFAULT;
+			}
+			done += chunk;
+		}
+	}
+	ipc_message_release(&reply);
+	buffer_release(buffer);
+	return result;
+}
+
+static u64 linux_forward_path_output(struct ipc_port *linux,
+				     struct ipc_port *reply_port,
+				     u32 type, u64 path_user,
+				     u64 out_user, u64 out_len,
+				     u64 word0, u64 word2, u64 word3)
+{
+	const u64 path_len = user_cstr_len_limited(path_user,
+						   LINUX_MAX_SYSCALL_BUFFER);
+	u64 buffer_len;
+	struct shared_buffer *buffer;
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = type,
+		.sender = 0,
+		.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+			      TASK_RIGHT_DUP,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_BUFFER,
+		.cap_object = 0,
+		.words = { word0, 0, word2, word3 },
+	};
+	struct ipc_message reply;
+	u8 copy[RISCV64_USER_COPY_CHUNK];
+
+	if (path_len > LINUX_MAX_SYSCALL_BUFFER ||
+	    out_user == 0 ||
+	    out_len > LINUX_MAX_SHARED_BUFFER) {
+		return (u64)-LINUX_EFAULT;
+	}
+	buffer_len = path_len + 1 > out_len ? path_len + 1 : out_len;
+	buffer = buffer_create(buffer_len == 0 ? 1 : buffer_len);
+	if (buffer == 0) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	for (u64 done = 0; done < path_len + 1;) {
+		const u64 chunk = min_u64(path_len + 1 - done, sizeof(copy));
+
+		if (arch_user_copy_from(copy, path_user + done, chunk) != 0 ||
+		    buffer_write(buffer, done, copy, chunk) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
+		done += chunk;
+	}
+	request.cap_object = buffer;
+	request.words[1] = path_len + 1;
+	if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	const u64 result = reply.words[0];
+	if ((i64)result >= 0) {
+		u64 copy_len = type == LINUX_SHARED_READLINKAT ? result :
+			       out_len;
+
+		if (copy_len > out_len) {
+			copy_len = out_len;
+		}
+		for (u64 done = 0; done < copy_len;) {
+			const u64 chunk = min_u64(copy_len - done,
+						  sizeof(copy));
+
+			if (buffer_read(buffer, done, copy, chunk) != 0 ||
+			    arch_user_copy_to(out_user + done, copy,
+					      chunk) != 0) {
+				ipc_message_release(&reply);
+				buffer_release(buffer);
+				return (u64)-LINUX_EFAULT;
+			}
+			done += chunk;
+		}
+	}
+	ipc_message_release(&reply);
+	buffer_release(buffer);
+	return result;
+}
+
+static int linux_unmap_task_range(struct task *task, u64 base, u64 len)
+{
+	if (vm_unmap_user_range(task_vm_space(task), base, len) != 0) {
+		return -1;
+	}
+	return task_remove_vm_region(task, base, len);
+}
+
+static int linux_mmap_file_into_task(struct task *task, struct ipc_port *linux,
+				     struct ipc_port *reply_port, u64 base,
+				     u64 len, u64 fd, u64 offset)
+{
+	struct shared_buffer *buffer;
+	u8 copy[RISCV64_USER_COPY_CHUNK];
+
+	if (linux == 0 || reply_port == 0 || len == 0 ||
+	    (offset & (VM_PAGE_SIZE - 1)) != 0) {
+		return -1;
+	}
+	buffer = buffer_create(LINUX_MAX_SYSCALL_BUFFER);
+	if (buffer == 0) {
+		return -1;
+	}
+	for (u64 done = 0; done < len;) {
+		const u64 chunk = min_u64(len - done,
+					  LINUX_MAX_SYSCALL_BUFFER);
+		struct ipc_message request = {
+			.protocol = USER_FOURCC_LINX,
+			.type = LINUX_SHARED_MMAP,
+			.sender = 0,
+			.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+			.reply_port = reply_port,
+			.cap_type = IPC_CAP_BUFFER,
+			.cap_object = buffer,
+			.words = { fd, offset + done, chunk, 0 },
+		};
+		struct ipc_message reply;
+
+		if (linux_forward_message(linux, reply_port, &request, &reply) != 0 ||
+		    (i64)reply.words[0] < 0 ||
+		    reply.words[0] > chunk) {
+			buffer_release(buffer);
+			return -1;
+		}
+		const u64 got = reply.words[0];
+		ipc_message_release(&reply);
+		if (got == 0) {
+			break;
+		}
+		for (u64 copied = 0; copied < got;) {
+			const u64 part = min_u64(got - copied, sizeof(copy));
+
+			if (buffer_read(buffer, copied, copy, part) != 0 ||
+			    vm_write_user(task_vm_space(task),
+					  base + done + copied,
+					  copy, part) != 0) {
+				buffer_release(buffer);
+				return -1;
+			}
+			copied += part;
+		}
+		done += got;
+	}
+	buffer_release(buffer);
+	return 0;
+}
+
+static u64 linux_mmap_current(struct ipc_port *linux,
+			      struct ipc_port *reply_port,
+			      const struct arch_syscall_frame *frame)
+{
+	struct task *task = task_current();
+	const u64 prot = frame->arg2;
+	const u64 flags = frame->arg3;
+	const u64 fd = frame->a[4];
+	const u64 offset = frame->a[5];
+	const int anonymous = (flags & LINUX_MAP_ANONYMOUS) != 0;
+	const u32 task_prot = linux_prot_to_task(prot);
+	const u32 task_flags = linux_map_flags_to_task(flags);
+	const u32 writable = (task_prot & TASK_VM_PROT_WRITE) != 0;
+	const u32 alloc_writable = writable || !anonymous;
+	u64 base = frame->arg0;
+	u64 len = frame->arg1;
+
+	if (len == 0 || (flags & LINUX_MAP_PRIVATE) == 0 ||
+	    len + VM_PAGE_SIZE - 1 < len ||
+	    (!anonymous && (offset & (VM_PAGE_SIZE - 1)) != 0)) {
+		return (u64)-LINUX_EINVAL;
+	}
+	len = align_up(len, VM_PAGE_SIZE);
+	if (base == 0) {
+		base = task_linux_mmap_next(task);
+	} else if ((flags & LINUX_MAP_FIXED) == 0) {
+		base = align_up(base, VM_PAGE_SIZE);
+	} else if ((base & (VM_PAGE_SIZE - 1)) != 0) {
+		return (u64)-LINUX_EINVAL;
+	}
+
+	const u64 min_base = (flags & LINUX_MAP_FIXED) != 0 ?
+			     LINUX_MAP_FIXED_MIN : LINUX_MMAP_BASE;
+	if (base < min_base || base + len < base ||
+	    base + len > LINUX_MMAP_LIMIT) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	if ((flags & LINUX_MAP_FIXED) != 0 &&
+	    !task_vm_range_is_free(task, base, len) &&
+	    linux_unmap_task_range(task, base, len) != 0) {
+		return (u64)-LINUX_EINVAL;
+	}
+	if ((flags & LINUX_MAP_FIXED) == 0 &&
+	    !task_vm_range_is_free(task, base, len)) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	if (vm_alloc_user_range(task_vm_space(task), base, len,
+				alloc_writable) != 0) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	if (task_add_vm_mapping(task, base, len, task_prot, task_flags,
+				TASK_VM_REGION_MMAP, TASK_VM_OBJECT_ANON,
+				0, 0) != 0) {
+		(void)vm_unmap_user_range(task_vm_space(task), base, len);
+		return (u64)-LINUX_ENOMEM;
+	}
+	if (!anonymous &&
+	    linux_mmap_file_into_task(task, linux, reply_port, base, len,
+				      fd, offset) != 0) {
+		(void)linux_unmap_task_range(task, base, len);
+		return (u64)-LINUX_EINVAL;
+	}
+	if (!anonymous && !writable &&
+	    vm_protect_user_range(task_vm_space(task), base, len, 0) != 0) {
+		(void)linux_unmap_task_range(task, base, len);
+		return (u64)-LINUX_EINVAL;
+	}
+	if (base + len > task_linux_mmap_next(task)) {
+		task_set_linux_mmap_next(task, base + len);
+	}
+	return base;
+}
+
+static u64 linux_brk_current(u64 requested)
+{
+	struct task *task = task_current();
+
+	if (requested == 0) {
+		return task_linux_brk(task);
+	}
+	if (requested >= LINUX_INITIAL_BRK && requested < LINUX_MAX_BRK) {
+		const u64 old_brk = task_linux_brk(task);
+		const u64 old_page = align_up(old_brk, VM_PAGE_SIZE);
+		const u64 new_page = align_up(requested, VM_PAGE_SIZE);
+
+		if (new_page > old_page &&
+		    (vm_alloc_user_range(task_vm_space(task), old_page,
+					 new_page - old_page, 1) != 0 ||
+		     task_add_or_extend_vm_mapping(task, old_page,
+						   new_page - old_page,
+						   TASK_VM_PROT_READ |
+						   TASK_VM_PROT_WRITE,
+						   TASK_VM_MAP_PRIVATE |
+						   TASK_VM_MAP_ANONYMOUS,
+						   TASK_VM_REGION_BRK,
+						   TASK_VM_OBJECT_ANON,
+						   0, 0) != 0)) {
+			return task_linux_brk(task);
+		}
+		if (new_page < old_page &&
+		    linux_unmap_task_range(task, new_page,
+					   old_page - new_page) != 0) {
+			return task_linux_brk(task);
+		}
+		task_set_linux_brk(task, requested);
+	}
+	return task_linux_brk(task);
+}
+
 static u64 linux_exit_current(struct ipc_port *linux, struct ipc_port *reply_port,
 			      u64 status)
 {
@@ -1056,9 +1504,50 @@ static u64 linux_riscv64_syscall_dispatch(struct arch_syscall_frame *frame)
 	}
 
 	switch (frame->number) {
+	case LINUX_RISCV64_OPENAT: {
+		const u64 path_len = user_cstr_len_limited(
+			frame->arg1, LINUX_MAX_SYSCALL_BUFFER);
+
+		if (path_len > LINUX_MAX_SYSCALL_BUFFER) {
+			return (u64)-LINUX_EFAULT;
+		}
+		return linux_forward_user_buffer(
+			linux, reply_port, LINUX_SHARED_OPENAT,
+			TASK_RIGHT_RECV | TASK_RIGHT_DUP,
+			frame->arg1, path_len + 1,
+			frame->arg0, path_len + 1,
+			frame->arg2, frame->arg3, 1, 0);
+	}
+	case LINUX_RISCV64_CLOSE:
+		return linux_forward_words(linux, reply_port, LINUX_SHARED_CLOSE,
+					   frame->arg0, 0, 0, 0);
+	case LINUX_RISCV64_READ:
+		return linux_forward_user_buffer(
+			linux, reply_port, LINUX_SHARED_READ,
+			TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+			frame->arg1, frame->arg2,
+			frame->arg0, frame->arg2, 0, 0, 0, 1);
 	case LINUX_RISCV64_WRITE:
 		return linux_write_chunked(linux, reply_port, frame->arg0,
 					   frame->arg1, frame->arg2);
+	case LINUX_RISCV64_READLINKAT: {
+		return linux_forward_path_output(
+			linux, reply_port, LINUX_SHARED_READLINKAT,
+			frame->arg1, frame->arg2, frame->arg3,
+			frame->arg0, frame->arg3, 0);
+	}
+	case LINUX_RISCV64_NEWFSTATAT: {
+		return linux_forward_path_output(
+			linux, reply_port, LINUX_SHARED_NEWFSTATAT,
+			frame->arg1, frame->arg2, LINUX_STAT_SIZE,
+			frame->arg0, frame->arg3, 0);
+	}
+	case LINUX_RISCV64_FSTAT:
+		return linux_forward_user_buffer(
+			linux, reply_port, LINUX_SHARED_FSTAT,
+			TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+			frame->arg1, LINUX_STAT_SIZE,
+			frame->arg0, 0, 0, 0, 0, 1);
 	case LINUX_RISCV64_EXIT:
 	case LINUX_RISCV64_EXIT_GROUP:
 		return linux_exit_current(linux, reply_port, frame->arg0);
@@ -1078,6 +1567,23 @@ static u64 linux_riscv64_syscall_dispatch(struct arch_syscall_frame *frame)
 		return linux_forward_scalar(linux, reply_port, LINUX_SHARED_GETEGID);
 	case LINUX_RISCV64_GETTID:
 		return linux_forward_scalar(linux, reply_port, LINUX_SHARED_GETTID);
+	case LINUX_RISCV64_BRK:
+		return linux_brk_current(frame->arg0);
+	case LINUX_RISCV64_MUNMAP:
+		if (frame->arg0 == 0 ||
+		    (frame->arg0 & (VM_PAGE_SIZE - 1)) != 0 ||
+		    frame->arg1 == 0 ||
+		    frame->arg1 + VM_PAGE_SIZE - 1 < frame->arg1) {
+			return (u64)-LINUX_EINVAL;
+		}
+		return linux_unmap_task_range(task_current(), frame->arg0,
+					      align_up(frame->arg1,
+						       VM_PAGE_SIZE)) == 0 ?
+			0 : (u64)-LINUX_EINVAL;
+	case LINUX_RISCV64_MMAP:
+		return linux_mmap_current(linux, reply_port, frame);
+	case LINUX_RISCV64_MPROTECT:
+		return 0;
 	default:
 		console_printf("linux-riscv64: unknown syscall=%u pc=%p arg0=%p arg1=%p arg2=%p arg3=%p\n",
 			       (u32)frame->number,

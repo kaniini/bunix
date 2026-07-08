@@ -37,6 +37,8 @@ Tasks:
       personality semantics.
 - [ ] Define a riscv64 Linux syscall ABI table that maps riscv64 syscall
       numbers to the shared `BUNIX_LINUX_*` RPC operations.
+- [ ] Replace the ad hoc riscv64 dynamic-loader syscall forwarding helpers
+      added during exploration 035 with the table-driven frontend boundary.
 - [x] Build `user/linux/main.c` or a shared Linux server library for riscv64
       as the module named `linux`.
 - [x] Provide the minimal riscv64 service-registration path needed by the
@@ -51,6 +53,8 @@ Tasks:
       `BUNIX_LINUX_RISCV64_ACTION_*` once no path uses the action protocol.
 - [ ] Add a riscv64 static-musl shared-Linux smoke target that proves the
       module log identifies the shared Linux server, not the old stub.
+- [ ] Keep the exploration-035 dynamic-loader smoke passing while deleting
+      the temporary action protocol and old riscv64 Linux stub.
 - [ ] Run a narrow x86_64 smoke target to prove the Linux server split did not
       regress the mature path.
 
@@ -86,3 +90,9 @@ Progress notes:
   is to broaden the table beyond static hello, retire the UART package's old
   stub dependency, delete the `BUNIX_LINUX_RISCV64_*` action protocol after no
   path uses it, and add syscall-heavy/dynamic-loader runtime coverage.
+- Exploration 035 later added dynamic-loader runtime coverage for
+  `/bin/dyn-hello` through proc, VFS, squashfs, and the shared Linux server.
+  The riscv64 frontend now forwards the observed musl-loader calls directly
+  enough for smoke coverage, including `openat(2)` and `fstat(2)`.  This
+  exploration should treat that as a working baseline and refactor it into a
+  real riscv64 syscall ABI table rather than adding more one-off switch cases.

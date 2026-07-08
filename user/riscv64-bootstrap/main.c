@@ -27,6 +27,16 @@ static void launch_with_caps_or_log(const char *name,
 	}
 }
 
+static u64 str_len(const char *text)
+{
+	u64 len = 0;
+
+	while (text != 0 && text[len] != '\0') {
+		len++;
+	}
+	return len;
+}
+
 static u64 wait_service(u64 service, unsigned int rights)
 {
 	struct bunix_msg request = {
@@ -46,6 +56,82 @@ static u64 wait_service(u64 service, unsigned int rights)
 		return 0;
 	}
 	return reply.cap;
+}
+
+static long proc_register_exec(u64 proc, const char *path,
+			       const char *task_name, u64 linux)
+{
+	const u64 path_len = str_len(path) + 1;
+	const u64 task_len = str_len(task_name) + 1;
+	const long buffer = bunix_buffer_create(path_len + task_len);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = BUNIX_PROC_REGISTER_EXEC,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { path_len, task_len, linux, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (proc == 0 || buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, path, path_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, path_len, task_name,
+			       task_len) != 0 ||
+	    bunix_ipc_call(proc, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
+static long proc_spawn_wait(u64 proc, const char *path)
+{
+	const u64 path_len = str_len(path) + 1;
+	const u64 total = path_len * 2;
+	const long buffer = bunix_buffer_create(total);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_PROC,
+		.type = BUNIX_PROC_SPAWN_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { total, 1, 0, 2 },
+	};
+	struct bunix_msg reply;
+	u64 pid;
+
+	if (proc == 0 || buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, path, path_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, path_len, path, path_len) != 0 ||
+	    bunix_ipc_call(proc, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	pid = reply.words[1];
+	bunix_handle_close((u64)buffer);
+
+	request.type = BUNIX_PROC_WAIT;
+	request.cap = 0;
+	request.cap_rights = 0;
+	request.words[0] = pid;
+	request.words[1] = 0;
+	request.words[2] = 0;
+	request.words[3] = 0;
+	if (bunix_ipc_call(proc, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+	return 0;
 }
 
 static long send_path_command(u64 service, unsigned int protocol,
@@ -101,6 +187,10 @@ int main(void)
 	const char root_fail[] = "bootstrap-riscv64: rootfs mount failed\n";
 	const char linux_ok[] = "bootstrap-riscv64: linux launched\n";
 	const char linux_fail[] = "bootstrap-riscv64: linux failed\n";
+	const char linux_ready[] = "bootstrap-riscv64: linux ready\n";
+	const char linux_wait_fail[] = "bootstrap-riscv64: linux wait failed\n";
+	const char dyn_ok[] = "bootstrap-riscv64: dyn-hello ok\n";
+	const char dyn_fail[] = "bootstrap-riscv64: dyn-hello failed\n";
 	const char syscall_ok[] = "bootstrap-riscv64: syscall-smoke launched\n";
 	const char syscall_fail[] = "bootstrap-riscv64: syscall-smoke failed\n";
 	const char hello_ok[] = "bootstrap-riscv64: musl-hello launched\n";
@@ -142,6 +232,8 @@ int main(void)
 	} else {
 		log_line(proc_fail, sizeof(proc_fail) - 1);
 	}
+	const u64 proc = wait_service(BUNIX_SERVICE_PROC,
+				      BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	launch_with_caps_or_log("block", fs_caps,
 				sizeof(fs_caps) / sizeof(fs_caps[0]),
 				block_ok, sizeof(block_ok) - 1,
@@ -156,7 +248,8 @@ int main(void)
 				sizeof(fs_caps) / sizeof(fs_caps[0]),
 				vfs_ok, sizeof(vfs_ok) - 1,
 				vfs_fail, sizeof(vfs_fail) - 1);
-	const u64 vfs = wait_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
+	const u64 vfs = wait_service(BUNIX_SERVICE_VFS,
+				     BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	if (vfs != 0) {
 		log_line(vfs_ready, sizeof(vfs_ready) - 1);
 	} else {
@@ -183,13 +276,26 @@ int main(void)
 	}
 	const struct bunix_launch_cap linux_caps[] = {
 		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
-		{ BUNIX_HANDLE_VM, BUNIX_RIGHT_SEND, 0 },
+		{ vfs, BUNIX_RIGHT_SEND, 0 },
 		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
 	};
 	launch_with_caps_or_log("linux", linux_caps,
 				sizeof(linux_caps) / sizeof(linux_caps[0]),
 				linux_ok, sizeof(linux_ok) - 1,
 				linux_fail, sizeof(linux_fail) - 1);
+	const u64 linux = wait_service(BUNIX_SERVICE_LINUX, BUNIX_RIGHT_SEND);
+	if (linux != 0) {
+		log_line(linux_ready, sizeof(linux_ready) - 1);
+	} else {
+		log_line(linux_wait_fail, sizeof(linux_wait_fail) - 1);
+	}
+	if (proc != 0 && linux != 0 &&
+	    proc_register_exec(proc, "/bin/dyn-hello", "dyn-hello", 1) == 0 &&
+	    proc_spawn_wait(proc, "/bin/dyn-hello") == 0) {
+		log_line(dyn_ok, sizeof(dyn_ok) - 1);
+	} else {
+		log_line(dyn_fail, sizeof(dyn_fail) - 1);
+	}
 	launch_or_log("/bin/rv64-syscall-smoke", syscall_ok,
 		      sizeof(syscall_ok) - 1, syscall_fail,
 		      sizeof(syscall_fail) - 1);

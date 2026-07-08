@@ -29,6 +29,9 @@ Tasks:
       where both architectures already agree.
 - [ ] Move Linux-personality syscall forwarding into a shared registry or
       dispatch layer with arch-specific ABI tables.
+- [ ] Replace the riscv64 dynamic-loader smoke's temporary `mprotect(2)`
+      success stub with real VM permission updates shared with the x86_64
+      Linux mmap/mprotect semantics.
 - [ ] Replace the temporary riscv64 frontend behavior that re-sends
       `BUNIX_LINUX_REGISTER_PROCESS` before forwarded scalar syscalls with
       per-task Linux frontend state.  This must support concurrent riscv64

@@ -62,7 +62,7 @@ Tasks:
       process/thread entry details.
 - [x] Add riscv64 tests for the shared Linux server using the existing static
       musl hello smoke and at least one additional syscall-heavy static test.
-- [ ] Add riscv64 dynamic-linker smoke coverage for the musl loader path,
+- [x] Add riscv64 dynamic-linker smoke coverage for the musl loader path,
       including `openat(2)` and correct `fstat(2)` behavior.
 - [x] Build or prepare a minimal riscv64 Alpine rootfs artifact using the
       existing project rootfs conventions where possible.
@@ -77,7 +77,7 @@ Tasks:
 
 Verification:
 
-- [ ] `make ARCH=riscv64 all`
+- [x] `make ARCH=riscv64 all`
 - [x] Existing `make test-boot-riscv64-early`
 - [x] Existing `make test-boot-riscv64-uart-console`
 - [x] New riscv64 shared-Linux-server smoke target
@@ -412,3 +412,29 @@ Progress notes:
   - `make ARCH=riscv64 all`
   - `make test-boot-riscv64-early`
   - `make build/x86_64/bunixos.kernel`
+- Added runtime coverage for the riscv64 dynamic-loader path:
+  - The riscv64 smoke squashfs now overlays `/bin/dyn-hello`,
+    `/lib/ld-musl-riscv64.so.1`, and `/lib/libc.so` from the riscv64 musl.cc
+    toolchain artifacts.
+  - `user/riscv64-bootstrap/main.c` now launches the shared Linux server with
+    the mounted VFS service handle, waits for Linux registration through
+    names, registers `/bin/dyn-hello` with proc as a Linux-personality exec,
+    spawns it through `BUNIX_PROC_SPAWN_BUFFER`, and waits for it to exit
+    before launching the existing static smoke tasks.
+  - `arch/riscv64/user.c` now forwards the musl loader syscall surface needed
+    by the smoke path into the shared Linux server: `openat(2)`, `close(2)`,
+    `read(2)`, `readlinkat(2)`, `newfstatat(2)`, `fstat(2)`, `brk(2)`,
+    `mmap(2)`, and `munmap(2)`.
+  - The early boot test now requires
+    `bootstrap-riscv64: linux ready`,
+    `musl hello argc=1 argv0=/bin/dyn-hello`, and
+    `bootstrap-riscv64: dyn-hello ok`, proving the shared Linux server,
+    proc, VFS, squashfs, and musl loader path work together on riscv64.
+  - This smoke still keeps larger frontend cleanup out of the current
+    exploration.  The syscall table split and deletion of the old riscv64
+    action protocol remain in `036-shared-linux-personality-riscv64.txt`;
+    the broader x86_64/riscv64 syscall-forwarding and VM-permission cleanup
+    remain in `039-x86-riscv64-dryness-refactor.txt`.
+- Verification for the riscv64 dynamic-loader smoke slice:
+  - `make ARCH=riscv64 all`
+  - `make test-boot-riscv64-early`

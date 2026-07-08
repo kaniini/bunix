@@ -5,9 +5,19 @@ out=${1:?output image required}
 stage=${TMPDIR:-/tmp}/bunix-riscv64-rootfs.$$
 
 rm -rf "$stage"
-mkdir -p "$stage/bin" "$stage/etc"
+mkdir -p "$stage/bin" "$stage/etc" "$stage/lib"
 printf 'hello from riscv64 squashfs\n' > "$stage/hello.txt"
 printf 'riscv64-smoke\n' > "$stage/etc/hostname"
+
+if [ -n "${RISCV64_DYN_HELLO_MODULE:-}" ]; then
+	cp "$RISCV64_DYN_HELLO_MODULE" "$stage/bin/dyn-hello"
+	chmod 0555 "$stage/bin/dyn-hello"
+fi
+if [ -n "${RISCV64_MUSL_LDSO:-}" ]; then
+	cp "$RISCV64_MUSL_LDSO" "$stage/lib/ld-musl-riscv64.so.1"
+	chmod 0555 "$stage/lib/ld-musl-riscv64.so.1"
+	ln -sf ld-musl-riscv64.so.1 "$stage/lib/libc.so"
+fi
 
 mkdir -p "$(dirname "$out")"
 mksquashfs "$stage" "$out" -noappend -no-compression -no-fragments \
