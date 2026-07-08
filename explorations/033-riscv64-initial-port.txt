@@ -36,10 +36,10 @@ Constraints:
 
 Tasks:
 
-- [ ] Inventory all x86_64 assumptions in the build system, linker scripts,
+- [x] Inventory all x86_64 assumptions in the build system, linker scripts,
       boot path, arch headers, task/thread state, VM, interrupt/timer code,
       syscall entry, Linux syscall bridge, userspace crt0, and test harness.
-- [ ] Choose the initial riscv64 boot path and machine model:
+- [x] Choose the initial riscv64 boot path and machine model:
       `qemu-system-riscv64 -machine virt`, OpenSBI/direct kernel entry, payload
       format, memory map, and firmware expectations.
 - [ ] Add riscv64 toolchain variables, build rules, linker script, and
@@ -65,3 +65,61 @@ Tasks:
 - [ ] Add documentation for unsupported riscv64 features after initial bringup:
       SMP, FPU/vector context, signals, dynamic linking, VirtIO MMIO devices,
       networking, and Alpine rootfs parity.
+
+Progress notes:
+
+- Inventory found the first hard x86_64 dependencies:
+  - The Makefile defaults `ARCH := x86_64`, `QEMU ?= qemu-system-x86_64`,
+    x86_64 OVMF/EFI paths, `BOOTX64.EFI`, `MUSL_LDSO` for
+    `ld-musl-x86_64.so.1`, `-m64`, `-mno-red-zone`, x86_64 linker emulation,
+    and fixed x86_64 kernel/user source lists.
+  - Kernel entry is Multiboot2/GRUB-specific: `kernel_main()` receives
+    Multiboot2 magic/info, `pmm_init()` consumes Multiboot2 memory maps and
+    modules, and boot module discovery depends on Multiboot2 module tags.
+  - Generic kernel code still exposes x86_64 concepts through arch interfaces:
+    LAPIC mapping in VM space creation, APIC timer/EOI/IPI hooks, ACPI RSDP
+    discovery through Multiboot2, `hlt`/`cli` halt loops, CR3 logging, and
+    syscall-stack setup.
+  - Thread and trap state are x86_64-shaped: kernel stacks are aligned for the
+    current assembly path, `arch_thread_context` stores `rsp` plus
+    xsave/fxsave state, trap/syscall frames name `rip`, `rsp`, `rflags`, and
+    x86 callee-saved registers.
+  - Userspace startup and syscall ABI are x86_64-only: `user/crt0.S` reads
+    argc/argv/envp from `%rsp`, user syscall wrappers emit `syscall`, assembly
+    regression tests are x86_64, and Linux syscall numbers currently follow
+    the x86_64 ABI.
+  - Test harnesses assume x86_64 QEMU/OVMF/EFI/GRUB and x86_64 serial boot
+    markers.  Riscv64 needs separate QEMU, firmware, marker, and packaging
+    paths so x86_64 defaults remain unchanged.
+- Initial riscv64 boot path is `qemu-system-riscv64 -machine virt` using the
+  default OpenSBI firmware handoff into an ELF supervisor payload.  The first
+  target is a direct kernel image loaded with QEMU `-kernel`, not EFI/GRUB.
+  Early console and poweroff should use SBI calls first, with device-tree
+  parsing introduced for memory and device discovery before VirtIO MMIO.
+- Local tool availability check found no `qemu-system-riscv64`,
+  `riscv64-linux-gnu-gcc`, `riscv64-alpine-linux-musl-gcc`, or
+  `riscv64-unknown-elf-gcc` in `PATH`.  The next build-system slice should add
+  `ARCH=riscv64` variables and clear skip/fail behavior when the riscv64 tools
+  are absent.
+
+Open design notes:
+
+- The boot-info interface needs to be abstracted before real riscv64 server
+  bringup.  Multiboot2 can remain the x86_64 provider, while riscv64 should
+  provide equivalent command line, memory map, module list, and firmware data
+  from OpenSBI/device tree or a small boot package.
+- The native Bunix syscall ABI should stay negative-numbered and semantic, but
+  the inline syscall mechanism must become arch-specific so riscv64 can use
+  `ecall` while x86_64 keeps `syscall`.
+- Linux personality support for riscv64 must not reuse x86_64 syscall numbers
+  or signal frame layouts.  The first Linux slice should be a riscv64 static
+  musl hello once kernel threads, user entry, and native server execution are
+  proven.
+
+Verification so far:
+
+- `command -v qemu-system-riscv64` failed; tool missing from `PATH`.
+- `command -v riscv64-linux-gnu-gcc` failed; tool missing from `PATH`.
+- `command -v riscv64-alpine-linux-musl-gcc` failed; tool missing from
+  `PATH`.
+- `command -v riscv64-unknown-elf-gcc` failed; tool missing from `PATH`.
