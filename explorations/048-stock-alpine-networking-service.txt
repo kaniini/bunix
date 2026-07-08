@@ -6,6 +6,9 @@ Problem:
   `/etc/init.d/networking` service in the Alpine rootfs.
 - That is acceptable as a temporary bootstrap path, but the intended Alpine
   environment should run the real Alpine/ifupdown-ng networking service.
+- The current replacement service is a stopgap only.  It should not become the
+  Bunix network-management interface or a permanent OpenRC compatibility
+  contract.
 - The stock service currently pulls in OpenRC dependencies such as
   `localmount` and helper programs like `mkmntdirs`, `mountinfo`, and
   `fstabinfo` that expose gaps in Bunix's VFS, mount-table, and Linux
@@ -14,6 +17,9 @@ Problem:
 Intended outcome:
 
 - The generated Alpine rootfs keeps Alpine's stock `/etc/init.d/networking`.
+- The packaged service is not rewritten, shadowed, or replaced by rootfs
+  generation.  Any Bunix-specific behavior lives in standard configuration
+  files, hook scripts, or lower-level compatibility fixes.
 - `make run` boots through BusyBox init, runs `openrc sysinit`, `openrc boot`,
   and `openrc default`, then BusyBox init manages the `ttyS0` login respawn.
 - The stock OpenRC `networking` service starts `eth0` through ifupdown-ng and
@@ -29,6 +35,8 @@ Constraints:
   `udhcpc` drive network configuration.
 - Any Bunix-specific compatibility should be in general VFS, mount, procfs,
   sysfs, or Linux syscall behavior, not a forked networking script.
+- Preserve the existing working temporary service until this exploration has a
+  deterministic failing test and the stock service path is ready to replace it.
 
 Investigation targets:
 
@@ -45,8 +53,12 @@ Tasks:
 - [ ] Add a deterministic OpenRC boot test that preserves Alpine's stock
       `/etc/init.d/networking` and fails at the current blocking point with
       useful failure artifacts.
+- [ ] Add a rootfs build switch or test-only mode that disables the temporary
+      generated networking service without deleting the default working path.
 - [ ] Replace temporary generated OpenRC service hacks with general VFS,
       procfs, sysfs, mount-table, or Linux compatibility fixes.
+- [ ] Verify the packaged `openrc-run` service body is the one being executed,
+      rather than a Bunix-generated script with the same path.
 - [ ] Make stock `localmount` complete successfully on the Bunix Alpine image.
 - [ ] Make stock Alpine `/etc/init.d/networking start` and boot runlevel
       startup complete successfully.
