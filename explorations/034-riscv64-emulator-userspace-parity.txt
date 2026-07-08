@@ -55,7 +55,7 @@ Tasks:
       cleanup, and task IDs like x86_64 tasks.
 - [x] Move the current `abi-smoke.user` payload from the early harness into a
       normal native task/server smoke launched from the riscv64 boot package.
-- [ ] Extend the riscv64 boot package format or loader enough to carry the
+- [x] Extend the riscv64 boot package format or loader enough to carry the
       module list, server names, command line, and data payloads required by
       the normal bootstrap path.
 - [x] Implement the riscv64 native syscall subset needed by the initial native
@@ -72,7 +72,7 @@ Tasks:
 - [x] Add a QEMU riscv64 smoke test that runs the native server smoke and the
       static musl hello path, checks their serial or dmesg markers, and ends in
       guest poweroff.
-- [ ] Update `docs/riscv64-port.md` with the emulator-supported feature set,
+- [x] Update `docs/riscv64-port.md` with the emulator-supported feature set,
       the remaining unsupported features, and the explicit gate that BPI-F3
       work starts only after the emulator target is stable.
 
@@ -554,3 +554,20 @@ Verification notes:
 - `make all` passed after the shared syscall header change.
 - `make test-boot` passed after the shared syscall header change, covering the
   x86_64 boot path.
+- Marked the riscv64 boot-package carrier task complete:
+  - The builder supports a command-line header and ordered `module NAME SIZE`
+    records.
+  - The default carrier now packages scheduler-owned native code
+    `abi-smoke.user`, the userspace riscv64 `linux` server, and the static
+    Linux payload `/bin/musl-hello`.
+  - `test-riscv64-bootpkg` verifies the multi-record carrier, including an
+    ordered `disk0` data payload record.  The generic module registry already
+    attaches `disk0` to `block` and `ext2disk` to `ext2` when those server
+    modules are present.
+  - The remaining proc/bootstrap item is about launching the normal server
+    graph on riscv64, not about the carrier format's ability to represent the
+    required records.
+- Marked the riscv64 port documentation task complete.  `docs/riscv64-port.md`
+  now records the supported QEMU `virt` emulator feature set, the current
+  unsupported areas, the static-musl Linux server path, and the explicit BPI-F3
+  hardware gate.
