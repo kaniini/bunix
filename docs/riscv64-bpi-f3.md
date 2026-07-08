@@ -90,6 +90,17 @@ Check the host-side artifact shape with:
 make test-riscv64-bpi-f3-artifacts
 ```
 
+Before preparing hardware media or collecting a BPI-F3 serial log, run the
+emulator gate:
+
+```sh
+make test-riscv64-bpi-f3-emulator-gate
+```
+
+That target runs the QEMU `virt` riscv64 userspace smoke, validates the
+resulting serial log with the BPI-F3 smoke checker, and classifies the emulator
+evidence.  Do not proceed to physical-board work if this gate fails.
+
 Prepare a mounted boot partition with:
 
 ```sh

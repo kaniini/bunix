@@ -268,3 +268,13 @@ Verification notes:
   poweroff, timer, interrupt-controller discovery, SMP CPU-count discovery,
   and userspace smoke.
 - `git diff --check` passed after adding the BPI-F3 smoke-log classifier.
+- Added `make test-riscv64-bpi-f3-emulator-gate`:
+  - The target runs the QEMU `virt` riscv64 userspace smoke before BPI-F3
+    hardware work.
+  - It then checks and classifies the generated QEMU serial log with the
+    BPI-F3 smoke helper, making the emulator-first policy an executable gate
+    instead of only a documentation rule.
+- `make test-riscv64-bpi-f3-emulator-gate` passed after adding the executable
+  emulator-first BPI-F3 gate.
+- `git diff --check` passed after adding the executable emulator-first BPI-F3
+  gate.
