@@ -39,6 +39,15 @@ Problem:
   ping: recvfrom: Resource temporarily unavailable
   ```
 
+- Another manual repro of the remaining four pings showed the same failure
+  mode as repeated nonblocking receive failures:
+
+  ```
+  ping: recvfrom: Resource temporarily unavailable
+  ping: recvfrom: Resource temporarily unavailable
+  ping: recvfrom: Resource temporarily unavailable
+  ```
+
 - The bad source address suggests the receive path, ICMP echo reply parsing,
   IPv4 header source extraction, socket address reporting, checksum handling,
   NAT-facing metadata, or userspace `recvfrom`/`recvmsg` address copyout is
