@@ -85,6 +85,10 @@ Progress:
   generic VM contract remains shared across ports.
 - `/bin/lowmemtest` proves ring-3 low-memory reads and writes SIGSEGV and that
   Linux `write(2)` from a low kernel address returns `-EFAULT`.
+- The non-root shell validation blocker was isolated to BusyBox ash history
+  behavior when `HOME=/home/kaniini` points at an unwritable read-only squashfs
+  home.  Login now sets `HISTFILE=/dev/null` until writable homes are provided
+  by a later filesystem slice.
 
 Validation:
 
@@ -94,14 +98,10 @@ Validation:
 - Root `test-command` VFS smoke passed:
   `BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' BUNIX_CMD='busybox cat /hello.txt >/dev/null && echo SMOKE_VFS_OK' make test-command`.
 - `make test-boot-virtio-blk-irq` passed.
+- Default non-root command execution passed:
+  `BUNIX_CMD='echo USER_OK' make test-command`.
+- `make test-smoke` passed.
 
 Open blocker:
 
-- `make test-smoke` currently fails in the non-root interactive login shell
-  path before any smoke command output appears.  The shell reaches
-  `~ $ \033[6n`, the harness injects the command, the TTY echoes it, but ash
-  does not produce the expected marker.  A debug run showed the shell reaching
-  prompt setup after `/bin/sh` exec and then no later traced read/write syscall
-  before the harness timeout.  This appears separate from the low identity-map
-  isolation change because the root command path and dedicated lowmem test
-  pass, but it blocks the full shell/full-test gate until resolved.
+- None currently.  The remaining task is the broader OpenRC/full-test gate.

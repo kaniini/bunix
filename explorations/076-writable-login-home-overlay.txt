@@ -1,0 +1,39 @@
+Provide writable login homes on read-only root filesystems.
+
+Parent exploration: `043-user-address-space-identity-map-escape.txt`
+
+Problem:
+
+- The synthetic squashfs rootfs is mounted read-only and built with
+  `mksquashfs -all-root`, so `/home/kaniini` is not a writable user home in
+  the guest.
+- BusyBox ash tries to use history under `$HOME` for interactive non-root
+  shells.  Until the filesystem gives the user a writable home, login disables
+  history with `HISTFILE=/dev/null` to avoid wedging the interactive shell.
+- That login workaround is acceptable for the low-memory isolation gate, but
+  it is not the long-term multiuser model.
+
+Why this is a refactor:
+
+- The current slice should stay focused on proving user/kernel VM isolation.
+- Writable home directories belong in the rootfs/VFS/unionfs/tmpfs design, not
+  as shell-specific policy in the login program.
+
+Plan:
+
+- Decide whether synthetic and Alpine roots should create homes through tmpfs,
+  unionfs copy-up, a dedicated homefs server, or early boot provisioning.
+- Ensure `/home/$user` has the correct uid, gid, mode, and write behavior for
+  normal users even when the lower rootfs is squashfs.
+- Move shell history policy out of login once writable homes work.
+- Add regression coverage that a non-root login can create, read, append, and
+  remove a file in `$HOME`.
+- Keep Alpine/OpenRC behavior aligned with a normal Alpine image.
+
+Tasks:
+
+- [ ] Choose the writable-home mechanism for synthetic and Alpine roots.
+- [ ] Implement per-user home provisioning with correct ownership/mode.
+- [ ] Remove the login-level `HISTFILE=/dev/null` workaround when safe.
+- [ ] Add non-root `$HOME` write/read/append/remove regression coverage.
+- [ ] Run login smoke, OpenRC, shell, and full `make test` gates.

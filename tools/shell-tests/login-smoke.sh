@@ -52,7 +52,8 @@ check_login_smoke() {
 	wait_for_awk "$log" '{ sub(/\r$/, "") } /2018(\(g18\))?/ { found = 1 } END { exit found ? 0 : 1 }' "busybox id did not report more than 16 supplementary groups" 45 120
 	wait_for_each_fixed "$log" "login environment missing" 45 160 \
 		"HOME=/home/kaniini" "USER=kaniini" "LOGNAME=kaniini" \
-		"SHELL=/bin/sh" "PATH=/bin:/sbin:/usr/bin:/usr/sbin" "TERM=bunix"
+		"SHELL=/bin/sh" "PATH=/bin:/sbin:/usr/bin:/usr/sbin" \
+		"TERM=bunix" "HISTFILE=/dev/null"
 	wait_for_exact_line "$log" "/home/kaniini" "shell did not cd to login home directory" 45 160
 	wait_for_fixed "$log" "USR_ENV_OK" "/usr/bin/env symlink did not execute" 45 160
 	wait_for_each_fixed "$log" "linux access/faccessat regression missing" 45 160 \
