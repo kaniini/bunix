@@ -20,10 +20,28 @@ Problem:
   `0.0.0.0`.
 - The remaining three receives currently time out with `EAGAIN`, reported by
   BusyBox as `ping: recvfrom: Resource temporarily unavailable`.
+- The latest focused repro still receives only the first visible reply and
+  then reports the remaining receives as:
+
+  ```
+  ping: recvfrom: Resource temporarily unavailable
+  ping: recvfrom: Resource temporarily unavailable
+  ping: recvfrom: Resource temporarily unavailable
+  ```
+
 - The bad source address suggests the receive path, ICMP echo reply parsing,
   IPv4 header source extraction, socket address reporting, checksum handling,
   NAT-facing metadata, or userspace `recvfrom`/`recvmsg` address copyout is
   still wrong.
+- Investigation showed the first bad `0.0.0.0` source was in the Linux
+  personality copyout path: the net server returned ICMP source metadata, but
+  `recvfrom(2)` did not copy the source sockaddr back to userspace.
+- After fixing source sockaddr copyout, the first reply reported `4.2.2.1`,
+  but later replies still timed out.  BusyBox ping needed real-timer signal
+  behavior to send subsequent probes while blocked in `recvfrom(2)`.
+- Minimal `alarm(2)` and `setitimer(ITIMER_REAL)` support now feeds
+  `SIGALRM` into interruptible socket receives, allowing BusyBox ping's
+  timer-driven loop to continue.
 
 Intended outcome:
 
@@ -70,20 +88,20 @@ Investigation targets:
 
 Tasks:
 
-- [ ] Add or extend a deterministic IPv4 external ping regression that runs in
+- [x] Add or extend a deterministic IPv4 external ping regression that runs in
       QEMU and records enough packet-path logs to distinguish TX, RX, parse,
       socket delivery, and userspace reporting failures.
 - [ ] Verify with host-side or QEMU-side evidence that four echo replies are
       received by QEMU for `ping -c 4 4.2.2.1`.
 - [ ] Verify the virtio-net driver receives all four replies and hands them to
       the net server.
-- [ ] Fix IPv4/ICMP parsing so inbound echo replies preserve the remote source
+- [x] Fix IPv4/ICMP parsing so inbound echo replies preserve the remote source
       address.
-- [ ] Fix Linux socket `recvfrom`/`recvmsg` address copyout if the packet is
+- [x] Fix Linux socket `recvfrom`/`recvmsg` address copyout if the packet is
       correct before the Linux server but wrong in BusyBox.
-- [ ] Make `ping -c 4 4.2.2.1` report four replies from `4.2.2.1`.
-- [ ] Add a regression for reply count and source address.
-- [ ] Re-run the focused networking tests needed to prove DHCP, default route,
+- [x] Make `ping -c 4 4.2.2.1` report four replies from `4.2.2.1`.
+- [x] Add a regression for reply count and source address.
+- [x] Re-run the focused networking tests needed to prove DHCP, default route,
       loopback, and external IPv4 ping still work.
 
 Completion criteria:

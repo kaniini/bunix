@@ -945,7 +945,7 @@ test-boot-virtio-net-external-ping-run: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/te
 	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		QEMU_TIMEOUT=180s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
 		BUNIX_MARKER=BUNIX_EXTERNAL_PING_OK \
-		BUNIX_CMD='udhcpc -n -q -i eth0 -t 1 -T 1; cat /proc/net/config; busybox grep -F "iface eth0" /proc/net/config; busybox grep -F "default_ipv4 1" /proc/net/config; busybox ping -c 1 -W 4 4.2.2.1; busybox ping -c 1 -W 4 8.8.8.8; cat /proc/net/dev; set -- $$(busybox grep -F "eth0:" /proc/net/dev); test "$$2" != 0; test "$$10" != 0' \
+		BUNIX_CMD='udhcpc -n -q -i eth0 -t 1 -T 1; C=/proc/net/config; grep -F "iface eth0" $$C; grep -F "default_ipv4 1" $$C; ping -c4 -W4 4.2.2.1 >/tmp/p; cat /tmp/p; grep -F "64 bytes from 4.2.2.1:" /tmp/p; grep -F "4 packets transmitted, 4 packets received" /tmp/p; ping -c1 -W4 8.8.8.8' \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" sh tools/test-command.sh
 
 test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) $(VIRTIO_BLK_TEST_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-squashfs.txt

@@ -87,6 +87,7 @@ enum {
 	LINUX_SIGINT = 2,
 	LINUX_SIGBUS = 7,
 	LINUX_SIGSEGV = 11,
+	LINUX_SIGALRM = 14,
 	LINUX_SIGTERM = 15,
 	LINUX_SIGCHLD = 17,
 	LINUX_ICRNL = 0000400,
@@ -274,6 +275,8 @@ struct linux_process {
 	u64 signal_handlers[64];
 	u64 signal_restorers[64];
 	u64 signal_flags[64];
+	u64 alarm_deadline_ns;
+	u64 alarm_active;
 	u64 umask;
 	u64 session_id;
 	u64 session_owner;
@@ -2309,6 +2312,59 @@ static int linux_signal_process(struct linux_process *process, u64 signal)
 	}
 
 	return 0;
+}
+
+static long linux_alarm(struct linux_process *process, u64 seconds)
+{
+	const u64 now = bunix_clock_monotonic_ns();
+	u64 previous = 0;
+
+	if (process == 0) {
+		return -LINUX_EINVAL;
+	}
+	if (process->alarm_active != 0 &&
+	    process->alarm_deadline_ns > now) {
+		previous = (process->alarm_deadline_ns - now +
+			    999999999ull) / 1000000000ull;
+	}
+	if (seconds == 0) {
+		process->alarm_active = 0;
+		process->alarm_deadline_ns = 0;
+		return (long)previous;
+	}
+	process->alarm_active = 1;
+	process->alarm_deadline_ns = now + seconds * 1000000000ull;
+	return (long)previous;
+}
+
+static long linux_setitimer_real(struct linux_process *process, u64 seconds,
+				 u64 useconds)
+{
+	if (process == 0 || useconds >= 1000000ull) {
+		return -LINUX_EINVAL;
+	}
+	if (seconds == 0 && useconds == 0) {
+		process->alarm_active = 0;
+		process->alarm_deadline_ns = 0;
+		return 0;
+	}
+	process->alarm_active = 1;
+	process->alarm_deadline_ns = bunix_clock_monotonic_ns() +
+				     seconds * 1000000000ull +
+				     useconds * 1000ull;
+	return 0;
+}
+
+static int linux_alarm_expire_if_ready(struct linux_process *process)
+{
+	if (process == 0 || process->alarm_active == 0 ||
+	    bunix_clock_monotonic_ns() < process->alarm_deadline_ns) {
+		return 0;
+	}
+	process->alarm_active = 0;
+	process->alarm_deadline_ns = 0;
+	(void)linux_signal_process(process, LINUX_SIGALRM);
+	return 1;
 }
 
 static u64 linux_task_fault_signal(const struct bunix_task_fault_event *event)
@@ -5803,6 +5859,49 @@ static long linux_write_sockaddr(u64 buffer, u64 max_len,
 	return (long)actual;
 }
 
+static long linux_write_sockaddr_at(u64 buffer, u64 offset, u64 max_len,
+				    const struct linux_sockaddr *addr)
+{
+	char raw[28];
+	u64 actual;
+	u64 copy;
+
+	if (buffer == 0 || addr == 0) {
+		return -LINUX_EFAULT;
+	}
+	zero_bytes(raw, sizeof(raw));
+	actual = linux_sockaddr_len(addr->family);
+	raw[0] = (unsigned char)(addr->family & 0xff);
+	raw[1] = (unsigned char)((addr->family >> 8) & 0xff);
+	raw[2] = (unsigned char)((addr->port >> 8) & 0xff);
+	raw[3] = (unsigned char)(addr->port & 0xff);
+	if (addr->family == LINUX_AF_INET) {
+		raw[4] = (unsigned char)((addr->lo >> 24) & 0xff);
+		raw[5] = (unsigned char)((addr->lo >> 16) & 0xff);
+		raw[6] = (unsigned char)((addr->lo >> 8) & 0xff);
+		raw[7] = (unsigned char)(addr->lo & 0xff);
+	} else if (addr->family == LINUX_AF_INET6) {
+		u64 hi = addr->hi;
+		u64 lo = addr->lo;
+
+		for (u64 i = 0; i < 8; i++) {
+			raw[15 - i] = (unsigned char)(hi & 0xff);
+			hi >>= 8;
+		}
+		for (u64 i = 0; i < 8; i++) {
+			raw[23 - i] = (unsigned char)(lo & 0xff);
+			lo >>= 8;
+		}
+	} else {
+		return -LINUX_EAFNOSUPPORT;
+	}
+	copy = actual < max_len ? actual : max_len;
+	if (copy != 0 && bunix_buffer_write(buffer, offset, raw, copy) != 0) {
+		return -LINUX_EFAULT;
+	}
+	return (long)actual;
+}
+
 static long linux_socket_addr(struct linux_process *process, u64 fd, u64 max_len,
 			      u64 buffer, int peer, u64 *actual_len)
 {
@@ -6403,7 +6502,8 @@ static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 }
 
 static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
-			   u64 flags, u64 buffer)
+			   u64 flags, u64 buffer, u64 addr_len,
+			   u64 *actual_addr_len)
 {
 	struct bunix_msg reply;
 	u64 op;
@@ -6412,6 +6512,9 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 		(fd < process->fd_capacity &&
 		 (process->fds[fd].status_flags & LINUX_O_NONBLOCK) != 0);
 
+	if (actual_addr_len != 0) {
+		*actual_addr_len = 0;
+	}
 	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
 		return -LINUX_ENOTSOCK;
@@ -6427,7 +6530,31 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 			if (linux_net_call(op, buffer, BUNIX_RIGHT_SEND,
 					   process->fds[fd].offset, len, 0, 0,
 					   &reply) == 0) {
+				if (addr_len != 0 &&
+				    process->fds[fd].handle ==
+				    LINUX_SOCKET_NET_ICMP) {
+					const struct linux_sockaddr addr = {
+						.family = process->fds[fd].size,
+						.hi = reply.words[2],
+						.lo = reply.words[3],
+						.port = 0,
+					};
+					const long actual =
+						linux_write_sockaddr_at(
+							buffer, reply.words[1],
+							addr_len, &addr);
+
+					if (actual < 0) {
+						return actual;
+					}
+					if (actual_addr_len != 0) {
+						*actual_addr_len = (u64)actual;
+					}
+				}
 				return (long)reply.words[1];
+			}
+			if (!nonblock && linux_alarm_expire_if_ready(process)) {
+				return -LINUX_EINTR;
 			}
 			if (nonblock || retry >= LINUX_RECV_BLOCK_RETRIES) {
 				return -LINUX_EAGAIN;
@@ -6475,7 +6602,8 @@ static long linux_recvmsg(struct linux_process *process, u64 fd, u64 len,
 		return -LINUX_ENOTSOCK;
 	}
 	if (process->fds[fd].handle != LINUX_SOCKET_NET_PACKET) {
-		return linux_recvfrom(process, fd, len, flags, buffer);
+		return linux_recvfrom(process, fd, len, flags, buffer, name_len,
+				      actual_name_len);
 	}
 	if (process->fds[fd].offset == 0) {
 		return -LINUX_EDESTADDRREQ;
@@ -6704,7 +6832,7 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	     process->fds[fd].handle == LINUX_SOCKET_NET_RAW ||
 	     process->fds[fd].handle == LINUX_SOCKET_NET_PACKET ||
 	     process->fds[fd].handle == LINUX_SOCKET_NETLINK_ROUTE)) {
-		return linux_recvfrom(process, fd, len, 0, buffer);
+		return linux_recvfrom(process, fd, len, 0, buffer, 0, 0);
 	}
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
 		return -LINUX_EISDIR;
@@ -7312,9 +7440,11 @@ static void linux_process_reset(struct linux_process *process)
 	process->signal_ignored = 0;
 	for (u64 signal = 0; signal < 64; signal++) {
 		process->signal_handlers[signal] = 0;
-		process->signal_restorers[signal] = 0;
-		process->signal_flags[signal] = 0;
+	process->signal_restorers[signal] = 0;
+	process->signal_flags[signal] = 0;
 	}
+	process->alarm_deadline_ns = 0;
+	process->alarm_active = 0;
 	process->umask = 0;
 	process->session_id = 0;
 	process->session_owner = 0;
@@ -7629,6 +7759,14 @@ int main(void)
 			reply.words[0] = (u64)linux_rt_sigtimedwait(process,
 								    message.words[0],
 								    message.words[2]);
+			break;
+		case BUNIX_LINUX_ALARM:
+			reply.words[0] = (u64)linux_alarm(process,
+							  message.words[0]);
+			break;
+		case BUNIX_LINUX_SETITIMER:
+			reply.words[0] = (u64)linux_setitimer_real(
+				process, message.words[1], message.words[2]);
 			break;
 		case BUNIX_LINUX_SIGNAL_PENDING:
 			reply.words[0] = linux_signal_deliverable(process) != 0;
@@ -8026,7 +8164,9 @@ int main(void)
 							     message.words[0],
 							     message.words[1],
 							     message.words[2],
-							     message.cap);
+							     message.cap,
+							     message.words[3],
+							     &reply.words[1]);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

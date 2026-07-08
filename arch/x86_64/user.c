@@ -105,6 +105,8 @@ enum {
 	LINUX_SYSCALL_NANOSLEEP = 35,
 	LINUX_SYSCALL_DUP = 32,
 	LINUX_SYSCALL_DUP2 = 33,
+	LINUX_SYSCALL_ALARM = 37,
+	LINUX_SYSCALL_SETITIMER = 38,
 	LINUX_SYSCALL_TRUNCATE = 76,
 	LINUX_SYSCALL_FTRUNCATE = 77,
 	LINUX_SYSCALL_RMDIR = 84,
@@ -2250,6 +2252,75 @@ static u64 linux_forward_output_words(struct ipc_port *linux,
 					   size, cap_rights);
 }
 
+static u64 linux_forward_recvfrom(struct ipc_port *linux,
+				  struct ipc_port *reply_port,
+				  struct ipc_message *request,
+				  u64 fd, u64 user_payload, u64 payload_len,
+				  u64 flags, u64 user_addr,
+				  u64 user_addr_lenp)
+{
+	struct shared_buffer *buffer;
+	struct ipc_message reply;
+	u32 in_addr_len = 0;
+	u64 addr_len = 0;
+	u64 buffer_size;
+
+	if (user_payload == 0 && payload_len != 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	if (user_addr != 0) {
+		if (user_addr_lenp == 0 ||
+		    read_current_user(user_addr_lenp, &in_addr_len,
+				      sizeof(in_addr_len)) != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		addr_len = in_addr_len > LINUX_MAX_SOCKADDR ?
+			   LINUX_MAX_SOCKADDR : in_addr_len;
+	}
+	buffer_size = payload_len + addr_len;
+	buffer = buffer_create(buffer_size == 0 ? 1 : buffer_size);
+	if (buffer == 0) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	request->type = LINUX_SYSCALL_RECVFROM;
+	request->words[0] = fd;
+	request->words[1] = payload_len;
+	request->words[2] = flags;
+	request->words[3] = addr_len;
+	request->cap_type = IPC_CAP_BUFFER;
+	request->cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP;
+	request->cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	if ((i64)reply.words[0] > 0) {
+		if (reply.words[0] > payload_len ||
+		    linux_copy_buffer_to_user(buffer, 0, user_payload,
+					      reply.words[0]) != 0) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
+	}
+	if ((i64)reply.words[0] >= 0 && user_addr != 0) {
+		const u32 out_addr_len = (u32)reply.words[1];
+		const u64 copy = reply.words[1] < addr_len ?
+				 reply.words[1] : addr_len;
+
+		if (write_current_user(user_addr_lenp, &out_addr_len,
+				       sizeof(out_addr_len)) != 0 ||
+		    (copy != 0 &&
+		     (reply.words[0] + copy > buffer_size ||
+		      linux_copy_buffer_to_user(buffer, reply.words[0],
+						user_addr, copy) != 0))) {
+			buffer_release(buffer);
+			return (u64)-LINUX_EFAULT;
+		}
+	}
+	buffer_release(buffer);
+	return reply.words[0];
+}
+
 static u64 linux_forward_fixed_output_buffer(struct ipc_port *linux,
 					     struct ipc_port *reply_port,
 					     struct ipc_message *request,
@@ -3468,6 +3539,10 @@ static const char *linux_syscall_name(u64 number)
 		return "dup";
 	case LINUX_SYSCALL_DUP2:
 		return "dup2";
+	case LINUX_SYSCALL_ALARM:
+		return "alarm";
+	case LINUX_SYSCALL_SETITIMER:
+		return "setitimer";
 	case LINUX_SYSCALL_SENDFILE:
 		return "sendfile";
 	case LINUX_SYSCALL_SOCKET:
@@ -4332,6 +4407,27 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		return 0;
 	case LINUX_SYSCALL_NANOSLEEP:
 		return linux_sleep_relative(arg0, arg1);
+	case LINUX_SYSCALL_ALARM:
+		break;
+	case LINUX_SYSCALL_SETITIMER: {
+		u64 timer[4];
+		u64 old_timer[4] = { 0, 0, 0, 0 };
+
+		if (arg0 != 0) {
+			return linux_einval_u64(__func__, __LINE__);
+		}
+		if (arg2 != 0 &&
+		    write_current_user(arg2, old_timer, sizeof(old_timer)) != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		if (arg1 == 0 ||
+		    read_current_user(arg1, timer, sizeof(timer)) != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		return linux_forward_words(linux, reply_port,
+					   LINUX_SYSCALL_SETITIMER,
+					   arg0, timer[2], timer[3]);
+	}
 	case LINUX_SYSCALL_CLOCK_NANOSLEEP:
 		if (arg0 != LINUX_CLOCK_REALTIME &&
 		    arg0 != LINUX_CLOCK_MONOTONIC) {
@@ -4712,16 +4808,9 @@ poll_again:
 		const u64 len = arg2 > LINUX_MAX_SYSCALL_BUFFER ?
 				LINUX_MAX_SYSCALL_BUFFER : arg2;
 
-		if (arg1 == 0 && len != 0) {
-			return (u64)-LINUX_EFAULT;
-		}
-
-		return linux_forward_output_words(linux, reply_port, &request,
-						  LINUX_SYSCALL_RECVFROM,
-						  (void *)arg1, len,
-						  TASK_RIGHT_SEND |
-						  TASK_RIGHT_DUP,
-						  arg0, arg3, 0);
+		return linux_forward_recvfrom(linux, reply_port, &request,
+					      arg0, arg1, len, arg3,
+					      frame->r8, frame->r9);
 	}
 	case LINUX_SYSCALL_SENDMSG:
 		return linux_forward_sendmsg(linux, reply_port, &request,
