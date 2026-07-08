@@ -237,6 +237,7 @@ KERNEL_OBJDUMP_CHECK :=
 KERNEL_ARCH_SRCS := \
 	arch/riscv64/boot/start.S \
 	arch/riscv64/early.c \
+	arch/riscv64/fdt.c \
 	arch/riscv64/interrupts.c \
 	arch/riscv64/power.c \
 	arch/riscv64/smp.c \

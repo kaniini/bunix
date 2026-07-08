@@ -8,6 +8,7 @@ struct riscv64_boot_info {
 	u64 hart_id;
 	u64 fdt;
 	u64 phys_base;
+	u64 phys_size;
 	u64 kernel_load_base;
 	u64 direct_map_base;
 	u64 direct_map_size;

@@ -155,6 +155,17 @@ Progress notes:
   - Real physical memory enumeration is intentionally not implemented yet; the
     next boot/memory slice should parse the FDT memory node instead of assuming
     a fixed RAM size.
+- Added a minimal FDT memory scanner for the next boot/memory slice:
+  - `arch/riscv64/include/arch/fdt.h` exposes a bounded memory-range scan API.
+  - `arch/riscv64/fdt.c` walks the FDT structure block, decodes big-endian
+    cells, tracks root `#address-cells`/`#size-cells`, and extracts `reg`
+    ranges from `memory` nodes.
+  - `arch/riscv64/early.c` now records the first FDT memory range in boot
+    info, falling back to the QEMU virt physical base if the FDT is absent or
+    invalid.
+  - This is enough structure for early PMM bringup to consume real firmware
+    memory data later, but the QEMU boot/poweroff milestone remains unverified
+    until riscv64 tools are available.
 
 Open design notes:
 
@@ -194,3 +205,5 @@ Verification so far:
 - `make -n all` passed for the default x86_64 target.
 - `make -n ARCH=riscv64 all` showed the layout/boot-info headers included by
   the early payload and VM stubs.
+- `make -n ARCH=riscv64 all` showed `arch/riscv64/fdt.c` in the riscv64
+  compile/link plan.
