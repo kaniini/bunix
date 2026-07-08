@@ -20,10 +20,10 @@ Problem:
 
 Tasks:
 
-- [ ] Audit x86_64/riscv64 duplication across kernel entry, runtime init,
+- [x] Audit x86_64/riscv64 duplication across kernel entry, runtime init,
       boot module handling, user entry, syscall forwarding, server packaging,
       rootfs image wiring, and QEMU test targets.
-- [ ] Identify which differences are architectural contracts and which are
+- [x] Identify which differences are architectural contracts and which are
       accidental bringup duplication.
 - [ ] Create shared helpers for generic lifecycle and boot-module sequencing
       where both architectures already agree.
@@ -44,7 +44,7 @@ Tasks:
       servers.
 - [ ] Unify common QEMU test harness behavior while preserving architecture
       machine, firmware, and shutdown differences.
-- [ ] Update documentation to describe the architecture boundary explicitly:
+- [x] Update documentation to describe the architecture boundary explicitly:
       what belongs in `arch/*`, what belongs in generic kernel code, and what
       belongs in userspace servers.
 - [ ] Keep BPI-F3 artifacts and x86_64 Alpine boot tests passing throughout.
@@ -124,3 +124,14 @@ Progress notes:
   - Verification:
     - `make test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build`
     - `make test-boot-riscv64-alpine`
+- Architecture-boundary audit/doc slice:
+  - Added `docs/architecture-boundary.md` to define ownership for `arch/*`,
+    generic kernel mechanisms, and userspace server policy.
+  - Classified accepted architecture differences: boot protocol/carrier,
+    trap/syscall register ABI, context switch code, MMU format, timer/interrupt
+    controller, SMP startup, and poweroff/reset mechanics.
+  - Classified cleanup targets: normalized boot-module sequencing, shared
+    Linux syscall forwarding machinery with arch ABI tables, server module
+    build/package repetition, freestanding runtime helper policy, and QEMU
+    harness behavior.
+  - Added a README pointer so future port work has a stable local reference.

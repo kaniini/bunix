@@ -77,7 +77,8 @@ have not been generalized yet.
 
 The tree is split so future ports can add a sibling such as `arch/arm64/` with
 its own boot path, interrupt setup, MMU setup, and device I/O while reusing the
-common kernel and server code.
+common kernel and server code.  The ownership rules are documented in
+`docs/architecture-boundary.md`.
 
 Kernel logging uses `console_printf`, a small freestanding formatter supporting
 `%s`, `%c`, `%d`, `%i`, `%u`, `%x`, `%p`, and `%%`. Once Linux userspace starts,
