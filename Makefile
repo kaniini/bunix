@@ -36,6 +36,7 @@ RISCV64_OBJDUMP ?= llvm-objdump
 RISCV64_READELF ?= llvm-readelf
 RISCV64_USER_ABI_MODULE := $(BUILD_DIR)/riscv64/modules/abi-smoke.user
 RISCV64_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg.img
+RISCV64_BOOTPKG_MULTI := $(BUILD_DIR)/riscv64/bootpkg-multi.img
 BOOTSTRAP_MODULE := $(BUILD_DIR)/modules/bootstrap.server
 USER_CRT0_OBJ := $(BUILD_DIR)/user/crt0.S.o
 BOOTSTRAP_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o
@@ -421,9 +422,16 @@ test-riscv64-user-abi: $(RISCV64_USER_ABI_MODULE)
 $(RISCV64_BOOTPKG): $(RISCV64_USER_ABI_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ $(RISCV64_USER_ABI_MODULE) abi-smoke.user
 
-test-riscv64-bootpkg: $(RISCV64_BOOTPKG)
+$(RISCV64_BOOTPKG_MULTI): $(RISCV64_USER_ABI_MODULE) tools/build-riscv64-bootpkg.sh
+	sh tools/build-riscv64-bootpkg.sh $@ \
+		$(RISCV64_USER_ABI_MODULE) disk0 \
+		$(RISCV64_USER_ABI_MODULE) abi-smoke.user
+
+test-riscv64-bootpkg: $(RISCV64_BOOTPKG) $(RISCV64_BOOTPKG_MULTI)
 	grep -aF "BUNIX-RV64-BOOTPKG" $(RISCV64_BOOTPKG) >/dev/null
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG) >/dev/null
+	grep -aF "module disk0" $(RISCV64_BOOTPKG_MULTI) >/dev/null
+	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 
 $(BOOTSTRAP_MODULE): $(BOOTSTRAP_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)

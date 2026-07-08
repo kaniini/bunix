@@ -51,11 +51,15 @@ The early boot gate currently verifies:
 
 The first riscv64 module/rootfs carrier is a QEMU initrd image.  The host-side
 builder `tools/build-riscv64-bootpkg.sh` creates a text-header package with a
-module record and the current `abi-smoke.user` payload.  The early kernel
-can validate the carrier magic, locate that module record, verify the payload
-is an ELF64 RISC-V image, register it with the generic module registry, launch
-it with `server_launch_module()`, build a crt0-compatible stack, enter U-mode
-at `0x400000`, and observe native `exit` through scheduler task teardown.
+module records and payloads.  The old `OUT MODULE [NAME]` invocation remains
+valid, and the builder also accepts repeated `MODULE NAME` pairs for ordered
+module/data payloads.  The default QEMU boot carrier still contains only the
+current `abi-smoke.user` payload, while `test-riscv64-bootpkg` also builds a
+multi-record carrier to prove host-side ordering.  The early kernel can
+validate the carrier magic, locate the module record, verify the payload is an
+ELF64 RISC-V image, register it with the generic module registry, launch it
+with `server_launch_module()`, build a crt0-compatible stack, enter U-mode at
+`0x400000`, and observe native `exit` through scheduler task teardown.
 
 Riscv64 now also has initial implementations of the generic `arch_vm_*` hooks
 for Sv39 page-table roots, map/protect/unmap/translate, and `satp`

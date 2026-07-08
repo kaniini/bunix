@@ -405,3 +405,19 @@ Verification notes:
 - `make test-riscv64-bootpkg` passed after moving `abi-smoke.user` to the
   scheduler-owned module launch path.
 - `make test-boot` passed after changing generic module launch stack seeding.
+- Extended host-side riscv64 boot-package construction beyond one module:
+  - `tools/build-riscv64-bootpkg.sh` remains backward-compatible with the old
+    `OUT MODULE [NAME]` form and now also accepts repeated `MODULE NAME`
+    pairs.
+  - Added a separate `build/riscv64/bootpkg-multi.img` test artifact that
+    emits an ordered data-style `disk0` record followed by `abi-smoke.user`.
+  - `test-riscv64-bootpkg` now verifies both the default single-module
+    carrier and the multi-record carrier.  The default QEMU boot target still
+    uses the single-module carrier.
+  - This covers ordered module/data payload construction on the host side.
+    Command-line policy and packaging the real riscv64 server graph remain
+    open under the boot-package carrier task.
+- `make test-riscv64-bootpkg` passed after adding multi-record package
+  coverage.
+- `make test-boot-riscv64-early` passed with the updated boot-package builder.
+- `make all` passed after adding multi-record package coverage.
