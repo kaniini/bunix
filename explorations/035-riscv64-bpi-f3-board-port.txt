@@ -1,5 +1,12 @@
 Target the riscv64 port to boot on Banana Pi BPI-F3 hardware.
 
+Status:
+
+- Blocked.  Do not start BPI-F3 implementation work until
+  `034-riscv64-emulator-userspace-parity.txt` is complete, its full emulator
+  verification passes, and the QEMU `virt` path can boot scheduler-owned
+  native userspace plus the static riscv64 musl/Linux-personality smoke.
+
 Problem:
 
 - The generic riscv64 port can start on QEMU `virt`, but real hardware will

@@ -32,6 +32,9 @@ Constraints:
 
 - Keep hardware/board-specific code out of this exploration.  The target is
   `qemu-system-riscv64 -machine virt`.
+- Prioritize further riscv64 emulator bringup over BPI-F3 work.  Board
+  bringup must not start while any emulator userspace parity tasks in this
+  exploration remain open.
 - Preserve the microkernel shape.  Do not pull VFS, proc, Linux personality,
   or filesystem policy into the riscv64 kernel path to simplify bringup.
 - Keep x86_64 behavior and tests green while adding riscv64 implementations of
