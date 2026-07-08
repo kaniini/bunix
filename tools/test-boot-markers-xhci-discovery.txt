@@ -8,5 +8,7 @@ xhci: port reset port=
 xhci: enable slot slot=
 xhci: address device slot=
 xhci: device descriptor len=
+xhci: config descriptor len=
+xhci: set configuration value=
 xhci: ready skeleton
 machine: poweroff

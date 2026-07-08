@@ -70,9 +70,13 @@ enum {
 	XHCI_CONTEXT_DWORD_SIZE = 4,
 	XHCI_CONTEXT_COUNT = 32,
 	XHCI_USB_DT_DEVICE = 1,
+	XHCI_USB_DT_CONFIGURATION = 2,
 	XHCI_USB_REQ_GET_DESCRIPTOR = 6,
+	XHCI_USB_REQ_SET_CONFIGURATION = 9,
 	XHCI_USB_DIR_IN = 0x80,
 	XHCI_USB_DEVICE_DESCRIPTOR_SIZE = 18,
+	XHCI_USB_CONFIG_DESCRIPTOR_HEADER_SIZE = 9,
+	XHCI_USB_CONFIG_DESCRIPTOR_MAX_SIZE = 256,
 	XHCI_ERST_ENTRIES = 1,
 	XHCI_ERST_ENTRY_SIZE = 16,
 	XHCI_MAX_SCRATCHPADS = 16,
@@ -784,7 +788,7 @@ static int xhci_enable_slot(const struct xhci_controller *controller,
 static int xhci_wait_transfer_completion(
 	const struct xhci_controller *controller, struct xhci_rings *rings,
 	const struct xhci_device *device, u64 *completion_code,
-	u64 *actual_length)
+	u64 requested_length, u64 *actual_length)
 {
 	for (u64 poll = 0; poll < XHCI_COMMAND_POLLS; poll++) {
 		const u64 offset = rings->event_ring.offset +
@@ -831,8 +835,9 @@ static int xhci_wait_transfer_completion(
 				return -1;
 			}
 			*completion_code = (status >> 24) & 0xffu;
-			*actual_length =
-				XHCI_USB_DEVICE_DESCRIPTOR_SIZE - residual;
+			*actual_length = residual > requested_length ?
+						 0 :
+						 requested_length - residual;
 			return 0;
 		}
 		if (type != XHCI_TRB_TYPE_PORT_STATUS_CHANGE) {
@@ -959,50 +964,118 @@ static int xhci_address_device(const struct xhci_controller *controller,
 		       -1;
 }
 
-static int xhci_get_device_descriptor(
-	const struct xhci_controller *controller, struct xhci_rings *rings,
-	struct xhci_device *device, unsigned char *descriptor, u64 descriptor_len,
-	u64 *actual_length, u64 *completion_code)
+static int xhci_control_read(const struct xhci_controller *controller,
+			     struct xhci_rings *rings,
+			     struct xhci_device *device, u64 request_type,
+			     u64 request, u64 value, u64 index,
+			     unsigned char *out, u64 out_len,
+			     u64 *actual_length, u64 *completion_code)
 {
-	const u64 setup = ((u64)XHCI_USB_DIR_IN) |
-			  ((u64)XHCI_USB_REQ_GET_DESCRIPTOR << 8) |
-			  ((u64)XHCI_USB_DT_DEVICE << 24) |
-			  ((u64)XHCI_USB_DEVICE_DESCRIPTOR_SIZE << 48);
+	const u64 setup = request_type | (request << 8) | (value << 16) |
+			  (index << 32) | (out_len << 48);
 	const u64 setup_status = 8;
 	const u64 setup_control =
 		((u64)XHCI_TRB_TYPE_SETUP_STAGE << 10) | XHCI_TRB_IDT |
 		XHCI_TRB_SETUP_TRT_IN;
-	const u64 data_status = XHCI_USB_DEVICE_DESCRIPTOR_SIZE;
+	const u64 data_status = out_len;
 	const u64 data_control =
 		((u64)XHCI_TRB_TYPE_DATA_STAGE << 10) | XHCI_TRB_DIR_IN;
 	const u64 status_control =
 		((u64)XHCI_TRB_TYPE_STATUS_STAGE << 10) | XHCI_TRB_IOC;
 
-	if (descriptor == 0 || descriptor_len < XHCI_USB_DEVICE_DESCRIPTOR_SIZE ||
+	if (out == 0 || out_len == 0 || out_len > XHCI_PAGE_SIZE ||
 	    buffer_zero(device->control_buffer.handle,
-			device->control_buffer.offset,
-			XHCI_USB_DEVICE_DESCRIPTOR_SIZE) != 0 ||
+			device->control_buffer.offset, out_len) != 0 ||
 	    xhci_write_ep0_trb(device, setup, setup_status, setup_control) != 0 ||
 	    xhci_write_ep0_trb(device, device->control_buffer.phys,
 			       data_status, data_control) != 0 ||
 	    xhci_write_ep0_trb(device, 0, 0, status_control) != 0 ||
 	    xhci_ring_ep0_doorbell(controller, device) != 0 ||
 	    xhci_wait_transfer_completion(controller, rings, device,
-					  completion_code, actual_length) != 0) {
+					  completion_code, out_len,
+					  actual_length) != 0) {
 		return -1;
 	}
 	if (*completion_code != XHCI_COMPLETION_SUCCESS &&
 	    *completion_code != XHCI_COMPLETION_SHORT_PACKET) {
 		return -1;
 	}
-	if (*actual_length > XHCI_USB_DEVICE_DESCRIPTOR_SIZE) {
-		*actual_length = XHCI_USB_DEVICE_DESCRIPTOR_SIZE;
+	if (*actual_length > out_len) {
+		*actual_length = out_len;
 	}
 	return bunix_buffer_read(device->control_buffer.handle,
-				 device->control_buffer.offset, descriptor,
-				 XHCI_USB_DEVICE_DESCRIPTOR_SIZE) == 0 ?
+				 device->control_buffer.offset, out, out_len) == 0 ?
 		       0 :
 		       -1;
+}
+
+static int xhci_control_no_data(const struct xhci_controller *controller,
+				struct xhci_rings *rings,
+				struct xhci_device *device, u64 request_type,
+				u64 request, u64 value, u64 index,
+				u64 *completion_code)
+{
+	u64 actual = 0;
+	const u64 setup = request_type | (request << 8) | (value << 16) |
+			  (index << 32);
+	const u64 setup_status = 8;
+	const u64 setup_control =
+		((u64)XHCI_TRB_TYPE_SETUP_STAGE << 10) | XHCI_TRB_IDT;
+	const u64 status_control =
+		((u64)XHCI_TRB_TYPE_STATUS_STAGE << 10) | XHCI_TRB_IOC |
+		XHCI_TRB_DIR_IN;
+
+	if (xhci_write_ep0_trb(device, setup, setup_status, setup_control) != 0 ||
+	    xhci_write_ep0_trb(device, 0, 0, status_control) != 0 ||
+	    xhci_ring_ep0_doorbell(controller, device) != 0 ||
+	    xhci_wait_transfer_completion(controller, rings, device,
+					  completion_code, 0, &actual) != 0) {
+		return -1;
+	}
+	return *completion_code == XHCI_COMPLETION_SUCCESS ? 0 : -1;
+}
+
+static int xhci_get_device_descriptor(
+	const struct xhci_controller *controller, struct xhci_rings *rings,
+	struct xhci_device *device, unsigned char *descriptor, u64 descriptor_len,
+	u64 *actual_length, u64 *completion_code)
+{
+	if (descriptor_len < XHCI_USB_DEVICE_DESCRIPTOR_SIZE) {
+		return -1;
+	}
+	return xhci_control_read(controller, rings, device, XHCI_USB_DIR_IN,
+				 XHCI_USB_REQ_GET_DESCRIPTOR,
+				 ((u64)XHCI_USB_DT_DEVICE) << 8, 0,
+				 descriptor, XHCI_USB_DEVICE_DESCRIPTOR_SIZE,
+				 actual_length, completion_code);
+}
+
+static int xhci_get_config_descriptor(
+	const struct xhci_controller *controller, struct xhci_rings *rings,
+	struct xhci_device *device, unsigned char *descriptor, u64 descriptor_len,
+	u64 requested_len, u64 *actual_length, u64 *completion_code)
+{
+	if (descriptor == 0 || requested_len == 0 ||
+	    requested_len > descriptor_len ||
+	    requested_len > XHCI_USB_CONFIG_DESCRIPTOR_MAX_SIZE) {
+		return -1;
+	}
+	return xhci_control_read(controller, rings, device, XHCI_USB_DIR_IN,
+				 XHCI_USB_REQ_GET_DESCRIPTOR,
+				 ((u64)XHCI_USB_DT_CONFIGURATION) << 8, 0,
+				 descriptor, requested_len, actual_length,
+				 completion_code);
+}
+
+static int xhci_set_configuration(const struct xhci_controller *controller,
+				  struct xhci_rings *rings,
+				  struct xhci_device *device,
+				  u64 configuration_value,
+				  u64 *completion_code)
+{
+	return xhci_control_no_data(controller, rings, device, 0,
+				    XHCI_USB_REQ_SET_CONFIGURATION,
+				    configuration_value, 0, completion_code);
 }
 
 static void log_rings(const struct xhci_rings *rings)
@@ -1084,6 +1157,49 @@ static void log_device_descriptor(const unsigned char *descriptor,
 	append_u64(line, sizeof(line), &offset, vendor);
 	append_text(line, sizeof(line), &offset, " product=");
 	append_u64(line, sizeof(line), &offset, product);
+	append_char(line, sizeof(line), &offset, '\n');
+	bunix_console_log(line, offset);
+}
+
+static void log_config_descriptor(const unsigned char *descriptor,
+				  u64 actual_length, u64 completion_code)
+{
+	char line[144];
+	u64 offset = 0;
+	u64 total = 0;
+	u64 interfaces = 0;
+	u64 config_value = 0;
+
+	if (descriptor != 0 && actual_length >= XHCI_USB_CONFIG_DESCRIPTOR_HEADER_SIZE) {
+		total = (u64)descriptor[2] | ((u64)descriptor[3] << 8);
+		interfaces = descriptor[4];
+		config_value = descriptor[5];
+	}
+	line[0] = '\0';
+	append_text(line, sizeof(line), &offset, "xhci: config descriptor len=");
+	append_u64(line, sizeof(line), &offset, actual_length);
+	append_text(line, sizeof(line), &offset, " code=");
+	append_u64(line, sizeof(line), &offset, completion_code);
+	append_text(line, sizeof(line), &offset, " total=");
+	append_u64(line, sizeof(line), &offset, total);
+	append_text(line, sizeof(line), &offset, " interfaces=");
+	append_u64(line, sizeof(line), &offset, interfaces);
+	append_text(line, sizeof(line), &offset, " value=");
+	append_u64(line, sizeof(line), &offset, config_value);
+	append_char(line, sizeof(line), &offset, '\n');
+	bunix_console_log(line, offset);
+}
+
+static void log_set_configuration(u64 configuration_value, u64 completion_code)
+{
+	char line[96];
+	u64 offset = 0;
+
+	line[0] = '\0';
+	append_text(line, sizeof(line), &offset, "xhci: set configuration value=");
+	append_u64(line, sizeof(line), &offset, configuration_value);
+	append_text(line, sizeof(line), &offset, " code=");
+	append_u64(line, sizeof(line), &offset, completion_code);
 	append_char(line, sizeof(line), &offset, '\n');
 	bunix_console_log(line, offset);
 }
@@ -1259,10 +1375,78 @@ int main(void)
 										    sizeof(descriptor),
 										    &actual,
 										    &code) == 0) {
+										unsigned char
+											config
+												[XHCI_USB_CONFIG_DESCRIPTOR_MAX_SIZE];
+										u64 config_actual =
+											0;
+										u64 config_len =
+											XHCI_USB_CONFIG_DESCRIPTOR_HEADER_SIZE;
+										u64 config_value =
+											0;
+
 										log_device_descriptor(
 											descriptor,
 											actual,
 											code);
+										if (xhci_get_config_descriptor(
+											    &controller,
+											    &rings,
+											    &device,
+											    config,
+											    sizeof(config),
+											    config_len,
+											    &config_actual,
+											    &code) == 0 &&
+										    config_actual >=
+											    XHCI_USB_CONFIG_DESCRIPTOR_HEADER_SIZE) {
+											config_len =
+												(u64)config[2] |
+												((u64)config[3] << 8);
+											config_value =
+												config[5];
+											if (config_len >
+											    sizeof(config)) {
+												config_len =
+													sizeof(config);
+											}
+											if (xhci_get_config_descriptor(
+												    &controller,
+												    &rings,
+												    &device,
+												    config,
+												    sizeof(config),
+												    config_len,
+												    &config_actual,
+												    &code) == 0) {
+												log_config_descriptor(
+													config,
+													config_actual,
+													code);
+												if (xhci_set_configuration(
+													    &controller,
+													    &rings,
+													    &device,
+													    config_value,
+													    &code) == 0) {
+													log_set_configuration(
+														config_value,
+														code);
+												} else {
+													log_command_debug(
+														&controller,
+														&rings);
+												}
+											} else {
+												log_command_debug(
+													&controller,
+													&rings);
+											}
+										} else {
+											log_command_debug(
+												&controller,
+												&rings);
+										}
 									} else {
 										log_command_debug(
 											&controller,

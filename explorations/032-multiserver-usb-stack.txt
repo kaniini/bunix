@@ -149,6 +149,10 @@ Progress notes:
   `GET_DESCRIPTOR(Device)` using setup/data/status TRBs, consumes the transfer
   event, copies the descriptor out of the controller-owned bounce buffer, and
   logs the deterministic QEMU keyboard device descriptor vendor/product.
+- `xhci.server` now reads the QEMU keyboard configuration descriptor header,
+  fetches the full configuration descriptor, logs total length/interface count/
+  configuration value, issues `SET_CONFIGURATION`, and observes successful
+  transfer completion in `test-boot-xhci-discovery`.
 - Default boot behavior is unchanged: the USB modules are packaged but not
   launched unless a USB command-line test flag is present.
 
@@ -159,9 +163,9 @@ Open design notes:
 - The upper `USB0` constants now name the intended class-driver operations, but
   endpoint capabilities and transfer-completion objects still need full OCAP
   modeling.
-- The next xHCI enumeration step is to use the device descriptor's endpoint
-  zero maximum packet size, read configuration descriptors, set configuration,
-  and publish the real xHCI-discovered descriptor set through `USB0`.
+- The next xHCI enumeration step is publishing the real xHCI-discovered
+  descriptor set through `USB0`, replacing the current xHCI-only logging path
+  with a controller registration path that `usb-bus.server` can consume.
 
 USB DMA model:
 
