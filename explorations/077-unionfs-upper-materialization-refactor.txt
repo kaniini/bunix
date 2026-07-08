@@ -1,0 +1,48 @@
+Refactor unionfs upper materialization and copy-up contracts.
+
+Parent exploration: `043-user-address-space-identity-map-escape.txt`
+
+Problem:
+
+- Unionfs currently materializes upper-layer directories and copy-up state
+  while serving VFS requests from another task.
+- The low-memory isolation work exposed that nested VFS-style calls from
+  unionfs into the upper filesystem are easy to wedge and hard to reason
+  about.
+- The immediate fix uses a tmpfs-private mkdir-p control operation so the
+  current exploration can keep moving, but unionfs should not be permanently
+  coupled to tmpfs internals.
+
+Why this is a refactor:
+
+- The behavior we need is clear: writable union roots must create parent
+  directories, copy lower files up before mutation, preserve metadata, and
+  return failures promptly.
+- The durable design should make those operations explicit rather than relying
+  on ad hoc nested calls through the public VFS request path.
+
+Plan:
+
+- Define a filesystem-private operation model for upper-layer preparation that
+  avoids recursive waits through the public VFS dispatcher.
+- Replace the tmpfs-specific mkdir-p coupling with either a generic VFS
+  transaction, a translator-private filesystem API, or a documented per-server
+  control protocol.
+- Make unionfs copy-up preserve mode, ownership, timestamps where available,
+  size, and file type.
+- Add clear timeout/error handling for materialization and copy-up failures so
+  shells receive `errno` instead of hanging.
+- Add regression coverage for creating nested upper files, appending lower
+  files, truncating copied-up files, chmod/chown after copy-up, and concurrent
+  copy-up attempts.
+
+Tasks:
+
+- [ ] Design the upper materialization/copy-up operation contract.
+- [ ] Remove tmpfs-specific unionfs coupling or document it as a generic
+      server-private protocol.
+- [ ] Preserve lower metadata during copy-up.
+- [ ] Add bounded failure handling and diagnostics for upper materialization.
+- [ ] Add nested create, append, truncate, chmod/chown, and concurrent copy-up
+      regression tests.
+- [ ] Run unionfs, VFS, login, Alpine rootfs, and full `make test` gates.

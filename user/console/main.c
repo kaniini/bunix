@@ -15,6 +15,7 @@ enum {
 };
 
 static char console_buffer[CONSOLE_CHUNK];
+static char console_input_buffer[CONSOLE_CHUNK];
 static u64 console_serial_handle;
 static u64 console_linux_handle;
 static int console_serial_ready;
@@ -154,39 +155,64 @@ static u64 resolve_linux(void)
 	return reply.cap;
 }
 
-static void console_forward_input(char c)
+static int console_forward_input_buffer(const char *input, u64 len)
 {
+	long buffer;
 	struct bunix_msg message = {
 		.protocol = BUNIX_PROTO_LINUX,
-		.type = BUNIX_LINUX_TTY_INPUT,
+		.type = BUNIX_LINUX_TTY_INPUT_BUFFER,
 		.sender = 0,
-		.cap_rights = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
 		.reply = 0,
 		.cap = 0,
-		.words = { (u64)(unsigned char)c, 0, 0, 0 },
+		.words = { len, 0, 0, 0 },
 	};
 
+	if (input == 0 || len == 0) {
+		return 0;
+	}
 	if (console_linux_handle == 0) {
 		console_linux_handle = resolve_linux();
 	}
-	if (console_linux_handle != 0 &&
-	    bunix_ipc_send(console_linux_handle, &message) != 0) {
+	if (console_linux_handle == 0) {
+		return -1;
+	}
+	buffer = bunix_buffer_create(len);
+	if (buffer < 0 ||
+	    bunix_buffer_write((u64)buffer, 0, input, len) != 0) {
+		if (buffer >= 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	message.cap = (u64)buffer;
+	if (bunix_ipc_send(console_linux_handle, &message) != 0) {
 		bunix_handle_close(console_linux_handle);
 		console_linux_handle = 0;
+		bunix_handle_close((u64)buffer);
+		return -1;
 	}
+	bunix_handle_close((u64)buffer);
+	return 0;
 }
 
 static int console_poll_input(void)
 {
 	int any = 0;
 	char c;
+	u64 len = 0;
 
 	if (!console_serial_ready) {
 		return 0;
 	}
 	while (serial_try_getc(&c)) {
-		console_forward_input(c);
+		if (len < sizeof(console_input_buffer)) {
+			console_input_buffer[len++] = c;
+		}
 		any = 1;
+	}
+	if (len != 0) {
+		(void)console_forward_input_buffer(console_input_buffer, len);
 	}
 	return any;
 }

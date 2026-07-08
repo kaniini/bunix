@@ -15,7 +15,7 @@ EOF_ROOT
 		"HOME=/root" "USER=root" "LOGNAME=root"
 	wait_for_fixed "$log" "ROOT_SECRET_OK" "root login could not read /secret.txt" 45 180
 
-	send_script <<'EOF_ROOT_UNION'
+	send_script_sync <<'EOF_ROOT_UNION'
 echo UNION_LOWER_PARENT_CREATE_PAYLOAD > /usr/share/bunix/nested/created.txt
 busybox cat /usr/share/bunix/nested/created.txt && echo UNION_LOWER_PARENT_CREATE_OK
 busybox cat /.upper/usr/share/bunix/nested/created.txt && echo UNION_LOWER_PARENT_UPPER_OK

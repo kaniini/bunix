@@ -21,6 +21,7 @@ enum {
 	LINUX_EISDIR = 21,
 	LINUX_EINVAL = 22,
 	LINUX_EMFILE = 24,
+	LINUX_ENOTTY = 25,
 	LINUX_ESPIPE = 29,
 	LINUX_EPIPE = 32,
 	LINUX_EADDRINUSE = 98,
@@ -3182,6 +3183,34 @@ static void linux_tty_input_event(struct linux_tty *tty, char c)
 	linux_tty_wake_reader(tty);
 }
 
+static void linux_tty_input_buffer_event(struct linux_tty *tty, u64 buffer,
+					 u64 len)
+{
+	enum {
+		TTY_INPUT_CHUNK = 128,
+	};
+	char input[TTY_INPUT_CHUNK];
+	u64 done = 0;
+
+	if (tty == 0 || buffer == 0) {
+		return;
+	}
+	while (done < len) {
+		u64 chunk = len - done;
+
+		if (chunk > sizeof(input)) {
+			chunk = sizeof(input);
+		}
+		if (bunix_buffer_read(buffer, done, input, chunk) != 0) {
+			break;
+		}
+		for (u64 i = 0; i < chunk; i++) {
+			linux_tty_input_event(tty, input[i]);
+		}
+		done += chunk;
+	}
+}
+
 static long linux_tty_read(struct linux_tty *tty, struct linux_process *process,
 			   u64 len, u64 buffer, u64 reply_handle,
 			   int *blocked)
@@ -3472,7 +3501,7 @@ static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
 		return linux_net_ioctl(request, buffer);
 	}
 	if (process->fds[fd].kind != LINUX_FD_CONSOLE) {
-		return -LINUX_EBADF;
+		return -LINUX_ENOTTY;
 	}
 
 	switch (request) {
@@ -6853,10 +6882,6 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
 		return -LINUX_EISDIR;
 	}
-	if (process->fds[fd].kind == LINUX_FD_FILE &&
-	    process->fds[fd].offset >= process->fds[fd].size) {
-		return 0;
-	}
 
 	request.words[0] = process->fds[fd].handle;
 	request.words[1] = process->fds[fd].offset;
@@ -7519,6 +7544,17 @@ int main(void)
 			linux_tty_input_event(&console_tty,
 					      (char)(unsigned char)
 					      message.words[0]);
+			continue;
+		}
+		if (message.type == BUNIX_LINUX_TTY_INPUT_BUFFER) {
+			if ((message.cap_rights & BUNIX_RIGHT_RECV) != 0) {
+				linux_tty_input_buffer_event(&console_tty,
+							     message.cap,
+							     message.words[0]);
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
 			continue;
 		}
 		if (message.type == BUNIX_LINUX_REGISTER_PROCESS) {

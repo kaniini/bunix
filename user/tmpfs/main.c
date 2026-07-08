@@ -692,6 +692,31 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 	return file;
 }
 
+static int mkdir_p_path(const char *path, u64 mode, u64 task)
+{
+	char parent[TMPFS_MAX_PATH];
+	struct tmpfs_file *file;
+	u64 status = 0;
+
+	if (path == 0 || path[0] != '/') {
+		return -1;
+	}
+	if (path_is_root(path)) {
+		return 0;
+	}
+	file = file_find(path);
+	if (file != 0) {
+		return file->inode->type == BUNIX_VFS_TYPE_DIRECTORY ? 0 : -1;
+	}
+	if (path_parent_path(path, parent) != 0 ||
+	    mkdir_p_path(parent, mode, task) != 0) {
+		return -1;
+	}
+	file = file_create(path, mode, BUNIX_VFS_TYPE_DIRECTORY, task,
+			   &status);
+	return file != 0 || status == BUNIX_VFS_ERR_EXIST ? 0 : -1;
+}
+
 static u64 open_dir(const char *path)
 {
 	struct tmpfs_open *open;
@@ -1202,30 +1227,39 @@ int main(void)
 		if (message.protocol == BUNIX_PROTO_TMPFS) {
 			reply.protocol = BUNIX_PROTO_TMPFS;
 			reply.type = message.type;
-				switch (message.type) {
-				case BUNIX_TMPFS_MOUNT_ROOT:
-					if (bunix_read_path_cap(&message, path,
-								sizeof(path)) != 0) {
-						reply.words[0] = (u64)-1;
-						break;
-					}
-					reply.words[0] =
-						(u64)mount_root(vfs_service, path);
-					if (reply.words[0] == 0) {
-						bunix_console_log(mounted,
-								  sizeof(mounted) - 1);
-				}
-				break;
-				default:
+			switch (message.type) {
+			case BUNIX_TMPFS_MOUNT_ROOT:
+				if (bunix_read_path_cap(&message, path,
+							sizeof(path)) != 0) {
 					reply.words[0] = (u64)-1;
 					break;
 				}
-				if (message.cap != 0) {
-					bunix_handle_close(message.cap);
+				reply.words[0] = (u64)mount_root(vfs_service, path);
+				if (reply.words[0] == 0) {
+					bunix_console_log(mounted,
+							  sizeof(mounted) - 1);
 				}
-				bunix_ipc_send(message.reply, &reply);
-				continue;
+				break;
+			case BUNIX_TMPFS_MKDIR_P_BUFFER:
+				if (bunix_read_path_cap(&message, path,
+							sizeof(path)) != 0) {
+					reply.words[0] = (u64)-1;
+					break;
+				}
+				reply.words[0] =
+					(u64)mkdir_p_path(path, message.words[1],
+							  message.words[2]);
+				break;
+			default:
+				reply.words[0] = (u64)-1;
+				break;
 			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			bunix_ipc_send(message.reply, &reply);
+			continue;
+		}
 		if (message.protocol != BUNIX_PROTO_VFS) {
 			continue;
 		}

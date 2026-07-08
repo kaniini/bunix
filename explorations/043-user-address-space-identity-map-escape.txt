@@ -101,6 +101,9 @@ Validation:
 - Default non-root command execution passed:
   `BUNIX_CMD='echo USER_OK' make test-command`.
 - `make test-smoke` passed.
+- `BUNIX_SHELL_PART=tmpfs-basic-linux-tests make test-shell-part` passed.
+- `BUNIX_SHELL_PART=root-login-union make test-shell-part` passed.
+- `BUNIX_SHELL_PART=root-tmpfs-chown make test-shell-part` passed.
 
 Open blocker:
 

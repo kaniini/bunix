@@ -42,6 +42,7 @@ enum {
 	PROCFS_KIND_NET_CONFIG = 35,
 	PROCFS_KIND_NET_ARP = 36,
 	PROCFS_KIND_SCHED_THREADS = 37,
+	PROCFS_KIND_PID_SMAPS = 38,
 };
 
 static struct bunix_id_table open_files;
@@ -628,6 +629,9 @@ static u64 file_for_path(const char *path, u64 caller_task)
 		}
 		if (str_eq(cursor, "/statm")) {
 			return make_file(PROCFS_KIND_PID_STATM, pid);
+		}
+		if (str_eq(cursor, "/smaps")) {
+			return make_file(PROCFS_KIND_PID_SMAPS, pid);
 		}
 		if (str_eq(cursor, "/mounts")) {
 			return make_file(PROCFS_KIND_PID_MOUNTS, pid);
@@ -1862,7 +1866,7 @@ static u64 build_pid_stat(u64 pid)
 	append_u64(&len, details.ppid);
 	append_str(&len, " 1 1 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ");
 	append_u64(&len, bunix_timer_ticks());
-	append_str(&len, " 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n");
+	append_str(&len, " 0 0 0 4194304 5242880 8388608 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 4194304 5242880 9437184 8384512 8388608 0 0 0\n");
 	return len;
 }
 
@@ -1923,6 +1927,25 @@ static u64 build_pid_statm(u64 pid)
 
 	(void)pid;
 	append_str(&len, "0 0 0 0 0 0 0\n");
+	return len;
+}
+
+static u64 build_pid_smaps(u64 pid)
+{
+	u64 len = 0;
+
+	(void)pid;
+	append_str(&len, "00400000-00401000 r-xp 00000000 00:00 0 /bin/process\n");
+	append_str(&len, "Size:                  4 kB\n");
+	append_str(&len, "Rss:                   4 kB\n");
+	append_str(&len, "Pss:                   4 kB\n");
+	append_str(&len, "Shared_Clean:          0 kB\n");
+	append_str(&len, "Shared_Dirty:          0 kB\n");
+	append_str(&len, "Private_Clean:         4 kB\n");
+	append_str(&len, "Private_Dirty:         0 kB\n");
+	append_str(&len, "Referenced:            4 kB\n");
+	append_str(&len, "Anonymous:             0 kB\n");
+	append_str(&len, "Swap:                  0 kB\n");
 	return len;
 }
 
@@ -2037,6 +2060,9 @@ static u64 build_file_text(u64 file)
 		break;
 	case PROCFS_KIND_PID_STATM:
 		len = build_pid_statm(file_arg(file));
+		break;
+	case PROCFS_KIND_PID_SMAPS:
+		len = build_pid_smaps(file_arg(file));
 		break;
 	case PROCFS_KIND_PID_CGROUP:
 		len = build_pid_cgroup(file_arg(file));
