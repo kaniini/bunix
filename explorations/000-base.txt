@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 039-x86-riscv64-dryness-refactor.txt
+The current exploration is: 040-scheduler-benchmark-suite.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.
