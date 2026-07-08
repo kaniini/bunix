@@ -1,0 +1,41 @@
+Refactor user-copy and VM authority contracts after identity-map removal.
+
+Parent exploration: `043-user-address-space-identity-map-escape.txt`
+
+Problem:
+
+- Removing the user-accessible low identity map made user-copy behavior depend
+  on architecture-specific "is this really user memory?" checks.
+- The generic VM layer, Linux server, native servers, and arch page-table code
+  still share a fairly implicit contract for translating, copying, protecting,
+  cloning, and unmapping user memory.
+- That contract needs to be explicit before more server-side mmap, SIGBUS,
+  dynamic-linker, and cross-architecture work lands.
+
+Why this is a refactor:
+
+- The immediate security fix should remain small and auditable.
+- Follow-up work can improve API shape, diagnostics, and tests without
+  changing the intended isolation policy.
+
+Plan:
+
+- Document the generic user-memory contract: which APIs accept task IDs,
+  which require explicit user mappings, and which may touch kernel mappings.
+- Introduce named helper families for user translation, kernel translation,
+  user copy, mapping clone, protection changes, and unmap operations.
+- Add trace/debug hooks for failed user-copy paths that report task, address,
+  length, and permission reason without dumping user data.
+- Audit all Linux server, VFS, procfs, tmpfs, user server, and test program
+  call sites for the new contract.
+- Add cross-architecture regression coverage for low-address faults, unmapped
+  pointers, read-only pages, copied mappings, and denied kernel-only mappings.
+
+Tasks:
+
+- [ ] Document the current user-copy and VM API contract.
+- [ ] Rename or wrap APIs so user versus kernel translation is explicit.
+- [ ] Add diagnostics for user-copy/protection failures.
+- [ ] Audit all server and test-program call sites.
+- [ ] Add cross-architecture user-memory regression tests.
+- [ ] Run focused VM/Linux/VFS tests, riscv64 gates, then full `make test`.

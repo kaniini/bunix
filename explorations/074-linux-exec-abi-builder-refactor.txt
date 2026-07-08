@@ -1,0 +1,42 @@
+Refactor Linux exec argument, environment, auxv, and stack construction.
+
+Parent exploration: `043-user-address-space-identity-map-escape.txt`
+
+Problem:
+
+- Linux exec currently spreads path/vector serialization, shebang rewriting,
+  ELF loading, process bookkeeping, and user stack construction across a large
+  Linux server file.
+- Debugging login and shell startup regressions requires touching code that is
+  easy to perturb and hard to validate in isolation.
+- Future dynamic-linker, shebang, login, and OpenRC work will keep stressing
+  this path, so it needs a tighter ABI builder with focused tests.
+
+Why this is a refactor:
+
+- The existing behavior should not change as part of this exploration.
+- The goal is to extract the exec ABI rules into a smaller, testable module
+  while preserving current Linux personality semantics.
+
+Plan:
+
+- Split exec vector serialization/deserialization into a dedicated Linux exec
+  helper module.
+- Split stack image construction into a helper that owns argc, argv, envp,
+  auxv, random bytes, alignment, and string placement.
+- Add host-side unit tests for common exec layouts, long vectors, empty env,
+  shebang rewrites, and stack alignment.
+- Add guest regression coverage for BusyBox applets, dynamic musl binaries,
+  shebang scripts, login shell startup, and OpenRC helper scripts.
+- Keep policy decisions in the Linux server; only move mechanical ABI building
+  into helpers.
+
+Tasks:
+
+- [ ] Map current exec path ownership and identify pure helper boundaries.
+- [ ] Extract vector serialization/deserialization helpers with tests.
+- [ ] Extract user stack/auxv construction helpers with tests.
+- [ ] Wire Linux server exec through the new helpers without behavior changes.
+- [ ] Add guest regression coverage for BusyBox, musl, shebang, login, and
+      OpenRC exec paths.
+- [ ] Run focused exec/login/OpenRC tests, then full `make test`.
