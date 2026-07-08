@@ -17,9 +17,11 @@ enum {
 	STARVATION_WORKERS = CPU_WORKERS + SLEEPER_WORKERS,
 	PROC_SCHED_BUF = 4096,
 	BENCH_DURATION_NS = 750000000,
+	SHELL_BENCH_DURATION_NS = 1500000000,
 	SLEEP_INTERVAL_NS = 1000000,
 	MAX_SLEEPER_WAKE_NS = 250000000,
 	MAX_IPC_ROUNDTRIP_NS = 500000000,
+	MAX_SHELL_COMMAND_NS = 1000000000,
 	MAX_FAIRNESS_SKEW = 12,
 };
 
@@ -708,6 +710,148 @@ static int run_ipc(void)
 	return 0;
 }
 
+static int run_shell_latency(void)
+{
+	int start_pipe[2];
+	int result_pipe[2];
+	pid_t pids[CPU_WORKERS];
+	struct worker_result results[CPU_WORKERS];
+	struct sched_snapshot before;
+	struct sched_snapshot after;
+	unsigned long long deadline;
+	unsigned long long now;
+	unsigned long long samples = 0;
+	unsigned long long total_latency = 0;
+	unsigned long long max_latency = 0;
+	unsigned long long cpu_total = 0;
+	int status;
+
+	if (read_sched_snapshot(&before) != 0) {
+		return 1;
+	}
+	if (pipe(start_pipe) != 0 || pipe(result_pipe) != 0) {
+		perror("schedbench shell pipe");
+		return 1;
+	}
+
+	for (int worker = 0; worker < CPU_WORKERS; worker++) {
+		pids[worker] = fork();
+		if (pids[worker] < 0) {
+			perror("schedbench shell fork");
+			return 1;
+		}
+		if (pids[worker] == 0) {
+			close(start_pipe[1]);
+			close(result_pipe[0]);
+			_exit(worker_main(worker, start_pipe[0],
+					  result_pipe[1]));
+		}
+	}
+
+	close(start_pipe[0]);
+	close(result_pipe[1]);
+
+	deadline = monotonic_ns() + SHELL_BENCH_DURATION_NS;
+	for (int worker = 0; worker < CPU_WORKERS; worker++) {
+		if (write_full(start_pipe[1], &deadline,
+			       sizeof(deadline)) != 0) {
+			perror("schedbench shell start write");
+			return 1;
+		}
+	}
+	if (close(start_pipe[1]) != 0) {
+		perror("schedbench shell close start");
+		return 1;
+	}
+
+	now = monotonic_ns();
+	while (now < deadline) {
+		const char *command = (samples % 2) == 0 ?
+			"busybox true" :
+			"busybox cat /proc/sched_threads >/dev/null";
+		const unsigned long long before_command = monotonic_ns();
+
+		status = system(command);
+		if (status != 0) {
+			fprintf(stderr,
+				"schedbench shell command failed status=%d\n",
+				status);
+			return 1;
+		}
+		const unsigned long long after_command = monotonic_ns();
+		const unsigned long long elapsed = after_command - before_command;
+
+		if (elapsed > max_latency) {
+			max_latency = elapsed;
+		}
+		total_latency += elapsed;
+		samples++;
+		now = after_command;
+	}
+
+	for (int worker = 0; worker < CPU_WORKERS; worker++) {
+		if (read_full(result_pipe[0], &results[worker],
+			      sizeof(results[worker])) != 0) {
+			perror("schedbench shell result read");
+			return 1;
+		}
+	}
+	if (close(result_pipe[0]) != 0) {
+		perror("schedbench shell close result");
+		return 1;
+	}
+
+	for (int worker = 0; worker < CPU_WORKERS; worker++) {
+		if (waitpid(pids[worker], &status, 0) != pids[worker]) {
+			perror("schedbench shell waitpid");
+			return 1;
+		}
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+			fprintf(stderr, "schedbench shell worker status=%d\n",
+				status);
+			return 1;
+		}
+		if (results[worker].iterations == 0) {
+			fprintf(stderr, "schedbench shell empty cpu worker\n");
+			return 1;
+		}
+		cpu_total += results[worker].iterations;
+	}
+
+	if (samples < 2 || max_latency > MAX_SHELL_COMMAND_NS) {
+		fprintf(stderr,
+			"schedbench shell latency too high samples=%llu max_ns=%llu limit_ns=%u\n",
+			samples, max_latency, MAX_SHELL_COMMAND_NS);
+		return 1;
+	}
+
+	if (read_sched_snapshot(&after) != 0) {
+		return 1;
+	}
+	if (after.switches <= before.switches ||
+	    after.runtime_ticks <= before.runtime_ticks ||
+	    after.wakeups <= before.wakeups) {
+		fprintf(stderr,
+			"schedbench shell counters did not advance switches %lu->%lu runtime %lu->%lu wakeups %lu->%lu\n",
+			before.switches, after.switches,
+			before.runtime_ticks, after.runtime_ticks,
+			before.wakeups, after.wakeups);
+		return 1;
+	}
+
+	printf("schedbench shell cpu_workers=%u cpu_total=%llu commands=%llu avg_ns=%llu max_ns=%llu\n",
+	       CPU_WORKERS, cpu_total, samples, total_latency / samples,
+	       max_latency);
+	printf("schedbench shell counters switches %lu -> %lu runtime %lu -> %lu wakeups %lu -> %lu preemptions %lu -> %lu max_wake_to_run %lu -> %lu\n",
+	       before.switches, after.switches,
+	       before.runtime_ticks, after.runtime_ticks,
+	       before.wakeups, after.wakeups,
+	       before.preemptions, after.preemptions,
+	       before.max_wake_to_run_ticks, after.max_wake_to_run_ticks);
+	printf("schedbench shell ok\n");
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc == 1 || strcmp(argv[1], "fairness") == 0) {
@@ -719,6 +863,9 @@ int main(int argc, char **argv)
 	if (strcmp(argv[1], "ipc") == 0) {
 		return run_ipc();
 	}
-	fprintf(stderr, "usage: %s [fairness|starvation|ipc]\n", argv[0]);
+	if (strcmp(argv[1], "shell") == 0) {
+		return run_shell_latency();
+	}
+	fprintf(stderr, "usage: %s [fairness|starvation|ipc|shell]\n", argv[0]);
 	return 2;
 }

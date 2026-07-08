@@ -50,7 +50,7 @@ Tasks:
       latency.
 - [x] Add an IPC/server latency benchmark that drives repeated RPCs while
       background CPU workers are runnable.
-- [ ] Add an interactive shell latency test that runs commands under background
+- [x] Add an interactive shell latency test that runs commands under background
       CPU load and checks bounded command completion using scheduler counters
       rather than only host wall time.
 - [ ] Add SMP migration and idle-balancing tests once migration policy exists:
@@ -146,3 +146,18 @@ Progress notes:
     - `BUNIX_TEST_SET=scheduler-bench make test-parallel`
     - inspected `build/test-runs/20260708T145843Z-22012/scheduler-bench/stdout.log`
     - `git diff --check`
+- Interactive shell latency benchmark slice:
+  - Extended `/bin/schedbench` with `schedbench shell`.
+  - The mode keeps CPU-bound workers runnable while repeatedly executing real
+    BusyBox shell commands, including a procfs read, through `system(3)`.
+  - The benchmark bounds guest-side command completion time, verifies CPU
+    workers keep progressing, verifies scheduler switch/runtime/wakeup counters
+    advance, and reports command count, average/max command latency, CPU work,
+    and counter deltas.
+  - The dedicated `scheduler-bench` shard now runs fairness, starvation, IPC,
+    and shell-latency modes and preserves all comparison lines in its stdout
+    artifact.
+  - Verification:
+    - `make build/modules/schedbench.user`
+    - `BUNIX_TEST_SET=scheduler-bench make test-parallel`
+    - inspected `build/test-runs/20260708T150113Z-23729/scheduler-bench/stdout.log`

@@ -5,6 +5,7 @@ run_scheduler_bench() {
 /bin/schedbench fairness
 /bin/schedbench starvation
 /bin/schedbench ipc
+/bin/schedbench shell
 EOF_SCHEDULER_BENCH
 }
 
@@ -18,5 +19,8 @@ check_scheduler_bench() {
 	wait_for_fixed "$log" "schedbench ipc ok" "scheduler IPC benchmark did not complete" 75 220
 	wait_for_fixed "$log" "schedbench ipc counters" "scheduler IPC counters missing" 45 220
 	require_no_fixed "$log" "schedbench ipc latency too high" "scheduler IPC latency exceeded threshold" 220
+	wait_for_fixed "$log" "schedbench shell ok" "scheduler shell latency benchmark did not complete" 75 220
+	wait_for_fixed "$log" "schedbench shell counters" "scheduler shell latency counters missing" 45 220
+	require_no_fixed "$log" "schedbench shell latency too high" "scheduler shell latency exceeded threshold" 220
 	grep -E "^schedbench " "$log" | sed 's/^/scheduler-bench report /'
 }
