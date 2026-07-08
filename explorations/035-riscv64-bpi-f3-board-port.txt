@@ -411,3 +411,34 @@ Verification notes:
 - `make test-riscv64-bpi-f3-emulator-gate` passed after tightening BPI-F3
   preboot evidence checks.
 - `git diff --check` passed after tightening BPI-F3 preboot evidence checks.
+- Added milestone classifier rows to the BPI-F3 review output:
+  - `tools/bpi-f3-smoke.sh --classify-log` now emits
+    `first-hardware-milestone` evidence only when the log has the kernel
+    banner, memory map, timer tick, serial diagnostics, interrupt-routing
+    diagnostics, SMP policy, clean SBI poweroff markers, and preboot board
+    identity from U-Boot.
+  - It emits `second-hardware-milestone` evidence only when native bootstrap,
+    native smoke, static musl hello, and bootstrap completion markers are
+    present along with preboot board identity from U-Boot.
+  - These rows are review aids for physical-board logs; they do not
+    automatically close the hardware tasks.
+- Checked whether the local emulator can model BPI-F3 directly:
+  - `qemu-system-riscv64 -machine help` lists `virt`, Spike, SiFive, Icicle
+    Kit, Shakti, and Xiangshan machines, but no SpacemiT K1 or Banana Pi
+    BPI-F3 machine.
+  - The user confirmed that a BPI-F3 emulator would be acceptable for now if
+    available, with physical hardware evaluation later.
+  - Because this QEMU build lacks a BPI-F3/K1 machine, the current emulator
+    path remains the QEMU `virt` surrogate gate.  It can prove generic
+    riscv64 correctness and the BPI-F3 evidence tooling, but it cannot close
+    BPI-F3-specific hardware proof tasks by itself.
+- `qemu-system-riscv64 -machine help` confirmed the local emulator has no
+  BPI-F3 or SpacemiT K1 machine.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding BPI-F3 milestone
+  classifier rows.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding BPI-F3
+  milestone classifier rows.
+- `make test-riscv64-bpi-f3-emulator-gate` passed after adding BPI-F3
+  milestone classifier rows; the QEMU-only log reports the hardware milestone
+  rows as missing because it lacks BPI-F3 preboot board identity.
+- `git diff --check` passed after adding BPI-F3 milestone classifier rows.

@@ -101,6 +101,11 @@ That target runs the QEMU `virt` riscv64 userspace smoke, validates the
 resulting serial log with the BPI-F3 smoke checker, and classifies the emulator
 evidence.  Do not proceed to physical-board work if this gate fails.
 
+The local QEMU build does not provide a SpacemiT K1 or Banana Pi BPI-F3 machine
+model.  Until one exists, `virt` is the emulator surrogate for generic riscv64
+boot, userspace, FDT parsing, and evidence-tool validation; BPI-F3-specific
+proof still comes from a later physical-board serial log.
+
 Prepare a mounted boot partition with:
 
 ```sh
@@ -125,6 +130,11 @@ summary tables.  The individual commands are also available when debugging a
 specific phase.  The Bunix smoke check also validates that memory size is
 nonzero, kernel/initrd/FDT ranges are ordered, and initrd/FDT size fields match
 their start/end ranges.
+
+The classifier includes conservative `first-hardware-milestone` and
+`second-hardware-milestone` rows.  Treat those rows as review evidence only;
+the exploration tasks should still be closed manually after inspecting the full
+physical-board serial capture.
 
 ```sh
 tools/bpi-f3-smoke.sh --check-preboot-log bpi-f3-serial.log

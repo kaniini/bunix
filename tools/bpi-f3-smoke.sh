@@ -387,6 +387,37 @@ classify_log() {
 		classify_line "userspace-smoke" "missing" \
 			"need bootstrap plus native and musl hello markers"
 	fi
+
+	if has_marker "$log" "model = " &&
+	    has_marker "$log" "compatible = " &&
+	    has_marker "$log" "bunixos: riscv64 early bootstrap" &&
+	    has_marker "$log" "pmm: riscv64 ranges" &&
+	    has_marker "$log" "timer: riscv64 tick" &&
+	    has_marker "$log" "fdt: riscv64 stdout-uart" &&
+	    has_marker "$log" "fdt: riscv64 timebase-hz=" &&
+	    has_marker "$log" "fdt: riscv64 interrupt-routing-compatible=" &&
+	    has_marker "$log" "smp: riscv64 secondary-policy=parked" &&
+	    has_marker "$log" "machine: poweroff" &&
+	    has_marker "$log" "sbi: system reset poweroff"; then
+		classify_line "first-hardware-milestone" "evidence" \
+			"kernel banner, memory map, timer, serial, routing diagnostics, SMP policy, and clean poweroff are present"
+	else
+		classify_line "first-hardware-milestone" "missing" \
+			"need preboot board identity plus banner, memory map, timer, serial, interrupt routing, SMP policy, and poweroff markers"
+	fi
+
+	if has_marker "$log" "model = " &&
+	    has_marker "$log" "compatible = " &&
+	    has_marker "$log" "bootstrap-riscv64: online" &&
+	    has_marker "$log" "native: riscv64 server argc=1 argv0=/bin/abi-smoke.user" &&
+	    has_marker "$log" "musl hello argc=1 argv0=/bin/musl-hello" &&
+	    has_marker "$log" "bootstrap-riscv64: done"; then
+		classify_line "second-hardware-milestone" "evidence" \
+			"native bootstrap, native smoke server, musl hello, and bootstrap completion are present"
+	else
+		classify_line "second-hardware-milestone" "missing" \
+			"need preboot board identity plus native bootstrap, native smoke, musl hello, and bootstrap completion markers"
+	fi
 }
 
 self_test() {
@@ -437,6 +468,7 @@ bootpkg: riscv64 initrd
 bootstrap-riscv64: online
 native: riscv64 server argc=1 argv0=/bin/abi-smoke.user
 musl hello argc=1 argv0=/bin/musl-hello
+bootstrap-riscv64: done
 machine: poweroff
 sbi: system reset poweroff
 EOF
@@ -479,6 +511,10 @@ EOF
 		"timebase-frequency" \
 		"missing serial marker: timebase-frequency"
 	classify_log "$tmp" >/dev/null
+	classify_log "$tmp" | grep -aF "first-hardware-milestone	missing" >/dev/null
+	classify_log "$tmp" | grep -aF "second-hardware-milestone	missing" >/dev/null
+	classify_log "$review" | grep -aF "first-hardware-milestone	evidence" >/dev/null
+	classify_log "$review" | grep -aF "second-hardware-milestone	evidence" >/dev/null
 	summarize_log "$tmp" | grep -aF "initrd-size	0x10000" >/dev/null
 	summarize_log "$review" | grep -aF 'preboot-model	"Banana Pi BPI-F3";' >/dev/null
 	summarize_log "$review" | grep -aF \
