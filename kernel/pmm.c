@@ -1,4 +1,3 @@
-#include "console.h"
 #include "pmm.h"
 #include "spinlock.h"
 
@@ -196,11 +195,7 @@ static void reserve_range(u64 start, u64 end)
 	free_pages = new_free;
 	free_pages_count -= removed;
 
-	if (removed != 0) {
-		console_printf("pmm: reserve %p-%p pages=%u\n",
-			       (const void *)start, (const void *)end,
-			       (u32)removed);
-	}
+	(void)removed;
 }
 
 void pmm_init_from_ranges(const struct pmm_memory_range *available,
@@ -222,8 +217,6 @@ void pmm_init_from_ranges(const struct pmm_memory_range *available,
 		available, available_count, reserved, reserved_count,
 		detected_pages);
 	if (pages == 0 || metadata_end <= metadata_start) {
-		console_printf("pmm: metadata allocation failed pages=%u\n",
-			       (u32)detected_pages);
 		for (;;) {
 		}
 	}
@@ -239,9 +232,6 @@ void pmm_init_from_ranges(const struct pmm_memory_range *available,
 	}
 	reserve_range(metadata_start, metadata_end);
 
-	console_printf("pmm: pages total=%u free=%u metadata=%p-%p\n",
-		       (u32)total_pages, (u32)free_pages_count,
-		       (const void *)metadata_start, (const void *)metadata_end);
 }
 
 

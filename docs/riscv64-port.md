@@ -76,6 +76,10 @@ the generic allocator without pulling in x86 boot-protocol symbols.
 Generic spinlocks have also been moved onto architecture interrupt
 save/restore hooks; riscv64 provides `sstatus.SIE` save/restore semantics so
 generic locking code can compile for the emulator path.
+The PMM core is also console-independent now, so linking it for riscv64 does
+not require the current x86-specific console implementation.  Riscv64 still
+needs an FDT-backed memory/reservation provider and build wiring before the
+generic PMM can allocate real page-table and user-frame pages.
 
 This gives riscv64 a firmware-neutral package handoff separate from
 Multiboot2.  Future rootfs images can ride in the same carrier or replace it

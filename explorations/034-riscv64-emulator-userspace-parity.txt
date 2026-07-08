@@ -164,3 +164,16 @@ Verification notes:
 - `make test-boot` passed after adding arch interrupt save/restore hooks.
 - `make test-boot-riscv64-early` passed after adding arch interrupt
   save/restore hooks.
+- Removed the generic PMM core's dependency on the x86 console path:
+  - `kernel/pmm.c` no longer includes `console.h` or emits boot-time
+    `console_printf()` lines directly from allocator internals.
+  - This keeps the range-based PMM core boot-protocol-neutral and
+    console-independent, so riscv64 can compile it without dragging in the
+    current x86-specific console implementation.
+  - A manual riscv64 compile of `kernel/pmm.c` passed:
+    `clang --target=riscv64-alpine-linux-musl ... -c kernel/pmm.c`.
+- `make all` passed after removing the PMM console dependency.
+- `make ARCH=riscv64 all` passed after removing the PMM console dependency.
+- `make test-boot` passed after removing the PMM console dependency.
+- `make test-boot-riscv64-early` passed after removing the PMM console
+  dependency.
