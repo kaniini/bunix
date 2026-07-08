@@ -1154,11 +1154,19 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "thread: riscv64 switch" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "pmm: riscv64 ranges" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 cpus" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "fdt: riscv64 cpu-count=" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 timer" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "fdt: riscv64 timebase-hz=" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 stdout" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "fdt: riscv64 stdout-path=" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 stdout-uart" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "fdt: riscv64 stdout-resolved=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "fdt: riscv64 stdout-uart-base=" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 uart" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "fdt: riscv64 uart-count=" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "fdt: riscv64 interrupt-controller" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "fdt: riscv64 interrupt-controller-path=" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "fdt: riscv64 interrupt-controller-count=" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "sched: riscv64 thread" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "vm: riscv64 hooks" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "syscall: riscv64 ecall" $(RISCV64_SERIAL_LOG) >/dev/null

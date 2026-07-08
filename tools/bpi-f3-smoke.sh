@@ -67,11 +67,19 @@ check_log() {
 	require_marker "$log" "bunixos: riscv64 early bootstrap"
 	require_marker "$log" "pmm: riscv64 ranges"
 	require_marker "$log" "fdt: riscv64 cpus"
+	require_marker "$log" "fdt: riscv64 cpu-count="
 	require_marker "$log" "fdt: riscv64 timer"
+	require_marker "$log" "fdt: riscv64 timebase-hz="
 	require_marker "$log" "fdt: riscv64 stdout"
+	require_marker "$log" "fdt: riscv64 stdout-path="
 	require_marker "$log" "fdt: riscv64 stdout-uart"
+	require_marker "$log" "fdt: riscv64 stdout-resolved="
+	require_marker "$log" "fdt: riscv64 stdout-uart-base="
 	require_marker "$log" "fdt: riscv64 uart"
+	require_marker "$log" "fdt: riscv64 uart-count="
 	require_marker "$log" "fdt: riscv64 interrupt-controller"
+	require_marker "$log" "fdt: riscv64 interrupt-controller-path="
+	require_marker "$log" "fdt: riscv64 interrupt-controller-count="
 	require_marker "$log" "timer: riscv64 tick"
 	require_marker "$log" "thread: riscv64 switch"
 	require_marker "$log" "bootpkg: riscv64 initrd"
@@ -91,11 +99,19 @@ self_test() {
 bunixos: riscv64 early bootstrap
 pmm: riscv64 ranges
 fdt: riscv64 cpus
+fdt: riscv64 cpu-count=1
 fdt: riscv64 timer
+fdt: riscv64 timebase-hz=10000000
 fdt: riscv64 stdout
+fdt: riscv64 stdout-path=serial0:115200n8
 fdt: riscv64 stdout-uart
+fdt: riscv64 stdout-resolved=/soc/serial@10000000
+fdt: riscv64 stdout-uart-base=0x10000000
 fdt: riscv64 uart
+fdt: riscv64 uart-count=1
 fdt: riscv64 interrupt-controller
+fdt: riscv64 interrupt-controller-path=/soc/interrupt-controller@c000000
+fdt: riscv64 interrupt-controller-count=1
 timer: riscv64 tick
 thread: riscv64 switch
 bootpkg: riscv64 initrd

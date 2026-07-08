@@ -61,6 +61,61 @@ static void early_puts(const char *text)
 	}
 }
 
+static void early_put_u64_dec(u64 value)
+{
+	char digits[20];
+	u32 count = 0;
+
+	if (value == 0) {
+		sbi_putchar('0');
+		return;
+	}
+	while (value != 0 && count < sizeof(digits)) {
+		digits[count++] = (char)('0' + (value % 10));
+		value /= 10;
+	}
+	while (count != 0) {
+		sbi_putchar(digits[--count]);
+	}
+}
+
+static void early_put_u64_hex(u64 value)
+{
+	static const char hex[] = "0123456789abcdef";
+	int started = 0;
+
+	early_puts("0x");
+	for (int shift = 60; shift >= 0; shift -= 4) {
+		const u8 nibble = (value >> shift) & 0xf;
+
+		if (nibble != 0 || started != 0 || shift == 0) {
+			sbi_putchar(hex[nibble]);
+			started = 1;
+		}
+	}
+}
+
+static void early_put_kv_dec(const char *key, u64 value)
+{
+	early_puts(key);
+	early_put_u64_dec(value);
+	early_puts("\n");
+}
+
+static void early_put_kv_hex(const char *key, u64 value)
+{
+	early_puts(key);
+	early_put_u64_hex(value);
+	early_puts("\n");
+}
+
+static void early_put_kv_str(const char *key, const char *value)
+{
+	early_puts(key);
+	early_puts(value);
+	early_puts("\n");
+}
+
 static void pmm_bootstrap_from_fdt(u64 fdt)
 {
 	struct riscv64_fdt_memory_range memory_ranges[8];
@@ -163,21 +218,36 @@ static void platform_discovery_smoke(u64 fdt)
 	}
 	if (platform.cpu_count != 0) {
 		early_puts("fdt: riscv64 cpus\n");
+		early_put_kv_dec("fdt: riscv64 cpu-count=", platform.cpu_count);
 	}
 	if (platform.timebase_frequency != 0) {
 		early_puts("fdt: riscv64 timer\n");
+		early_put_kv_dec("fdt: riscv64 timebase-hz=",
+				 platform.timebase_frequency);
 	}
 	if (platform.stdout_path[0] != '\0') {
 		early_puts("fdt: riscv64 stdout\n");
+		early_put_kv_str("fdt: riscv64 stdout-path=",
+				 platform.stdout_path);
 	}
 	if (platform.stdout_uart_valid != 0) {
 		early_puts("fdt: riscv64 stdout-uart\n");
+		early_put_kv_str("fdt: riscv64 stdout-resolved=",
+				 platform.stdout_resolved_path);
+		early_put_kv_hex("fdt: riscv64 stdout-uart-base=",
+				 platform.uarts[platform.stdout_uart_index].reg_base);
 	}
 	if (platform.uart_count != 0) {
 		early_puts("fdt: riscv64 uart\n");
+		early_put_kv_dec("fdt: riscv64 uart-count=",
+				 platform.uart_count);
 	}
 	if (platform.interrupt_controller_count != 0) {
 		early_puts("fdt: riscv64 interrupt-controller\n");
+		early_put_kv_str("fdt: riscv64 interrupt-controller-path=",
+				 platform.interrupt_controllers[0].path);
+		early_put_kv_dec("fdt: riscv64 interrupt-controller-count=",
+				 platform.interrupt_controller_count);
 	}
 }
 

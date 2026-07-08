@@ -130,11 +130,19 @@ Expected first milestone serial markers:
 - `bunixos: riscv64 early bootstrap`
 - `pmm: riscv64 ranges`
 - `fdt: riscv64 cpus`
+- `fdt: riscv64 cpu-count=...`
 - `fdt: riscv64 timer`
+- `fdt: riscv64 timebase-hz=...`
 - `fdt: riscv64 stdout`
+- `fdt: riscv64 stdout-path=...`
 - `fdt: riscv64 stdout-uart`
+- `fdt: riscv64 stdout-resolved=...`
+- `fdt: riscv64 stdout-uart-base=...`
 - `fdt: riscv64 uart`
+- `fdt: riscv64 uart-count=...`
 - `fdt: riscv64 interrupt-controller`
+- `fdt: riscv64 interrupt-controller-path=...`
+- `fdt: riscv64 interrupt-controller-count=...`
 - `timer: riscv64 tick`
 - `thread: riscv64 switch`
 - `bootpkg: riscv64 initrd`
@@ -146,6 +154,11 @@ Expected first milestone serial markers:
 
 If the firmware FDT does not provide the same initrd properties as QEMU, fix
 the U-Boot `/chosen` setup before adding kernel-side board constants.
+
+The `fdt: riscv64 ...=...` diagnostic lines are part of the evidence package
+for the still-open hardware tasks: they identify the board CPU count,
+timebase, selected stdout UART, UART MMIO base, and interrupt-controller path
+from the firmware DT.
 
 ## Follow-Up Hardware Work
 

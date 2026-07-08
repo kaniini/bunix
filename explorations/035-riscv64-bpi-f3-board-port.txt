@@ -211,3 +211,18 @@ Verification notes:
 - `tools/bpi-f3-smoke.sh --artifact-dir build/riscv64/bpi-f3 --check-log
   build/riscv64-serial.log` passed after adding firmware stdout UART
   resolution.
+- Added richer FDT diagnostic serial lines for BPI-F3 evidence capture:
+  - The riscv64 early boot log now prints CPU count, timebase frequency,
+    raw and resolved stdout path, stdout UART MMIO base, UART count, first
+    interrupt-controller path, and interrupt-controller count.
+  - The QEMU riscv64 smoke and BPI-F3 smoke-log checker now require those
+    diagnostic prefixes.  This gives the physical-board run enough serial
+    evidence to classify the open console, timer, interrupt-controller, and
+    SMP policy tasks.
+- `make ARCH=riscv64 all` passed after adding FDT diagnostic serial lines.
+- `make test-boot-riscv64-early` passed after adding FDT diagnostic serial
+  lines.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding FDT diagnostic
+  serial lines.
+- `tools/bpi-f3-smoke.sh --artifact-dir build/riscv64/bpi-f3 --check-log
+  build/riscv64-serial.log` passed after adding FDT diagnostic serial lines.
