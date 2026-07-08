@@ -396,3 +396,18 @@ Verification notes:
 - `make test-riscv64-bpi-f3-emulator-gate` passed after adding preboot
   board-identity summary rows.
 - `git diff --check` passed after adding preboot board-identity summary rows.
+- Tightened BPI-F3 preboot evidence checks:
+  - `tools/bpi-f3-smoke.sh --check-preboot-log` now requires the specific
+    `fdt print / model` and `fdt print / compatible` command markers plus
+    their root DT property output, instead of accepting any generic
+    `model`/`compatible` text in the serial log.
+  - The self-test now verifies that malformed preboot logs are rejected when
+    root model diagnostics, root compatible diagnostics, or timebase evidence
+    are missing.
+- `sh -n tools/bpi-f3-smoke.sh` passed after tightening BPI-F3 preboot
+  evidence checks.
+- `make test-riscv64-bpi-f3-smoke-script` passed after tightening BPI-F3
+  preboot evidence checks.
+- `make test-riscv64-bpi-f3-emulator-gate` passed after tightening BPI-F3
+  preboot evidence checks.
+- `git diff --check` passed after tightening BPI-F3 preboot evidence checks.

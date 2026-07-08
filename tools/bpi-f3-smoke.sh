@@ -135,8 +135,10 @@ check_preboot_log() {
 
 	require_file "$log"
 	require_marker "$log" "bdinfo"
-	require_marker "$log" "model"
-	require_marker "$log" "compatible"
+	require_marker "$log" "fdt print / model"
+	require_marker "$log" "model = "
+	require_marker "$log" "fdt print / compatible"
+	require_marker "$log" "compatible = "
 	require_marker "$log" "fdt print /chosen"
 	require_marker "$log" "fdt print /aliases"
 	require_marker "$log" "fdt print /cpus"
@@ -240,6 +242,22 @@ expect_check_log_failure() {
 	if "$0" --artifact-dir "$artifact_dir" --check-log "$bad_log" \
 	    >/dev/null 2>"$error_log"; then
 		echo "expected BPI-F3 smoke log check to fail: $match" >&2
+		exit 1
+	fi
+	grep -aF "$expected" "$error_log" >/dev/null
+}
+
+expect_preboot_log_failure() {
+	source_log=$1
+	bad_log=$2
+	error_log=$3
+	match=$4
+	expected=$5
+
+	grep -aFv "$match" "$source_log" > "$bad_log"
+	if "$0" --artifact-dir "$artifact_dir" --check-preboot-log "$bad_log" \
+	    >/dev/null 2>"$error_log"; then
+		echo "expected BPI-F3 preboot log check to fail: $match" >&2
 		exit 1
 	fi
 	grep -aF "$expected" "$error_log" >/dev/null
@@ -451,6 +469,15 @@ EOF
 		"boot: riscv64 initrd-size=" \
 		"boot: riscv64 initrd-size=0x20000" \
 		"invalid serial evidence: initrd size does not match start/end"
+	expect_preboot_log_failure "$preboot" "$bad" "$err" \
+		"fdt print / model" \
+		"missing serial marker: fdt print / model"
+	expect_preboot_log_failure "$preboot" "$bad" "$err" \
+		"compatible = " \
+		"missing serial marker: compatible = "
+	expect_preboot_log_failure "$preboot" "$bad" "$err" \
+		"timebase-frequency" \
+		"missing serial marker: timebase-frequency"
 	classify_log "$tmp" >/dev/null
 	summarize_log "$tmp" | grep -aF "initrd-size	0x10000" >/dev/null
 	summarize_log "$review" | grep -aF 'preboot-model	"Banana Pi BPI-F3";' >/dev/null
