@@ -38,6 +38,11 @@ RISCV64_USER_ABI_MODULE := $(BUILD_DIR)/riscv64/modules/abi-smoke.user
 RISCV64_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg.img
 RISCV64_BOOTPKG_MULTI := $(BUILD_DIR)/riscv64/bootpkg-multi.img
 RISCV64_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test
+RISCV64_BPI_F3_DIR := $(BUILD_DIR)/riscv64/bpi-f3
+RISCV64_BPI_F3_KERNEL := $(RISCV64_BPI_F3_DIR)/bunixos-riscv64.elf
+RISCV64_BPI_F3_BOOTPKG := $(RISCV64_BPI_F3_DIR)/bunix-riscv64.bootpkg
+RISCV64_BPI_F3_BOOT_SCRIPT := $(RISCV64_BPI_F3_DIR)/boot-bunix-bpi-f3.cmd
+RISCV64_BPI_F3_MANIFEST := $(RISCV64_BPI_F3_DIR)/manifest.txt
 RISCV64_MUSLCC_PREFIX ?= $(BUILD_DIR)/toolchains/riscv64-linux-musl-cross
 RISCV64_MUSLCC_GCC := $(RISCV64_MUSLCC_PREFIX)/bin/riscv64-linux-musl-gcc
 RISCV64_MUSLCC_SYSROOT := $(RISCV64_MUSLCC_PREFIX)/riscv64-linux-musl
@@ -368,7 +373,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early riscv64-muslcc-toolchain test test-alpine-rootfs test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-riscv64-bootpkg test-riscv64-user-abi test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-riscv64-bootpkg test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -503,6 +508,46 @@ test-riscv64-bootpkg: $(RISCV64_BOOTPKG) $(RISCV64_BOOTPKG_MULTI)
 	grep -aF "module abi-smoke.user" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module linux" $(RISCV64_BOOTPKG_MULTI) >/dev/null
 	grep -aF "module /bin/musl-hello" $(RISCV64_BOOTPKG_MULTI) >/dev/null
+
+$(RISCV64_BPI_F3_MANIFEST): $(RISCV64_KERNEL) $(RISCV64_BOOTPKG) Makefile
+	mkdir -p $(RISCV64_BPI_F3_DIR)
+	cp $(RISCV64_KERNEL) $(RISCV64_BPI_F3_KERNEL)
+	cp $(RISCV64_BOOTPKG) $(RISCV64_BPI_F3_BOOTPKG)
+	printf '%s\n' \
+		'Bunix riscv64 Banana Pi BPI-F3 bringup artifacts' \
+		'kernel=$(notdir $(RISCV64_BPI_F3_KERNEL))' \
+		'bootpkg=$(notdir $(RISCV64_BPI_F3_BOOTPKG))' \
+		'boot_script=$(notdir $(RISCV64_BPI_F3_BOOT_SCRIPT))' \
+		'kernel_load_base=0x80200000' \
+		'boot_protocol=OpenSBI to U-Boot bootelf with firmware FDT' \
+		'command_line=$(RISCV64_KERNEL_CMDLINE)' \
+		> $(RISCV64_BPI_F3_MANIFEST)
+	printf '%s\n' \
+		'# Bunix BPI-F3 first-smoke U-Boot recipe.' \
+		'# Copy bunixos-riscv64.elf and bunix-riscv64.bootpkg to the first boot partition.' \
+		'# Stop at the U-Boot prompt and run these commands by hand first.' \
+		'setenv bunix_kernel_addr 0x90200000' \
+		'setenv bunix_initrd_addr 0x94000000' \
+		'load mmc 0:1 $${bunix_kernel_addr} /bunixos-riscv64.elf' \
+		'load mmc 0:1 $${bunix_initrd_addr} /bunix-riscv64.bootpkg' \
+		'setexpr bunix_initrd_end $${bunix_initrd_addr} + $${filesize}' \
+		'fdt addr $${fdtcontroladdr}' \
+		'fdt resize 4096' \
+		'fdt set /chosen bootargs "$(RISCV64_KERNEL_CMDLINE)"' \
+		'fdt set /chosen linux,initrd-start <$${bunix_initrd_addr}>' \
+		'fdt set /chosen linux,initrd-end <$${bunix_initrd_end}>' \
+		'bootelf -d $${fdtcontroladdr} $${bunix_kernel_addr} $${fdtcontroladdr}' \
+		> $(RISCV64_BPI_F3_BOOT_SCRIPT)
+
+riscv64-bpi-f3-artifacts: $(RISCV64_BPI_F3_MANIFEST)
+
+test-riscv64-bpi-f3-artifacts: riscv64-bpi-f3-artifacts
+	test -s $(RISCV64_BPI_F3_KERNEL)
+	test -s $(RISCV64_BPI_F3_BOOTPKG)
+	grep -aF "BUNIX-RV64-BOOTPKG" $(RISCV64_BPI_F3_BOOTPKG) >/dev/null
+	grep -aF "bootelf -d" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
+	grep -aF "linux,initrd-start" $(RISCV64_BPI_F3_BOOT_SCRIPT) >/dev/null
+	grep -aF "kernel_load_base=0x80200000" $(RISCV64_BPI_F3_MANIFEST) >/dev/null
 
 $(BOOTSTRAP_MODULE): $(BOOTSTRAP_MODULE_OBJS) user/user.ld Makefile
 	mkdir -p $(dir $@)

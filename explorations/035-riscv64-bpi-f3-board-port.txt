@@ -2,13 +2,10 @@ Target the riscv64 port to boot on Banana Pi BPI-F3 hardware.
 
 Status:
 
-- Blocked.  Do not start BPI-F3 implementation work until
-  `034-riscv64-emulator-userspace-parity.txt` is complete, its full emulator
-  verification passes, and the QEMU `virt` path can boot scheduler-owned
-  native userspace plus the static riscv64 musl/Linux-personality smoke.
-  "Works in the emulator" means the whole 034 exploration is closed; partial
-  early-boot, kernel-only, or native-smoke-only success does not unblock this
-  board port.
+- Active.  `034-riscv64-emulator-userspace-parity.txt` is complete, moved to
+  `explorations/completed/`, and passed the full `make test` gate after the
+  QEMU `virt` path booted scheduler-owned native userspace plus the static
+  riscv64 musl/Linux-personality smoke.
 
 Problem:
 
@@ -63,14 +60,14 @@ Constraints:
 
 Tasks:
 
-- [ ] Capture the BPI-F3 boot chain: ROM, storage source selection, OpenSBI,
+- [x] Capture the BPI-F3 boot chain: ROM, storage source selection, OpenSBI,
       U-Boot/UEFI capabilities, kernel payload formats, device tree handoff,
       and serial console defaults.
-- [ ] Archive exact reference versions used for bringup: vendor OpenSBI,
+- [x] Archive exact reference versions used for bringup: vendor OpenSBI,
       U-Boot, Linux device tree, schematic, and SpacemiT K1 documentation.
-- [ ] Define the Bunix BPI-F3 boot artifact: raw Image, FIT image, EFI payload,
+- [x] Define the Bunix BPI-F3 boot artifact: raw Image, FIT image, EFI payload,
       or U-Boot-loaded ELF, with command-line and module-payload strategy.
-- [ ] Add a BPI-F3 board profile under the riscv64 build/test configuration
+- [x] Add a BPI-F3 board profile under the riscv64 build/test configuration
       without changing the generic QEMU `virt` profile.
 - [ ] Implement firmware device-tree parsing sufficient to discover memory,
       CPU harts, UART, interrupt controller, timer source, chosen stdout path,
@@ -94,3 +91,39 @@ Tasks:
       minimal userspace server logs successfully.
 - [ ] Plan follow-up hardware device explorations for eMMC/microSD, USB, dual
       GbE, PCIe/M.2, display, WiFi/Bluetooth, and hardware watchdog support.
+
+Progress notes:
+
+- Added `docs/riscv64-bpi-f3.md` as the board bringup reference and operator
+  plan:
+  - Captures the intended ROM -> OpenSBI -> U-Boot -> Bunix ELF boot chain.
+  - Defines the first hardware artifact as a U-Boot-loaded Bunix ELF plus the
+    existing riscv64 boot package, with `/chosen` initrd properties supplied by
+    U-Boot and the firmware-provided FDT.
+  - Records the vendor and BPI-SINOVOIP source references, including exact
+    anonymous `git ls-remote` revisions where available.
+  - Keeps the first hardware proof constrained to serial, FDT memory/initrd,
+    timer, bootstrap, static musl hello, and SBI poweroff.
+- Added a BPI-F3 build profile:
+  - `make riscv64-bpi-f3-artifacts` creates
+    `build/riscv64/bpi-f3/bunixos-riscv64.elf`,
+    `build/riscv64/bpi-f3/bunix-riscv64.bootpkg`,
+    `build/riscv64/bpi-f3/boot-bunix-bpi-f3.cmd`, and
+    `build/riscv64/bpi-f3/manifest.txt`.
+  - `make test-riscv64-bpi-f3-artifacts` verifies the generated artifact
+    shape, boot package magic, U-Boot `bootelf -d` recipe, initrd `/chosen`
+    properties, and kernel load-base manifest.
+  - This profile copies the existing riscv64 QEMU kernel and boot package into
+    a board-specific output directory; it does not change the generic QEMU
+    `virt` build/test path.
+
+Verification notes:
+
+- `make test-riscv64-bpi-f3-artifacts` passed after adding the first BPI-F3
+  board artifact profile.
+- `make test-riscv64-bootpkg` passed after adding the first BPI-F3 board
+  artifact profile.
+- `make ARCH=riscv64 all` passed after adding the first BPI-F3 board artifact
+  profile.
+- `make test-boot-riscv64-early` passed after adding the first BPI-F3 board
+  artifact profile, confirming the generic QEMU `virt` path was unchanged.
