@@ -158,6 +158,10 @@ Operator setup:
 - Copy the generated Bunix BPI-F3 artifacts to the first boot partition.
 - Stop at the U-Boot prompt.
 - Run the commands in `boot-bunix-bpi-f3.cmd` by hand.
+- After the SBI-backed recipe works, run the commands in
+  `boot-bunix-bpi-f3-uart.cmd` by hand to enable the native stdout UART
+  backend.  This variant loads `bunix-riscv64-uart.bootpkg`, whose embedded
+  command line includes `riscv64-uart-console`.
 - Capture the full serial log and run
   `tools/bpi-f3-smoke.sh --review-log bpi-f3-serial.log`.
 - Record the review output:
@@ -201,6 +205,8 @@ Expected first milestone serial markers:
 - `fdt: riscv64 stdout-uart`
 - `fdt: riscv64 stdout-resolved=...`
 - `fdt: riscv64 stdout-uart-base=...`
+- `uart: riscv64 console-driver=ns16550 ...` when using
+  `boot-bunix-bpi-f3-uart.cmd`
 - `fdt: riscv64 uart`
 - `fdt: riscv64 uart-count=...`
 - `fdt: riscv64 interrupt-controller`
@@ -249,11 +255,11 @@ After the first serial/poweroff smoke, bring up hardware in this order:
   appear on BPI-F3: CPU hart IDs, `/cpus/timebase-frequency`,
   `/chosen/stdout-path`, UART-compatible nodes, interrupt-controller nodes,
   memory ranges, and `/chosen/linux,initrd-*`.
-- Confirm the K1 UART binding and then add an early native UART backend under
-  the riscv64 board layer.  The generic riscv64 FDT scanner now resolves
+- Confirm the K1 UART binding by running `boot-bunix-bpi-f3-uart.cmd` after
+  the SBI-backed recipe works.  The generic riscv64 FDT scanner now resolves
   `/chosen/stdout-path`, including `/aliases` entries such as `serial0`, to a
-  discovered UART node so the board run can identify the intended console
-  device before native MMIO output is enabled.
+  discovered UART node, and the opt-in native UART backend binds that node
+  when it is ns16550/8250-compatible.
 - Confirm SBI timer and poweroff/reboot behavior on the vendor OpenSBI.  The
   riscv64 power path now prefers the SBI System Reset extension and falls back
   to legacy shutdown if that extension returns.

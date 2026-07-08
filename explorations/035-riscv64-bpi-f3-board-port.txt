@@ -491,3 +491,23 @@ Verification notes:
   milestone rows as missing in QEMU-only logs.
 - `git diff --check` passed after adding the shared runtime and UART console
   driver slice.
+- Added a BPI-F3 native-UART artifact variant:
+  - `make riscv64-bpi-f3-artifacts` now emits both the conservative
+    SBI-backed `bunix-riscv64.bootpkg` and an opt-in
+    `bunix-riscv64-uart.bootpkg` whose embedded command line includes
+    `riscv64-uart-console`.
+  - The artifact directory now includes both `boot-bunix-bpi-f3.cmd` and
+    `boot-bunix-bpi-f3-uart.cmd`; the UART recipe loads the UART boot package
+    explicitly, so enabling native console output does not rely on U-Boot
+    bootargs being parsed instead of the boot package command line.
+  - `tools/bpi-f3-smoke.sh --prepare` copies both recipes and both boot
+    packages, and `--print-uboot-uart` prints the native-UART recipe.
+  - The early-serial hardware task remains open until a real BPI-F3 serial
+    capture proves the firmware stdout UART binding and the
+    `uart: riscv64 console-driver=ns16550 ...` marker on the board.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding the BPI-F3
+  native-UART artifact variant.
+- `make test-boot-riscv64-uart-console` passed after adding the BPI-F3
+  native-UART artifact variant.
+- `git diff --check` passed after adding the BPI-F3 native-UART artifact
+  variant.

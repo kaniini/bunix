@@ -10,6 +10,8 @@ usage: $0 [--artifact-dir DIR] COMMAND [ARG]
 commands:
   --prepare DIR       copy Bunix BPI-F3 boot artifacts into DIR
   --print-uboot      print the manual U-Boot command recipe
+  --print-uboot-uart
+                      print the native-UART U-Boot command recipe
   --check-preboot-log FILE
                       verify captured U-Boot preboot diagnostics
   --check-log FILE   verify a captured serial log has first-smoke markers
@@ -60,7 +62,9 @@ has_marker() {
 check_artifacts() {
 	require_file "$(artifact_path bunixos-riscv64.elf)"
 	require_file "$(artifact_path bunix-riscv64.bootpkg)"
+	require_file "$(artifact_path bunix-riscv64-uart.bootpkg)"
 	require_file "$(artifact_path boot-bunix-bpi-f3.cmd)"
+	require_file "$(artifact_path boot-bunix-bpi-f3-uart.cmd)"
 	require_file "$(artifact_path manifest.txt)"
 }
 
@@ -71,7 +75,9 @@ prepare_boot_partition() {
 	mkdir -p "$dst"
 	cp "$(artifact_path bunixos-riscv64.elf)" "$dst/"
 	cp "$(artifact_path bunix-riscv64.bootpkg)" "$dst/"
+	cp "$(artifact_path bunix-riscv64-uart.bootpkg)" "$dst/"
 	cp "$(artifact_path boot-bunix-bpi-f3.cmd)" "$dst/"
+	cp "$(artifact_path boot-bunix-bpi-f3-uart.cmd)" "$dst/"
 	cp "$(artifact_path manifest.txt)" "$dst/"
 	printf 'prepared %s\n' "$dst"
 }
@@ -79,6 +85,11 @@ prepare_boot_partition() {
 print_uboot_recipe() {
 	check_artifacts
 	cat "$(artifact_path boot-bunix-bpi-f3.cmd)"
+}
+
+print_uboot_uart_recipe() {
+	check_artifacts
+	cat "$(artifact_path boot-bunix-bpi-f3-uart.cmd)"
 }
 
 check_log() {
@@ -546,6 +557,10 @@ while [ $# -gt 0 ]; do
 		;;
 	--print-uboot)
 		print_uboot_recipe
+		exit 0
+		;;
+	--print-uboot-uart)
+		print_uboot_uart_recipe
 		exit 0
 		;;
 	--check-log)
