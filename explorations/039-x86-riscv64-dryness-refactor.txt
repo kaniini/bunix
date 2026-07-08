@@ -135,3 +135,17 @@ Progress notes:
     build/package repetition, freestanding runtime helper policy, and QEMU
     harness behavior.
   - Added a README pointer so future port work has a stable local reference.
+- Generic boot-package parser slice:
+  - Moved the riscv64 text boot-package parser out of
+    `arch/riscv64/early.c` and into `kernel/bootpkg.c`.
+  - Riscv64 still owns FDT initrd discovery and decides when to run the
+    low-level boot smoke; the parser now owns firmware-neutral package magic,
+    cmdline extraction, module lookup, and module recording.
+  - This is partial progress toward the lifecycle/boot-module helper task; the
+    top-level x86_64 Multiboot2 and riscv64 FDT boot sequencing is still not
+    unified.
+  - Verification:
+    - `make ARCH=riscv64 all`
+    - `make ARCH=x86_64 all`
+    - `make test-riscv64-bootpkg test-boot-riscv64-early`
+    - `make test-smoke`

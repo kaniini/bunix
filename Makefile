@@ -318,6 +318,7 @@ USER_ASFLAGS := -m64 -g -ffreestanding -fno-pic -fno-pie \
 
 KERNEL_GENERIC_SRCS_x86_64 := \
 	kernel/main.c \
+	kernel/bootpkg.c \
 	kernel/buffer.c \
 	kernel/cmdline.c \
 	kernel/console.c \
@@ -338,6 +339,7 @@ KERNEL_GENERIC_SRCS_x86_64 := \
 	kernel/vm.c \
 	servers/vm/vm.c
 KERNEL_GENERIC_SRCS_riscv64 := \
+	kernel/bootpkg.c \
 	kernel/buffer.c \
 	kernel/cmdline.c \
 	kernel/elf.c \
