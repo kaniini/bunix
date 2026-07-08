@@ -1,16 +1,5 @@
 #include <arch/vm.h>
 
-enum {
-	PTE_V = 1 << 0,
-	PTE_R = 1 << 1,
-	PTE_W = 1 << 2,
-	PTE_X = 1 << 3,
-	PTE_U = 1 << 4,
-	PTE_G = 1 << 5,
-	PTE_A = 1 << 6,
-	PTE_D = 1 << 7,
-};
-
 void arch_vm_kernel_space_init(struct arch_vm_space *space)
 {
 	space->root_table = 0;
@@ -70,16 +59,17 @@ void arch_vm_activate(const struct arch_vm_space *space)
 
 u64 riscv64_vm_page_flags(u32 writable, u32 user, u32 executable)
 {
-	u64 flags = PTE_V | PTE_R | PTE_A | PTE_D;
+	u64 flags = RISCV64_PTE_V | RISCV64_PTE_R |
+		    RISCV64_PTE_A | RISCV64_PTE_D;
 
 	if (writable != 0) {
-		flags |= PTE_W;
+		flags |= RISCV64_PTE_W;
 	}
 	if (user != 0) {
-		flags |= PTE_U;
+		flags |= RISCV64_PTE_U;
 	}
 	if (executable != 0) {
-		flags |= PTE_X;
+		flags |= RISCV64_PTE_X;
 	}
 	return flags;
 }

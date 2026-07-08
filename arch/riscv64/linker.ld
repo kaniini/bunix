@@ -2,6 +2,7 @@ ENTRY(_start)
 
 SECTIONS
 {
+	/* Must match RISCV64_KERNEL_LOAD_BASE in arch/riscv64/include/arch/layout.h. */
 	. = 0x80200000;
 	__kernel_start = .;
 

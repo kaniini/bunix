@@ -1,13 +1,8 @@
 #ifndef BUNIXOS_ARCH_VM_H
 #define BUNIXOS_ARCH_VM_H
 
+#include <arch/layout.h>
 #include "types.h"
-
-enum {
-	RISCV64_USER_BASE = 0x400000,
-	RISCV64_USER_LIMIT = 0x0000004000000000ULL,
-	RISCV64_DIRECT_MAP_BASE = 0xffffffe000000000ULL,
-};
 
 struct arch_vm_space {
 	u64 root_table;

@@ -1,0 +1,41 @@
+#ifndef BUNIXOS_ARCH_RISCV64_LAYOUT_H
+#define BUNIXOS_ARCH_RISCV64_LAYOUT_H
+
+#include "types.h"
+
+#define RISCV64_PAGE_SHIFT 12
+#define RISCV64_PAGE_SIZE (1ULL << RISCV64_PAGE_SHIFT)
+#define RISCV64_KERNEL_LOAD_BASE 0x80200000ULL
+#define RISCV64_PHYS_MEM_BASE 0x80000000ULL
+#define RISCV64_USER_BASE 0x400000ULL
+#define RISCV64_USER_LIMIT 0x0000004000000000ULL
+#define RISCV64_DIRECT_MAP_BASE 0xffffffc000000000ULL
+#define RISCV64_DIRECT_MAP_SIZE 0x0000004000000000ULL
+#define RISCV64_MMIO_BASE 0xffffff8000000000ULL
+#define RISCV64_MMIO_SIZE 0x0000004000000000ULL
+#define RISCV64_KERNEL_STACK_ALIGN 16
+
+enum {
+	RISCV64_PTE_V = 1 << 0,
+	RISCV64_PTE_R = 1 << 1,
+	RISCV64_PTE_W = 1 << 2,
+	RISCV64_PTE_X = 1 << 3,
+	RISCV64_PTE_U = 1 << 4,
+	RISCV64_PTE_G = 1 << 5,
+	RISCV64_PTE_A = 1 << 6,
+	RISCV64_PTE_D = 1 << 7,
+};
+
+static inline u64 riscv64_direct_map_addr(u64 phys)
+{
+	return RISCV64_DIRECT_MAP_BASE + phys;
+}
+
+static inline int riscv64_user_addr_valid(u64 addr, u64 len)
+{
+	return addr >= RISCV64_USER_BASE &&
+	       addr + len >= addr &&
+	       addr + len <= RISCV64_USER_LIMIT;
+}
+
+#endif

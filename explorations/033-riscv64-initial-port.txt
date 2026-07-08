@@ -47,7 +47,7 @@ Tasks:
 - [x] Add `arch/riscv64/` skeleton headers and implementations for early
       console, poweroff/reboot, interrupt enable/disable, timer source,
       thread context, page-table primitives, and user entry stubs.
-- [ ] Define the riscv64 kernel virtual-memory layout, page-table flags,
+- [x] Define the riscv64 kernel virtual-memory layout, page-table flags,
       physical memory discovery, direct map policy, and userspace address
       limits.
 - [ ] Implement enough boot and early memory initialization to print a kernel
@@ -138,6 +138,23 @@ Progress notes:
   such as `arch_smp_lapic_*` alive as compatibility shims.  A later portability
   cleanup should rename those generic contracts around CPU interrupt
   controller behavior instead of APIC-specific terminology.
+- Defined the first riscv64 virtual-memory and boot-info contract:
+  - `arch/riscv64/include/arch/layout.h` names the initial Sv39-era layout:
+    QEMU virt physical memory at `0x80000000`, direct kernel load at
+    `0x80200000`, user range `0x400000` through `0x4000000000`, a high
+    direct-map window, and a separate high MMIO window.
+  - The layout header centralizes riscv64 PTE flags and helper predicates for
+    direct-map and user-address policy.
+  - `arch/riscv64/linker.ld` documents that its load address must match
+    `RISCV64_KERNEL_LOAD_BASE`.
+  - `arch/riscv64/include/arch/boot.h` defines the initial boot-info record
+    sourced from OpenSBI handoff state: hart ID in `a0`, FDT pointer in `a1`,
+    physical base, kernel load base, direct-map policy, and user limits.
+  - `arch/riscv64/early.c` preserves that handoff information for later FDT
+    memory/device discovery.
+  - Real physical memory enumeration is intentionally not implemented yet; the
+    next boot/memory slice should parse the FDT memory node instead of assuming
+    a fixed RAM size.
 
 Open design notes:
 
@@ -175,3 +192,5 @@ Verification so far:
   with `interrupts.c`, `power.c`, `smp.c`, `thread.c`, `thread.S`, `user.c`,
   and `vm.c`.
 - `make -n all` passed for the default x86_64 target.
+- `make -n ARCH=riscv64 all` showed the layout/boot-info headers included by
+  the early payload and VM stubs.
