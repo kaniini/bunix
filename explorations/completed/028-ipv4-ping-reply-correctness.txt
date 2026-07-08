@@ -29,8 +29,8 @@ Problem:
   ping: recvfrom: Resource temporarily unavailable
   ```
 
-- A later manual run for the remaining four pings reported only transient
-  receive failures:
+- A later manual run of the remaining four pings reported only transient
+  receive failures instead of any ICMP replies:
 
   ```
   ping: recvfrom: Resource temporarily unavailable
