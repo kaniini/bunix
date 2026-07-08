@@ -306,3 +306,16 @@ Verification notes:
   `interrupt-routing-compatible=sifive,plic-1.0.0`.
 - `git diff --check` passed after adding interrupt-controller routing
   diagnostics.
+- Added first-milestone SMP policy diagnostics:
+  - The riscv64 firmware-DT smoke now prints discovered hart count, started
+    hart count, boot hart ID, and `secondary-policy=parked`.
+  - This makes the BPI-F3 first hardware milestone explicit: discover all
+    firmware-described harts, start one hart, and defer secondary hart release
+    until after single-hart board boot is reliable.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding first-milestone SMP
+  policy diagnostics.
+- `make test-riscv64-bpi-f3-emulator-gate` passed after adding
+  first-milestone SMP policy diagnostics and printed QEMU `virt` summary rows
+  for discovered harts, started harts, boot hart, and secondary policy.
+- `git diff --check` passed after adding first-milestone SMP policy
+  diagnostics.

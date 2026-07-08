@@ -81,6 +81,10 @@ check_log() {
 	require_marker "$log" "pmm: riscv64 ranges"
 	require_marker "$log" "fdt: riscv64 cpus"
 	require_marker "$log" "fdt: riscv64 cpu-count="
+	require_marker "$log" "smp: riscv64 discovered-harts="
+	require_marker "$log" "smp: riscv64 started-harts="
+	require_marker "$log" "smp: riscv64 boot-hart="
+	require_marker "$log" "smp: riscv64 secondary-policy=parked"
 	require_marker "$log" "fdt: riscv64 timer"
 	require_marker "$log" "fdt: riscv64 timebase-hz="
 	require_marker "$log" "fdt: riscv64 stdout"
@@ -152,6 +156,13 @@ summarize_log() {
 
 	require_file "$log"
 	summary_line "cpu-count" "$(marker_value "$log" "fdt: riscv64 cpu-count=")"
+	summary_line "smp-discovered-harts" \
+		"$(marker_value "$log" "smp: riscv64 discovered-harts=")"
+	summary_line "smp-started-harts" \
+		"$(marker_value "$log" "smp: riscv64 started-harts=")"
+	summary_line "smp-boot-hart" "$(marker_value "$log" "smp: riscv64 boot-hart=")"
+	summary_line "smp-secondary-policy" \
+		"$(marker_value "$log" "smp: riscv64 secondary-policy=")"
 	summary_line "timebase-hz" "$(marker_value "$log" "fdt: riscv64 timebase-hz=")"
 	summary_line "stdout-path" "$(marker_value "$log" "fdt: riscv64 stdout-path=")"
 	summary_line "stdout-resolved" "$(marker_value "$log" "fdt: riscv64 stdout-resolved=")"
@@ -211,12 +222,14 @@ classify_log() {
 			"need interrupt-controller discovery and routing-compatible diagnostics"
 	fi
 
-	if has_marker "$log" "fdt: riscv64 cpu-count="; then
+	if has_marker "$log" "fdt: riscv64 cpu-count=" &&
+	    has_marker "$log" "smp: riscv64 started-harts=" &&
+	    has_marker "$log" "smp: riscv64 secondary-policy=parked"; then
 		classify_line "smp-policy" "evidence" \
-			"firmware CPU count discovered; secondary hart release policy still separate"
+			"firmware hart count discovered and first-milestone secondary policy is parked"
 	else
 		classify_line "smp-policy" "missing" \
-			"need CPU count diagnostic"
+			"need hart count, started hart, and secondary policy diagnostics"
 	fi
 
 	if has_marker "$log" "bootstrap-riscv64: online" &&
@@ -240,6 +253,10 @@ bunixos: riscv64 early bootstrap
 pmm: riscv64 ranges
 fdt: riscv64 cpus
 fdt: riscv64 cpu-count=1
+smp: riscv64 discovered-harts=1
+smp: riscv64 started-harts=1
+smp: riscv64 boot-hart=0
+smp: riscv64 secondary-policy=parked
 fdt: riscv64 timer
 fdt: riscv64 timebase-hz=10000000
 fdt: riscv64 stdout
@@ -276,6 +293,7 @@ fdt print /cpus
 EOF
 	check_preboot_log "$preboot" >/dev/null
 	classify_log "$tmp" >/dev/null
+	summarize_log "$tmp" | grep -aF "smp-secondary-policy	parked" >/dev/null
 	summarize_log "$tmp" | grep -aF "stdout-resolved	/soc/serial@10000000" >/dev/null
 	summarize_log "$tmp" | grep -aF "interrupt-controller-path	/soc/interrupt-controller@c000000" >/dev/null
 	summarize_log "$tmp" | grep -aF "interrupt-routing-compatible	sifive,plic-1.0.0" >/dev/null

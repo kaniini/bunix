@@ -237,6 +237,11 @@ static void platform_discovery_smoke(u64 fdt)
 	if (platform.cpu_count != 0) {
 		early_puts("fdt: riscv64 cpus\n");
 		early_put_kv_dec("fdt: riscv64 cpu-count=", platform.cpu_count);
+		early_put_kv_dec("smp: riscv64 discovered-harts=",
+				 platform.cpu_count);
+		early_put_kv_dec("smp: riscv64 started-harts=", 1);
+		early_put_kv_dec("smp: riscv64 boot-hart=", boot_info.hart_id);
+		early_put_kv_str("smp: riscv64 secondary-policy=", "parked");
 	}
 	if (platform.timebase_frequency != 0) {
 		early_puts("fdt: riscv64 timer\n");

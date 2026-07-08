@@ -159,6 +159,10 @@ Expected first milestone serial markers:
 - `pmm: riscv64 ranges`
 - `fdt: riscv64 cpus`
 - `fdt: riscv64 cpu-count=...`
+- `smp: riscv64 discovered-harts=...`
+- `smp: riscv64 started-harts=...`
+- `smp: riscv64 boot-hart=...`
+- `smp: riscv64 secondary-policy=parked`
 - `fdt: riscv64 timer`
 - `fdt: riscv64 timebase-hz=...`
 - `fdt: riscv64 stdout`
@@ -198,7 +202,8 @@ serial log and updating the exploration notes.
 
 The summary output is also tab-separated.  It extracts the board-specific
 values that must be reviewed before closing the remaining hardware tasks:
-`cpu-count`, `timebase-hz`, `stdout-path`, `stdout-resolved`,
+`cpu-count`, `smp-discovered-harts`, `smp-started-harts`, `smp-boot-hart`,
+`smp-secondary-policy`, `timebase-hz`, `stdout-path`, `stdout-resolved`,
 `stdout-uart-base`, `uart-count`, `interrupt-controller-path`,
 `interrupt-controller-compatible`, `interrupt-controller-count`,
 `interrupt-routing-path`, and `interrupt-routing-compatible`.
@@ -221,8 +226,10 @@ After the first serial/poweroff smoke, bring up hardware in this order:
   to legacy shutdown if that extension returns.
 - Identify the interrupt-controller path from the vendor DT and BSP: PLIC,
   AIA, or vendor-specific routing.
-- Decide whether the first SMP hardware milestone stays `SMP=1` or releases
-  secondary harts.
+- Keep the first SMP hardware milestone at one started hart while firmware
+  hart discovery is proved.  Real BPI-F3 logs should show
+  `smp-secondary-policy=parked`; secondary hart release belongs in a later
+  SMP bringup slice after the single-hart board boot is reliable.
 - Split later device work into explorations for eMMC/microSD, USB, dual GbE,
   PCIe/M.2, display, WiFi/Bluetooth, and watchdog support.
 
