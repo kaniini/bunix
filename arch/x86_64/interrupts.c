@@ -39,6 +39,11 @@ enum {
 
 	IPC_RIGHT_SEND = 1 << 0,
 	LINUX_SIGNAL_FRAME_MAGIC = 0x534947424e555858ull,
+	LINUX_SIGBUS = 7,
+	LINUX_SIGSEGV = 11,
+	LINUX_SEGV_MAPERR = 1,
+	LINUX_SEGV_ACCERR = 2,
+	LINUX_BUS_ADRALN = 1,
 	RFLAGS_AC = 1u << 18,
 };
 
@@ -78,6 +83,15 @@ struct linux_signal_frame {
 	u64 saved_rax;
 	u64 old_mask;
 	struct arch_syscall_frame frame;
+};
+
+struct linux_siginfo {
+	u32 signo;
+	u32 errno_value;
+	u32 code;
+	u32 pad0;
+	u64 addr;
+	u8 pad[104];
 };
 
 struct idt_entry {
@@ -252,7 +266,7 @@ static u64 user_fault_class(const struct arch_interrupt_frame *frame)
 static int write_signal_frame(struct arch_interrupt_frame *frame,
 			      struct interrupt_saved_regs *regs,
 			      u64 signal, u64 handler, u64 restorer,
-			      u64 old_mask)
+			      u64 old_mask, const struct task_fault_event *event)
 {
 	const struct linux_signal_frame signal_frame = {
 		.magic = LINUX_SIGNAL_FRAME_MAGIC,
@@ -277,19 +291,43 @@ static int write_signal_frame(struct arch_interrupt_frame *frame,
 			.r9 = regs->r9,
 		},
 	};
+	struct linux_siginfo siginfo = {
+		.signo = (u32)signal,
+		.errno_value = 0,
+		.code = 0,
+		.pad0 = 0,
+		.addr = 0,
+		.pad = { 0 },
+	};
 	const u64 frame_addr =
-		((frame->rsp - sizeof(signal_frame) - 8) & ~15ull) - 8;
+		((frame->rsp - sizeof(signal_frame) - sizeof(siginfo) - 8) &
+		 ~15ull) - 8;
+	const u64 signal_frame_addr = frame_addr + 8;
+	const u64 siginfo_addr = signal_frame_addr + sizeof(signal_frame);
+
+	if (event != 0 && signal == LINUX_SIGSEGV) {
+		const u64 fault_class = event->flags >> 32;
+
+		siginfo.code = fault_class == TASK_FAULT_CLASS_PROTECTION ?
+			       LINUX_SEGV_ACCERR : LINUX_SEGV_MAPERR;
+		siginfo.addr = event->fault_addr;
+	} else if (event != 0 && signal == LINUX_SIGBUS) {
+		siginfo.code = LINUX_BUS_ADRALN;
+		siginfo.addr = event->fault_addr;
+	}
 
 	if (vm_write_user(task_vm_space(task_current()), frame_addr,
 			  &restorer, sizeof(restorer)) != 0 ||
-	    vm_write_user(task_vm_space(task_current()), frame_addr + 8,
-			  &signal_frame, sizeof(signal_frame)) != 0) {
+	    vm_write_user(task_vm_space(task_current()), signal_frame_addr,
+			  &signal_frame, sizeof(signal_frame)) != 0 ||
+	    vm_write_user(task_vm_space(task_current()), siginfo_addr,
+			  &siginfo, sizeof(siginfo)) != 0) {
 		return -1;
 	}
 
 	regs->rax = 0;
 	regs->rdi = signal;
-	regs->rsi = 0;
+	regs->rsi = siginfo_addr;
 	regs->rdx = 0;
 	regs->r10 = 0;
 	regs->r8 = 0;
@@ -351,7 +389,7 @@ static int notify_linux_task_fault(struct arch_interrupt_frame *frame, u64 cr2)
 		return 0;
 	}
 	if (write_signal_frame(frame, regs, reply.words[0], reply.words[1],
-			       reply.words[2], reply.words[3]) != 0) {
+			       reply.words[2], reply.words[3], &event) != 0) {
 		console_printf("interrupts: user fault signal frame failed vector=%u rip=%p task=%u\n",
 			       (u32)frame->vector, (const void *)frame->rip,
 			       task_id(task_current()));

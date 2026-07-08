@@ -9,9 +9,19 @@
 #include <unistd.h>
 
 static int signal_pipe[2] = { -1, -1 };
+static int expected_fault_signal;
+static int expected_fault_code;
+static void *expected_fault_addr;
 
-static void fault_handler(int signal)
+static void fault_handler(int signal, siginfo_t *info, void *context)
 {
+	(void)context;
+	if (signal != expected_fault_signal || info == 0 ||
+	    info->si_signo != expected_fault_signal ||
+	    info->si_code != expected_fault_code ||
+	    info->si_addr != expected_fault_addr) {
+		_exit(4);
+	}
 	_exit(signal == SIGSEGV ? 42 : 43);
 }
 
@@ -43,7 +53,8 @@ static int test_caught_faults(void)
 	pid_t child;
 
 	memset(&action, 0, sizeof(action));
-	action.sa_handler = fault_handler;
+	action.sa_sigaction = fault_handler;
+	action.sa_flags = SA_SIGINFO;
 	sigemptyset(&action.sa_mask);
 
 	child = fork();
@@ -54,6 +65,9 @@ static int test_caught_faults(void)
 	if (child == 0) {
 		volatile int *bad = (volatile int *)0x0000700000000000ull;
 
+		expected_fault_signal = SIGSEGV;
+		expected_fault_code = SEGV_MAPERR;
+		expected_fault_addr = (void *)bad;
 		if (sigaction(SIGSEGV, &action, 0) != 0) {
 			_exit(2);
 		}
@@ -73,6 +87,9 @@ static int test_caught_faults(void)
 		static unsigned int word = 0x12345678;
 		volatile unsigned int value;
 
+		expected_fault_signal = SIGBUS;
+		expected_fault_code = BUS_ADRALN;
+		expected_fault_addr = 0;
 		if (sigaction(SIGBUS, &action, 0) != 0) {
 			_exit(2);
 		}
