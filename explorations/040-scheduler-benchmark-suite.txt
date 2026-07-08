@@ -38,7 +38,7 @@ Design direction:
 
 Tasks:
 
-- [ ] Define the scheduler policy RPC/capability model for class, priority,
+- [x] Define the scheduler policy RPC/capability model for class, priority,
       weight, and affinity changes without allowing ambient self-promotion.
 - [x] Expose per-thread scheduler statistics sufficient for fairness and
       latency tests, including task/thread IDs that can be correlated with
@@ -122,4 +122,17 @@ Progress notes:
   - Verification:
     - `make build/modules/schedbench.user`
     - `BUNIX_TEST_SET=scheduler-bench make test-parallel`
+    - `git diff --check`
+- Scheduler policy authority model slice:
+  - Added `docs/scheduler-policy.md` defining the scheduler-policy service as
+    FourCC protocol `SCHD`.
+  - Defined policy capability targets, rights, bounds, delegation depth,
+    monotonic attenuation, and the rule that ordinary tasks cannot self-promote
+    without an explicit scheduler-policy capability.
+  - Documented that Linux scheduling and affinity APIs must map Linux PID/TID
+    semantics to Bunix task/thread targets through proc/Linux server state
+    before RPCing to the scheduler-policy server.
+  - Kept hard affinity and migration test tasks open until the corresponding
+    policy and migration mechanisms exist.
+  - Verification:
     - `git diff --check`
