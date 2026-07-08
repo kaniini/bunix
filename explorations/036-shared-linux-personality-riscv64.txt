@@ -73,3 +73,10 @@ Progress notes:
   module task's private port by the name `linux`.  The shared-server slice
   must make service registration real on riscv64 before the action protocol
   can be deleted.
+- Exploration 035 has since staged the first service-registration dependency:
+  the main riscv64 boot package launches shared `names` and shared `user`
+  servers before the temporary riscv64 Linux stub.  This exploration still
+  owns replacing the `linux` module with the shared Linux personality and
+  translating riscv64 Linux syscalls into the shared `BUNIX_LINUX_*` protocol;
+  it should not re-open the broad boot-package refactor except where required
+  to make the shared Linux server become usable.

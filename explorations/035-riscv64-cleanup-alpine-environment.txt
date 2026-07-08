@@ -247,3 +247,26 @@ Progress notes:
   cleanly.
 - `make test-boot-riscv64-uart-console` passed after adding `names` to the
   UART boot package.
+- Added the next normal riscv64 service-graph piece needed before the shared
+  Linux personality can run:
+  - `build/riscv64/modules/user.server` now builds from the shared
+    `user/user/main.c` server with the riscv64 crt0 and user linker script.
+  - The default and multi-record riscv64 boot packages include the `user`
+    module after `names`.
+  - The riscv64 bootstrap launches `user` with console and names send
+    capabilities before launching the temporary riscv64 `linux` server, so the
+    future shared Linux server has the expected USER service path available.
+  - The early boot smoke now requires `names: register name=user`, proving the
+    shared user server starts and registers on the main emulator path.
+  - The UART boot package intentionally remains lean.  Including the normal
+    `user` server there exposed a UART-only timeout after names handled the
+    user service registration.  That is not part of the Alpine milestone
+    implementation slice; it is tracked in the next boot-test/server-graph
+    exploration instead of being hidden as an implicit refactor.
+- `make test-riscv64-bootpkg` passed after adding the riscv64 user module to
+  the default and multi-record boot packages.
+- `make test-boot-riscv64-early` passed after proving the shared user server
+  registers through names and the existing static musl hello path still powers
+  off cleanly.
+- `make test-boot-riscv64-uart-console` passed with the UART boot package kept
+  as a narrow SBI/UART smoke package.

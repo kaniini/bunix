@@ -20,6 +20,8 @@ int main(void)
 	const char online[] = "bootstrap-riscv64: online\n";
 	const char abi_ok[] = "bootstrap-riscv64: abi-smoke launched\n";
 	const char abi_fail[] = "bootstrap-riscv64: abi-smoke failed\n";
+	const char user_ok[] = "bootstrap-riscv64: user launched\n";
+	const char user_fail[] = "bootstrap-riscv64: user failed\n";
 	const char linux_ok[] = "bootstrap-riscv64: linux launched\n";
 	const char linux_fail[] = "bootstrap-riscv64: linux failed\n";
 	const char hello_ok[] = "bootstrap-riscv64: musl-hello launched\n";
@@ -29,6 +31,17 @@ int main(void)
 	log_line(online, sizeof(online) - 1);
 	launch_or_log("abi-smoke.user", abi_ok, sizeof(abi_ok) - 1,
 		      abi_fail, sizeof(abi_fail) - 1);
+	const struct bunix_launch_cap user_caps[] = {
+		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, 0 },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, 0 },
+	};
+	if (bunix_launch_module_with_caps("user", user_caps,
+					  sizeof(user_caps) /
+						  sizeof(user_caps[0])) >= 0) {
+		log_line(user_ok, sizeof(user_ok) - 1);
+	} else {
+		log_line(user_fail, sizeof(user_fail) - 1);
+	}
 	launch_or_log("linux", linux_ok, sizeof(linux_ok) - 1,
 		      linux_fail, sizeof(linux_fail) - 1);
 	launch_or_log("/bin/musl-hello", hello_ok, sizeof(hello_ok) - 1,

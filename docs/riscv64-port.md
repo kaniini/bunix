@@ -115,14 +115,23 @@ U-mode from the module server thread, handles native `exit` by terminating the
 thread, reaps the task, and then powers off.  The old static mapped-image
 early harness for that payload has been removed.
 
-The riscv64 boot package now also carries the shared `names` server, and the
-generic initial boot-module starter launches it before the riscv64 bootstrap.
-The current smoke checks the `names` launch marker and a real
-`names: register name=bootstrap` service effect.  The package still omits the
-normal console server, so ordinary `bunix_console_log()` messages queued by
-`names` are not drained as visible `names: online` text yet.  The riscv64
-native syscall frontend implements the shared-buffer create/read/write
-syscalls needed by normal userspace servers on that path.
+The default riscv64 boot package now carries the shared `names` and `user`
+servers, and the generic initial boot-module starter launches `names` before
+the riscv64 bootstrap.  The bootstrap then launches `user` with console and
+names send capabilities before launching the temporary riscv64 `linux` stub.
+The current smoke checks the `names` launch marker plus real
+`names: register name=bootstrap` and `names: register name=user` service
+effects.  The package still omits the normal console server, so ordinary
+`bunix_console_log()` messages queued by `names` and `user` are not drained as
+visible `names: online` or `user: online` text yet.  The riscv64 native
+syscall frontend implements the shared-buffer create/read/write syscalls
+needed by normal userspace servers on that path.
+
+The UART boot package remains a narrower SBI/UART smoke carrier for now.
+Including the shared `user` server there exposed a UART-only timeout while the
+names service was replying to the user service registration.  That debugging
+belongs with the boot-test/server-graph split, not with the main emulator path
+that is preparing for Alpine userspace.
 
 The generic ELF loader now asks the architecture for its ELF machine ID rather
 than hardcoding x86_64.  The riscv64 early smoke loads `abi-smoke.user` through

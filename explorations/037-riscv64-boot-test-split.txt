@@ -20,6 +20,11 @@ Tasks:
 
 - [ ] Classify each riscv64 early marker as required boot evidence,
       hardware/firmware diagnostic, or test-only self-test.
+- [ ] Investigate the UART boot package timeout seen when the normal shared
+      `user` server is included.  The default emulator boot path can launch
+      `names` and `user`, but the UART package is intentionally kept lean until
+      this exploration splits hardware-console smoke from normal server-graph
+      boot.
 - [ ] Move test-only checks behind explicit command-line tokens or dedicated
       test entry helpers while preserving existing smoke target coverage.
 - [ ] Keep platform/FDT diagnostics available for BPI-F3 review logs without
