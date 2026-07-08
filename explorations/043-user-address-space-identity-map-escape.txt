@@ -70,8 +70,38 @@ Regression gate:
 
 Tasks:
 
-- [ ] Build local read/write reproducers for low-memory user access.
-- [ ] Remove user-accessible low identity mappings from task page tables.
-- [ ] Preserve required syscall/trap/kernel execution mappings safely.
-- [ ] Add regression coverage for denied low-memory access.
+- [x] Build local read/write reproducers for low-memory user access.
+- [x] Remove user-accessible low identity mappings from task page tables.
+- [x] Preserve required syscall/trap/kernel execution mappings safely.
+- [x] Add regression coverage for denied low-memory access.
 - [ ] Run focused boot/shell/virtio/OpenRC tests, then full `make test`.
+
+Progress:
+
+- x86_64 task address spaces now keep the low identity mapping supervisor-only.
+- Generic user copy/protect/unmap/clone paths now require arch-confirmed user
+  mappings instead of translating through kernel-only mappings.
+- riscv64 exposes matching user-only translate/protect/unmap hooks so the
+  generic VM contract remains shared across ports.
+- `/bin/lowmemtest` proves ring-3 low-memory reads and writes SIGSEGV and that
+  Linux `write(2)` from a low kernel address returns `-EFAULT`.
+
+Validation:
+
+- `make` passed.
+- `make test-lowmem-isolation` passed.
+- `make test-riscv64-shared-linux-server-build` passed.
+- Root `test-command` VFS smoke passed:
+  `BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' BUNIX_CMD='busybox cat /hello.txt >/dev/null && echo SMOKE_VFS_OK' make test-command`.
+- `make test-boot-virtio-blk-irq` passed.
+
+Open blocker:
+
+- `make test-smoke` currently fails in the non-root interactive login shell
+  path before any smoke command output appears.  The shell reaches
+  `~ $ \033[6n`, the harness injects the command, the TTY echoes it, but ash
+  does not produce the expected marker.  A debug run showed the shell reaching
+  prompt setup after `/bin/sh` exec and then no later traced read/write syscall
+  before the harness timeout.  This appears separate from the low identity-map
+  isolation change because the root command path and dedicated lowmem test
+  pass, but it blocks the full shell/full-test gate until resolved.

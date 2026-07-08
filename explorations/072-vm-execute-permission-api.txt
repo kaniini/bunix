@@ -1,0 +1,41 @@
+Add explicit execute permissions to the shared VM mapping API.
+
+Parent exploration: `043-user-address-space-identity-map-escape.txt`
+
+Problem:
+
+- The shared VM API currently models present, writable, and user-accessible
+  permissions, but it does not model executable versus non-executable pages.
+- x86_64 currently has no NX handling in the generic mapping contract.
+- riscv64 needs an execute bit for instruction fetches and therefore maps all
+  user pages executable locally until the shared API can express the intended
+  permission.
+
+Why this is a refactor:
+
+- User/kernel isolation should eventually distinguish data pages from code
+  pages across both architectures.
+- Architecture-specific compensation makes VM behavior harder to reason about
+  and easier to diverge as more ports are added.
+
+Plan:
+
+- Extend the generic VM mapping/protection APIs to include execute permission.
+- Teach ELF loading, stack allocation, heap/mmap growth, shared buffers, and
+  server mappings to request the correct executable or non-executable access.
+- Implement x86_64 NX support where available and keep a conservative fallback
+  for CPUs without NX.
+- Remove riscv64's local "all user pages executable" workaround.
+- Add regression coverage proving stacks/data mappings are not executable and
+  text mappings remain executable.
+
+Tasks:
+
+- [ ] Audit all user mapping call sites and assign intended execute policy.
+- [ ] Extend generic VM APIs with execute permission.
+- [ ] Implement x86_64 NX and riscv64 execute-bit handling through the shared
+      contract.
+- [ ] Update ELF, mmap, stack, shared-buffer, and server mapping callers.
+- [ ] Add execute-permission regression tests.
+- [ ] Run focused boot/shell tests, riscv64 build/boot gates, then full
+      `make test`.

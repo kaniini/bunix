@@ -120,12 +120,12 @@ int arch_vm_space_init(struct arch_vm_space *space)
 	u64 *pdpt = (u64 *)pdpt_phys;
 	u64 *pd = (u64 *)pd_phys;
 
-	pml4[0] = pdpt_phys | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
-	pdpt[0] = pd_phys | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+	pml4[0] = pdpt_phys | PTE_PRESENT | PTE_WRITABLE;
+	pdpt[0] = pd_phys | PTE_PRESENT | PTE_WRITABLE;
 
 	for (u64 i = 0; i < PAGE_ENTRIES; i++) {
 		pd[i] = (i * LARGE_PAGE_SIZE) | PTE_PRESENT | PTE_WRITABLE |
-			PTE_USER | PTE_LARGE;
+			PTE_LARGE;
 	}
 
 	space->cr3 = pml4_phys;
@@ -263,6 +263,57 @@ int arch_vm_protect_page(struct arch_vm_space *space, u64 vaddr, u32 writable)
 	return 0;
 }
 
+int arch_vm_protect_user_page(struct arch_vm_space *space, u64 vaddr,
+			      u32 writable)
+{
+	u64 *pml4 = (u64 *)space->cr3;
+	const u64 pml4_index = (vaddr >> 39) & 0x1ff;
+	const u64 pdpt_index = (vaddr >> 30) & 0x1ff;
+	const u64 pd_index = (vaddr >> 21) & 0x1ff;
+	const u64 pt_index = (vaddr >> 12) & 0x1ff;
+	u64 entry;
+
+	if ((vaddr & (PAGE_SIZE - 1)) != 0) {
+		return -1;
+	}
+
+	entry = pml4[pml4_index];
+	if ((entry & (PTE_PRESENT | PTE_USER)) !=
+	    (PTE_PRESENT | PTE_USER) || (entry & PTE_LARGE) != 0) {
+		return -1;
+	}
+
+	u64 *pdpt = (u64 *)(entry & ~0xfffull);
+	entry = pdpt[pdpt_index];
+	if ((entry & (PTE_PRESENT | PTE_USER)) !=
+	    (PTE_PRESENT | PTE_USER) || (entry & PTE_LARGE) != 0) {
+		return -1;
+	}
+
+	u64 *pd = (u64 *)(entry & ~0xfffull);
+	entry = pd[pd_index];
+	if ((entry & (PTE_PRESENT | PTE_USER)) !=
+	    (PTE_PRESENT | PTE_USER) || (entry & PTE_LARGE) != 0) {
+		return -1;
+	}
+
+	u64 *pt = (u64 *)(entry & ~0xfffull);
+	entry = pt[pt_index];
+	if ((entry & (PTE_PRESENT | PTE_USER)) !=
+	    (PTE_PRESENT | PTE_USER)) {
+		return -1;
+	}
+
+	if (writable) {
+		entry |= PTE_WRITABLE;
+	} else {
+		entry &= ~((u64)PTE_WRITABLE);
+	}
+	pt[pt_index] = entry;
+	__asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
+	return 0;
+}
+
 u64 arch_vm_unmap_page(struct arch_vm_space *space, u64 vaddr)
 {
 	u64 *pml4 = (u64 *)space->cr3;
@@ -296,6 +347,52 @@ u64 arch_vm_unmap_page(struct arch_vm_space *space, u64 vaddr)
 	u64 *pt = (u64 *)(entry & ~0xfffull);
 	entry = pt[pt_index];
 	if ((entry & PTE_PRESENT) == 0) {
+		return 0;
+	}
+
+	const u64 phys = entry & ~0xfffull;
+	pt[pt_index] = 0;
+	__asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
+	return phys;
+}
+
+u64 arch_vm_unmap_user_page(struct arch_vm_space *space, u64 vaddr)
+{
+	u64 *pml4 = (u64 *)space->cr3;
+	const u64 pml4_index = (vaddr >> 39) & 0x1ff;
+	const u64 pdpt_index = (vaddr >> 30) & 0x1ff;
+	const u64 pd_index = (vaddr >> 21) & 0x1ff;
+	const u64 pt_index = (vaddr >> 12) & 0x1ff;
+	u64 entry;
+
+	if ((vaddr & (PAGE_SIZE - 1)) != 0) {
+		return 0;
+	}
+
+	entry = pml4[pml4_index];
+	if ((entry & (PTE_PRESENT | PTE_USER)) !=
+	    (PTE_PRESENT | PTE_USER) || (entry & PTE_LARGE) != 0) {
+		return 0;
+	}
+
+	u64 *pdpt = (u64 *)(entry & ~0xfffull);
+	entry = pdpt[pdpt_index];
+	if ((entry & (PTE_PRESENT | PTE_USER)) !=
+	    (PTE_PRESENT | PTE_USER) || (entry & PTE_LARGE) != 0) {
+		return 0;
+	}
+
+	u64 *pd = (u64 *)(entry & ~0xfffull);
+	entry = pd[pd_index];
+	if ((entry & (PTE_PRESENT | PTE_USER)) !=
+	    (PTE_PRESENT | PTE_USER) || (entry & PTE_LARGE) != 0) {
+		return 0;
+	}
+
+	u64 *pt = (u64 *)(entry & ~0xfffull);
+	entry = pt[pt_index];
+	if ((entry & (PTE_PRESENT | PTE_USER)) !=
+	    (PTE_PRESENT | PTE_USER)) {
 		return 0;
 	}
 
@@ -339,6 +436,52 @@ u64 arch_vm_translate(const struct arch_vm_space *space, u64 vaddr, u32 write)
 	const u64 *pt = (const u64 *)(entry & ~0xfffull);
 	entry = pt[pt_index];
 	if ((entry & PTE_PRESENT) == 0 || (write && (entry & PTE_WRITABLE) == 0)) {
+		return 0;
+	}
+
+	return (entry & ~0xfffull) + page_offset;
+}
+
+u64 arch_vm_translate_user(const struct arch_vm_space *space, u64 vaddr,
+			   u32 write)
+{
+	const u64 *pml4 = (const u64 *)space->cr3;
+	const u64 pml4_index = (vaddr >> 39) & 0x1ff;
+	const u64 pdpt_index = (vaddr >> 30) & 0x1ff;
+	const u64 pd_index = (vaddr >> 21) & 0x1ff;
+	const u64 pt_index = (vaddr >> 12) & 0x1ff;
+	const u64 page_offset = vaddr & (PAGE_SIZE - 1);
+	u64 entry;
+
+	entry = pml4[pml4_index];
+	if ((entry & (PTE_PRESENT | PTE_USER)) !=
+	    (PTE_PRESENT | PTE_USER) ||
+	    (write && (entry & PTE_WRITABLE) == 0)) {
+		return 0;
+	}
+
+	const u64 *pdpt = (const u64 *)(entry & ~0xfffull);
+	entry = pdpt[pdpt_index];
+	if ((entry & (PTE_PRESENT | PTE_USER)) !=
+	    (PTE_PRESENT | PTE_USER) ||
+	    (write && (entry & PTE_WRITABLE) == 0)) {
+		return 0;
+	}
+
+	const u64 *pd = (const u64 *)(entry & ~0xfffull);
+	entry = pd[pd_index];
+	if ((entry & (PTE_PRESENT | PTE_USER)) !=
+	    (PTE_PRESENT | PTE_USER) ||
+	    (write && (entry & PTE_WRITABLE) == 0) ||
+	    (entry & PTE_LARGE) != 0) {
+		return 0;
+	}
+
+	const u64 *pt = (const u64 *)(entry & ~0xfffull);
+	entry = pt[pt_index];
+	if ((entry & (PTE_PRESENT | PTE_USER)) !=
+	    (PTE_PRESENT | PTE_USER) ||
+	    (write && (entry & PTE_WRITABLE) == 0)) {
 		return 0;
 	}
 

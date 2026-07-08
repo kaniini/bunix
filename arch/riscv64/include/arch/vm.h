@@ -15,9 +15,14 @@ int arch_vm_register_mmio_identity(u64 start, u64 len);
 int arch_vm_map_page(struct arch_vm_space *space, u64 vaddr, u64 phys,
 		     u32 writable, u32 user);
 int arch_vm_protect_page(struct arch_vm_space *space, u64 vaddr, u32 writable);
+int arch_vm_protect_user_page(struct arch_vm_space *space, u64 vaddr,
+			      u32 writable);
 u64 arch_vm_unmap_page(struct arch_vm_space *space, u64 vaddr);
+u64 arch_vm_unmap_user_page(struct arch_vm_space *space, u64 vaddr);
 u64 arch_vm_translate(const struct arch_vm_space *space, u64 vaddr,
 		      u32 write);
+u64 arch_vm_translate_user(const struct arch_vm_space *space, u64 vaddr,
+			   u32 write);
 void arch_vm_activate(const struct arch_vm_space *space);
 u64 arch_vm_root(const struct arch_vm_space *space);
 

@@ -1,0 +1,56 @@
+Fix non-root login shell readiness and TTY command injection.
+
+Parent exploration: `043-user-address-space-identity-map-escape.txt`
+
+Problem:
+
+- Non-root interactive login reaches the BusyBox ash prompt, emits a cursor
+  position query, and echoes injected harness input, but the shell does not
+  execute the command before the harness times out.
+- This blocks `make test-smoke` and any full `make test` gate that relies on
+  the default `kaniini` login path.
+
+Evidence:
+
+- `BUNIX_CMD='echo USER_OK' make test-command` fails after:
+  `login: shell exec` and `~ $ \033[6n`.
+- `make test-smoke` fails waiting for `SMOKE_PROCFS_OK` after the harness sends
+  the first smoke command.
+- A `log=debug strace=structured` run shows `/bin/sh` exec in the login task,
+  then shell initialization through `arch_prctl`, `set_tid_address`, and
+  `brk`.  The prompt appears afterward, but no later traced shell read/write
+  syscall is emitted before timeout.
+- Root `test-command` succeeds with the same command path, so the failure is
+  specific to non-root login/session/TTY state or shell prompt readiness.
+
+Likely areas:
+
+- TTY cursor-position response handling around BusyBox ash line editing.
+- Foreground process group/session state after non-root login.
+- Termios transitions across password echo disable/restore, `setuid`, and
+  `/bin/sh` exec.
+- Harness prompt detection racing with ash's internal CPR/readiness state.
+
+Plan:
+
+- Build a focused reproducer that logs in as `kaniini`, waits for the prompt,
+  and records TTY termios, foreground pgid, pending reader, and read-queue
+  state at each transition.
+- Add narrowly scoped debug or trace hooks in the Linux TTY layer that can be
+  enabled by kernel command line without polluting normal logs.
+- Compare root and non-root login traces from `login: shell exec` through the
+  first command read.
+- Fix the underlying Linux server/session/TTY behavior if the guest is wrong;
+  otherwise fix the harness to wait for the real shell readiness signal instead
+  of matching the prompt too early.
+- Add a regression that proves a non-root login can execute `echo USER_OK` and
+  return to login after exit.
+
+Tasks:
+
+- [ ] Add focused non-root login command reproducer.
+- [ ] Add gated TTY/session trace points for prompt/read readiness.
+- [ ] Compare root versus non-root shell startup and first read.
+- [ ] Fix the guest TTY/session bug or harness readiness race.
+- [ ] Add regression coverage for non-root command execution.
+- [ ] Rerun `make test-smoke`, then the full gate blocked by exploration 043.

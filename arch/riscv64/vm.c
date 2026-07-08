@@ -327,6 +327,32 @@ int arch_vm_protect_page(struct arch_vm_space *space, u64 vaddr, u32 writable)
 	return 0;
 }
 
+int arch_vm_protect_user_page(struct arch_vm_space *space, u64 vaddr,
+			      u32 writable)
+{
+	u64 *slot;
+	u64 entry;
+
+	if ((vaddr & (RISCV64_PAGE_SIZE - 1)) != 0 ||
+	    lookup_leaf(space, vaddr, &slot) != 0) {
+		return -1;
+	}
+
+	entry = *slot;
+	if (!pte_leaf_valid(entry) || (entry & RISCV64_PTE_U) == 0) {
+		return -1;
+	}
+
+	if (writable != 0) {
+		entry |= RISCV64_PTE_W | RISCV64_PTE_D;
+	} else {
+		entry &= ~((u64)RISCV64_PTE_W);
+	}
+	*slot = entry;
+	flush_vma();
+	return 0;
+}
+
 u64 arch_vm_unmap_page(struct arch_vm_space *space, u64 vaddr)
 {
 	u64 *slot;
@@ -349,6 +375,28 @@ u64 arch_vm_unmap_page(struct arch_vm_space *space, u64 vaddr)
 	return phys;
 }
 
+u64 arch_vm_unmap_user_page(struct arch_vm_space *space, u64 vaddr)
+{
+	u64 *slot;
+	u64 entry;
+	u64 phys;
+
+	if ((vaddr & (RISCV64_PAGE_SIZE - 1)) != 0 ||
+	    lookup_leaf(space, vaddr, &slot) != 0) {
+		return 0;
+	}
+
+	entry = *slot;
+	if (!pte_leaf_valid(entry) || (entry & RISCV64_PTE_U) == 0) {
+		return 0;
+	}
+
+	phys = pte_phys(entry);
+	*slot = 0;
+	flush_vma();
+	return phys;
+}
+
 u64 arch_vm_translate(const struct arch_vm_space *space, u64 vaddr, u32 write)
 {
 	const u64 page_offset = vaddr & (RISCV64_PAGE_SIZE - 1);
@@ -361,6 +409,26 @@ u64 arch_vm_translate(const struct arch_vm_space *space, u64 vaddr, u32 write)
 
 	entry = *slot;
 	if (!pte_leaf_valid(entry) ||
+	    (write != 0 && (entry & RISCV64_PTE_W) == 0)) {
+		return 0;
+	}
+
+	return pte_phys(entry) + page_offset;
+}
+
+u64 arch_vm_translate_user(const struct arch_vm_space *space, u64 vaddr,
+			   u32 write)
+{
+	const u64 page_offset = vaddr & (RISCV64_PAGE_SIZE - 1);
+	u64 *slot;
+	u64 entry;
+
+	if (lookup_leaf(space, vaddr, &slot) != 0) {
+		return 0;
+	}
+
+	entry = *slot;
+	if (!pte_leaf_valid(entry) || (entry & RISCV64_PTE_U) == 0 ||
 	    (write != 0 && (entry & RISCV64_PTE_W) == 0)) {
 		return 0;
 	}

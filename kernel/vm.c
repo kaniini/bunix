@@ -162,7 +162,8 @@ int vm_read_user(struct vm_space *space, u64 vaddr, void *dst, u64 len)
 
 	while (done < len) {
 		const u64 current = vaddr + done;
-		const u64 phys = arch_vm_translate(&space->arch, current, 0);
+		const u64 phys =
+			arch_vm_translate_user(&space->arch, current, 0);
 		const u64 page_remaining =
 			VM_PAGE_SIZE - (current & (VM_PAGE_SIZE - 1));
 		const u64 chunk = min_u64(len - done, page_remaining);
@@ -188,7 +189,8 @@ int vm_write_user(struct vm_space *space, u64 vaddr, const void *src, u64 len)
 
 	while (done < len) {
 		const u64 current = vaddr + done;
-		const u64 phys = arch_vm_translate(&space->arch, current, 1);
+		const u64 phys =
+			arch_vm_translate_user(&space->arch, current, 1);
 		const u64 page_remaining = VM_PAGE_SIZE - (current & (VM_PAGE_SIZE - 1));
 		const u64 chunk = min_u64(len - done, page_remaining);
 
@@ -271,7 +273,7 @@ int vm_protect_user_range(struct vm_space *space, u64 vaddr, u64 len,
 	}
 
 	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
-		if (arch_vm_protect_page(&space->arch, page, writable) != 0) {
+		if (arch_vm_protect_user_page(&space->arch, page, writable) != 0) {
 			return -1;
 		}
 	}
@@ -292,7 +294,7 @@ int vm_unmap_user_range(struct vm_space *space, u64 vaddr, u64 len)
 	}
 
 	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
-		const u64 phys = arch_vm_unmap_page(&space->arch, page);
+		const u64 phys = arch_vm_unmap_user_page(&space->arch, page);
 
 		if (phys == 0) {
 			return -1;
@@ -318,7 +320,8 @@ int vm_clone_user_range(struct vm_space *dst, struct vm_space *src,
 
 	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
 		struct vm_frame frame = vm_alloc_user_page(dst, page, writable);
-		const u64 src_phys = arch_vm_translate(&src->arch, page, 0);
+		const u64 src_phys =
+			arch_vm_translate_user(&src->arch, page, 0);
 
 		if (frame.addr == 0 || src_phys == 0) {
 			if (frame.addr != 0) {
