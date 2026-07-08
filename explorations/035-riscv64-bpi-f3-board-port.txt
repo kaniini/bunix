@@ -353,3 +353,16 @@ Verification notes:
 - `make test-riscv64-bpi-f3-emulator-gate` passed after adding BPI-F3
   boot-layout sanity checks.
 - `git diff --check` passed after adding BPI-F3 boot-layout sanity checks.
+- Added negative self-test coverage for BPI-F3 log evidence rejection:
+  - `tools/bpi-f3-smoke.sh --self-test` now verifies that `--check-log`
+    rejects zero memory size, unordered kernel ranges, and initrd size fields
+    that do not match their start/end range.
+  - This keeps the physical-board evidence gate from accepting malformed
+    serial logs while hardware work remains blocked on emulator parity.
+- `sh -n tools/bpi-f3-smoke.sh` passed after adding negative BPI-F3 log
+  evidence tests.
+- `make test-riscv64-bpi-f3-smoke-script` passed after adding negative
+  BPI-F3 log evidence tests.
+- `make test-riscv64-bpi-f3-emulator-gate` passed after adding negative
+  BPI-F3 log evidence tests.
+- `git diff --check` passed after adding negative BPI-F3 log evidence tests.

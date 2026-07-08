@@ -226,6 +226,23 @@ check_layout_sanity() {
 		"boot: riscv64 fdt-size="
 }
 
+expect_check_log_failure() {
+	source_log=$1
+	bad_log=$2
+	error_log=$3
+	match=$4
+	replacement=$5
+	expected=$6
+
+	sed "s|$match.*|$replacement|" "$source_log" > "$bad_log"
+	if "$0" --artifact-dir "$artifact_dir" --check-log "$bad_log" \
+	    >/dev/null 2>"$error_log"; then
+		echo "expected BPI-F3 smoke log check to fail: $match" >&2
+		exit 1
+	fi
+	grep -aF "$expected" "$error_log" >/dev/null
+}
+
 summary_line() {
 	key=$1
 	value=$2
@@ -354,8 +371,10 @@ self_test() {
 	tmp=${TMPDIR:-/tmp}/bunix-bpi-f3-smoke.$$
 	preboot=${TMPDIR:-/tmp}/bunix-bpi-f3-preboot.$$
 	review=${TMPDIR:-/tmp}/bunix-bpi-f3-review.$$
+	bad=${TMPDIR:-/tmp}/bunix-bpi-f3-bad.$$
+	err=${TMPDIR:-/tmp}/bunix-bpi-f3-err.$$
 
-	trap 'rm -f "$tmp" "$preboot" "$review"' EXIT HUP INT TERM
+	trap 'rm -f "$tmp" "$preboot" "$review" "$bad" "$err"' EXIT HUP INT TERM
 	cat >"$tmp" <<EOF
 bunixos: riscv64 early bootstrap
 pmm: riscv64 ranges
@@ -412,6 +431,18 @@ EOF
 	check_preboot_log "$preboot" >/dev/null
 	cat "$preboot" "$tmp" > "$review"
 	review_log "$review" | grep -aF "bpi-f3 summary:" >/dev/null
+	expect_check_log_failure "$tmp" "$bad" "$err" \
+		"boot: riscv64 memory-size=" \
+		"boot: riscv64 memory-size=0x0" \
+		"invalid serial evidence: boot: riscv64 memory-size= is zero"
+	expect_check_log_failure "$tmp" "$bad" "$err" \
+		"boot: riscv64 kernel-end=" \
+		"boot: riscv64 kernel-end=0x80100000" \
+		"invalid serial evidence: kernel range is not ordered"
+	expect_check_log_failure "$tmp" "$bad" "$err" \
+		"boot: riscv64 initrd-size=" \
+		"boot: riscv64 initrd-size=0x20000" \
+		"invalid serial evidence: initrd size does not match start/end"
 	classify_log "$tmp" >/dev/null
 	summarize_log "$tmp" | grep -aF "initrd-size	0x10000" >/dev/null
 	summarize_log "$tmp" | grep -aF "smp-secondary-policy	parked" >/dev/null
