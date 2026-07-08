@@ -5587,6 +5587,11 @@ void arch_user_set_fs_base(u64 fs_base)
 	arch_wrmsr(MSR_FS_BASE, fs_base);
 }
 
+u16 arch_user_elf_machine(void)
+{
+	return 62;
+}
+
 void arch_user_enter(u64 entry, u64 stack)
 {
 	console_printf("user: enter rip=%p rsp=%p\n",

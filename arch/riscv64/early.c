@@ -7,6 +7,7 @@
 #include <arch/user.h>
 #include <arch/vm.h>
 #include "buffer.h"
+#include "elf.h"
 #include "ipc.h"
 #include "name.h"
 #include "pmm.h"
@@ -618,6 +619,21 @@ static int user_copy_self_test(void)
 	return 0;
 }
 
+static int generic_elf_loader_self_test(u64 module_start, u64 module_size)
+{
+	struct vm_space *space = vm_server_bootstrap_space("rv64-elf-smoke");
+	u64 entry = 0;
+	int rc;
+
+	if (space == 0) {
+		return -1;
+	}
+	rc = elf_load_user_image(space, module_start,
+				 module_start + module_size, &entry);
+	vm_rpc_destroy_space(space);
+	return rc == 0 && entry != 0 ? 0 : -1;
+}
+
 void riscv64_early_main(u64 hart_id, u64 fdt)
 {
 	struct riscv64_fdt_memory_range memory;
@@ -692,6 +708,10 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 					&module_start, &module_size) == 0 &&
 		    user_elf_is_riscv64(module_start, module_size)) {
 			early_puts("module: riscv64 user elf\n");
+			if (generic_elf_loader_self_test(module_start,
+							 module_size) == 0) {
+				early_puts("elf: riscv64 loader\n");
+			}
 			if (load_user_elf_image(module_start, module_size,
 						RISCV64_USER_BASE,
 						mapped_user_image,

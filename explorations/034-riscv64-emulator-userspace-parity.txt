@@ -356,3 +356,24 @@ Verification notes:
   the generic registry.
 - `make test-boot` passed after adding the generic `abi-smoke.user` module
   name and registration probe.
+- Made generic ELF loading architecture-aware:
+  - Added `arch_user_elf_machine()` on x86_64 and riscv64.
+  - `elf_load_user_image()` now accepts the current architecture's ELF machine
+    ID instead of hardcoding `EM_X86_64`.
+  - The riscv64 early boot path now loads `abi-smoke.user` through the generic
+    ELF loader into a temporary VM server space and requires the
+    `elf: riscv64 loader` marker.
+  - This proves generic ELF mapping accepts the riscv64 payload.  It still
+    does not transfer control through `server_launch_module()`; that needs
+    scheduler-owned riscv64 U-mode entry and task stack ownership next.
+- `make ARCH=riscv64 all` passed after making the generic ELF loader
+  architecture-aware.
+- `make all` passed after making the generic ELF loader architecture-aware.
+- `make test-boot-riscv64-early` passed with the generic riscv64 ELF loader
+  marker.
+- `make test-riscv64-user-abi` passed after making the generic ELF loader
+  architecture-aware.
+- `make test-riscv64-bootpkg` passed after making the generic ELF loader
+  architecture-aware.
+- `make test-boot` passed after making the generic ELF loader
+  architecture-aware.

@@ -1,13 +1,13 @@
 #include "console.h"
 #include "elf.h"
 #include "vm.h"
+#include <arch/user.h>
 
 enum {
 	ELF_MAGIC = 0x464c457f,
 	ELFCLASS64 = 2,
 	ELFDATA2LSB = 1,
 	ET_EXEC = 2,
-	EM_X86_64 = 62,
 	PT_LOAD = 1,
 	PF_W = 1 << 1,
 };
@@ -122,7 +122,8 @@ int elf_load_user_image(struct vm_space *space, u64 image_start, u64 image_end,
 	if (space == 0 || image_size < sizeof(*ehdr) ||
 	    read_magic(ehdr->ident) != ELF_MAGIC ||
 	    ehdr->ident[4] != ELFCLASS64 || ehdr->ident[5] != ELFDATA2LSB ||
-	    ehdr->type != ET_EXEC || ehdr->machine != EM_X86_64) {
+	    ehdr->type != ET_EXEC ||
+	    ehdr->machine != arch_user_elf_machine()) {
 		console_printf("elf: invalid user image %p-%p\n",
 			       (const void *)image_start, (const void *)image_end);
 		return -1;

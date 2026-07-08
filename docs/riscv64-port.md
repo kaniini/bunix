@@ -104,8 +104,14 @@ the generic boot-module registry and feeds package `module` records into
 `server_record_boot_module()`.  The current smoke records `abi-smoke.user` as
 a known native module and requires the `module: riscv64 registered` marker.
 The packaged payload still launches through the early harness until
-architecture-aware generic ELF loading and scheduler-owned U-mode launch are
-in place.
+scheduler-owned U-mode launch is in place.
+
+The generic ELF loader now asks the architecture for its ELF machine ID rather
+than hardcoding x86_64.  The riscv64 early smoke loads `abi-smoke.user` through
+`elf_load_user_image()` into a temporary generic VM server space and requires
+the `elf: riscv64 loader` marker before falling back to the old early harness
+to execute the payload.  Scheduler-owned U-mode launch is still the next
+runtime ownership step.
 
 The early riscv64 emulator path now initializes those generic services after
 PMM bringup and proves scheduler-owned kernel thread lifetime: it creates a

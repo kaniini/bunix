@@ -43,6 +43,11 @@ void arch_user_set_fs_base(u64 fs_base)
 	(void)fs_base;
 }
 
+u16 arch_user_elf_machine(void)
+{
+	return 243;
+}
+
 void arch_user_enter(u64 entry, u64 stack)
 {
 	riscv64_user_enter(entry, stack, current_kernel_stack);
