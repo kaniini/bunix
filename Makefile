@@ -1,5 +1,6 @@
-ARCH := x86_64
+ARCH ?= x86_64
 BUILD_DIR := build
+ARCH_BUILD_DIR := $(BUILD_DIR)/$(ARCH)
 ISO_ROOT := $(BUILD_DIR)/iso
 ESP_DIR := $(BUILD_DIR)/esp
 ALPINE_ESP_DIR := $(BUILD_DIR)/esp-alpine
@@ -24,7 +25,10 @@ EFI_BOOT_IMG := $(BUILD_DIR)/bunixos-efi.iso
 EFI_BOOT_APP := $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI
 GRUB_CFG := $(BUILD_DIR)/grub.cfg
 GRUB_STANDALONE_CFG := $(BUILD_DIR)/grub-standalone.cfg
-KERNEL := $(BUILD_DIR)/bunixos.kernel
+KERNEL := $(ARCH_BUILD_DIR)/bunixos.kernel
+RISCV64_KERNEL := $(BUILD_DIR)/riscv64/bunixos.kernel
+RISCV64_SERIAL_LOG := $(BUILD_DIR)/riscv64-serial.log
+RISCV64_QEMU ?= qemu-system-riscv64
 BOOTSTRAP_MODULE := $(BUILD_DIR)/modules/bootstrap.server
 USER_CRT0_OBJ := $(BUILD_DIR)/user/crt0.S.o
 BOOTSTRAP_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o
@@ -195,34 +199,17 @@ ROOTFS_BUSYBOX_LINKS := \
 	--symlink /sbin/halt /bin/busybox \
 	--symlink /sbin/reboot /bin/busybox
 
+ifeq ($(ARCH),x86_64)
 CC ?= gcc
 MUSL_CC ?= x86_64-alpine-linux-musl-gcc
 LD ?= ld
 OBJDUMP ?= objdump
 READELF ?= readelf
 QEMU ?= qemu-system-x86_64
-SMP ?= 2
-GRUB_MKRESCUE ?= grub-mkrescue
-GRUB_MKSTANDALONE ?= grub-mkstandalone
-OVMF_CODE ?= /usr/share/OVMF/OVMF_CODE.fd
-KERNEL_CMDLINE ?= log=info
-EFFECTIVE_KERNEL_CMDLINE = $(KERNEL_CMDLINE)$(if $(filter squashfs alpine-squashfs,$(ROOTFS_FLAVOR)), squashfs-root)
-
-CFLAGS := -m64 -std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-	-fno-pic -fno-pie -fno-builtin -mno-red-zone \
-	-mno-sse -mno-sse2 \
-	-Iarch/$(ARCH)/include -Ikernel \
-	-Wall -Wextra -Werror -MMD -MP
-ASFLAGS := -m64 -g -ffreestanding -Iarch/$(ARCH)/include -Ikernel -MMD -MP
-LDFLAGS := -m elf_x86_64 -nostdlib -T linker.ld
-USER_CFLAGS := -m64 -std=c11 -O2 -g -ffreestanding -fno-stack-protector \
-	-fno-pic -fno-pie -fno-builtin -mno-red-zone \
-	-mno-sse -mno-sse2 \
-	-Iuser/include -Wall -Wextra -Werror -MMD -MP
-USER_ASFLAGS := -m64 -g -ffreestanding -fno-pic -fno-pie \
-	-Iuser/include -MMD -MP
-
-KERNEL_SRCS := \
+KERNEL_LINKER := linker.ld
+KERNEL_LD_EMULATION := elf_x86_64
+KERNEL_OBJDUMP_CHECK := multiboot
+KERNEL_ARCH_SRCS := \
 	arch/$(ARCH)/boot/multiboot2.S \
 	arch/$(ARCH)/ap_trampoline.S \
 	arch/$(ARCH)/interrupts.c \
@@ -233,7 +220,49 @@ KERNEL_SRCS := \
 	arch/$(ARCH)/thread.S \
 	arch/$(ARCH)/syscall.S \
 	arch/$(ARCH)/user.c \
-	arch/$(ARCH)/vm.c \
+	arch/$(ARCH)/vm.c
+ARCH_CFLAGS := -m64 -mno-red-zone -mno-sse -mno-sse2
+ARCH_ASFLAGS := -m64
+else ifeq ($(ARCH),riscv64)
+RISCV64_CROSS_COMPILE ?= riscv64-linux-gnu-
+CC := $(RISCV64_CROSS_COMPILE)gcc
+MUSL_CC ?= riscv64-alpine-linux-musl-gcc
+LD := $(RISCV64_CROSS_COMPILE)ld
+OBJDUMP := $(RISCV64_CROSS_COMPILE)objdump
+READELF := $(RISCV64_CROSS_COMPILE)readelf
+QEMU ?= qemu-system-riscv64
+KERNEL_LINKER := arch/riscv64/linker.ld
+KERNEL_LD_EMULATION := elf64lriscv
+KERNEL_OBJDUMP_CHECK :=
+KERNEL_ARCH_SRCS := \
+	arch/riscv64/boot/start.S \
+	arch/riscv64/early.c
+ARCH_CFLAGS := -march=rv64gc -mabi=lp64 -mcmodel=medany
+ARCH_ASFLAGS := -march=rv64gc -mabi=lp64 -mcmodel=medany
+else
+$(error unsupported ARCH=$(ARCH))
+endif
+SMP ?= 2
+GRUB_MKRESCUE ?= grub-mkrescue
+GRUB_MKSTANDALONE ?= grub-mkstandalone
+OVMF_CODE ?= /usr/share/OVMF/OVMF_CODE.fd
+KERNEL_CMDLINE ?= log=info
+EFFECTIVE_KERNEL_CMDLINE = $(KERNEL_CMDLINE)$(if $(filter squashfs alpine-squashfs,$(ROOTFS_FLAVOR)), squashfs-root)
+
+CFLAGS := $(ARCH_CFLAGS) -std=c11 -O2 -g -ffreestanding -fno-stack-protector \
+	-fno-pic -fno-pie -fno-builtin \
+	-Iarch/$(ARCH)/include -Ikernel \
+	-Wall -Wextra -Werror -MMD -MP
+ASFLAGS := $(ARCH_ASFLAGS) -g -ffreestanding -Iarch/$(ARCH)/include -Ikernel -MMD -MP
+LDFLAGS := -m $(KERNEL_LD_EMULATION) -nostdlib -T $(KERNEL_LINKER)
+USER_CFLAGS := -m64 -std=c11 -O2 -g -ffreestanding -fno-stack-protector \
+	-fno-pic -fno-pie -fno-builtin -mno-red-zone \
+	-mno-sse -mno-sse2 \
+	-Iuser/include -Wall -Wextra -Werror -MMD -MP
+USER_ASFLAGS := -m64 -g -ffreestanding -fno-pic -fno-pie \
+	-Iuser/include -MMD -MP
+
+KERNEL_GENERIC_SRCS_x86_64 := \
 	kernel/main.c \
 	kernel/buffer.c \
 	kernel/console.c \
@@ -249,6 +278,11 @@ KERNEL_SRCS := \
 	kernel/timer.c \
 	kernel/vm.c \
 	servers/vm/vm.c
+KERNEL_GENERIC_SRCS_riscv64 :=
+KERNEL_GENERIC_SRCS := $(KERNEL_GENERIC_SRCS_$(ARCH))
+KERNEL_SRCS := \
+	$(KERNEL_ARCH_SRCS) \
+	$(KERNEL_GENERIC_SRCS)
 
 KERNEL_OBJS := $(KERNEL_SRCS:%=$(BUILD_DIR)/%.o)
 USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
@@ -291,13 +325,16 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso test test-alpine-rootfs test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early test test-alpine-rootfs test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
-$(KERNEL): $(KERNEL_OBJS) linker.ld
+$(KERNEL): $(KERNEL_OBJS) $(KERNEL_LINKER)
+	mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJS)
+ifneq ($(KERNEL_OBJDUMP_CHECK),)
 	$(OBJDUMP) -h $@ | awk '/multiboot/ { if (strtonum("0x" $$6) >= 0x8000) exit 1 }'
+endif
 
 $(BUILD_DIR)/%.c.o: %.c
 	mkdir -p $(dir $@)
@@ -898,6 +935,11 @@ run-iso: $(EFI_BOOT_IMG)
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-cdrom $(EFI_BOOT_IMG) -serial stdio -display none -no-reboot
 
+run-riscv64-early:
+	$(MAKE) ARCH=riscv64 all
+	$(RISCV64_QEMU) -machine virt -m 128M -nographic -no-reboot \
+		-kernel $(RISCV64_KERNEL)
+
 test: test-parallel
 
 test-alpine-rootfs: $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy tools/test-alpine-rootfs.sh modules/passwd modules/shadow modules/group
@@ -907,6 +949,15 @@ test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-b
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) QEMU_TIMEOUT=$(QEMU_TIMEOUT) \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
+
+test-boot-riscv64-early:
+	@command -v $(RISCV64_QEMU) >/dev/null 2>&1 || { echo "missing $(RISCV64_QEMU)"; exit 1; }
+	$(MAKE) ARCH=riscv64 all
+	mkdir -p $(BUILD_DIR)
+	timeout 30s $(RISCV64_QEMU) -machine virt -m 128M -nographic \
+		-no-reboot -kernel $(RISCV64_KERNEL) > $(RISCV64_SERIAL_LOG)
+	grep -aF "bunixos: riscv64 early bootstrap" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 
 test-boot-ext2: $(EXT2_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-ext2.txt
 	ESP_DIR=$(EXT2_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \

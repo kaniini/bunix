@@ -42,7 +42,7 @@ Tasks:
 - [x] Choose the initial riscv64 boot path and machine model:
       `qemu-system-riscv64 -machine virt`, OpenSBI/direct kernel entry, payload
       format, memory map, and firmware expectations.
-- [ ] Add riscv64 toolchain variables, build rules, linker script, and
+- [x] Add riscv64 toolchain variables, build rules, linker script, and
       `ARCH=riscv64` targets without disrupting the x86_64 defaults.
 - [ ] Add `arch/riscv64/` skeleton headers and implementations for early
       console, poweroff/reboot, interrupt enable/disable, timer source,
@@ -101,6 +101,22 @@ Progress notes:
   `riscv64-unknown-elf-gcc` in `PATH`.  The next build-system slice should add
   `ARCH=riscv64` variables and clear skip/fail behavior when the riscv64 tools
   are absent.
+- Added initial `ARCH=riscv64` build plumbing:
+  - x86_64 remains the default `ARCH`, but kernel output is now scoped under
+    `build/$(ARCH)/bunixos.kernel`.
+  - x86_64 keeps its Multiboot2 source list, linker script, compiler flags,
+    GRUB/EFI packaging, and test defaults.
+  - riscv64 has explicit `riscv64-linux-gnu-` tool variables, `rv64gc/lp64`
+    freestanding compile flags, `elf64lriscv` linker emulation, and a direct
+    early kernel source list.
+  - Added `arch/riscv64/linker.ld`, `arch/riscv64/boot/start.S`, and
+    `arch/riscv64/early.c` as a tiny OpenSBI payload that prints an early
+    banner and requests poweroff through SBI.
+  - Added `run-riscv64-early` and `test-boot-riscv64-early` targets for the
+    future QEMU bringup gate.
+- `make ARCH=riscv64 all` now selects the riscv64 source/link path correctly
+  and fails at the expected host prerequisite boundary because
+  `riscv64-linux-gnu-gcc` is not installed.
 
 Open design notes:
 
@@ -123,3 +139,14 @@ Verification so far:
 - `command -v riscv64-alpine-linux-musl-gcc` failed; tool missing from
   `PATH`.
 - `command -v riscv64-unknown-elf-gcc` failed; tool missing from `PATH`.
+- `make -n all` showed the default x86_64 kernel link path using
+  `build/x86_64/bunixos.kernel`.
+- `make -n ARCH=riscv64 all` showed the riscv64 early payload compile/link
+  path using `arch/riscv64/linker.ld` and `build/riscv64/bunixos.kernel`.
+- `make -n test-boot-riscv64-early` showed the future QEMU smoke path and
+  marker checks.
+- `make all` passed for the default x86_64 kernel.
+- `make test-boot` passed, proving x86_64 EFI/GRUB packaging still boots after
+  moving the kernel output under `build/x86_64/`.
+- `make ARCH=riscv64 all` failed at `riscv64-linux-gnu-gcc` missing from
+  `PATH`, after selecting the expected riscv64 object path.
