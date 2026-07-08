@@ -90,10 +90,14 @@ static long proc_register_exec(u64 proc, const char *path,
 	return 0;
 }
 
-static long proc_spawn_wait(u64 proc, const char *path)
+static long proc_spawn_wait_argv(u64 proc, const char *path,
+				 const char *const *argv, u64 argc)
 {
 	const u64 path_len = str_len(path) + 1;
-	const u64 total = path_len * 2;
+	u64 total = path_len;
+	for (u64 i = 0; i < argc; i++) {
+		total += str_len(argv[i]) + 1;
+	}
 	const long buffer = bunix_buffer_create(total);
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_PROC,
@@ -102,19 +106,32 @@ static long proc_spawn_wait(u64 proc, const char *path)
 		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
 		.reply = 0,
 		.cap = buffer > 0 ? (u64)buffer : 0,
-		.words = { total, 1, 0, 2 },
+		.words = { total, argc, 0, 2 },
 	};
 	struct bunix_msg reply;
 	u64 pid;
+	u64 offset = path_len;
 
 	if (proc == 0 || buffer <= 0 ||
-	    bunix_buffer_write((u64)buffer, 0, path, path_len) != 0 ||
-	    bunix_buffer_write((u64)buffer, path_len, path, path_len) != 0 ||
-	    bunix_ipc_call(proc, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
+	    bunix_buffer_write((u64)buffer, 0, path, path_len) != 0) {
 		if (buffer > 0) {
 			bunix_handle_close((u64)buffer);
 		}
+		return -1;
+	}
+	for (u64 i = 0; i < argc; i++) {
+		const u64 len = str_len(argv[i]) + 1;
+
+		if (bunix_buffer_write((u64)buffer, offset, argv[i],
+				       len) != 0) {
+			bunix_handle_close((u64)buffer);
+			return -1;
+		}
+		offset += len;
+	}
+	if (bunix_ipc_call(proc, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		bunix_handle_close((u64)buffer);
 		return -1;
 	}
 	pid = reply.words[1];
@@ -132,6 +149,14 @@ static long proc_spawn_wait(u64 proc, const char *path)
 		return -1;
 	}
 	return 0;
+}
+
+static long proc_spawn_wait(u64 proc, const char *path)
+{
+	const char *const argv[] = { path };
+
+	return proc_spawn_wait_argv(proc, path, argv,
+				    sizeof(argv) / sizeof(argv[0]));
 }
 
 static long send_path_command(u64 service, unsigned int protocol,
@@ -191,11 +216,14 @@ int main(void)
 	const char linux_wait_fail[] = "bootstrap-riscv64: linux wait failed\n";
 	const char dyn_ok[] = "bootstrap-riscv64: dyn-hello ok\n";
 	const char dyn_fail[] = "bootstrap-riscv64: dyn-hello failed\n";
+	const char alpine_sh_ok[] = "bootstrap-riscv64: alpine sh ok\n";
+	const char alpine_sh_fail[] = "bootstrap-riscv64: alpine sh failed\n";
 	const char syscall_ok[] = "bootstrap-riscv64: syscall-smoke launched\n";
 	const char syscall_fail[] = "bootstrap-riscv64: syscall-smoke failed\n";
 	const char hello_ok[] = "bootstrap-riscv64: musl-hello launched\n";
 	const char hello_fail[] = "bootstrap-riscv64: musl-hello failed\n";
 	const char done[] = "bootstrap-riscv64: done\n";
+	const int alpine_test = bunix_cmdline_has("riscv64-alpine-test") > 0;
 
 	log_line(online, sizeof(online) - 1);
 	launch_or_log("abi-smoke.user", abi_ok, sizeof(abi_ok) - 1,
@@ -295,6 +323,25 @@ int main(void)
 		log_line(dyn_ok, sizeof(dyn_ok) - 1);
 	} else {
 		log_line(dyn_fail, sizeof(dyn_fail) - 1);
+	}
+	if (alpine_test) {
+		const char *const sh_argv[] = {
+			"/bin/sh",
+			"-c",
+			"echo BUNIX_RISCV64_ALPINE_SH_OK",
+		};
+
+		if (proc != 0 &&
+		    proc_register_exec(proc, "/bin/sh", "alpine-sh", 1) == 0 &&
+		    proc_spawn_wait_argv(proc, "/bin/sh", sh_argv,
+					sizeof(sh_argv) / sizeof(sh_argv[0])) == 0) {
+			log_line(alpine_sh_ok, sizeof(alpine_sh_ok) - 1);
+		} else {
+			log_line(alpine_sh_fail, sizeof(alpine_sh_fail) - 1);
+		}
+		log_line(done, sizeof(done) - 1);
+		(void)bunix_machine_poweroff(0);
+		return 0;
 	}
 	launch_or_log("/bin/rv64-syscall-smoke", syscall_ok,
 		      sizeof(syscall_ok) - 1, syscall_fail,

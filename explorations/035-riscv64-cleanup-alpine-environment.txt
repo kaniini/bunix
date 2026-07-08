@@ -66,9 +66,9 @@ Tasks:
       including `openat(2)` and correct `fstat(2)` behavior.
 - [x] Build or prepare a minimal riscv64 Alpine rootfs artifact using the
       existing project rootfs conventions where possible.
-- [ ] Add a riscv64 QEMU boot target for the Alpine environment with clear
+- [x] Add a riscv64 QEMU boot target for the Alpine environment with clear
       serial markers and a clean poweroff condition.
-- [ ] Prove an initial Alpine userspace milestone on riscv64: init path
+- [x] Prove an initial Alpine userspace milestone on riscv64: init path
       starts, `/bin/sh` or an equivalent shell can run a small command, and
       the log identifies the riscv64 Linux server as the shared implementation
       rather than the old stub.
@@ -82,7 +82,7 @@ Verification:
 - [x] Existing `make test-boot-riscv64-uart-console`
 - [x] New riscv64 shared-Linux-server smoke target
 - [x] New riscv64 filesystem-server build target
-- [ ] New riscv64 Alpine environment boot target
+- [x] New riscv64 Alpine environment boot target
 - [x] A narrow x86_64 smoke proving the shared Linux server refactor did not
       break the existing x86_64 path
 
@@ -438,3 +438,23 @@ Progress notes:
 - Verification for the riscv64 dynamic-loader smoke slice:
   - `make ARCH=riscv64 all`
   - `make test-boot-riscv64-early`
+- Added a dedicated riscv64 Alpine QEMU boot target:
+  - `build/riscv64/bootpkg-alpine.img` carries the riscv64 Alpine squashfs as
+    `disk0`, the shared riscv64 server graph, the shared Linux server, and the
+    smoke bootstrap under the `riscv64-alpine-test` command-line token.
+  - `run-riscv64-alpine` boots that package manually.
+  - `test-boot-riscv64-alpine` boots it under QEMU, verifies the mounted
+    Alpine rootfs, waits for the shared Linux server, runs `/bin/dyn-hello`,
+    spawns Alpine `/bin/sh -c 'echo BUNIX_RISCV64_ALPINE_SH_OK'` through
+    proc/Linux, and requires a clean SBI poweroff.
+  - The riscv64 native syscall frontend now implements `cmdline_has`, letting
+    the bootstrap select the Alpine test path without hard-coding a separate
+    bootstrap binary.
+  - This proves an Alpine userspace shell command in QEMU.  It is still a
+    controlled milestone, not full OpenRC/interactive login on riscv64; later
+    explorations own the broader boot-test split, server/rootfs packaging, and
+    cross-architecture cleanup.
+- Verification for the riscv64 Alpine boot target slice:
+  - `make test-boot-riscv64-alpine`
+  - `make test-boot-riscv64-early`
+  - `make test-riscv64-bootpkg`

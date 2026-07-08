@@ -42,6 +42,7 @@ enum {
 	SYSCALL_EARLY_CONSOLE_LOG = -56,
 	SYSCALL_MACHINE_POWER = -64,
 	SYSCALL_TASK_CLEAR = -66,
+	SYSCALL_CMDLINE_HAS = -98,
 	LINUX_RISCV64_OPENAT = 56,
 	LINUX_RISCV64_CLOSE = 57,
 	LINUX_RISCV64_READ = 63,
@@ -854,6 +855,17 @@ static u64 native_sys_machine_power(const struct native_syscall_args *args)
 {
 	(void)args;
 	arch_poweroff();
+	return 0;
+}
+
+static u64 native_sys_cmdline_has(const struct native_syscall_args *args)
+{
+	char token[128];
+
+	if (copy_cstr_from_user(token, args->arg0, sizeof(token)) != 0) {
+		return 0;
+	}
+	return kernel_cmdline_has(token) != 0 ? 1 : 0;
 }
 
 static const struct native_syscall_entry native_syscalls[] = {
@@ -890,6 +902,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_EARLY_CONSOLE_LOG, "early_console_log",
 	  native_sys_early_console_log },
 	{ SYSCALL_MACHINE_POWER, "machine_power", native_sys_machine_power },
+	{ SYSCALL_CMDLINE_HAS, "cmdline_has", native_sys_cmdline_has },
 };
 
 static const struct native_syscall_entry *native_syscall_lookup(i64 number)

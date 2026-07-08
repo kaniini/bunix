@@ -37,8 +37,10 @@ RISCV64_READELF ?= llvm-readelf
 RISCV64_USER_ABI_MODULE := $(BUILD_DIR)/riscv64/modules/abi-smoke.user
 RISCV64_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg.img
 RISCV64_BOOTPKG_MULTI := $(BUILD_DIR)/riscv64/bootpkg-multi.img
+RISCV64_ALPINE_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg-alpine.img
 RISCV64_UART_BOOTPKG := $(BUILD_DIR)/riscv64/bootpkg-uart.img
 RISCV64_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test
+RISCV64_ALPINE_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test riscv64-alpine-test
 RISCV64_UART_KERNEL_CMDLINE ?= log=info riscv64-bootpkg-test riscv64-uart-console
 RISCV64_BPI_F3_DIR := $(BUILD_DIR)/riscv64/bpi-f3
 RISCV64_BPI_F3_KERNEL := $(RISCV64_BPI_F3_DIR)/bunixos-riscv64.elf
@@ -396,7 +398,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-boot test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -729,6 +731,20 @@ $(RISCV64_BOOTPKG_MULTI): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISCV
 		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux \
 		$(RISCV64_SYSCALL_SMOKE_MODULE) /bin/rv64-syscall-smoke \
 		$(RISCV64_MUSL_HELLO_MODULE) /bin/musl-hello
+
+$(RISCV64_ALPINE_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_TIME_MODULE) $(RISCV64_USER_MODULE) $(RISCV64_PROC_MODULE) $(RISCV64_BLOCK_MODULE) $(RISCV64_VFS_MODULE) $(RISCV64_SQUASHFS_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_SHARED_LINUX_SERVER_MODULE) $(RISCV64_ALPINE_SQUASHFS_IMAGE) tools/build-riscv64-bootpkg.sh
+	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_ALPINE_KERNEL_CMDLINE)" \
+		$(RISCV64_ALPINE_SQUASHFS_IMAGE) disk0 \
+		$(RISCV64_NAMES_MODULE) names \
+		$(RISCV64_TIME_MODULE) time \
+		$(RISCV64_USER_MODULE) user \
+		$(RISCV64_PROC_MODULE) proc \
+		$(RISCV64_BLOCK_MODULE) block \
+		$(RISCV64_VFS_MODULE) vfs \
+		$(RISCV64_SQUASHFS_MODULE) squashfs \
+		$(RISCV64_BOOTSTRAP_MODULE) bootstrap \
+		$(RISCV64_USER_ABI_MODULE) abi-smoke.user \
+		$(RISCV64_SHARED_LINUX_SERVER_MODULE) linux
 
 $(RISCV64_UART_BOOTPKG): $(RISCV64_NAMES_MODULE) $(RISCV64_BOOTSTRAP_MODULE) $(RISCV64_USER_ABI_MODULE) $(RISCV64_LINUX_SERVER_MODULE) $(RISCV64_MUSL_HELLO_MODULE) tools/build-riscv64-bootpkg.sh
 	sh tools/build-riscv64-bootpkg.sh $@ --cmdline "$(RISCV64_UART_KERNEL_CMDLINE)" \
@@ -1448,6 +1464,11 @@ run-riscv64-early: $(RISCV64_BOOTPKG)
 	$(RISCV64_QEMU) -machine virt -m 128M -nographic -no-reboot \
 		-kernel $(RISCV64_KERNEL) -initrd $(RISCV64_BOOTPKG)
 
+run-riscv64-alpine: $(RISCV64_ALPINE_BOOTPKG)
+	$(MAKE) ARCH=riscv64 all
+	$(RISCV64_QEMU) -machine virt -m 128M -nographic -no-reboot \
+		-kernel $(RISCV64_KERNEL) -initrd $(RISCV64_ALPINE_BOOTPKG)
+
 test: test-parallel
 
 test-alpine-rootfs: $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy tools/test-alpine-rootfs.sh modules/passwd modules/shadow modules/group
@@ -1562,6 +1583,24 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG)
 	grep -aF "native: riscv64 syscalls" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "bootstrap-riscv64: done" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "linux-riscv64: exit_group status=0" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "sbi: system reset poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
+
+test-boot-riscv64-alpine: $(RISCV64_ALPINE_BOOTPKG)
+	@command -v $(RISCV64_QEMU) >/dev/null 2>&1 || { echo "missing $(RISCV64_QEMU)"; exit 1; }
+	$(MAKE) ARCH=riscv64 all
+	mkdir -p $(BUILD_DIR)
+	timeout 45s $(RISCV64_QEMU) -machine virt -m 128M -nographic \
+		-no-reboot -kernel $(RISCV64_KERNEL) \
+		-initrd $(RISCV64_ALPINE_BOOTPKG) > $(RISCV64_SERIAL_LOG)
+	grep -aF "cmdline: riscv64 bootpkg" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "bootstrap-riscv64: rootfs mounted" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "bootstrap-riscv64: linux ready" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "musl hello argc=1 argv0=/bin/dyn-hello" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "bootstrap-riscv64: dyn-hello ok" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "BUNIX_RISCV64_ALPINE_SH_OK" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "bootstrap-riscv64: alpine sh ok" $(RISCV64_SERIAL_LOG) >/dev/null
+	grep -aF "bootstrap-riscv64: done" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "machine: poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 	grep -aF "sbi: system reset poweroff" $(RISCV64_SERIAL_LOG) >/dev/null
 
