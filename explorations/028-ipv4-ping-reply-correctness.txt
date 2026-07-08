@@ -1,0 +1,87 @@
+Fix remaining IPv4 networking correctness problems exposed by external ping.
+
+Problem:
+
+- DHCP can configure networking well enough to send packets, but IPv4 ICMP
+  replies are not decoded or surfaced correctly.
+- A manual external ping currently reports:
+
+  ```
+  ~ # ping -c 4 4.2.2.1
+  PING 4.2.2.1 (4.2.2.1): 56 data bytes
+  64 bytes from 0.0.0.0: seq=0 ttl=96 time=300.000 ms
+  ```
+
+- There should be four replies for `ping -c 4 4.2.2.1`.
+- Each reply should report the actual remote source address, `4.2.2.1`, not
+  `0.0.0.0`.
+- The bad source address suggests the receive path, ICMP echo reply parsing,
+  IPv4 header source extraction, socket address reporting, checksum handling,
+  NAT-facing metadata, or userspace `recvfrom`/`recvmsg` address copyout is
+  still wrong.
+
+Intended outcome:
+
+- A fresh `make run` Alpine environment boots with networking up through the
+  current working OpenRC networking path.
+- After login, `ping -c 4 4.2.2.1` prints four ICMP replies.
+- Each reply is reported as coming from `4.2.2.1`.
+- `ping -c 4 8.8.8.8` also reports four replies from `8.8.8.8`, unless the
+  host network blocks that destination; in that case the test should keep a
+  deterministic QEMU user-net target.
+- The fix should preserve DHCP, default route setup, localhost IPv4, localhost
+  IPv6, and existing UDP/TCP loopback tests.
+
+Constraints:
+
+- Do not replace the current temporary Bunix networking OpenRC service in this
+  exploration.  Stock Alpine networking service restoration is tracked
+  separately.
+- Do not guess from packet symptoms alone.  Verify whether QEMU receives and
+  returns the packets, then verify the Bunix virtio-net, net server, Linux
+  socket, and BusyBox ping receive paths.
+- Keep the network policy in userspace and keep the packet path split across
+  the existing virtio/net/Linux personality boundaries.
+- Prefer fixing general IPv4/ICMP/socket behavior over adding ping-specific
+  behavior.
+
+Investigation targets:
+
+- Capture the outbound ICMP echo request and inbound echo reply at the QEMU
+  boundary, using the existing socket-peer or QEMU user-net test hooks where
+  practical.
+- Trace virtio-net RX descriptor completion through Ethernet, IPv4, ICMP, and
+  socket delivery.
+- Audit IPv4 source and destination byte order handling in packet parsing and
+  userspace socket address copyout.
+- Audit ICMP echo reply filtering: id, sequence, payload length, checksum, and
+  destination address matching.
+- Audit `recvfrom(2)` and `recvmsg(2)` address reporting for raw/ICMP sockets
+  and any BusyBox ping-specific socket mode.
+- Check whether only the first reply is delivered, whether later replies are
+  dropped, or whether BusyBox exits after one malformed reply.
+
+Tasks:
+
+- [ ] Add or extend a deterministic IPv4 external ping regression that runs in
+      QEMU and records enough packet-path logs to distinguish TX, RX, parse,
+      socket delivery, and userspace reporting failures.
+- [ ] Verify with host-side or QEMU-side evidence that four echo replies are
+      received by QEMU for `ping -c 4 4.2.2.1`.
+- [ ] Verify the virtio-net driver receives all four replies and hands them to
+      the net server.
+- [ ] Fix IPv4/ICMP parsing so inbound echo replies preserve the remote source
+      address.
+- [ ] Fix Linux socket `recvfrom`/`recvmsg` address copyout if the packet is
+      correct before the Linux server but wrong in BusyBox.
+- [ ] Make `ping -c 4 4.2.2.1` report four replies from `4.2.2.1`.
+- [ ] Add a regression for reply count and source address.
+- [ ] Re-run the focused networking tests needed to prove DHCP, default route,
+      loopback, and external IPv4 ping still work.
+
+Completion criteria:
+
+- `make run` boots to a login with networking up.
+- Running `ping -c 4 4.2.2.1` manually prints four replies from `4.2.2.1`.
+- The automated regression checks both reply count and source address.
+- Existing focused networking tests still pass.
