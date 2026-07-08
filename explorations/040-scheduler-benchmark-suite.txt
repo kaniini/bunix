@@ -58,7 +58,7 @@ Tasks:
       preserved.
 - [ ] Add affinity tests once capability-scoped CPU masks exist: pin workers,
       verify they run on allowed CPUs, and verify invalid masks are rejected.
-- [ ] Add comparison reporting for key shards and scheduler benchmarks so
+- [x] Add comparison reporting for key shards and scheduler benchmarks so
       future scheduler changes can see runtime/counter deltas.
 
 Progress notes:
@@ -135,4 +135,14 @@ Progress notes:
   - Kept hard affinity and migration test tasks open until the corresponding
     policy and migration mechanisms exist.
   - Verification:
+    - `git diff --check`
+- Scheduler benchmark comparison-reporting slice:
+  - The `scheduler-bench` shard now copies clean `schedbench ...` result lines
+    from the guest serial log into the shard stdout artifact.
+  - Successful scheduler benchmark artifacts now retain fairness iteration
+    totals/skew, starvation sleeper sample/latency data, IPC latency samples,
+    scheduler counter deltas, and the existing test-parallel shard runtime.
+  - Verification:
+    - `BUNIX_TEST_SET=scheduler-bench make test-parallel`
+    - inspected `build/test-runs/20260708T145843Z-22012/scheduler-bench/stdout.log`
     - `git diff --check`
