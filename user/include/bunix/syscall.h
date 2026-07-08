@@ -794,6 +794,16 @@ static inline void bunix_vfs_stat_pack(unsigned char *buffer, u64 size,
 
 static inline long bunix_syscall0(long number)
 {
+#if defined(__riscv) && __riscv_xlen == 64
+	register long a0 __asm__("a0");
+	register long a7 __asm__("a7") = number;
+
+	__asm__ volatile ("ecall"
+			  : "=r"(a0)
+			  : "r"(a7)
+			  : "memory");
+	return a0;
+#else
 	long rax = number;
 
 	__asm__ volatile ("syscall"
@@ -802,10 +812,21 @@ static inline long bunix_syscall0(long number)
 			  : "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10",
 			    "r11", "memory");
 	return rax;
+#endif
 }
 
 static inline long bunix_syscall1(long number, u64 arg0)
 {
+#if defined(__riscv) && __riscv_xlen == 64
+	register long a0 __asm__("a0") = (long)arg0;
+	register long a7 __asm__("a7") = number;
+
+	__asm__ volatile ("ecall"
+			  : "+r"(a0)
+			  : "r"(a7)
+			  : "memory");
+	return a0;
+#else
 	long rax = number;
 	register u64 rdi __asm__("rdi") = arg0;
 
@@ -815,10 +836,22 @@ static inline long bunix_syscall1(long number, u64 arg0)
 			  : "rcx", "rdx", "rsi", "r8", "r9", "r10", "r11",
 			    "memory");
 	return rax;
+#endif
 }
 
 static inline long bunix_syscall2(long number, u64 arg0, u64 arg1)
 {
+#if defined(__riscv) && __riscv_xlen == 64
+	register long a0 __asm__("a0") = (long)arg0;
+	register long a1 __asm__("a1") = (long)arg1;
+	register long a7 __asm__("a7") = number;
+
+	__asm__ volatile ("ecall"
+			  : "+r"(a0)
+			  : "r"(a1), "r"(a7)
+			  : "memory");
+	return a0;
+#else
 	long rax = number;
 	register u64 rdi __asm__("rdi") = arg0;
 	register u64 rsi __asm__("rsi") = arg1;
@@ -828,10 +861,23 @@ static inline long bunix_syscall2(long number, u64 arg0, u64 arg1)
 			  :
 			  : "rcx", "rdx", "r8", "r9", "r10", "r11", "memory");
 	return rax;
+#endif
 }
 
 static inline long bunix_syscall3(long number, u64 arg0, u64 arg1, u64 arg2)
 {
+#if defined(__riscv) && __riscv_xlen == 64
+	register long a0 __asm__("a0") = (long)arg0;
+	register long a1 __asm__("a1") = (long)arg1;
+	register long a2 __asm__("a2") = (long)arg2;
+	register long a7 __asm__("a7") = number;
+
+	__asm__ volatile ("ecall"
+			  : "+r"(a0)
+			  : "r"(a1), "r"(a2), "r"(a7)
+			  : "memory");
+	return a0;
+#else
 	long rax = number;
 	register u64 rdi __asm__("rdi") = arg0;
 	register u64 rsi __asm__("rsi") = arg1;
@@ -842,11 +888,25 @@ static inline long bunix_syscall3(long number, u64 arg0, u64 arg1, u64 arg2)
 			  :
 			  : "rcx", "r8", "r9", "r10", "r11", "memory");
 	return rax;
+#endif
 }
 
 static inline long bunix_syscall4(long number, u64 arg0, u64 arg1, u64 arg2,
 				  u64 arg3)
 {
+#if defined(__riscv) && __riscv_xlen == 64
+	register long a0 __asm__("a0") = (long)arg0;
+	register long a1 __asm__("a1") = (long)arg1;
+	register long a2 __asm__("a2") = (long)arg2;
+	register long a3 __asm__("a3") = (long)arg3;
+	register long a7 __asm__("a7") = number;
+
+	__asm__ volatile ("ecall"
+			  : "+r"(a0)
+			  : "r"(a1), "r"(a2), "r"(a3), "r"(a7)
+			  : "memory");
+	return a0;
+#else
 	long rax = number;
 	register u64 rdi __asm__("rdi") = arg0;
 	register u64 rsi __asm__("rsi") = arg1;
@@ -859,6 +919,7 @@ static inline long bunix_syscall4(long number, u64 arg0, u64 arg1, u64 arg2,
 			  :
 			  : "rcx", "r8", "r9", "r11", "memory");
 	return rax;
+#endif
 }
 
 static inline long bunix_launch_module(const char *name)

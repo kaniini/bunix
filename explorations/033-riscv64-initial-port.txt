@@ -161,6 +161,18 @@ Progress notes:
     marker before poweroff.
   - This covers the kernel-thread context-switch half of the context/userspace
     task; native riscv64 userspace server execution remains open.
+- Added a compile/link smoke for the riscv64 native Bunix userspace ABI:
+  - `user/include/bunix/syscall.h` now emits rv64 `ecall` wrappers for native
+    Bunix syscalls while preserving the x86_64 `syscall` path.
+  - The initial rv64 ABI passes the negative Bunix syscall number in `a7`,
+    arguments in `a0` through `a3`, and returns the result in `a0`.
+  - `user/crt0-riscv64.S` derives `argc`, `argv`, and `envp` from the initial
+    user stack, calls `main`, and exits through `BUNIX_SYSCALL_EXIT`.
+  - `test-riscv64-user-abi` builds a freestanding riscv64 user ELF and checks
+    that the resulting module is a RISC-V binary.
+  - This only proves the userspace object ABI at build time; supervisor trap
+    dispatch for user `ecall`, user page-table activation, and runtime native
+    server execution remain open.
 - Added riscv64 arch skeleton headers and implementations:
   - `arch/riscv64/include/arch/sbi.h` centralizes the early SBI call ABI and
     console putchar helper used by the early payload and power path.
@@ -258,6 +270,14 @@ Verification so far:
 - `command -v qemu-system-riscv64` found `/usr/bin/qemu-system-riscv64`.
 - `command -v riscv64-alpine-linux-musl-ld` found
   `/usr/bin/riscv64-alpine-linux-musl-ld`.
+- `make test-riscv64-user-abi` passed.
+- `llvm-objdump -d build/riscv64/modules/abi-smoke.user` showed `_start`
+  calling `main` and both `_start`/`main` exiting through `ecall` with
+  `a7 = -2`.
+- `make test-boot-riscv64-early` passed after the native ABI smoke was added.
+- `make all` passed for the default x86_64 target after the native ABI smoke
+  was added.
+- `git diff --check` passed after the native ABI smoke was added.
 - `make ARCH=riscv64 all` passed and linked `build/riscv64/bunixos.kernel`.
 - `make test-boot-riscv64-early` passed.
 - `make all` passed for the default x86_64 target after the riscv64 linker
