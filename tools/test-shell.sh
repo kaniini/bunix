@@ -491,12 +491,6 @@ if part_selected tmpfs-extended; then
 	run_tmpfs_extended
 fi
 
-if part_selected large-io-mount; then
-	begin_shard large-io-mount
-	login_user_if_needed
-	run_large_io_mount
-fi
-
 if part_selected login-smoke; then
 	check_login_smoke
 	finish_shard login-smoke
@@ -562,11 +556,6 @@ if part_selected tmpfs-extended; then
 	finish_shard tmpfs-extended
 fi
 
-if part_selected large-io-mount; then
-	check_large_io_mount
-	finish_shard large-io-mount
-fi
-
 if part_selected tmpfs-basic-linux-tests; then
 	check_tmpfs_basic_linux_tests
 	finish_shard tmpfs-basic-linux-tests
@@ -614,6 +603,15 @@ if part_selected root-mount-soak; then
 	check_root_mount_soak
 	root_shell_active=1
 	finish_shard root-mount-soak
+fi
+
+if part_selected large-io-mount; then
+	begin_shard large-io-mount
+	login_root_if_needed
+	run_large_io_mount
+	check_large_io_mount
+	root_shell_active=1
+	finish_shard large-io-mount
 fi
 
 if part_selected long-login; then

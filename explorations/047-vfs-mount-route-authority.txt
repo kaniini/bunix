@@ -72,6 +72,8 @@ Notes:
 - Linux retains normal VFS path access for userspace, but mount/umount now
   require Linux effective UID 0 before the Linux server issues privileged VFS
   RPCs.
+- Updated `large-io-mount` to run under the root shell because it intentionally
+  exercises Linux mount/umount, which is now privileged.
 - Route pins are now per-sender route-pin objects rather than mount-table IDs.
   `BUNIX_VFS_UNPIN_ROUTE` requires the caller that created the pin.
 - Added `test-vfs-mount-authority`, implemented through `mgmt-test` with only
@@ -80,4 +82,6 @@ Notes:
 - Focused verification passed:
   `make test-vfs-mount-authority`, `make test-vfs-authority`,
   `BUNIX_TEST_SET=rootfs-vfs-proc-dev,tmpfs-basic-linux-tests,tmpfs-extended,root-mount-soak make test-shell-parallel`
-  run id `20260709T214107Z-8167`, and `make test-boot-ext2`.
+  run id `20260709T214107Z-8167`, `make test-boot-ext2`, and
+  `BUNIX_TEST_SET=large-io-mount make test-shell-parallel` run id
+  `20260709T220644Z-27592`.
