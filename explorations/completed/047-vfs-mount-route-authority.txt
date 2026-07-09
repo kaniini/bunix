@@ -60,7 +60,7 @@ Tasks:
       explicit authority model.
 - [x] Add regression tests for unauthorized mount, unmount, route pin/unpin,
       and translator capability resolution.
-- [ ] Run focused VFS/mount tests, shell tests, and full tests before
+- [x] Run focused VFS/mount tests, shell tests, and full tests before
       completion.
 
 Notes:
@@ -90,3 +90,5 @@ Notes:
   `20260709T220644Z-27592`, and
   `BUNIX_TEST_SET=linux-signaltest make test-shell-parallel` run id
   `20260709T222526Z-10519`.
+- Full verification passed with `make test` run id
+  `20260709T224908Z-29253`: 25 launched, 25 passed, 0 skipped.
