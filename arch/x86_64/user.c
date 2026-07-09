@@ -4503,6 +4503,15 @@ poll_again:
 			}
 			slept = 1;
 			thread_sleep_ns(infinite_timeout ? 10000000ull : timeout_ns);
+			const u64 woke_pending = linux_signal_pending(linux,
+								      reply_port);
+
+			if ((i64)woke_pending < 0) {
+				return woke_pending;
+			}
+			if (woke_pending != 0) {
+				return (u64)-LINUX_EINTR;
+			}
 			goto poll_again;
 		}
 		return ready;

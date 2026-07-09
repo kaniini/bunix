@@ -74,6 +74,9 @@ Notes:
   RPCs.
 - Updated `large-io-mount` to run under the root shell because it intentionally
   exercises Linux mount/umount, which is now privileged.
+- Fixed Linux `poll()` timeout handling to re-check pending signals after
+  sleeping; otherwise SIGCHLD delivered during the sleep could be held until
+  the timeout expired, breaking self-pipe signal handlers.
 - Route pins are now per-sender route-pin objects rather than mount-table IDs.
   `BUNIX_VFS_UNPIN_ROUTE` requires the caller that created the pin.
 - Added `test-vfs-mount-authority`, implemented through `mgmt-test` with only
@@ -84,4 +87,6 @@ Notes:
   `BUNIX_TEST_SET=rootfs-vfs-proc-dev,tmpfs-basic-linux-tests,tmpfs-extended,root-mount-soak make test-shell-parallel`
   run id `20260709T214107Z-8167`, `make test-boot-ext2`, and
   `BUNIX_TEST_SET=large-io-mount make test-shell-parallel` run id
-  `20260709T220644Z-27592`.
+  `20260709T220644Z-27592`, and
+  `BUNIX_TEST_SET=linux-signaltest make test-shell-parallel` run id
+  `20260709T222526Z-10519`.
