@@ -57,6 +57,23 @@ static int call_denied(u64 port, unsigned int protocol, unsigned int type,
 	return reply.words[0] != 0 ? 0 : -1;
 }
 
+static int path_call_denied(u64 port, unsigned int protocol, unsigned int type,
+			    const char *path,
+			    u64 word0, u64 word1, u64 word2)
+{
+	struct bunix_msg reply;
+
+	if (port == 0 ||
+	    bunix_ipc_call_path(port, protocol, type, path,
+				word0, word1, word2, &reply) != 0) {
+		return -1;
+	}
+	if (reply.cap != 0) {
+		bunix_handle_close(reply.cap);
+	}
+	return reply.words[0] != 0 ? 0 : -1;
+}
+
 static long vfs_open_path(u64 vfs, const char *path, u64 *handle)
 {
 	const char cwd[] = "/";
@@ -164,6 +181,51 @@ static int run_vfs_authority_test(u64 vfs)
 	return 0;
 }
 
+static int run_vfs_mount_authority_test(u64 vfs)
+{
+	if (path_call_denied(vfs, BUNIX_PROTO_VFS,
+			     BUNIX_VFS_MOUNT_BUFFER, "/tmp/evil",
+			     BUNIX_SERVICE_TMPFS, 0, 0) != 0) {
+		log_text("vfs-mount-auth-test: mount succeeded\n");
+		return 1;
+	}
+	log_text("vfs-mount-auth-test: mount denied\n");
+
+	if (path_call_denied(vfs, BUNIX_PROTO_VFS,
+			     BUNIX_VFS_UNMOUNT_BUFFER, "/tmp",
+			     0, 0, 0) != 0) {
+		log_text("vfs-mount-auth-test: unmount succeeded\n");
+		return 1;
+	}
+	log_text("vfs-mount-auth-test: unmount denied\n");
+
+	if (path_call_denied(vfs, BUNIX_PROTO_VFS,
+			     BUNIX_VFS_RESOLVE_MOUNT_BUFFER, "/",
+			     0, 0, 0) != 0) {
+		log_text("vfs-mount-auth-test: resolve succeeded\n");
+		return 1;
+	}
+	log_text("vfs-mount-auth-test: resolve denied\n");
+
+	if (path_call_denied(vfs, BUNIX_PROTO_VFS,
+			     BUNIX_VFS_PIN_ROUTE_BUFFER, "/hello.txt",
+			     0, 0, 0) != 0) {
+		log_text("vfs-mount-auth-test: pin succeeded\n");
+		return 1;
+	}
+	log_text("vfs-mount-auth-test: pin denied\n");
+
+	if (call_denied(vfs, BUNIX_PROTO_VFS,
+			BUNIX_VFS_UNPIN_ROUTE, 1, 0, 0, 0) != 0) {
+		log_text("vfs-mount-auth-test: unpin succeeded\n");
+		return 1;
+	}
+	log_text("vfs-mount-auth-test: unpin denied\n");
+
+	log_text("vfs-mount-auth-test: ok\n");
+	return 0;
+}
+
 int main(void)
 {
 	const char user_denied[] = "mgmt-test: user denied\n";
@@ -177,6 +239,9 @@ int main(void)
 	const u64 vfs = bunix_handle_find(BUNIX_CAP_VFS);
 
 	if (vfs != 0) {
+		if (bunix_cmdline_has("vfs-mount-auth-test") > 0) {
+			return run_vfs_mount_authority_test(vfs);
+		}
 		return run_vfs_authority_test(vfs);
 	}
 

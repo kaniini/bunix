@@ -4992,8 +4992,15 @@ static long linux_mount(struct linux_process *process, u64 target_len,
 	char full_target[LINUX_MAX_PATH];
 	char fstype[64];
 	long normalize_result;
+	const long euid = linux_user_credential(process, BUNIX_LINUX_GETEUID);
 
 	(void)flags;
+	if (euid < 0) {
+		return euid;
+	}
+	if (euid != 0) {
+		return -LINUX_EPERM;
+	}
 	if (target_len == 0 || target_len > sizeof(target) ||
 	    fstype_len == 0 || fstype_len > sizeof(fstype)) {
 		return -LINUX_EINVAL;
@@ -5052,8 +5059,15 @@ static long linux_umount2(struct linux_process *process, u64 flags,
 	char full_path[LINUX_MAX_PATH];
 	long path_result;
 	long normalize_result;
+	const long euid = linux_user_credential(process, BUNIX_LINUX_GETEUID);
 
 	(void)flags;
+	if (euid < 0) {
+		return euid;
+	}
+	if (euid != 0) {
+		return -LINUX_EPERM;
+	}
 	path_result = linux_read_path_arg(path_buffer, path_len, path,
 					  sizeof(path));
 	if (path_result != 0) {

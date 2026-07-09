@@ -52,13 +52,32 @@ Fix plan:
 
 Tasks:
 
-- [ ] Build a local reproducer for unauthorized mount-table mutation or route
+- [x] Build a local reproducer for unauthorized mount-table mutation or route
       capability acquisition.
-- [ ] Define the VFS mount/route authority model and bootstrap delegation.
-- [ ] Gate mount, unmount, route pin, route unpin, and route resolve as needed.
-- [ ] Update unionfs/procfs/devfs/sysfs/utmpfs/tmpfs bringup paths to use the
+- [x] Define the VFS mount/route authority model and bootstrap delegation.
+- [x] Gate mount, unmount, route pin, route unpin, and route resolve as needed.
+- [x] Update unionfs/procfs/devfs/sysfs/utmpfs/tmpfs bringup paths to use the
       explicit authority model.
-- [ ] Add regression tests for unauthorized mount, unmount, route pin/unpin,
+- [x] Add regression tests for unauthorized mount, unmount, route pin/unpin,
       and translator capability resolution.
 - [ ] Run focused VFS/mount tests, shell tests, and full tests before
       completion.
+
+Notes:
+
+- Added `BUNIX_VFS_GRANT_ADMIN_TASK`; VFS records sender task IDs authorized
+  for mount-table and route-management operations.  Bootstrap claims the
+  initial grantor role, then delegates admin authority to procfs, tmpfs, devfs,
+  sysfs, utmpfs, squashfs, unionfs, ext2 when present, and the Linux server.
+- Linux retains normal VFS path access for userspace, but mount/umount now
+  require Linux effective UID 0 before the Linux server issues privileged VFS
+  RPCs.
+- Route pins are now per-sender route-pin objects rather than mount-table IDs.
+  `BUNIX_VFS_UNPIN_ROUTE` requires the caller that created the pin.
+- Added `test-vfs-mount-authority`, implemented through `mgmt-test` with only
+  ordinary `BUNIX_CAP_VFS`.  It proves unauthorized mount, unmount, route
+  resolve, route pin, and route unpin requests are denied.
+- Focused verification passed:
+  `make test-vfs-mount-authority`, `make test-vfs-authority`,
+  `BUNIX_TEST_SET=rootfs-vfs-proc-dev,tmpfs-basic-linux-tests,tmpfs-extended,root-mount-soak make test-shell-parallel`
+  run id `20260709T214107Z-8167`, and `make test-boot-ext2`.

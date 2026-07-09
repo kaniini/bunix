@@ -1,0 +1,6 @@
+vfs-mount-auth-test: mount denied
+vfs-mount-auth-test: unmount denied
+vfs-mount-auth-test: resolve denied
+vfs-mount-auth-test: pin denied
+vfs-mount-auth-test: unpin denied
+vfs-mount-auth-test: ok

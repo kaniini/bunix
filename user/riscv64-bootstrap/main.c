@@ -5,6 +5,20 @@ static void log_line(const char *text, u64 len)
 	(void)bunix_syscall2(BUNIX_SYSCALL_EARLY_CONSOLE_LOG, (u64)text, len);
 }
 
+static int str_eq(const char *left, const char *right)
+{
+	u64 i = 0;
+
+	while (left != 0 && right != 0 &&
+	       left[i] != '\0' && right[i] != '\0') {
+		if (left[i] != right[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return left != 0 && right != 0 && left[i] == right[i];
+}
+
 static void launch_or_log(const char *name, const char *ok, u64 ok_len,
 			  const char *fail, u64 fail_len)
 {
@@ -25,6 +39,37 @@ static void launch_with_caps_or_log(const char *name,
 	} else {
 		log_line(fail, fail_len);
 	}
+}
+
+static long launch_with_caps_task_id_or_log(const char *name,
+					    const struct bunix_launch_cap *caps,
+					    u64 cap_count, const char *ok,
+					    u64 ok_len, const char *fail,
+					    u64 fail_len)
+{
+	const long task = bunix_launch_module_with_caps(name, caps, cap_count);
+	u64 pid_threads_flags = 0;
+	u64 name_words[2] = { 0, 0 };
+
+	if (task < 0) {
+		log_line(fail, fail_len);
+		return -1;
+	}
+	log_line(ok, ok_len);
+	for (u64 i = 0; bunix_task_info(i, &pid_threads_flags,
+					name_words) == 0; i++) {
+		char task_name[17];
+
+		for (u64 j = 0; j < 16; j++) {
+			task_name[j] = (char)(name_words[j / 8] >>
+					      ((j % 8) * 8));
+		}
+		task_name[16] = '\0';
+		if (str_eq(task_name, name)) {
+			return (long)(pid_threads_flags & 0xffffffffu);
+		}
+	}
+	return -1;
 }
 
 static u64 str_len(const char *text)
@@ -183,6 +228,19 @@ static long vfs_mount_service(u64 vfs, const char *path, u64 service)
 	return reply.words[0] == 0 ? 0 : -1;
 }
 
+static long vfs_grant_admin_task(u64 vfs, u64 task)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_GRANT_ADMIN_TASK,
+		.words = { task, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	return bunix_ipc_call(vfs, &request, &reply) == 0 &&
+	       reply.words[0] == 0 ? 0 : -1;
+}
+
 int main(void)
 {
 	const char online[] = "bootstrap-riscv64: online\n";
@@ -281,24 +339,24 @@ int main(void)
 	} else {
 		log_line(block_wait_fail, sizeof(block_wait_fail) - 1);
 	}
-	launch_with_caps_or_log("vfs", fs_caps,
-				sizeof(fs_caps) / sizeof(fs_caps[0]),
-				vfs_ok, sizeof(vfs_ok) - 1,
-				vfs_fail, sizeof(vfs_fail) - 1);
+	const long vfs_task = launch_with_caps_task_id_or_log(
+		"vfs", fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]),
+		vfs_ok, sizeof(vfs_ok) - 1, vfs_fail, sizeof(vfs_fail) - 1);
 	const u64 vfs = wait_service(BUNIX_SERVICE_VFS,
 				     BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
-	if (vfs != 0) {
+	if (vfs != 0 && vfs_task > 0 && vfs_grant_admin_task(vfs, 0) == 0) {
 		log_line(vfs_ready, sizeof(vfs_ready) - 1);
 	} else {
 		log_line(vfs_wait_fail, sizeof(vfs_wait_fail) - 1);
 	}
-	launch_with_caps_or_log("squashfs", fs_caps,
-				sizeof(fs_caps) / sizeof(fs_caps[0]),
-				squashfs_ok, sizeof(squashfs_ok) - 1,
-				squashfs_fail, sizeof(squashfs_fail) - 1);
+	const long squashfs_task = launch_with_caps_task_id_or_log(
+		"squashfs", fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]),
+		squashfs_ok, sizeof(squashfs_ok) - 1,
+		squashfs_fail, sizeof(squashfs_fail) - 1);
 	const u64 squashfs = wait_service(BUNIX_SERVICE_SQUASHFS,
 					  BUNIX_RIGHT_SEND);
-	if (squashfs != 0) {
+	if (vfs != 0 && squashfs != 0 && squashfs_task > 0 &&
+	    vfs_grant_admin_task(vfs, squashfs_task) == 0) {
 		log_line(squashfs_ready, sizeof(squashfs_ready) - 1);
 	} else {
 		log_line(squashfs_wait_fail, sizeof(squashfs_wait_fail) - 1);

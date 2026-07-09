@@ -7,6 +7,8 @@ enum {
 		('N') | ('O' << 8) | ('W' << 16) | ('N' << 24),
 };
 
+static int str_eq(const char *left, const char *right);
+
 static long claim_names_admin(void)
 {
 	struct bunix_msg request = {
@@ -93,6 +95,33 @@ static long launch_claimed_module(const char *name, u64 namespace, u64 service,
 	claimed_caps[cap_count].rights = BUNIX_RIGHT_SEND;
 	claimed_caps[cap_count].tag = BUNIX_CAP_CLAM;
 	return bunix_launch_module_with_caps(name, claimed_caps, cap_count + 1);
+}
+
+static long launch_claimed_module_task_id(
+	const char *name, u64 namespace, u64 service,
+	const struct bunix_launch_cap *caps, u64 cap_count)
+{
+	u64 pid_threads_flags = 0;
+	u64 name_words[2] = { 0, 0 };
+
+	if (launch_claimed_module(name, namespace, service, caps, cap_count) <
+	    0) {
+		return -1;
+	}
+	for (u64 i = 0; bunix_task_info(i, &pid_threads_flags,
+					name_words) == 0; i++) {
+		char task_name[17];
+
+		for (u64 j = 0; j < 16; j++) {
+			task_name[j] = (char)(name_words[j / 8] >>
+					      ((j % 8) * 8));
+		}
+		task_name[16] = '\0';
+		if (str_eq(task_name, name)) {
+			return (long)(pid_threads_flags & 0xffffffffu);
+		}
+	}
+	return -1;
 }
 
 static u64 create_namespace(void)
@@ -1663,6 +1692,19 @@ static long vfs_mount_service(u64 vfs, const char *path, u64 service)
 		return -1;
 	}
 	return reply.words[0] == 0 ? 0 : -1;
+}
+
+static long vfs_grant_admin_task(u64 vfs, u64 task)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_GRANT_ADMIN_TASK,
+		.words = { task, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	return bunix_ipc_call(vfs, &request, &reply) == 0 &&
+	       reply.words[0] == 0 ? 0 : -1;
 }
 
 static long unionfs_set_upper(u64 unionfs, const char *path)
@@ -3552,12 +3594,16 @@ int main(void)
 			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	vfs = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS,
 					BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
-	if (vfs == 0) {
+	if (vfs == 0 || vfs_grant_admin_task(vfs, 0) != 0) {
 		return 1;
 	}
 	vfs_launch = vfs;
-	launch_claimed_module("procfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROCFS,
-			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+	const long procfs_task = launch_claimed_module_task_id(
+		"procfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROCFS,
+		fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (procfs_task <= 0 || vfs_grant_admin_task(vfs, procfs_task) != 0) {
+		return 1;
+	}
 	{
 		u64 procfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						       BUNIX_SERVICE_PROCFS,
@@ -3569,8 +3615,12 @@ int main(void)
 			return 1;
 		}
 	}
-	launch_claimed_module("tmpfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_TMPFS,
-			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+	const long tmpfs_task = launch_claimed_module_task_id(
+		"tmpfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_TMPFS,
+		fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (tmpfs_task <= 0 || vfs_grant_admin_task(vfs, tmpfs_task) != 0) {
+		return 1;
+	}
 	{
 		u64 tmpfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						      BUNIX_SERVICE_TMPFS,
@@ -3580,8 +3630,12 @@ int main(void)
 			return 1;
 		}
 	}
-	launch_claimed_module("devfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_DEVFS,
-			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+	const long devfs_task = launch_claimed_module_task_id(
+		"devfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_DEVFS,
+		fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (devfs_task <= 0 || vfs_grant_admin_task(vfs, devfs_task) != 0) {
+		return 1;
+	}
 	{
 		u64 devfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						      BUNIX_SERVICE_DEVFS,
@@ -3593,8 +3647,12 @@ int main(void)
 			return 1;
 		}
 	}
-	launch_claimed_module("sysfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_SYSFS,
-			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+	const long sysfs_task = launch_claimed_module_task_id(
+		"sysfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_SYSFS,
+		fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (sysfs_task <= 0 || vfs_grant_admin_task(vfs, sysfs_task) != 0) {
+		return 1;
+	}
 	{
 		u64 sysfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						      BUNIX_SERVICE_SYSFS,
@@ -3606,8 +3664,12 @@ int main(void)
 			return 1;
 		}
 	}
-	launch_claimed_module("utmpfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_UTMPFS,
-			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+	const long utmpfs_task = launch_claimed_module_task_id(
+		"utmpfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_UTMPFS,
+		fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (utmpfs_task <= 0 || vfs_grant_admin_task(vfs, utmpfs_task) != 0) {
+		return 1;
+	}
 	{
 		u64 utmpfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						       BUNIX_SERVICE_UTMPFS,
@@ -3634,9 +3696,13 @@ int main(void)
 				      BUNIX_TMPFS_MOUNT_ROOT, "/") != 0) {
 			return 1;
 		}
-		launch_claimed_module("ext2", BUNIX_NAMES_ROOT,
-				      BUNIX_SERVICE_EXT2, fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+		const long ext2_task = launch_claimed_module_task_id(
+			"ext2", BUNIX_NAMES_ROOT, BUNIX_SERVICE_EXT2,
+			fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+		if (ext2_task <= 0 ||
+		    vfs_grant_admin_task(vfs, ext2_task) != 0) {
+			return 1;
+		}
 		ext2 = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						  BUNIX_SERVICE_EXT2,
 						  BUNIX_RIGHT_SEND);
@@ -3654,9 +3720,13 @@ int main(void)
 	if (ext2_root_mode) {
 		u64 ext2;
 
-		launch_claimed_module("ext2", BUNIX_NAMES_ROOT,
-				      BUNIX_SERVICE_EXT2, fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+		const long ext2_task = launch_claimed_module_task_id(
+			"ext2", BUNIX_NAMES_ROOT, BUNIX_SERVICE_EXT2,
+			fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+		if (ext2_task <= 0 ||
+		    vfs_grant_admin_task(vfs, ext2_task) != 0) {
+			return 1;
+		}
 		ext2 = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						  BUNIX_SERVICE_EXT2,
 						  BUNIX_RIGHT_SEND);
@@ -3677,9 +3747,13 @@ int main(void)
 		u64 squashfs;
 
 		bunix_console_log(squashfs_root, sizeof(squashfs_root) - 1);
-		launch_claimed_module("squashfs", BUNIX_NAMES_ROOT,
-				      BUNIX_SERVICE_SQUASHFS, fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+		const long squashfs_task = launch_claimed_module_task_id(
+			"squashfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_SQUASHFS,
+			fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+		if (squashfs_task <= 0 ||
+		    vfs_grant_admin_task(vfs, squashfs_task) != 0) {
+			return 1;
+		}
 		squashfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						      BUNIX_SERVICE_SQUASHFS,
 						      BUNIX_RIGHT_SEND);
@@ -3692,9 +3766,12 @@ int main(void)
 			return 1;
 		}
 	}
-	launch_claimed_module("unionfs", BUNIX_NAMES_ROOT,
-			      BUNIX_SERVICE_UNIONFS, fs_caps,
-			      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	const long unionfs_task = launch_claimed_module_task_id(
+		"unionfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_UNIONFS,
+		fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (unionfs_task <= 0 || vfs_grant_admin_task(vfs, unionfs_task) != 0) {
+		return 1;
+	}
 	{
 		u64 unionfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 							BUNIX_SERVICE_UNIONFS,
@@ -3726,9 +3803,13 @@ int main(void)
 					      BUNIX_RIGHT_SEND) == 0) {
 			return 1;
 		}
-		launch_claimed_module("ext2", BUNIX_NAMES_ROOT,
-				      BUNIX_SERVICE_EXT2, fs_caps,
-				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+		const long ext2_task = launch_claimed_module_task_id(
+			"ext2", BUNIX_NAMES_ROOT, BUNIX_SERVICE_EXT2,
+			fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+		if (ext2_task <= 0 ||
+		    vfs_grant_admin_task(vfs, ext2_task) != 0) {
+			return 1;
+		}
 		ext2 = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 						  BUNIX_SERVICE_EXT2,
 						  BUNIX_RIGHT_SEND);
@@ -3812,9 +3893,12 @@ int main(void)
 		{ user_mgmt, BUNIX_RIGHT_SEND, BUNIX_CAP_USRM },
 		{ proc_mgmt, BUNIX_RIGHT_SEND, BUNIX_CAP_PRMG },
 	};
-	launch_claimed_module("linux", BUNIX_NAMES_ROOT, BUNIX_SERVICE_LINUX,
-			      linux_caps,
-			      sizeof(linux_caps) / sizeof(linux_caps[0]));
+	const long linux_task = launch_claimed_module_task_id(
+		"linux", BUNIX_NAMES_ROOT, BUNIX_SERVICE_LINUX,
+		linux_caps, sizeof(linux_caps) / sizeof(linux_caps[0]));
+	if (linux_task <= 0 || vfs_grant_admin_task(vfs_launch, linux_task) != 0) {
+		return 1;
+	}
 	linux = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_LINUX,
 					  BUNIX_RIGHT_SEND);
 	if (linux == 0) {
@@ -3857,6 +3941,24 @@ int main(void)
 			return 1;
 		}
 		(void)victim_handle;
+		bunix_sleep_ns(1000000000ull);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
+		for (;;) {
+		}
+	}
+
+	if (bunix_cmdline_has("vfs-mount-auth-test") > 0) {
+		const struct bunix_launch_cap vfs_mount_auth_test_caps[] = {
+			{ vfs_launch, BUNIX_RIGHT_SEND, BUNIX_CAP_VFS },
+			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		};
+
+		if (bunix_launch_module_with_caps(
+			    "mgmt-test", vfs_mount_auth_test_caps,
+			    sizeof(vfs_mount_auth_test_caps) /
+				    sizeof(vfs_mount_auth_test_caps[0])) < 0) {
+			return 1;
+		}
 		bunix_sleep_ns(1000000000ull);
 		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 		for (;;) {
