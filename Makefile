@@ -1357,6 +1357,9 @@ test-vfs-authority:
 test-vfs-mount-authority:
 	$(MAKE) KERNEL_CMDLINE="log=info vfs-mount-auth-test" BUNIX_BOOT_PHASE=marker-poweroff BUNIX_BOOT_MARKER="vfs-mount-auth-test: ok" TEST_BOOT_MARKERS=tools/test-boot-markers-vfs-mount-authority.txt test-boot
 
+test-vfs-subject-authority:
+	$(MAKE) KERNEL_CMDLINE="log=info vfs-subject-auth-test" BUNIX_BOOT_PHASE=marker-poweroff BUNIX_BOOT_MARKER="vfs-subject-auth-test: ok" TEST_BOOT_MARKERS=tools/test-boot-markers-vfs-subject-authority.txt test-boot
+
 test-lowmem-isolation: $(EFI_BOOT_APP) tools/test-lib.sh tools/test-command.sh
 	BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
 		BUNIX_CMD='/bin/lowmemtest' sh tools/test-command.sh

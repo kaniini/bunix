@@ -1,0 +1,2 @@
+vfs-subject-auth-test: forged root denied
+vfs-subject-auth-test: ok

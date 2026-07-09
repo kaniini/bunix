@@ -241,6 +241,19 @@ static long vfs_grant_admin_task(u64 vfs, u64 task)
 	       reply.words[0] == 0 ? 0 : -1;
 }
 
+static long vfs_grant_subject_task(u64 vfs, u64 task)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_GRANT_SUBJECT_TASK,
+		.words = { task, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	return bunix_ipc_call(vfs, &request, &reply) == 0 &&
+	       reply.words[0] == 0 ? 0 : -1;
+}
+
 int main(void)
 {
 	const char online[] = "bootstrap-riscv64: online\n";
@@ -344,7 +357,9 @@ int main(void)
 		vfs_ok, sizeof(vfs_ok) - 1, vfs_fail, sizeof(vfs_fail) - 1);
 	const u64 vfs = wait_service(BUNIX_SERVICE_VFS,
 				     BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
-	if (vfs != 0 && vfs_task > 0 && vfs_grant_admin_task(vfs, 0) == 0) {
+	if (vfs != 0 && vfs_task > 0 &&
+	    vfs_grant_admin_task(vfs, 0) == 0 &&
+	    vfs_grant_subject_task(vfs, 0) == 0) {
 		log_line(vfs_ready, sizeof(vfs_ready) - 1);
 	} else {
 		log_line(vfs_wait_fail, sizeof(vfs_wait_fail) - 1);

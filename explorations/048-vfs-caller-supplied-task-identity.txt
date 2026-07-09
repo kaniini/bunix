@@ -54,9 +54,9 @@ Fix plan:
 
 Tasks:
 
-- [ ] Build a local reproducer that forges VFS task identity from a weaker
+- [x] Build a local reproducer that forges VFS task identity from a weaker
       caller and proves whether it can bypass file permissions.
-- [ ] Define the VFS credential/subject model for Linux processes, native
+- [x] Define the VFS credential/subject model for Linux processes, native
       Bunix tasks, and privileged servers.
 - [ ] Update VFS and translators to derive/check authenticated subjects.
 - [ ] Remove or strictly gate privileged `task == 0` behavior.
@@ -64,3 +64,21 @@ Tasks:
       unionfs, and ext2 paths.
 - [ ] Run focused permission tests, shell tests, and full tests before
       completion.
+
+Notes:
+
+- Added `test-vfs-subject-authority`, which launches `mgmt-test` with ordinary
+  VFS send authority and proves it cannot forge task 0 to create
+  `/root/forged-root`.  Before the VFS subject gate, this test failed with
+  `vfs-subject-auth-test: forged root succeeded`.
+- VFS now has an explicit subject-issuer grant,
+  `BUNIX_VFS_GRANT_SUBJECT_TASK`.  Senders without that grant have the low
+  32-bit task subject in VFS request metadata rewritten to their authenticated
+  sender task before path or remote-handle forwarding.  Trusted brokers such as
+  Linux may still assert process subjects after bootstrap delegation.
+- Bootstrap claims the initial VFS subject grantor role, delegates subject
+  authority to Linux and trusted bootstrap servers that need service/root
+  filesystem credentials, and grants it to the existing VFS handle-authority
+  fixture only for that fixture.
+- Focused verification passed: `make test-vfs-subject-authority`,
+  `make test-vfs-authority`, and `make test-vfs-mount-authority`.

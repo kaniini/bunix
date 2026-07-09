@@ -74,6 +74,35 @@ static int path_call_denied(u64 port, unsigned int protocol, unsigned int type,
 	return reply.words[0] != 0 ? 0 : -1;
 }
 
+static int vfs_path_call_status(u64 vfs, unsigned int type, const char *path,
+				u64 word3)
+{
+	const char cwd[] = "/";
+	const u64 cwd_len = sizeof(cwd);
+	const u64 path_len = text_len(path) + 1;
+	const long buffer = bunix_buffer_create(cwd_len + path_len);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = type,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { cwd_len, path_len, 0, word3 },
+	};
+	struct bunix_msg reply;
+	u64 status = (u64)-1;
+
+	if (buffer > 0 &&
+	    bunix_buffer_write((u64)buffer, 0, cwd, cwd_len) == 0 &&
+	    bunix_buffer_write((u64)buffer, cwd_len, path, path_len) == 0 &&
+	    bunix_ipc_call(vfs, &request, &reply) == 0) {
+		status = reply.words[0];
+	}
+	if (buffer > 0) {
+		bunix_handle_close((u64)buffer);
+	}
+	return (int)status;
+}
+
 static long vfs_open_path(u64 vfs, const char *path, u64 *handle)
 {
 	const char cwd[] = "/";
@@ -226,6 +255,21 @@ static int run_vfs_mount_authority_test(u64 vfs)
 	return 0;
 }
 
+static int run_vfs_subject_authority_test(u64 vfs)
+{
+	const u64 forged_root = (u64)0700 << 32;
+
+	if (vfs_path_call_status(vfs, BUNIX_VFS_MKDIR_BUFFER,
+				 "/root/forged-root",
+				 forged_root) == 0) {
+		log_text("vfs-subject-auth-test: forged root succeeded\n");
+		return 1;
+	}
+	log_text("vfs-subject-auth-test: forged root denied\n");
+	log_text("vfs-subject-auth-test: ok\n");
+	return 0;
+}
+
 int main(void)
 {
 	const char user_denied[] = "mgmt-test: user denied\n";
@@ -241,6 +285,9 @@ int main(void)
 	if (vfs != 0) {
 		if (bunix_cmdline_has("vfs-mount-auth-test") > 0) {
 			return run_vfs_mount_authority_test(vfs);
+		}
+		if (bunix_cmdline_has("vfs-subject-auth-test") > 0) {
+			return run_vfs_subject_authority_test(vfs);
 		}
 		return run_vfs_authority_test(vfs);
 	}

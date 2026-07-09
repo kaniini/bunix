@@ -24,6 +24,11 @@ struct vfs_admin {
 	u64 task;
 };
 
+struct vfs_subject_issuer {
+	struct bunix_u64_tree_node node;
+	u64 task;
+};
+
 struct vfs_route_pin {
 	struct bunix_u64_tree_node node;
 	u64 id;
@@ -44,12 +49,14 @@ struct vfs_open {
 
 static struct bunix_tree mounts;
 static struct bunix_u64_tree admins;
+static struct bunix_u64_tree subject_issuers;
 static struct bunix_u64_tree route_pins;
 static struct bunix_u64_tree open_files;
 static u64 next_open_id = 1;
 static u64 next_mount_id = 1;
 static u64 next_route_pin_id = 1;
 static u64 admin_grantor = 0;
+static u64 subject_grantor = 0;
 
 static long register_service(u64 service, u64 handle)
 {
@@ -99,6 +106,12 @@ static int sender_is_admin(u64 sender)
 	       bunix_u64_tree_get(&admins, sender) != 0;
 }
 
+static int sender_is_subject_issuer(u64 sender)
+{
+	return sender != 0 &&
+	       bunix_u64_tree_get(&subject_issuers, sender) != 0;
+}
+
 static u64 grant_admin_task(u64 sender, u64 task)
 {
 	struct vfs_admin *admin;
@@ -128,6 +141,57 @@ static u64 grant_admin_task(u64 sender, u64 task)
 		return (u64)-1;
 	}
 	return 0;
+}
+
+static u64 grant_subject_task(u64 sender, u64 task)
+{
+	struct vfs_subject_issuer *issuer;
+
+	if (sender == 0) {
+		return BUNIX_VFS_ERR_ACCESS;
+	}
+	if (subject_grantor == 0) {
+		subject_grantor = sender;
+	} else if (sender != subject_grantor && !sender_is_admin(sender)) {
+		return BUNIX_VFS_ERR_ACCESS;
+	}
+	if (task == 0) {
+		task = sender;
+	}
+	if (bunix_u64_tree_get(&subject_issuers, task) != 0) {
+		return 0;
+	}
+	issuer = (struct vfs_subject_issuer *)bunix_calloc(1,
+							   sizeof(*issuer));
+	if (issuer == 0) {
+		return (u64)-1;
+	}
+	issuer->task = task;
+	if (bunix_u64_tree_insert_node(&subject_issuers, &issuer->node, task,
+				       (u64)issuer) != 0) {
+		bunix_free(issuer);
+		return (u64)-1;
+	}
+	return 0;
+}
+
+static u64 message_subject(const struct bunix_msg *message)
+{
+	if (message == 0 || message->sender == 0) {
+		return 0;
+	}
+	if (sender_is_subject_issuer(message->sender)) {
+		return message->words[3] & 0xffffffff;
+	}
+	return message->sender & 0xffffffff;
+}
+
+static void message_set_subject(struct bunix_msg *message, u64 subject)
+{
+	if (message != 0) {
+		message->words[3] = (message->words[3] & 0xffffffff00000000UL) |
+				    (subject & 0xffffffff);
+	}
 }
 
 static u64 str_len(const char *text)
@@ -864,11 +928,14 @@ static int forward_remote_handle(struct vfs_open *open,
 				 struct bunix_msg *message,
 				 struct bunix_msg *reply)
 {
+	const u64 subject = message_subject(message);
+
 	if (open == 0 || open->kind != VFS_OPEN_REMOTE ||
 	    open->service == 0 || open->remote_handle == 0) {
 		reply->words[0] = (u64)-1;
 		return -1;
 	}
+	message_set_subject(message, subject);
 
 	if (message->type == BUNIX_VFS_READDIR_BUFFER) {
 		char name[VFS_MAX_PATH];
@@ -1142,9 +1209,10 @@ static void vfs_open_path(struct bunix_msg *message, struct bunix_msg *reply,
 	char resolved[VFS_MAX_PATH];
 	u64 error = (u64)-1;
 	struct vfs_mount *mount;
+	const u64 subject = message_subject(message);
 
-	if (vfs_resolve_symlinks(path, resolved, message->words[3] & 0xffffffff,
-				 1, &error) != 0) {
+	message_set_subject(message, subject);
+	if (vfs_resolve_symlinks(path, resolved, subject, 1, &error) != 0) {
 		reply->words[0] = error;
 		return;
 	}
@@ -1171,9 +1239,11 @@ static void vfs_stat_path(struct bunix_msg *message, struct bunix_msg *reply,
 	u64 error = (u64)-1;
 	struct vfs_mount *mount;
 	const int nofollow = ((message->words[3] >> 32) & 1) != 0;
+	const u64 subject = message_subject(message);
 
-	if (vfs_resolve_symlinks(path, resolved, message->words[3] & 0xffffffff,
-				 !nofollow, &error) != 0) {
+	message_set_subject(message, subject);
+	if (vfs_resolve_symlinks(path, resolved, subject, !nofollow,
+				 &error) != 0) {
 		reply->words[0] = error;
 		return;
 	}
@@ -1199,8 +1269,9 @@ static void vfs_access_path(struct bunix_msg *message, struct bunix_msg *reply,
 	char resolved[VFS_MAX_PATH];
 	u64 error = (u64)-1;
 	struct vfs_mount *mount;
-	const u64 task = message->words[3] & 0xffffffff;
+	const u64 task = message_subject(message);
 
+	message_set_subject(message, task);
 	if (vfs_resolve_symlinks(path, resolved, task, 1, &error) != 0) {
 		reply->words[0] = error;
 		return;
@@ -1226,6 +1297,7 @@ static void vfs_mutate_path(struct bunix_msg *message, struct bunix_msg *reply,
 {
 	struct vfs_mount *mount = mount_for_path(path);
 
+	message_set_subject(message, message_subject(message));
 	if (mount != 0) {
 		(void)forward_mount_buffer_path(mount, message, reply, path);
 		return;
@@ -1240,6 +1312,7 @@ static void vfs_symlink_path(struct bunix_msg *message,
 {
 	struct vfs_mount *mount = mount_for_path(path);
 
+	message_set_subject(message, message_subject(message));
 	if (mount != 0) {
 		(void)forward_mount_symlink_path(mount, message, reply,
 						 target, path);
@@ -1254,6 +1327,7 @@ static void vfs_rename_path(struct bunix_msg *message, struct bunix_msg *reply,
 	struct vfs_mount *old_mount = mount_for_path(old_path);
 	struct vfs_mount *new_mount = mount_for_path(new_path);
 
+	message_set_subject(message, message_subject(message));
 	if (old_mount == 0 || new_mount == 0) {
 		reply->words[0] = old_mount == new_mount ?
 				  BUNIX_VFS_ERR_ACCESS : BUNIX_VFS_ERR_XDEV;
@@ -1273,6 +1347,7 @@ static void vfs_link_path(struct bunix_msg *message, struct bunix_msg *reply,
 	struct vfs_mount *old_mount = mount_for_path(old_path);
 	struct vfs_mount *new_mount = mount_for_path(new_path);
 
+	message_set_subject(message, message_subject(message));
 	if (old_mount == 0 || new_mount == 0) {
 		reply->words[0] = old_mount == new_mount ?
 				  BUNIX_VFS_ERR_ACCESS : BUNIX_VFS_ERR_XDEV;
@@ -1292,9 +1367,10 @@ static void vfs_readlink_path(struct bunix_msg *message,
 	char resolved[VFS_MAX_PATH];
 	u64 error = (u64)-1;
 	struct vfs_mount *mount;
+	const u64 subject = message_subject(message);
 
-	if (vfs_resolve_symlinks(path, resolved, message->words[3] & 0xffffffff,
-				 0, &error) != 0) {
+	message_set_subject(message, subject);
+	if (vfs_resolve_symlinks(path, resolved, subject, 0, &error) != 0) {
 		reply->words[0] = error;
 		return;
 	}
@@ -1316,6 +1392,9 @@ int main(void)
 	bunix_console_log(online, sizeof(online) - 1);
 	register_service(BUNIX_SERVICE_VFS, BUNIX_HANDLE_SELF);
 	bunix_tree_init(&mounts);
+	bunix_u64_tree_init(&admins);
+	bunix_u64_tree_init(&subject_issuers);
+	bunix_u64_tree_init(&route_pins);
 	bunix_u64_tree_init(&open_files);
 	next_open_id = 1;
 	bunix_console_log(ready, sizeof(ready) - 1);
@@ -1680,6 +1759,12 @@ int main(void)
 				reply.words[0] =
 					grant_admin_task(message.sender,
 							 message.words[0]);
+				break;
+			}
+			case BUNIX_VFS_GRANT_SUBJECT_TASK: {
+				reply.words[0] =
+					grant_subject_task(message.sender,
+							   message.words[0]);
 				break;
 			}
 			case BUNIX_VFS_MOUNT_BUFFER: {
