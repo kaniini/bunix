@@ -86,7 +86,7 @@ Tasks:
 - [x] Gate user server credential/session mutations.
 - [x] Gate proc server lifecycle/registration/cmdline mutations.
 - [x] Gate Linux server management RPCs.
-- [ ] Add regression tests and run full `make test`.
+- [x] Add regression tests and run full `make test`.
 
 Notes:
 
@@ -110,6 +110,8 @@ Notes:
   `make BUNIX_SHELL_PART=smoke test-shell-part`,
   `make BUNIX_SHELL_PART=exec-argv-pipe test-shell-part`, and
   `make BUNIX_SHELL_PART=privileged-native-denial test-shell-part`.
-- Remaining full-gate work: diagnose long filesystem/root shard failures and
-  the `alpine-openrc-full` login prompt timeout from the latest full
-  `make test` run.
+- Stabilized long shell regression shards by splitting the old
+  `rootfs-vfs-proc-dev` shard, moving root mount soak logic into the synthetic
+  rootfs, and isolating the timing-sensitive Linux signal regression.
+- Full verification passed:
+  `make test` run `20260709T200156Z-32269`, 25 shards launched, 25 passed.
