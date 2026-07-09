@@ -87,6 +87,8 @@ enum {
 	SYSCALL_HW_IRQ_MASK = -108,
 	SYSCALL_SCHED_THREAD_INFO = -110,
 	SYSCALL_HANDLE_FIND = -112,
+	SYSCALL_TASK_GRANT_TAGGED = -114,
+	SYSCALL_TASK_HANDLE_FIND = -116,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -5742,6 +5744,12 @@ static u64 native_sys_task_grant(const struct native_syscall_args *args)
 				      (u32)args->arg2);
 }
 
+static u64 native_sys_task_grant_tagged(const struct native_syscall_args *args)
+{
+	return server_task_grant_tagged(task_current(), args->arg0, args->arg1,
+					(u32)args->arg2, (u32)args->arg3);
+}
+
 static u64 native_sys_task_start(const struct native_syscall_args *args)
 {
 	return (u64)server_task_start(task_current(), args->arg0, args->arg1);
@@ -5936,6 +5944,15 @@ static u64 native_sys_handle_close(const struct native_syscall_args *args)
 static u64 native_sys_handle_find(const struct native_syscall_args *args)
 {
 	const u64 handle = task_handle_find(task_current(), (u32)args->arg0);
+
+	return handle != 0 ? handle : (u64)-1;
+}
+
+static u64 native_sys_task_handle_find(const struct native_syscall_args *args)
+{
+	const u64 handle =
+		server_task_handle_find(task_current(), args->arg0,
+					(u32)args->arg1);
 
 	return handle != 0 ? handle : (u64)-1;
 }
@@ -6753,6 +6770,8 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_IPC_CALL, "ipc_call", native_sys_ipc_call },
 	{ SYSCALL_HANDLE_CLOSE, "handle_close", native_sys_handle_close },
 	{ SYSCALL_HANDLE_FIND, "handle_find", native_sys_handle_find },
+	{ SYSCALL_TASK_HANDLE_FIND, "task_handle_find",
+	  native_sys_task_handle_find },
 	{ SYSCALL_BOOT_MODULE_READ, "boot_module_read",
 	  native_sys_boot_module_read },
 	{ SYSCALL_CLOCK_MONOTONIC_NS, "clock_monotonic_ns",
@@ -6762,6 +6781,8 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_TASK_CREATE, "task_create", native_sys_task_create },
 	{ SYSCALL_TASK_MAP, "task_map", native_sys_task_map },
 	{ SYSCALL_TASK_GRANT, "task_grant", native_sys_task_grant },
+	{ SYSCALL_TASK_GRANT_TAGGED, "task_grant_tagged",
+	  native_sys_task_grant_tagged },
 	{ SYSCALL_TASK_START, "task_start", native_sys_task_start },
 	{ SYSCALL_BUFFER_CREATE, "buffer_create", native_sys_buffer_create },
 	{ SYSCALL_BUFFER_READ, "buffer_read", native_sys_buffer_read },

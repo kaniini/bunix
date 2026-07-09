@@ -62,6 +62,8 @@ enum {
 	BUNIX_SYSCALL_HW_IRQ_MASK = -108,
 	BUNIX_SYSCALL_SCHED_THREAD_INFO = -110,
 	BUNIX_SYSCALL_HANDLE_FIND = -112,
+	BUNIX_SYSCALL_TASK_GRANT_TAGGED = -114,
+	BUNIX_SYSCALL_TASK_HANDLE_FIND = -116,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_SCHED_STATS_CPUS = 8,
@@ -1062,6 +1064,14 @@ static inline u64 bunix_handle_find(unsigned int tag)
 	return handle > 0 ? (u64)handle : 0;
 }
 
+static inline u64 bunix_task_handle_find(u64 task, unsigned int tag)
+{
+	const long handle =
+		bunix_syscall2(BUNIX_SYSCALL_TASK_HANDLE_FIND, task, tag);
+
+	return handle > 0 ? (u64)handle : 0;
+}
+
 static inline long bunix_task_create(const char *name)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_TASK_CREATE, (u64)name);
@@ -1090,6 +1100,14 @@ static inline long bunix_task_map(u64 task, u64 vaddr, const void *src,
 static inline long bunix_task_grant(u64 task, u64 handle, unsigned int rights)
 {
 	return bunix_syscall3(BUNIX_SYSCALL_TASK_GRANT, task, handle, rights);
+}
+
+static inline long bunix_task_grant_tagged(u64 task, u64 handle,
+					   unsigned int rights,
+					   unsigned int tag)
+{
+	return bunix_syscall4(BUNIX_SYSCALL_TASK_GRANT_TAGGED, task, handle,
+			      rights, tag);
 }
 
 static inline long bunix_task_start(u64 task, u64 entry)

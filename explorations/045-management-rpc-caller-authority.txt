@@ -61,6 +61,8 @@ Exploit/reproducer plan:
 
 Fix plan:
 
+- Use named capabilities and handle discovery for proc-created tasks; do not
+  depend on fixed child handle slots when passing authority through exec.
 - Define per-service management authorities: bootstrap/proc/linux/login/user
   should hold distinct capabilities for privileged lifecycle and credential
   operations.

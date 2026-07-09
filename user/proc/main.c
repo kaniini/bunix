@@ -41,12 +41,6 @@ enum {
 	AT_RANDOM = 25,
 	AT_ENTRY = 9,
 	AT_EXECFN = 31,
-	EXEC_HANDLE_SELF = 1,
-	EXEC_HANDLE_STDOUT = 2,
-	EXEC_HANDLE_STDERR = EXEC_HANDLE_STDOUT,
-	EXEC_HANDLE_TIME = 3,
-	EXEC_HANDLE_PROC = 4,
-	EXEC_HANDLE_NAMES = 5,
 	PROC_DYN_LOAD_BIAS = 0x400000,
 	PROC_INTERP_LOAD_BIAS = 0x600000,
 	PROC_EXEC_PATH_MAX = 4096,
@@ -147,6 +141,33 @@ struct exec_credentials {
 	u64 egid;
 	u64 secure;
 };
+
+struct exec_handles {
+	u64 stdout_handle;
+	u64 stderr_handle;
+	u64 time_handle;
+	u64 proc_handle;
+	u64 names_handle;
+};
+
+static int exec_handles_from_task(u64 task, struct exec_handles *handles)
+{
+	if (handles == 0) {
+		return -1;
+	}
+
+	handles->stdout_handle = bunix_task_handle_find(task, BUNIX_CAP_CONS);
+	handles->stderr_handle = handles->stdout_handle;
+	handles->time_handle = bunix_task_handle_find(task, BUNIX_CAP_TIME);
+	handles->proc_handle = bunix_task_handle_find(task, BUNIX_CAP_PROC);
+	handles->names_handle = bunix_task_handle_find(task, BUNIX_CAP_NAME);
+
+	return handles->stdout_handle != 0 &&
+		       handles->time_handle != 0 &&
+		       handles->proc_handle != 0 &&
+		       handles->names_handle != 0 ?
+		       0 : -1;
+}
 
 struct pending_exec_replace {
 	u64 token;
@@ -1076,9 +1097,11 @@ static long build_initial_stack(u64 task, const char *path,
 				u64 load_bias, u64 interpreter_base,
 				const struct exec_strings *strings,
 				const struct exec_credentials *creds,
+				const struct exec_handles *handles,
 				u64 *stack)
 {
 	const struct exec_credentials root_creds = { 0, 0, 0, 0, 0 };
+	const struct exec_handles empty_handles = { 0, 0, 0, 0, 0 };
 	const u64 stack_base = USER_STACK_TOP - PROC_INIT_STACK_MAX;
 	const u64 path_len = str_len(path);
 	const u64 phdr_size = exec != 0 ? exec->phnum * exec->phent : 0;
@@ -1099,6 +1122,9 @@ static long build_initial_stack(u64 task, const char *path,
 
 	if (creds == 0) {
 		creds = &root_creds;
+	}
+	if (handles == 0) {
+		handles = &empty_handles;
 	}
 	if (exec == 0 ||
 	    exec->phdrs == 0 ||
@@ -1215,15 +1241,15 @@ static long build_initial_stack(u64 task, const char *path,
 	words[word++] = AT_CLKTCK;
 	words[word++] = 100;
 	words[word++] = BUNIX_AT_STDOUT;
-	words[word++] = EXEC_HANDLE_STDOUT;
+	words[word++] = handles->stdout_handle;
 	words[word++] = BUNIX_AT_STDERR;
-	words[word++] = EXEC_HANDLE_STDERR;
+	words[word++] = handles->stderr_handle;
 	words[word++] = BUNIX_AT_TIME;
-	words[word++] = EXEC_HANDLE_TIME;
+	words[word++] = handles->time_handle;
 	words[word++] = BUNIX_AT_PROC;
-	words[word++] = EXEC_HANDLE_PROC;
+	words[word++] = handles->proc_handle;
 	words[word++] = BUNIX_AT_NAMES;
-	words[word++] = EXEC_HANDLE_NAMES;
+	words[word++] = handles->names_handle;
 	words[word++] = AT_NULL;
 	words[word++] = 0;
 
@@ -1314,6 +1340,7 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 			    const char *execfn_path,
 			    const struct exec_strings *strings,
 			    const struct exec_credentials *creds,
+			    const struct exec_handles *handles,
 			    u64 *entry, u64 *stack)
 {
 	struct elf64_ehdr ehdr;
@@ -1454,7 +1481,7 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 	}
 
 	if (build_initial_stack(task, execfn_path, &exec, load_bias,
-				interp_bias, strings, creds, stack) != 0) {
+				interp_bias, strings, creds, handles, stack) != 0) {
 		goto out;
 	}
 
@@ -1489,6 +1516,7 @@ static long exec_path(u64 vfs, struct process *process,
 		{ BUNIX_HANDLE_SELF, BUNIX_RIGHT_SEND, BUNIX_CAP_PROC },
 		{ PROC_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
 	};
+	struct exec_handles handles = { 0, 0, 0, 0, 0 };
 	long task;
 	u64 stack = 0;
 	u64 start_entry = 0;
@@ -1509,14 +1537,27 @@ static long exec_path(u64 vfs, struct process *process,
 	process->task_handle = (u64)task;
 
 	for (u64 i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {
-		if (bunix_task_grant((u64)task, caps[i].handle,
-				     caps[i].rights) != 0) {
+		const long child_handle =
+			bunix_task_grant_tagged((u64)task, caps[i].handle,
+						caps[i].rights, caps[i].tag);
+
+		if (child_handle <= 0) {
 			bunix_handle_close((u64)task);
 			return -1;
 		}
+		if (caps[i].tag == BUNIX_CAP_CONS) {
+			handles.stdout_handle = (u64)child_handle;
+			handles.stderr_handle = (u64)child_handle;
+		} else if (caps[i].tag == BUNIX_CAP_TIME) {
+			handles.time_handle = (u64)child_handle;
+		} else if (caps[i].tag == BUNIX_CAP_PROC) {
+			handles.proc_handle = (u64)child_handle;
+		} else if (caps[i].tag == BUNIX_CAP_NAME) {
+			handles.names_handle = (u64)child_handle;
+		}
 	}
 	if (load_task_image(vfs, (u64)task, 0, path, path, strings, 0,
-			    &start_entry, &stack) != 0) {
+			    &handles, &start_entry, &stack) != 0) {
 		bunix_handle_close((u64)task);
 		return -1;
 	}
@@ -1836,6 +1877,7 @@ static long exec_replace_from_message(u64 vfs, const struct bunix_msg *message,
 	struct pending_exec_replace *pending;
 	struct exec_strings strings = { 0, 0, 0, 0 };
 	struct exec_credentials creds = { 0, 0, 0, 0, 0 };
+	struct exec_handles handles = { 0, 0, 0, 0, 0 };
 	char *load_path = 0;
 	char *execfn_path = 0;
 	long result = -1;
@@ -1852,10 +1894,12 @@ static long exec_replace_from_message(u64 vfs, const struct bunix_msg *message,
 
 	if (exec_strings_from_replace_buffer(message, &load_path, &execfn_path,
 					     &creds,
-					     &strings) == 0) {
+					     &strings) == 0 &&
+	    exec_handles_from_task(pending->task_handle, &handles) == 0) {
 		result = load_task_image(vfs, pending->task_handle, 1,
 					 load_path, execfn_path, &strings,
 					 &creds,
+					 &handles,
 					 entry, stack);
 	}
 

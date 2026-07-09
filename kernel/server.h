@@ -42,6 +42,9 @@ int server_task_clone_range(struct task *parent, u64 dst_handle,
 			    u64 src_handle, u64 vaddr, u64 len, u32 writable);
 int server_task_grant(struct task *parent, u64 task_handle, u64 handle,
 		      u32 rights);
+u64 server_task_grant_tagged(struct task *parent, u64 task_handle, u64 handle,
+			     u32 rights, u32 tag);
+u64 server_task_handle_find(struct task *parent, u64 task_handle, u32 tag);
 int server_task_start(struct task *parent, u64 task_handle, u64 entry);
 int server_task_start_at(struct task *parent, u64 task_handle, u64 entry,
 			 u64 stack);

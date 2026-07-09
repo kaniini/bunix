@@ -725,18 +725,45 @@ out:
 int server_task_grant(struct task *parent, u64 task_handle, u64 handle,
 		      u32 rights)
 {
+	return server_task_grant_tagged(parent, task_handle, handle, rights, 0) ==
+		       0 ?
+		       -1 : 0;
+}
+
+u64 server_task_grant_tagged(struct task *parent, u64 task_handle, u64 handle,
+			     u32 rights, u32 tag)
+{
 	struct task *task = task_from_handle(parent, task_handle,
 					    TASK_RIGHT_SEND);
+	u64 child_handle;
 
 	if (task == 0) {
-		return -1;
+		return 0;
 	}
 
-	const int result =
-		task_grant_inherited_handle(task, parent, handle, rights) == 0 ?
-		-1 : 0;
+	child_handle = task_grant_inherited_handle(task, parent, handle, rights);
+	if (child_handle != 0 && tag != 0 &&
+	    task_set_handle_tag(task, child_handle, tag) != 0) {
+		(void)task_close_handle(task, child_handle);
+		child_handle = 0;
+	}
 	task_release(task);
-	return result;
+	return child_handle;
+}
+
+u64 server_task_handle_find(struct task *parent, u64 task_handle, u32 tag)
+{
+	struct task *task = task_from_handle(parent, task_handle,
+					    TASK_RIGHT_SEND);
+	u64 handle;
+
+	if (task == 0) {
+		return 0;
+	}
+
+	handle = task_handle_find(task, tag);
+	task_release(task);
+	return handle;
 }
 
 int server_task_start(struct task *parent, u64 task_handle, u64 entry)
