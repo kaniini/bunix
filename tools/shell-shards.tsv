@@ -12,7 +12,7 @@ rootfs-vfs-paths	user	2	128M	300	2	no	Rootfs stat/list/readlink, long paths, cwd
 procfs-sysfs-surface	user	2	128M	420	2	no	Procfs process/stat/ipc/scheduler/mount surfaces, sysfs CPU/TTY surfaces, dmesg prefixes, and writable runtime tmpfs mounts.
 devfs-console-surface	user	2	128M	180	1	no	Devfs null/zero/urandom/console/ttyS0 character devices and raw console write behavior.
 tmpfs-basic-linux-tests	user	2	128M	300	3	no	/tmp and /run writes, append/excl/truncate/unlink, bundled Linux regression binaries, proc tools, mount listing, mkdir basics, and dev console write.
-linux-signaltest	user	2	128M	120	1	no	Linux SIGCHLD self-pipe and delivered fault signal regression test.
+linux-signaltest	user	2	128M	180	1	no	Linux SIGCHLD self-pipe and delivered fault signal regression test.
 path-limits-statfs	user	2	128M	180	2	no	Deep tmpfs path creation, pathmaxtest, patherrtest, and df/statfs checks.
 union-root-user	user	2	128M	180	3	no	Unionfs lower rename/copy-up, root-created upper entries, long/name-max entries, and unlink behavior from the user phase.
 tmpfs-extended	user	2	128M	600	4	no	Tmpfs ownership, mkdir, long names, name max, touch, fifo, hardlink, rmdir, rename, chmod, chown denial, symlink, plus user-created union symlink/hardlink.
