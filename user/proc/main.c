@@ -1621,24 +1621,16 @@ static long exec_path(u64 vfs, struct process *process,
 	}
 
 	for (u64 i = 0; i < cap_count; i++) {
-		const long child_handle =
-			bunix_task_grant_tagged((u64)task, caps[i].handle,
-						caps[i].rights, caps[i].tag);
-
-		if (child_handle <= 0) {
+		if (bunix_task_grant_tagged((u64)task, caps[i].handle,
+					    caps[i].rights, caps[i].tag) <=
+		    0) {
 			bunix_handle_close((u64)task);
 			return -1;
 		}
-		if (caps[i].tag == BUNIX_CAP_CONS) {
-			handles.stdout_handle = (u64)child_handle;
-			handles.stderr_handle = (u64)child_handle;
-		} else if (caps[i].tag == BUNIX_CAP_TIME) {
-			handles.time_handle = (u64)child_handle;
-		} else if (caps[i].tag == BUNIX_CAP_PROC) {
-			handles.proc_handle = (u64)child_handle;
-		} else if (caps[i].tag == BUNIX_CAP_NAME) {
-			handles.names_handle = (u64)child_handle;
-		}
+	}
+	if (exec_handles_from_task((u64)task, &handles) != 0) {
+		bunix_handle_close((u64)task);
+		return -1;
 	}
 	if (load_task_image(vfs, (u64)task, 0, path, path, strings, 0,
 			    &handles, &start_entry, &stack) != 0) {
