@@ -291,6 +291,25 @@ static int run_tmpfs_subject_authority_test(void)
 	return 0;
 }
 
+static int run_squashfs_subject_authority_test(void)
+{
+	const u64 squashfs = resolve_service(BUNIX_SERVICE_SQUASHFS,
+					     BUNIX_RIGHT_SEND);
+
+	if (squashfs == 0) {
+		log_text("squashfs-subject-auth-test: no squashfs\n");
+		return 1;
+	}
+	if (vfs_path_call_status(squashfs, BUNIX_VFS_OPEN_BUFFER,
+				 "/etc/shadow", 0) == 0) {
+		log_text("squashfs-subject-auth-test: forged root succeeded\n");
+		return 1;
+	}
+	log_text("squashfs-subject-auth-test: forged root denied\n");
+	log_text("squashfs-subject-auth-test: ok\n");
+	return 0;
+}
+
 int main(void)
 {
 	const char user_denied[] = "mgmt-test: user denied\n";
@@ -305,6 +324,9 @@ int main(void)
 
 	if (bunix_cmdline_has("tmpfs-subject-auth-test") > 0) {
 		return run_tmpfs_subject_authority_test();
+	}
+	if (bunix_cmdline_has("squashfs-subject-auth-test") > 0) {
+		return run_squashfs_subject_authority_test();
 	}
 
 	if (vfs != 0) {

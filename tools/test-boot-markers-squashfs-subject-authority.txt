@@ -1,0 +1,2 @@
+squashfs-subject-auth-test: forged root denied
+squashfs-subject-auth-test: ok

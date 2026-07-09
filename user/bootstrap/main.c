@@ -3413,6 +3413,7 @@ int main(void)
 	u64 usb = 0;
 	u64 vfs = 0;
 	u64 vfs_launch = 0;
+	u64 squashfs = 0;
 	u64 fs_namespace = 0;
 	const int ext2_root_mode = bunix_cmdline_has("ext2-root-test") > 0;
 	const struct bunix_launch_cap bad_caps[] = {
@@ -3772,8 +3773,6 @@ int main(void)
 		for (;;) {
 		}
 	} else {
-		u64 squashfs;
-
 		bunix_console_log(squashfs_root, sizeof(squashfs_root) - 1);
 		const long squashfs_task = launch_claimed_module_task_id(
 			"squashfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_SQUASHFS,
@@ -3786,6 +3785,7 @@ int main(void)
 						      BUNIX_SERVICE_SQUASHFS,
 						      BUNIX_RIGHT_SEND);
 		if (squashfs == 0 ||
+		    vfs_grant_subject_task(squashfs, vfs_task) != 0 ||
 		    send_path_command(squashfs, BUNIX_PROTO_SQUASHFS,
 				      BUNIX_SQUASHFS_MOUNT_PATH,
 				      "/.lower") != 0 ||
@@ -3801,6 +3801,10 @@ int main(void)
 		return 1;
 	}
 	if (tmpfs == 0 || vfs_grant_subject_task(tmpfs, unionfs_task) != 0) {
+		return 1;
+	}
+	if (squashfs != 0 &&
+	    vfs_grant_subject_task(squashfs, unionfs_task) != 0) {
 		return 1;
 	}
 	{
@@ -4029,17 +4033,18 @@ int main(void)
 		}
 	}
 
-	if (bunix_cmdline_has("tmpfs-subject-auth-test") > 0) {
-		const struct bunix_launch_cap tmpfs_subject_auth_test_caps[] = {
+	if (bunix_cmdline_has("tmpfs-subject-auth-test") > 0 ||
+	    bunix_cmdline_has("squashfs-subject-auth-test") > 0) {
+		const struct bunix_launch_cap translator_subject_auth_test_caps[] = {
 			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND,
 			  BUNIX_CAP_NAME },
 			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
 		};
 
 		if (bunix_launch_module_with_caps(
-			    "mgmt-test", tmpfs_subject_auth_test_caps,
-			    sizeof(tmpfs_subject_auth_test_caps) /
-				    sizeof(tmpfs_subject_auth_test_caps[0])) < 0) {
+			    "mgmt-test", translator_subject_auth_test_caps,
+			    sizeof(translator_subject_auth_test_caps) /
+				    sizeof(translator_subject_auth_test_caps[0])) < 0) {
 			return 1;
 		}
 		bunix_sleep_ns(1000000000ull);

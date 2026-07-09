@@ -105,11 +105,17 @@ struct squashfs_open {
 	struct squashfs_node *fs_node;
 };
 
+struct squashfs_vfs_caller {
+	struct bunix_u64_tree_node node;
+	u64 task;
+};
+
 static struct squashfs_super root_super;
 static struct squashfs_metadata_cache *metadata_cache;
 static struct squashfs_inode root_inode;
 static struct bunix_tree nodes_by_path;
 static struct bunix_u64_tree open_files;
+static struct bunix_u64_tree vfs_callers;
 static struct squashfs_node *root_node;
 static struct squashfs_node *all_nodes;
 static u64 *id_values;
@@ -118,6 +124,7 @@ static u64 next_open_id = 1;
 static u64 block_service;
 static u64 user_service;
 static u64 image_size;
+static u64 vfs_caller_grantor;
 static char squashfs_mount_path[SQUASHFS_MAX_PATH] = "/";
 
 static int squashfs_is_directory_type(u64 type);
@@ -368,6 +375,43 @@ static long register_service(u64 service, u64 handle)
 	(void)service;
 	return bunix_names_register_claim(bunix_handle_find(BUNIX_CAP_CLAM),
 					  handle);
+}
+
+static int sender_is_vfs_caller(u64 sender)
+{
+	return sender != 0 && bunix_u64_tree_get(&vfs_callers, sender) != 0;
+}
+
+static u64 grant_vfs_caller_task(u64 sender, u64 task)
+{
+	struct squashfs_vfs_caller *caller;
+
+	if (sender == 0) {
+		return BUNIX_VFS_ERR_ACCESS;
+	}
+	if (vfs_caller_grantor == 0) {
+		vfs_caller_grantor = sender;
+	} else if (sender != vfs_caller_grantor) {
+		return BUNIX_VFS_ERR_ACCESS;
+	}
+	if (task == 0) {
+		task = sender;
+	}
+	if (bunix_u64_tree_get(&vfs_callers, task) != 0) {
+		return 0;
+	}
+	caller = (struct squashfs_vfs_caller *)bunix_calloc(1,
+							    sizeof(*caller));
+	if (caller == 0) {
+		return (u64)-1;
+	}
+	caller->task = task;
+	if (bunix_u64_tree_insert_node(&vfs_callers, &caller->node, task,
+				       (u64)caller) != 0) {
+		bunix_free(caller);
+		return (u64)-1;
+	}
+	return 0;
 }
 
 static u64 service_user(void)
@@ -1713,6 +1757,7 @@ int main(void)
 	bunix_console_log(online, sizeof(online) - 1);
 	bunix_tree_init(&nodes_by_path);
 	bunix_u64_tree_init(&open_files);
+	bunix_u64_tree_init(&vfs_callers);
 	block_service = resolve_service(BUNIX_SERVICE_BLOCK, BUNIX_RIGHT_SEND);
 	if (block_service == 0 ||
 	    squashfs_mount() != 0 ||
@@ -1753,6 +1798,28 @@ int main(void)
 		}
 		reply.type = message.type;
 		if (message.protocol == BUNIX_PROTO_VFS) {
+			if (message.type == BUNIX_VFS_GRANT_SUBJECT_TASK) {
+				reply.words[0] =
+					grant_vfs_caller_task(message.sender,
+							      message.words[0]);
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				if (message.reply != 0) {
+					bunix_ipc_send(message.reply, &reply);
+				}
+				continue;
+			}
+			if (!sender_is_vfs_caller(message.sender)) {
+				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				if (message.reply != 0) {
+					bunix_ipc_send(message.reply, &reply);
+				}
+				continue;
+			}
 			switch (message.type) {
 			case BUNIX_VFS_OPEN_BUFFER:
 				if (read_resolved_path(&message, path) != 0) {
