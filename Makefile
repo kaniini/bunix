@@ -1532,6 +1532,8 @@ test-boot-virtio-blk-irq-backend: test-boot-virtio-blk-backend
 	grep -aF "virtio-blk: irq ready" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "irq: bind" $(BUILD_DIR)/serial.log >/dev/null
 
+test-shell test-shell-part test-smoke test-smoke-parallel test-shell-parallel: KERNEL_CMDLINE=log=info shell-test
+
 test-shell: $(EFI_BOOT_APP)
 	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		sh tools/test-shell.sh

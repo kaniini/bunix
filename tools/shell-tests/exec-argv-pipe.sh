@@ -1,12 +1,12 @@
 #!/bin/sh
 
 run_exec_argv_pipe() {
-	send_script <<'EOF_EXEC_ARGV_PIPE'
+	send_script_sync <<'EOF_EXEC_ARGV_PIPE'
 busybox echo PIPE_OK | busybox cat
 busybox cat /hello.txt | busybox cat && echo PIPE_FILE_OK
 busybox cat /proc/kthreads >/dev/null && echo PROCFS_OK
 busybox echo BUSYBOX_ARGV_OK
-busybox sh -c "test \"\$13\" = m && echo BUSYBOX_MANY_ARGV_OK" _ a b c d e f g h i j k l m
+busybox sh -c "test \"\${13}\" = m && echo BUSYBOX_MANY_ARGV_OK" _ a b c d e f g h i j k l m
 BUNIX_LONG_ENV=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 busybox sh -c "test \"\$BUNIX_LONG_ENV\" = abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 && echo BUSYBOX_LONG_ENV_OK"
 set --
 i=1

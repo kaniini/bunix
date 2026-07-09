@@ -101,3 +101,15 @@ Notes:
 - Focused verification passed:
   `make`, `make BUNIX_SHELL_PART=login-smoke test-shell-part`, and
   `make test-management-authority`.
+- Full `make test` exposed shell-harness serial interleaving after the
+  management-capability changes made BusyBox init manage login normally.
+  Shell-test boots now use an explicit `shell-test` command-line flag so
+  bootstrap can route server logs to dmesg before interactive test input,
+  while boot-marker tests keep the old serial marker stream.
+- Additional focused verification passed:
+  `make BUNIX_SHELL_PART=smoke test-shell-part`,
+  `make BUNIX_SHELL_PART=exec-argv-pipe test-shell-part`, and
+  `make BUNIX_SHELL_PART=privileged-native-denial test-shell-part`.
+- Remaining full-gate work: diagnose long filesystem/root shard failures and
+  the `alpine-openrc-full` login prompt timeout from the latest full
+  `make test` run.

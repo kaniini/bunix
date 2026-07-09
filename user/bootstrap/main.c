@@ -3843,12 +3843,16 @@ int main(void)
 		return 1;
 	}
 	bunix_console_log(linux_init_exec, sizeof(linux_init_exec) - 1);
+	if (bunix_cmdline_has("shell-test") > 0) {
+		bunix_console_logs_to_ring();
+	}
 
 	if (run_boot_spawns(proc_mgmt, vfs) != 0) {
 		return 1;
 	}
-
-	bunix_console_logs_to_ring();
+	if (bunix_cmdline_has("shell-test") <= 0) {
+		bunix_console_logs_to_ring();
+	}
 
 	for (;;) {
 		sleep_ns(time, 1000000000ull);

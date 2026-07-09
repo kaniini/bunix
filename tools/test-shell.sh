@@ -14,6 +14,7 @@ sidecar_start_delay=${BUNIX_TEST_SIDECAR_START_DELAY:-1}
 sidecar_ready_timeout=${BUNIX_TEST_SIDECAR_READY_TIMEOUT:-20}
 guest_poweroff=${BUNIX_GUEST_POWEROFF:-1}
 send_line_delay=${BUNIX_SEND_LINE_DELAY:-0.35}
+send_sync_line_delay=${BUNIX_SEND_SYNC_LINE_DELAY:-0.45}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-shell-test.$run_id}
 log=$tmp/serial.log
@@ -101,7 +102,7 @@ send_script_sync() {
 		printf '%s\n' "$line" >&3
 		wait_for_prompt_count_gt "$prompt_probe" "$before" \
 			"shell prompt did not return after: $line" 90 220
-		sleep "$send_line_delay"
+		sleep "$send_sync_line_delay"
 	done
 }
 
