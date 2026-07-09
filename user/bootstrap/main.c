@@ -75,7 +75,7 @@ static long launch_claimed_module(const char *name, u64 namespace, u64 service,
 				  const struct bunix_launch_cap *caps,
 				  u64 cap_count)
 {
-	struct bunix_launch_cap claimed_caps[8];
+	struct bunix_launch_cap claimed_caps[16];
 	u64 claim;
 
 	if (name == 0 || service == 0 ||
@@ -3345,7 +3345,10 @@ int main(void)
 	u64 vm;
 	u64 time = 0;
 	u64 proc = 0;
+	u64 proc_mgmt = 0;
 	u64 linux = 0;
+	u64 linux_mgmt = 0;
+	u64 user_mgmt = 0;
 	u64 net = 0;
 	u64 usb = 0;
 	u64 vfs = 0;
@@ -3369,6 +3372,13 @@ int main(void)
 	if (console == 0 || vm == 0) {
 		return 1;
 	}
+	user_mgmt = (u64)bunix_port_create("user-mgmt");
+	proc_mgmt = (u64)bunix_port_create("proc-mgmt");
+	linux_mgmt = (u64)bunix_port_create("linux-mgmt");
+	if ((long)user_mgmt <= 0 || (long)proc_mgmt <= 0 ||
+	    (long)linux_mgmt <= 0) {
+		return 1;
+	}
 	bunix_console_log(names_ready, sizeof(names_ready) - 1);
 
 	const struct bunix_launch_cap fs_caps[] = {
@@ -3383,8 +3393,15 @@ int main(void)
 	if (time == 0) {
 		return 1;
 	}
+	const struct bunix_launch_cap user_caps[] = {
+		{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
+		{ user_mgmt, BUNIX_RIGHT_RECV, BUNIX_CAP_USRM },
+	};
+
 	launch_claimed_module("user", BUNIX_NAMES_ROOT, BUNIX_SERVICE_USER,
-			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+			      user_caps,
+			      sizeof(user_caps) / sizeof(user_caps[0]));
 	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_USER,
 				      BUNIX_RIGHT_SEND) == 0) {
 		return 1;
@@ -3395,6 +3412,11 @@ int main(void)
 		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 		  BUNIX_CAP_NAME },
 		{ time, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, BUNIX_CAP_TIME },
+		{ proc_mgmt, BUNIX_RIGHT_RECV, BUNIX_CAP_PRMG },
+		{ user_mgmt, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		  BUNIX_CAP_USRM },
+		{ linux_mgmt, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		  BUNIX_CAP_LNXM },
 	};
 	launch_claimed_module("proc", BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROC,
 			      proc_caps,
@@ -3732,7 +3754,7 @@ int main(void)
 		return 1;
 	}
 	bunix_console_log(fs_ready, sizeof(fs_ready) - 1);
-	if (register_proc_execs(proc, vfs) != 0) {
+	if (register_proc_execs(proc_mgmt, vfs) != 0) {
 		return 1;
 	}
 	if (vfs_read_text(vfs, "/hello.txt", file, sizeof(file)) == 0) {
@@ -3786,6 +3808,9 @@ int main(void)
 		{ vfs_launch, BUNIX_RIGHT_SEND, BUNIX_CAP_VFS },
 		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
 		{ BUNIX_HANDLE_POWER_AUTH, BUNIX_RIGHT_SEND, BUNIX_CAP_POWR },
+		{ linux_mgmt, BUNIX_RIGHT_RECV, BUNIX_CAP_LNXM },
+		{ user_mgmt, BUNIX_RIGHT_SEND, BUNIX_CAP_USRM },
+		{ proc_mgmt, BUNIX_RIGHT_SEND, BUNIX_CAP_PRMG },
 	};
 	launch_claimed_module("linux", BUNIX_NAMES_ROOT, BUNIX_SERVICE_LINUX,
 			      linux_caps,
@@ -3796,12 +3821,30 @@ int main(void)
 		return 1;
 	}
 
-	if (spawn_linux_init(linux, "/sbin/init") != 0) {
+	if (bunix_cmdline_has("mgmt-auth-test") > 0) {
+		const struct bunix_launch_cap mgmt_test_caps[] = {
+			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND,
+			  BUNIX_CAP_NAME },
+			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		};
+		if (bunix_launch_module_with_caps(
+			    "mgmt-test", mgmt_test_caps,
+			    sizeof(mgmt_test_caps) /
+				    sizeof(mgmt_test_caps[0])) < 0) {
+			return 1;
+		}
+		bunix_sleep_ns(1000000000ull);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
+		for (;;) {
+		}
+	}
+
+	if (spawn_linux_init(linux_mgmt, "/sbin/init") != 0) {
 		return 1;
 	}
 	bunix_console_log(linux_init_exec, sizeof(linux_init_exec) - 1);
 
-	if (run_boot_spawns(proc, vfs) != 0) {
+	if (run_boot_spawns(proc_mgmt, vfs) != 0) {
 		return 1;
 	}
 

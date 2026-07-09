@@ -81,9 +81,23 @@ Regression gate:
 
 Tasks:
 
-- [ ] Build reproducers for unauthorized user/proc/linux management RPCs.
-- [ ] Define management capability split and bootstrap grants.
-- [ ] Gate user server credential/session mutations.
-- [ ] Gate proc server lifecycle/registration/cmdline mutations.
-- [ ] Gate Linux server management RPCs.
+- [x] Build reproducers for unauthorized user/proc/linux management RPCs.
+- [x] Define management capability split and bootstrap grants.
+- [x] Gate user server credential/session mutations.
+- [x] Gate proc server lifecycle/registration/cmdline mutations.
+- [x] Gate Linux server management RPCs.
 - [ ] Add regression tests and run full `make test`.
+
+Notes:
+
+- Added `mgmt-test` as a boot-time negative test fixture for unauthorized
+  public user/proc/linux management RPCs.
+- Management authority is carried by named FourCC capabilities:
+  `USRM`, `PRMG`, and `LNXM`.  Consumers discover them by tag instead of by
+  inherited slot number.
+- Proc may delegate `USRM` and `LNXM` to `/bin/login` as tagged send-only
+  capabilities during spawn or exec replacement, so BusyBox init can manage
+  login normally while the hybrid login program still RPCs to Bunix services.
+- Focused verification passed:
+  `make`, `make BUNIX_SHELL_PART=login-smoke test-shell-part`, and
+  `make test-management-authority`.

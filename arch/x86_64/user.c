@@ -5654,7 +5654,7 @@ static u64 native_sys_cmdline_has(const struct native_syscall_args *args)
 static u64 native_sys_launch_module(const struct native_syscall_args *args)
 {
 	char name[LINUX_EXEC_MAX_PATH];
-	struct task_launch_cap caps[8];
+	struct task_launch_cap caps[16];
 
 	if (copy_cstr_from_user(name, (const char *)args->arg0,
 				sizeof(name)) != 0 ||

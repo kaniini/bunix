@@ -2,6 +2,7 @@
 #include <bunix/libbunix.h>
 
 #define USER_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+#define USER_HANDLE_MGMT (bunix_handle_find(BUNIX_CAP_USRM))
 
 enum {
 	USER_DEFAULT_GROUP_CAPACITY = 4,
@@ -80,6 +81,25 @@ static long register_service(u64 service)
 	(void)service;
 	return bunix_names_register_claim(bunix_handle_find(BUNIX_CAP_CLAM),
 					  BUNIX_HANDLE_SELF);
+}
+
+static int recv_user_message(struct bunix_msg *message, int *management)
+{
+	const u64 mgmt = USER_HANDLE_MGMT;
+
+	if (message == 0 || management == 0) {
+		return -1;
+	}
+	if (mgmt != 0 && bunix_ipc_try_recv(mgmt, message) == 0) {
+		*management = 1;
+		return 0;
+	}
+	if (bunix_ipc_try_recv(BUNIX_HANDLE_SELF, message) == 0) {
+		*management = 0;
+		return 0;
+	}
+	bunix_sleep_ns(1000000ull);
+	return -1;
 }
 
 static struct user_credential *credential_find(u64 task)
@@ -1268,8 +1288,9 @@ int main(void)
 			.cap = 0,
 			.words = { 0, 0, 0, 0 },
 		};
+		int management = 0;
 
-		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
+		if (recv_user_message(&message, &management) != 0 ||
 		    message.protocol != BUNIX_PROTO_USER) {
 			continue;
 		}
@@ -1285,6 +1306,10 @@ int main(void)
 							     &reply.words[1]);
 			break;
 		case BUNIX_USER_REGISTER_PROCESS:
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] = (u64)credential_register(message.words[0]);
 			if (reply.words[0] == 0) {
 				bunix_console_log(registered,
@@ -1292,6 +1317,10 @@ int main(void)
 			}
 			break;
 		case BUNIX_USER_FORK_PROCESS:
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] = (u64)credential_fork(message.words[0],
 							     message.words[1]);
 			if (reply.words[0] == 0) {
@@ -1299,6 +1328,10 @@ int main(void)
 			}
 			break;
 		case BUNIX_USER_EXIT_PROCESS:
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] = (u64)credential_exit(message.words[0]);
 			break;
 		case BUNIX_USER_GETGROUPS:
@@ -1316,24 +1349,40 @@ int main(void)
 				(u64)-1;
 			break;
 		case BUNIX_USER_SETRESUID:
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] = (u64)credential_setresuid(message.words[0],
 								   message.words[1],
 								   message.words[2],
 								   message.words[3]);
 			break;
 		case BUNIX_USER_SETRESGID:
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] = (u64)credential_setresgid(message.words[0],
 								   message.words[1],
 								   message.words[2],
 								   message.words[3]);
 			break;
 		case BUNIX_USER_SETGROUPS:
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] = (u64)credential_setgroups(message.words[0],
 								   message.words[1],
 								   message.words[2],
 								   message.words[3]);
 			break;
 		case BUNIX_USER_SETGROUPS_BUFFER:
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] =
 				(message.cap_rights & BUNIX_RIGHT_RECV) != 0 ?
 				(u64)credential_setgroups_buffer(message.words[0],
@@ -1355,6 +1404,10 @@ int main(void)
 								    &reply.words[1]);
 			break;
 		case BUNIX_USER_APPLY_LOGIN:
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] = (u64)credential_apply_login(message.words[0],
 								     message.words[1]);
 			break;
@@ -1413,6 +1466,10 @@ int main(void)
 				(u64)-1;
 			break;
 		case BUNIX_USER_SESSION_BEGIN:
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] = (u64)session_begin(message.words[0],
 							    message.words[1],
 							    message.words[2],
@@ -1423,6 +1480,10 @@ int main(void)
 			}
 			break;
 		case BUNIX_USER_SESSION_END:
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] = (u64)session_end(message.words[0]);
 			if (reply.words[0] == 0) {
 				bunix_console_log(session_ended,
@@ -1434,6 +1495,10 @@ int main(void)
 							  &reply);
 			break;
 		case BUNIX_USER_SESSION_SET_FOREGROUND:
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] = (u64)session_set_foreground(message.words[0],
 								     message.words[1]);
 			break;

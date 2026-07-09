@@ -1,0 +1,4 @@
+mgmt-test: user denied
+mgmt-test: proc denied
+mgmt-test: linux denied
+mgmt-test: ok

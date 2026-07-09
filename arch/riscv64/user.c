@@ -90,7 +90,7 @@ enum {
 	RISCV64_SSTATUS_SUM = 1ULL << 18,
 	RISCV64_USER_COPY_CHUNK = 256,
 	RISCV64_MAX_CSTR = 256,
-	MAX_INHERITED_CAPS = 8,
+	MAX_INHERITED_CAPS = 16,
 };
 
 struct native_syscall_args {

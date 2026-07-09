@@ -15,6 +15,7 @@
 static const struct server boot_servers[] = {
 	{ "names", 0 },
 	{ "names-test", 0 },
+	{ "mgmt-test", 0 },
 	{ "consoled", 0 },
 	{ "bootstrap", 0 },
 	{ "time", 0 },
@@ -138,7 +139,7 @@ static int validate_inherited_caps(const char *name, struct task *parent,
 				   u64 cap_count)
 {
 	enum {
-		MAX_INHERITED_HANDLES = 8,
+		MAX_INHERITED_HANDLES = 16,
 	};
 
 	if (cap_count > MAX_INHERITED_HANDLES) {

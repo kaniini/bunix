@@ -5,6 +5,9 @@
 #define PROC_HANDLE_CONSOLE (bunix_handle_find(BUNIX_CAP_CONS))
 #define PROC_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
 #define PROC_HANDLE_TIME (bunix_handle_find(BUNIX_CAP_TIME))
+#define PROC_HANDLE_MGMT (bunix_handle_find(BUNIX_CAP_PRMG))
+#define PROC_HANDLE_USER_MGMT (bunix_handle_find(BUNIX_CAP_USRM))
+#define PROC_HANDLE_LINUX_MGMT (bunix_handle_find(BUNIX_CAP_LNXM))
 
 enum {
 	PROC_SEGMENT_MAX = 4096,
@@ -172,6 +175,7 @@ static int exec_handles_from_task(u64 task, struct exec_handles *handles)
 struct pending_exec_replace {
 	u64 token;
 	u64 task_handle;
+	u64 sender;
 };
 
 static struct bunix_map processes_by_pid;
@@ -189,12 +193,53 @@ static const char proc_ready[] = "proc: ready\n";
 static const char proc_register_failed[] = "proc: register failed\n";
 
 static u64 str_len(const char *text);
+static int str_eq(const char *left, const char *right);
+
+static int path_is_login(const char *path)
+{
+	return str_eq(path, "/bin/login") || str_eq(path, "login");
+}
+
+static int grant_login_management_caps(u64 task)
+{
+	if (PROC_HANDLE_USER_MGMT == 0 || PROC_HANDLE_LINUX_MGMT == 0) {
+		return -1;
+	}
+	if (bunix_task_grant_tagged(task, PROC_HANDLE_USER_MGMT,
+				    BUNIX_RIGHT_SEND, BUNIX_CAP_USRM) <= 0) {
+		return -1;
+	}
+	if (bunix_task_grant_tagged(task, PROC_HANDLE_LINUX_MGMT,
+				    BUNIX_RIGHT_SEND, BUNIX_CAP_LNXM) <= 0) {
+		return -1;
+	}
+	return 0;
+}
 
 static long register_service(u64 service, u64 handle)
 {
 	(void)service;
 	return bunix_names_register_claim(bunix_handle_find(BUNIX_CAP_CLAM),
 					  handle);
+}
+
+static int recv_proc_message(struct bunix_msg *message, int *management)
+{
+	const u64 mgmt = PROC_HANDLE_MGMT;
+
+	if (message == 0 || management == 0) {
+		return -1;
+	}
+	if (mgmt != 0 && bunix_ipc_try_recv(mgmt, message) == 0) {
+		*management = 1;
+		return 0;
+	}
+	if (bunix_ipc_try_recv(BUNIX_HANDLE_SELF, message) == 0) {
+		*management = 0;
+		return 0;
+	}
+	bunix_sleep_ns(1000000ull);
+	return -1;
 }
 
 static u64 resolve_service(u64 service, unsigned int rights)
@@ -394,6 +439,23 @@ static u64 str_len(const char *text)
 	}
 
 	return len;
+}
+
+static int str_eq(const char *left, const char *right)
+{
+	u64 i = 0;
+
+	if (left == 0 || right == 0) {
+		return 0;
+	}
+	while (left[i] != '\0' && right[i] != '\0') {
+		if (left[i] != right[i]) {
+			return 0;
+		}
+		i++;
+	}
+
+	return left[i] == right[i];
 }
 
 static void append_dec(char *line, u64 *cursor, u64 value)
@@ -1281,11 +1343,21 @@ static long register_linux_process(u64 task, u64 requested_pid,
 		.words = { task, ppid, session_id, requested_pid },
 	};
 	struct bunix_msg reply;
-	const u64 linux = resolve_service(BUNIX_SERVICE_LINUX, BUNIX_RIGHT_SEND);
+	const u64 linux = PROC_HANDLE_LINUX_MGMT;
 
-	if (linux == 0 ||
-	    bunix_ipc_call(linux, &request, &reply) != 0 ||
-	    (long)reply.words[0] <= 0) {
+	if (linux == 0) {
+		bunix_console_log("proc: linux mgmt missing\n",
+				  sizeof("proc: linux mgmt missing\n") - 1);
+		return -1;
+	}
+	if (bunix_ipc_call(linux, &request, &reply) != 0) {
+		bunix_console_log("proc: linux register call failed\n",
+				  sizeof("proc: linux register call failed\n") - 1);
+		return -1;
+	}
+	if ((long)reply.words[0] <= 0) {
+		bunix_console_log("proc: linux register denied\n",
+				  sizeof("proc: linux register denied\n") - 1);
 		return -1;
 	}
 
@@ -1307,7 +1379,7 @@ static long apply_login_to_task(u64 task, u64 login_uid)
 		.words = { task, login_uid, 0, 0 },
 	};
 	struct bunix_msg reply;
-	const u64 user = resolve_service(BUNIX_SERVICE_USER, BUNIX_RIGHT_SEND);
+	const u64 user = PROC_HANDLE_USER_MGMT;
 
 	if (user == 0 ||
 	    bunix_ipc_call(user, &request, &reply) != 0 ||
@@ -1510,12 +1582,13 @@ static long exec_path(u64 vfs, struct process *process,
 		      u64 session_id, int linux_personality,
 		      const struct exec_strings *strings, u64 *linux_pid)
 {
-	const struct bunix_launch_cap caps[] = {
+	struct bunix_launch_cap caps[6] = {
 		{ PROC_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
 		{ PROC_HANDLE_TIME, BUNIX_RIGHT_SEND, BUNIX_CAP_TIME },
 		{ BUNIX_HANDLE_SELF, BUNIX_RIGHT_SEND, BUNIX_CAP_PROC },
 		{ PROC_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
 	};
+	u64 cap_count = 4;
 	struct exec_handles handles = { 0, 0, 0, 0, 0 };
 	long task;
 	u64 stack = 0;
@@ -1536,7 +1609,18 @@ static long exec_path(u64 vfs, struct process *process,
 	process->task_id = (u64)bunix_id;
 	process->task_handle = (u64)task;
 
-	for (u64 i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {
+	if (path_is_login(path) || path_is_login(task_name)) {
+		caps[cap_count].handle = PROC_HANDLE_USER_MGMT;
+		caps[cap_count].rights = BUNIX_RIGHT_SEND;
+		caps[cap_count].tag = BUNIX_CAP_USRM;
+		cap_count++;
+		caps[cap_count].handle = PROC_HANDLE_LINUX_MGMT;
+		caps[cap_count].rights = BUNIX_RIGHT_SEND;
+		caps[cap_count].tag = BUNIX_CAP_LNXM;
+		cap_count++;
+	}
+
+	for (u64 i = 0; i < cap_count; i++) {
 		const long child_handle =
 			bunix_task_grant_tagged((u64)task, caps[i].handle,
 						caps[i].rights, caps[i].tag);
@@ -1819,7 +1903,14 @@ static long register_linux_child_process(u64 linux_pid, u64 task_id, u64 ppid,
 	return 0;
 }
 
-static u64 exec_replace_begin(u64 task_handle)
+static int task_handle_matches_sender(u64 task_handle, u64 sender)
+{
+	const long id = bunix_task_id(task_handle);
+
+	return sender != 0 && id > 0 && (u64)id == sender;
+}
+
+static u64 exec_replace_begin(u64 task_handle, u64 sender)
 {
 	struct pending_exec_replace *pending;
 	u64 token;
@@ -1840,6 +1931,7 @@ static u64 exec_replace_begin(u64 task_handle)
 	}
 	pending->token = token;
 	pending->task_handle = task_handle;
+	pending->sender = sender;
 	if (bunix_map_set(&pending_exec_replaces, token, (u64)pending) != 0) {
 		bunix_free(pending);
 		return 0;
@@ -1858,6 +1950,12 @@ static struct pending_exec_replace *exec_replace_take(u64 token)
 		(void)bunix_map_remove(&pending_exec_replaces, token);
 	}
 	return pending;
+}
+
+static struct pending_exec_replace *exec_replace_find(u64 token)
+{
+	return (struct pending_exec_replace *)
+		bunix_map_get(&pending_exec_replaces, token);
 }
 
 static void exec_replace_free(struct pending_exec_replace *pending)
@@ -1896,6 +1994,10 @@ static long exec_replace_from_message(u64 vfs, const struct bunix_msg *message,
 					     &creds,
 					     &strings) == 0 &&
 	    exec_handles_from_task(pending->task_handle, &handles) == 0) {
+		if (path_is_login(load_path) &&
+		    grant_login_management_caps(pending->task_handle) != 0) {
+			goto out;
+		}
 		result = load_task_image(vfs, pending->task_handle, 1,
 					 load_path, execfn_path, &strings,
 					 &creds,
@@ -1903,6 +2005,7 @@ static long exec_replace_from_message(u64 vfs, const struct bunix_msg *message,
 					 entry, stack);
 	}
 
+out:
 	if (load_path != 0) {
 		bunix_free(load_path);
 	}
@@ -1943,8 +2046,9 @@ int main(void)
 			.words = { 0, 0, 0, 0 },
 		};
 		int should_reply = 1;
+		int management = 0;
 
-		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
+		if (recv_proc_message(&message, &management) != 0 ||
 		    message.protocol != BUNIX_PROTO_PROC) {
 			continue;
 		}
@@ -1960,6 +2064,13 @@ int main(void)
 			const u64 session_id = message.words[3] >>
 					       PROC_SPAWN_SESSION_SHIFT;
 
+			if (!management && message.sender != 0) {
+				reply.words[0] = (u64)-1;
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				break;
+			}
 			if (exec_strings_from_spawn_buffer(&message, &path,
 							   &strings) == 0 &&
 			    spawn_process(path, 0,
@@ -1986,6 +2097,13 @@ int main(void)
 			break;
 		}
 		case BUNIX_PROC_REGISTER_EXEC:
+			if (!management && message.sender != 0) {
+				reply.words[0] = (u64)-1;
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				break;
+			}
 			reply.words[0] = (u64)register_exec_from_message(&message);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
@@ -1994,9 +2112,21 @@ int main(void)
 		case BUNIX_PROC_EXEC_REPLACE_TASK: {
 			u64 token = 0;
 
+			if (!management &&
+			    (message.cap == 0 ||
+			     (message.cap_rights & BUNIX_RIGHT_SEND) == 0 ||
+			     !task_handle_matches_sender(message.cap,
+							 message.sender))) {
+				reply.words[0] = (u64)-1;
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				break;
+			}
 			if (message.cap != 0 &&
 			    (message.cap_rights & BUNIX_RIGHT_SEND) != 0) {
-				token = exec_replace_begin(message.cap);
+				token = exec_replace_begin(message.cap,
+							   message.sender);
 			}
 			if (token != 0) {
 				message.cap = 0;
@@ -2013,9 +2143,22 @@ int main(void)
 		case BUNIX_PROC_EXEC_REPLACE_BUFFER: {
 			u64 entry = 0;
 			u64 stack = 0;
+			struct pending_exec_replace *pending =
+				exec_replace_find(message.words[0]);
 			u64 vfs = resolve_service(BUNIX_SERVICE_VFS,
 						  BUNIX_RIGHT_SEND);
 
+			if (!management &&
+			    (pending == 0 || pending->sender != message.sender)) {
+				reply.words[0] = (u64)-1;
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				if (vfs != 0) {
+					bunix_handle_close(vfs);
+				}
+				break;
+			}
 			if (vfs != 0 &&
 			    exec_replace_from_message(vfs, &message, &entry,
 						      &stack) == 0) {
@@ -2036,6 +2179,10 @@ int main(void)
 		case BUNIX_PROC_WAIT: {
 			struct process *process = process_find(message.words[0]);
 
+			if (!management && message.sender != 0) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			if (process == 0) {
 				reply.words[0] = (u64)-1;
 			} else if (process->exited) {
@@ -2058,6 +2205,10 @@ int main(void)
 						  process_find_linux_pid(message.words[0]) :
 						  process_find(message.words[0]);
 
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			if (process != 0) {
 				if (message.words[3] != 0 &&
 				    process->task_handle != 0) {
@@ -2208,7 +2359,17 @@ int main(void)
 			struct process *process =
 				process_find_linux_pid(message.words[0]);
 			const u64 len = message.words[2];
+			const int self_cmdline =
+				message.sender != 0 &&
+				message.words[1] == message.sender;
 
+			if (!management && !self_cmdline) {
+				reply.words[0] = (u64)-1;
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				break;
+			}
 			if (process == 0) {
 				if (linux_exit_pending(message.words[0])) {
 					reply.words[0] = 0;
@@ -2245,6 +2406,10 @@ int main(void)
 		case BUNIX_PROC_REGISTER_LINUX: {
 			u64 pid = 0;
 
+			if (!management) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
 			reply.words[0] =
 				(u64)register_linux_child_process(message.words[0],
 								  message.words[1],

@@ -5,6 +5,9 @@
 #define LINUX_HANDLE_VFS (bunix_handle_find(BUNIX_CAP_VFS))
 #define LINUX_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
 #define LINUX_HANDLE_POWER_AUTH (bunix_handle_find(BUNIX_CAP_POWR))
+#define LINUX_HANDLE_USER_MGMT (bunix_handle_find(BUNIX_CAP_USRM))
+#define LINUX_HANDLE_PROC_MGMT (bunix_handle_find(BUNIX_CAP_PRMG))
+#define LINUX_HANDLE_MGMT (bunix_handle_find(BUNIX_CAP_LNXM))
 
 enum {
 	LINUX_EPERM = 1,
@@ -393,11 +396,21 @@ static long linux_user_process_register(u64 bunix_task)
 		.words = { bunix_task, 0, 0, 0 },
 	};
 	struct bunix_msg reply;
-	const u64 user = linux_user_service();
+	const u64 user = LINUX_HANDLE_USER_MGMT;
 
-	if (user == 0 ||
-	    bunix_ipc_call(user, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
+	if (user == 0) {
+		bunix_console_log("linux-server: user mgmt missing\n",
+				  sizeof("linux-server: user mgmt missing\n") - 1);
+		return -LINUX_ESRCH;
+	}
+	if (bunix_ipc_call(user, &request, &reply) != 0) {
+		bunix_console_log("linux-server: user register call failed\n",
+				  sizeof("linux-server: user register call failed\n") - 1);
+		return -LINUX_ESRCH;
+	}
+	if (reply.words[0] != 0) {
+		bunix_console_log("linux-server: user register denied\n",
+				  sizeof("linux-server: user register denied\n") - 1);
 		return -LINUX_ESRCH;
 	}
 
@@ -416,11 +429,21 @@ static long linux_user_process_fork(u64 parent_task, u64 child_task)
 		.words = { parent_task, child_task, 0, 0 },
 	};
 	struct bunix_msg reply;
-	const u64 user = linux_user_service();
+	const u64 user = LINUX_HANDLE_USER_MGMT;
 
-	if (user == 0 ||
-	    bunix_ipc_call(user, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
+	if (user == 0) {
+		bunix_console_log("linux-server: user mgmt missing\n",
+				  sizeof("linux-server: user mgmt missing\n") - 1);
+		return -LINUX_ESRCH;
+	}
+	if (bunix_ipc_call(user, &request, &reply) != 0) {
+		bunix_console_log("linux-server: user fork call failed\n",
+				  sizeof("linux-server: user fork call failed\n") - 1);
+		return -LINUX_ESRCH;
+	}
+	if (reply.words[0] != 0) {
+		bunix_console_log("linux-server: user fork denied\n",
+				  sizeof("linux-server: user fork denied\n") - 1);
 		return -LINUX_ESRCH;
 	}
 
@@ -439,7 +462,7 @@ static long linux_user_process_exit(u64 bunix_task)
 		.words = { bunix_task, 0, 0, 0 },
 	};
 	struct bunix_msg reply;
-	const u64 user = linux_user_service();
+	const u64 user = LINUX_HANDLE_USER_MGMT;
 
 	if (bunix_task == 0 || user == 0) {
 		return 0;
@@ -466,7 +489,7 @@ static long linux_user_session_get(u64 session_id, u64 *uid, u64 *gid,
 		.words = { session_id, 0, 0, 0 },
 	};
 	struct bunix_msg reply;
-	const u64 user = linux_user_service();
+	const u64 user = LINUX_HANDLE_USER_MGMT;
 
 	if (user == 0 ||
 	    bunix_ipc_call(user, &request, &reply) != 0 ||
@@ -500,7 +523,7 @@ static long linux_user_session_set_foreground(u64 session_id, u64 foreground)
 		.words = { session_id, foreground, 0, 0 },
 	};
 	struct bunix_msg reply;
-	const u64 user = linux_user_service();
+	const u64 user = LINUX_HANDLE_USER_MGMT;
 
 	if (user == 0 ||
 	    bunix_ipc_call(user, &request, &reply) != 0 ||
@@ -522,7 +545,7 @@ static long linux_user_session_end(u64 session_id)
 		.words = { session_id, 0, 0, 0 },
 	};
 	struct bunix_msg reply;
-	const u64 user = linux_user_service();
+	const u64 user = LINUX_HANDLE_USER_MGMT;
 
 	if (session_id == 0 || user == 0) {
 		return 0;
@@ -592,6 +615,25 @@ static long register_service(u64 service)
 					  BUNIX_HANDLE_SELF);
 }
 
+static int recv_linux_message(struct bunix_msg *message, int *management)
+{
+	const u64 mgmt = LINUX_HANDLE_MGMT;
+
+	if (message == 0 || management == 0) {
+		return -1;
+	}
+	if (mgmt != 0 && bunix_ipc_try_recv(mgmt, message) == 0) {
+		*management = 1;
+		return 0;
+	}
+	if (bunix_ipc_try_recv(BUNIX_HANDLE_SELF, message) == 0) {
+		*management = 0;
+		return 0;
+	}
+	bunix_sleep_ns(1000000ull);
+	return -1;
+}
+
 static u64 resolve_service_type(u64 service, unsigned int rights,
 				unsigned int type)
 {
@@ -619,15 +661,9 @@ static u64 resolve_service(u64 service, unsigned int rights)
 	return resolve_service_type(service, rights, BUNIX_NAMES_WAIT);
 }
 
-static u64 try_resolve_service(u64 service, unsigned int rights)
-{
-	return resolve_service_type(service, rights, BUNIX_NAMES_RESOLVE);
-}
-
 static void notify_proc_exit(u64 linux_pid, u64 status, u64 kill_task)
 {
-	const u64 proc = try_resolve_service(BUNIX_SERVICE_PROC,
-					     BUNIX_RIGHT_SEND);
+	const u64 proc = LINUX_HANDLE_PROC_MGMT;
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_PROC,
 		.type = BUNIX_PROC_EXIT,
@@ -646,8 +682,7 @@ static void notify_proc_exit(u64 linux_pid, u64 status, u64 kill_task)
 static void notify_proc_register_linux(u64 linux_pid, u64 bunix_task,
 				       u64 parent_linux_pid)
 {
-	const u64 proc = try_resolve_service(BUNIX_SERVICE_PROC,
-					     BUNIX_RIGHT_SEND);
+	const u64 proc = LINUX_HANDLE_PROC_MGMT;
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_PROC,
 		.type = BUNIX_PROC_REGISTER_LINUX,
@@ -701,7 +736,7 @@ static long linux_proc_spawn_path(u64 proc, const char *path)
 
 static long linux_exec_init(u64 path_len, u64 path_buffer)
 {
-	const u64 proc = resolve_service(BUNIX_SERVICE_PROC, BUNIX_RIGHT_SEND);
+	const u64 proc = LINUX_HANDLE_PROC_MGMT;
 	char path[LINUX_MAX_PATH];
 	long result;
 
@@ -1946,15 +1981,21 @@ static long linux_register_process(u64 bunix_task, u64 ppid, u64 session_id,
 				   u64 requested_pid)
 {
 	if (bunix_task == 0 || linux_process_find(bunix_task) != 0) {
+		bunix_console_log("linux-server: register duplicate task\n",
+				  sizeof("linux-server: register duplicate task\n") - 1);
 		return -LINUX_EINVAL;
 	}
 	if (requested_pid != 0 && linux_process_find_pid(requested_pid) != 0) {
+		bunix_console_log("linux-server: register duplicate pid\n",
+				  sizeof("linux-server: register duplicate pid\n") - 1);
 		return -LINUX_EINVAL;
 	}
 
 	struct linux_process *process = (struct linux_process *)
 		bunix_calloc(1, sizeof(*process));
 	if (process == 0) {
+		bunix_console_log("linux-server: register alloc failed\n",
+				  sizeof("linux-server: register alloc failed\n") - 1);
 		return -LINUX_ESRCH;
 	}
 
@@ -1974,10 +2015,14 @@ static long linux_register_process(u64 bunix_task, u64 ppid, u64 session_id,
 	process->bunix_task = bunix_task;
 	process->session_id = session_id;
 	if (linux_process_init_fds(process) != 0) {
+		bunix_console_log("linux-server: register fds failed\n",
+				  sizeof("linux-server: register fds failed\n") - 1);
 		bunix_free(process);
 		return -LINUX_ESRCH;
 	}
 	if (linux_process_set_cwd(process, "/") != 0) {
+		bunix_console_log("linux-server: register cwd failed\n",
+				  sizeof("linux-server: register cwd failed\n") - 1);
 		bunix_free(process->fds);
 		bunix_free(process);
 		return -LINUX_ESRCH;
@@ -1990,11 +2035,15 @@ static long linux_register_process(u64 bunix_task, u64 ppid, u64 session_id,
 							process->pgid);
 	}
 	if (linux_user_process_register(bunix_task) != 0) {
+		bunix_console_log("linux-server: register user failed\n",
+				  sizeof("linux-server: register user failed\n") - 1);
 		linux_process_reset(process);
 		return -LINUX_ESRCH;
 	}
 	if (bunix_map_set(&process_by_task, bunix_task, (u64)process) != 0 ||
 	    bunix_map_set(&process_by_pid, pid, (u64)process) != 0) {
+		bunix_console_log("linux-server: register map failed\n",
+				  sizeof("linux-server: register map failed\n") - 1);
 		linux_process_reset(process);
 		return -LINUX_ESRCH;
 	}
@@ -2007,12 +2056,16 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 
 	if (parent == 0 || child_task == 0 ||
 	    linux_process_find(child_task) != 0) {
+		bunix_console_log("linux-server: fork invalid task\n",
+				  sizeof("linux-server: fork invalid task\n") - 1);
 		return -LINUX_EINVAL;
 	}
 
 	struct linux_process *process = (struct linux_process *)
 		bunix_calloc(1, sizeof(*process));
 	if (process == 0) {
+		bunix_console_log("linux-server: fork alloc failed\n",
+				  sizeof("linux-server: fork alloc failed\n") - 1);
 		return -LINUX_ESRCH;
 	}
 
@@ -2043,6 +2096,8 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 	process->fds = (struct linux_fd *)
 		bunix_alloc(parent->fd_capacity * sizeof(process->fds[0]));
 	if (process->fds == 0) {
+		bunix_console_log("linux-server: fork fds failed\n",
+				  sizeof("linux-server: fork fds failed\n") - 1);
 		linux_process_reset(process);
 		return -LINUX_ESRCH;
 	}
@@ -2060,15 +2115,21 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 		}
 	}
 	if (linux_process_set_cwd(process, parent->cwd) != 0) {
+		bunix_console_log("linux-server: fork cwd failed\n",
+				  sizeof("linux-server: fork cwd failed\n") - 1);
 		linux_process_reset(process);
 		return -LINUX_ESRCH;
 	}
 	if (linux_user_process_fork(parent_task, child_task) != 0) {
+		bunix_console_log("linux-server: fork user failed\n",
+				  sizeof("linux-server: fork user failed\n") - 1);
 		linux_process_reset(process);
 		return -LINUX_ESRCH;
 	}
 	if (bunix_map_set(&process_by_task, child_task, (u64)process) != 0 ||
 	    bunix_map_set(&process_by_pid, pid, (u64)process) != 0) {
+		bunix_console_log("linux-server: fork map failed\n",
+				  sizeof("linux-server: fork map failed\n") - 1);
 		linux_process_reset(process);
 		return -LINUX_ESRCH;
 	}
@@ -2680,12 +2741,12 @@ static long linux_user_groups(struct linux_process *process, u64 max_groups,
 	};
 	struct bunix_msg reply;
 
-	if (process == 0 || linux_user_service() == 0) {
+	if (process == 0 || LINUX_HANDLE_USER_MGMT == 0) {
 		return -LINUX_ESRCH;
 	}
 
 	request.words[0] = process->bunix_task;
-	if (bunix_ipc_call(user_service, &request, &reply) != 0) {
+	if (bunix_ipc_call(LINUX_HANDLE_USER_MGMT, &request, &reply) != 0) {
 		return -LINUX_EIO;
 	}
 	if (reply.words[0] != 0) {
@@ -2715,12 +2776,12 @@ static long linux_user_groups_buffer(struct linux_process *process,
 	};
 	struct bunix_msg reply;
 
-	if (process == 0 || linux_user_service() == 0) {
+	if (process == 0 || LINUX_HANDLE_USER_MGMT == 0) {
 		return -LINUX_ESRCH;
 	}
 
 	request.words[0] = process->bunix_task;
-	if (bunix_ipc_call(user_service, &request, &reply) != 0) {
+	if (bunix_ipc_call(LINUX_HANDLE_USER_MGMT, &request, &reply) != 0) {
 		return -LINUX_EIO;
 	}
 	if (reply.words[0] != 0) {
@@ -2743,12 +2804,12 @@ static long linux_user_setres(struct linux_process *process, u64 type,
 	};
 	struct bunix_msg reply;
 
-	if (process == 0 || linux_user_service() == 0) {
+	if (process == 0 || LINUX_HANDLE_USER_MGMT == 0) {
 		return -LINUX_ESRCH;
 	}
 
 	request.words[0] = process->bunix_task;
-	if (bunix_ipc_call(user_service, &request, &reply) != 0) {
+	if (bunix_ipc_call(LINUX_HANDLE_USER_MGMT, &request, &reply) != 0) {
 		return -LINUX_EIO;
 	}
 	return reply.words[0] == 0 ? 0 : -LINUX_EPERM;
@@ -2771,12 +2832,12 @@ static long linux_user_setgroups(struct linux_process *process, u64 count,
 	if (count > 2) {
 		return -LINUX_EINVAL;
 	}
-	if (process == 0 || linux_user_service() == 0) {
+	if (process == 0 || LINUX_HANDLE_USER_MGMT == 0) {
 		return -LINUX_ESRCH;
 	}
 
 	request.words[0] = process->bunix_task;
-	if (bunix_ipc_call(user_service, &request, &reply) != 0) {
+	if (bunix_ipc_call(LINUX_HANDLE_USER_MGMT, &request, &reply) != 0) {
 		return -LINUX_EIO;
 	}
 	return reply.words[0] == 0 ? 0 : -LINUX_EPERM;
@@ -2796,12 +2857,12 @@ static long linux_user_setgroups_buffer(struct linux_process *process,
 	};
 	struct bunix_msg reply;
 
-	if (process == 0 || linux_user_service() == 0) {
+	if (process == 0 || LINUX_HANDLE_USER_MGMT == 0) {
 		return -LINUX_ESRCH;
 	}
 
 	request.words[0] = process->bunix_task;
-	if (bunix_ipc_call(user_service, &request, &reply) != 0) {
+	if (bunix_ipc_call(LINUX_HANDLE_USER_MGMT, &request, &reply) != 0) {
 		return -LINUX_EIO;
 	}
 	return reply.words[0] == 0 ? 0 : -LINUX_EPERM;
@@ -7522,8 +7583,9 @@ int main(void)
 			.words = { 0, 0, 0, 0 },
 		};
 		int should_reply = 1;
+		int management = 0;
 
-		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
+		if (recv_linux_message(&message, &management) != 0 ||
 		    message.protocol != BUNIX_PROTO_LINUX) {
 			continue;
 		}
@@ -7547,6 +7609,13 @@ int main(void)
 			continue;
 		}
 		if (message.type == BUNIX_LINUX_REGISTER_PROCESS) {
+			if (!management && message.sender != 0) {
+				reply.words[0] = (u64)-LINUX_EPERM;
+				if (message.reply != 0) {
+					bunix_ipc_send(message.reply, &reply);
+				}
+				continue;
+			}
 			reply.words[0] = (u64)linux_register_process(message.words[0],
 								     message.words[1],
 								     message.words[2],
@@ -7561,6 +7630,16 @@ int main(void)
 			continue;
 		}
 		if (message.type == BUNIX_LINUX_FORK_PROCESS) {
+			if (!management &&
+			    (message.sender == 0 ||
+			     message.words[0] != message.sender ||
+			     linux_process_find(message.sender) == 0)) {
+				reply.words[0] = (u64)-LINUX_EPERM;
+				if (message.reply != 0) {
+					bunix_ipc_send(message.reply, &reply);
+				}
+				continue;
+			}
 			reply.words[0] = (u64)linux_fork_process(message.words[0],
 								 message.words[1]);
 			if ((long)reply.words[0] > 0) {
@@ -7573,6 +7652,16 @@ int main(void)
 			continue;
 		}
 		if (message.type == BUNIX_LINUX_EXEC_INIT) {
+			if (!management && message.sender != 0) {
+				reply.words[0] = (u64)-LINUX_EPERM;
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				if (message.reply != 0) {
+					bunix_ipc_send(message.reply, &reply);
+				}
+				continue;
+			}
 			reply.words[0] = (u64)linux_exec_init(message.words[0],
 							     message.cap);
 			if (message.cap != 0) {
@@ -7584,6 +7673,18 @@ int main(void)
 			continue;
 		}
 		if (message.type == BUNIX_LINUX_EXEC_PREPARE) {
+			if (!management &&
+			    (message.sender == 0 ||
+			     linux_process_find(message.sender) == 0)) {
+				reply.words[0] = (u64)-LINUX_EPERM;
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
+				if (message.reply != 0) {
+					bunix_ipc_send(message.reply, &reply);
+				}
+				continue;
+			}
 			reply.words[0] = (u64)linux_exec_prepare(message.words[0],
 								 message.words[1],
 								 message.words[2],

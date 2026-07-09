@@ -26,12 +26,12 @@ trap - INT
 busybox sleep 1 && printf 'BUSYBOX_SLEEP_%s\n' OK
 sleep 1 && printf 'DIRECT_SLEEP_%s\n' OK
 EOF_LOGIN_SMOKE
-	wait_for_exact_line "$log" "BUSYBOX_SLEEP_OK" "busybox sleep did not complete" 45 160
-	wait_for_exact_line "$log" "DIRECT_SLEEP_OK" "/bin/sleep did not complete" 45 160
+	wait_for_fixed "$log" "BUSYBOX_SLEEP_OK" "busybox sleep did not complete" 45 160
+	wait_for_fixed "$log" "DIRECT_SLEEP_OK" "/bin/sleep did not complete" 45 160
 	send_script <<'EOF_LOGIN_SMOKE_SLEEP'
 busybox sleep 5
 EOF_LOGIN_SMOKE_SLEEP
-	wait_for_fixed "$log" "busybox sleep 5" "foreground sleep command was not submitted" 45 180
+	wait_for_fixed "$log" "sleep 5" "foreground sleep command was not submitted" 45 180
 	prompts_before_sleep_interrupt=$(current_prompt_count "/ $ ")
 	sleep 1
 	send_bytes '\003'

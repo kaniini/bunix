@@ -460,7 +460,8 @@ int main(int argc, char **argv, char **envp)
 	u64 group_count = 0;
 	unsigned int groups[LOGIN_MAX_GROUPS];
 	u64 user;
-	u64 linux;
+	u64 user_mgmt;
+	u64 linux_mgmt;
 	u64 session_id;
 	long nread;
 	char saved_termios[60];
@@ -471,8 +472,8 @@ int main(int argc, char **argv, char **envp)
 	load_auxv(envp, &aux);
 	user = resolve_service(aux.names_handle, BUNIX_SERVICE_USER,
 			       BUNIX_RIGHT_SEND);
-	linux = resolve_service(aux.names_handle, BUNIX_SERVICE_LINUX,
-				BUNIX_RIGHT_SEND);
+	user_mgmt = bunix_handle_find(BUNIX_CAP_USRM);
+	linux_mgmt = bunix_handle_find(BUNIX_CAP_LNXM);
 	for (;;) {
 		restore_termios = tty_set_echo(0, saved_termios) == 0;
 		write_text("login: ");
@@ -504,18 +505,18 @@ int main(int argc, char **argv, char **envp)
 		} else if (login_groups(user, name, gid, &group_count,
 					groups) != 0) {
 			write_text("login: groups failed\n");
-		} else if (session_begin(user, uid, gid, &session_id) != 0) {
+		} else if (session_begin(user_mgmt, uid, gid, &session_id) != 0) {
 			write_text("login: session failed\n");
-		} else if (attach_session(linux, session_id) != 0) {
+		} else if (attach_session(linux_mgmt, session_id) != 0) {
 			write_text("login: session attach failed\n");
-			(void)session_end(user, session_id);
+			(void)session_end(user_mgmt, session_id);
 		} else if (apply_login(uid, gid, group_count, groups) != 0) {
 			write_text("login: apply failed\n");
-			(void)session_end(user, session_id);
+			(void)session_end(user_mgmt, session_id);
 		} else {
 			write_text("login: shell exec\n");
 			if (exec_shell(name, uid) != 0) {
-				(void)session_end(user, session_id);
+				(void)session_end(user_mgmt, session_id);
 			}
 		}
 		write_text("login: authentication failed\n");
