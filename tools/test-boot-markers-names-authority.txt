@@ -1,5 +1,7 @@
 names: online
 names-test: spoof denied
+names-test: unclaimed denied
+names-test: claimed register ok
 names-test: owner refresh ok
 names-test: namespace denied
 names-test: ok

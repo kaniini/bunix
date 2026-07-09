@@ -2,8 +2,6 @@
 
 enum {
 	CONSOLE_CHUNK = 256,
-	CONSOLE_HANDLE_NAMES = 3,
-	CONSOLE_HANDLE_COM1 = 4,
 	COM1_DATA = 0,
 	COM1_INT_ENABLE = 1,
 	COM1_FIFO_CTRL = 2,
@@ -17,29 +15,11 @@ enum {
 static char console_buffer[CONSOLE_CHUNK];
 static char console_input_buffer[CONSOLE_CHUNK];
 static u64 console_serial_handle;
+static u64 console_service_handle;
+static u64 console_names_handle;
 static u64 console_linux_handle;
 static int console_serial_ready;
 static int console_driver_output_enabled;
-
-static const struct bunix_driver_resource console_resources[] = {
-	{
-		.name = "com1",
-		.handle = CONSOLE_HANDLE_COM1,
-		.kind = BUNIX_HW_RESOURCE_PORT,
-		.ops = BUNIX_HW_OP_READ | BUNIX_HW_OP_WRITE,
-		.base = 0x3f8,
-		.len = 8,
-	},
-};
-
-static const struct bunix_driver console_driver = {
-	.name = "console",
-	.service = BUNIX_SERVICE_CONSOLE,
-	.service_handle = BUNIX_HANDLE_CONSOLE,
-	.names_handle = CONSOLE_HANDLE_NAMES,
-	.resources = console_resources,
-	.resource_count = sizeof(console_resources) / sizeof(console_resources[0]),
-};
 
 static int serial_out8(u64 offset, u64 value)
 {
@@ -148,7 +128,7 @@ static u64 resolve_linux(void)
 	};
 	struct bunix_msg reply;
 
-	if (bunix_ipc_call(CONSOLE_HANDLE_NAMES, &request, &reply) != 0 ||
+	if (bunix_ipc_call(console_names_handle, &request, &reply) != 0 ||
 	    reply.words[0] != 0) {
 		return 0;
 	}
@@ -223,9 +203,30 @@ int main(void)
 {
 	const char online[] = "console: online\n";
 	struct bunix_msg message;
+	struct bunix_driver_resource console_resources[] = {
+		{
+			.name = "com1",
+			.handle = bunix_handle_find(BUNIX_CAP_COM1),
+			.kind = BUNIX_HW_RESOURCE_PORT,
+			.ops = BUNIX_HW_OP_READ | BUNIX_HW_OP_WRITE,
+			.base = 0x3f8,
+			.len = 8,
+		},
+	};
+	struct bunix_driver console_driver = {
+		.name = "console",
+		.service = BUNIX_SERVICE_CONSOLE,
+		.service_handle = bunix_handle_find(BUNIX_CAP_CONS),
+		.names_handle = bunix_handle_find(BUNIX_CAP_NAME),
+		.resources = console_resources,
+		.resource_count = sizeof(console_resources) /
+				  sizeof(console_resources[0]),
+	};
 	const struct bunix_driver_resource *com1 =
 		bunix_driver_resource_named(&console_driver, "com1");
 
+	console_service_handle = console_driver.service_handle;
+	console_names_handle = console_driver.names_handle;
 	console_serial_handle = com1 != 0 ? com1->handle : 0;
 	console_serial_ready = serial_init() == 0;
 	bunix_early_console_log(online, sizeof(online) - 1);
@@ -235,7 +236,7 @@ int main(void)
 				   "driver fallback");
 	for (;;) {
 		const long recv =
-			bunix_ipc_try_recv(BUNIX_HANDLE_CONSOLE, &message);
+			bunix_ipc_try_recv(console_service_handle, &message);
 		int did_work = console_poll_input();
 
 		if (recv == 1) {

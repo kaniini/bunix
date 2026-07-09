@@ -2,8 +2,9 @@
 #include <bunix/id_table.h>
 #include <bunix/tree.h>
 
+#define PROCFS_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	PROCFS_HANDLE_NAMES = 3,
 	PROCFS_MAX_PATH = 4096,
 	PROCFS_KIND_PROC = 1,
 	PROCFS_KIND_KTHREADS = 2,

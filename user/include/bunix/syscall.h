@@ -623,6 +623,7 @@ enum {
 	BUNIX_CAP_PCFG = BUNIX_FOURCC('P', 'C', 'F', 'G'),
 	BUNIX_CAP_PAUT = BUNIX_FOURCC('P', 'A', 'U', 'T'),
 	BUNIX_CAP_USB = BUNIX_FOURCC('U', 'S', 'B', ' '),
+	BUNIX_CAP_COM1 = BUNIX_FOURCC('C', 'O', 'M', '1'),
 };
 
 struct bunix_ipc_stats {
@@ -1265,6 +1266,7 @@ static inline u64 bunix_boot_module_size(void)
 static inline long bunix_console_send(unsigned int type, const char *text,
 				      usize len)
 {
+	const u64 console = bunix_handle_find(BUNIX_CAP_CONS);
 	u64 buffer;
 	long result;
 	struct bunix_msg message = {
@@ -1291,7 +1293,8 @@ static inline long bunix_console_send(unsigned int type, const char *text,
 	}
 
 	message.cap = buffer;
-	result = bunix_ipc_send(BUNIX_HANDLE_CONSOLE, &message);
+	result = bunix_ipc_send(console != 0 ? console : BUNIX_HANDLE_CONSOLE,
+				&message);
 	bunix_handle_close(buffer);
 	return result;
 }
@@ -1308,6 +1311,7 @@ static inline long bunix_console_log(const char *text, usize len)
 
 static inline long bunix_console_logs_to_ring(void)
 {
+	const u64 console = bunix_handle_find(BUNIX_CAP_CONS);
 	const struct bunix_msg message = {
 		.protocol = BUNIX_PROTO_CONSOLE,
 		.type = BUNIX_CONSOLE_LOGS_TO_RING,
@@ -1318,7 +1322,8 @@ static inline long bunix_console_logs_to_ring(void)
 		.words = { 0, 0, 0, 0 },
 	};
 
-	return bunix_ipc_send(BUNIX_HANDLE_CONSOLE, &message);
+	return bunix_ipc_send(console != 0 ? console : BUNIX_HANDLE_CONSOLE,
+			      &message);
 }
 
 static inline long bunix_early_console_write(const char *text, usize len)

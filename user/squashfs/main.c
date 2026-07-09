@@ -2,8 +2,9 @@
 #include <bunix/libbunix.h>
 #include <bunix/tree.h>
 
+#define SQUASHFS_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	SQUASHFS_HANDLE_NAMES = 3,
 	SQUASHFS_MAX_PATH = 4096,
 	SQUASHFS_NAME_MAX = 255,
 	SQUASHFS_MAGIC = 0x73717368,

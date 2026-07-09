@@ -1,8 +1,9 @@
 #include <bunix/alloc.h>
 #include <bunix/libbunix.h>
 
+#define NET_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	NET_HANDLE_NAMES = 3,
 	NET_IFACE_LO = 1,
 	NET_PACKET_MAX = 65536,
 	NET_UDP_PORT_EPHEMERAL_FIRST = 49152,

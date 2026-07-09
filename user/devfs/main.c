@@ -1,7 +1,8 @@
 #include <bunix/libbunix.h>
 
+#define DEVFS_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	DEVFS_HANDLE_NAMES = 3,
 	DEVFS_MAX_PATH = 4096,
 	DEVFS_DIR = 1,
 	DEVFS_NULL = 2,

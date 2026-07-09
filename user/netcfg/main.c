@@ -1,7 +1,8 @@
 #include <bunix/libbunix.h>
 
+#define NETCFG_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	NETCFG_HANDLE_NAMES = 3,
 	NETCFG_MAX_CONFIG = 4096,
 	NETCFG_IFACE_LO = 1,
 	NETCFG_QEMU_USER_IPV4 = 0x0a00020full,

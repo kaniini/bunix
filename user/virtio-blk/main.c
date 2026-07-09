@@ -1,7 +1,8 @@
 #include <bunix/virtio.h>
 
+#define VIRTIO_BLK_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	VIRTIO_BLK_HANDLE_NAMES = 3,
 	VIRTIO_BLK_QUEUE_SIZE = 128,
 	VIRTIO_BLK_SECTOR_SIZE = 512,
 	VIRTIO_BLK_BUFFER_MAX = 128 * 1024,

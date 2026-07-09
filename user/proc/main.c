@@ -2,10 +2,11 @@
 #include <bunix/id_table.h>
 #include <bunix/libbunix.h>
 
+#define PROC_HANDLE_CONSOLE (bunix_handle_find(BUNIX_CAP_CONS))
+#define PROC_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+#define PROC_HANDLE_TIME (bunix_handle_find(BUNIX_CAP_TIME))
+
 enum {
-	PROC_HANDLE_CONSOLE = 2,
-	PROC_HANDLE_NAMES = 3,
-	PROC_HANDLE_TIME = 4,
 	PROC_SEGMENT_MAX = 4096,
 	PROC_INIT_STACK_MAX = 512 * 1024,
 	PROC_SPAWN_BUFFER_MAX = 512 * 1024,

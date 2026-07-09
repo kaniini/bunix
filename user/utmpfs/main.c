@@ -1,7 +1,8 @@
 #include <bunix/libbunix.h>
 
+#define UTMPFS_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	UTMPFS_HANDLE_NAMES = 3,
 	UTMPFS_MAX_PATH = 4096,
 	UTMPFS_RECORD_SIZE = 400,
 	UTMPFS_USER_PROCESS = 7,

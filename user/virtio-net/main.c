@@ -1,7 +1,8 @@
 #include <bunix/virtio.h>
 
+#define VIRTIO_NET_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	VIRTIO_NET_HANDLE_NAMES = 3,
 	VIRTIO_NET_QUEUE_SIZE = 128,
 	VIRTIO_NET_RX_BUFFERS = 8,
 	VIRTIO_NET_DEFAULT_MTU = 1500,

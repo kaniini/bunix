@@ -1,8 +1,6 @@
 #include <bunix/syscall.h>
 
-enum {
-	USB_SYNTH_HANDLE_USB = 4,
-};
+#define USB_SYNTH_HANDLE_USB (bunix_handle_find(BUNIX_CAP_USB))
 
 static const unsigned char synthetic_keyboard_descriptors[] = {
 	18, 1, 0x00, 0x02, 0x00, 0x00, 0x00, 64,

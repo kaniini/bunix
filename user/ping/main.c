@@ -1,8 +1,7 @@
 #include <bunix/libbunix.h>
 
-enum {
-	PING_HANDLE_TIME = 4,
-};
+#define PING_HANDLE_TIME (bunix_handle_find(BUNIX_CAP_TIME))
+#define PING_HANDLE_VM (bunix_handle_find(BUNIX_CAP_VM))
 
 static u64 time_call(u64 type, u64 word0)
 {
@@ -48,6 +47,6 @@ int main(void)
 		vm_message.words[0] = sequence++;
 		vm_message.words[1] = now != 0 ? now :
 				      time_call(BUNIX_TIME_NOW_MONOTONIC, 0);
-		bunix_ipc_send(BUNIX_HANDLE_VM, &vm_message);
+		bunix_ipc_send(PING_HANDLE_VM, &vm_message);
 	}
 }

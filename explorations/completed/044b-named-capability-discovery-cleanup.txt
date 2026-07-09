@@ -25,14 +25,14 @@ Desired design:
 
 Tasks:
 
-- [ ] Convert remaining user servers from inherited slot constants to
+- [x] Convert remaining user servers from inherited slot constants to
       `bunix_handle_find()` for `NAME`, `CONS`, `TIME`, `PROC`, `VFS`, `USB`,
       and related launch-provided capabilities.
-- [ ] Tag any remaining kernel-granted capabilities that user servers must
+- [x] Tag any remaining kernel-granted capabilities that user servers must
       discover by name.
-- [ ] Audit launch descriptors for ambiguous duplicate object+rights pairs and
+- [x] Audit launch descriptors for ambiguous duplicate object+rights pairs and
       either remove them or document why one tag is sufficient.
-- [ ] Add a focused regression that reorders launch caps for a test server and
+- [x] Add a focused regression that reorders launch caps for a test server and
       verifies it still boots and resolves its required handles.
-- [ ] Run the focused launch-cap regression, names authority test, and full
+- [x] Run the focused launch-cap regression, names authority test, and full
       `make test`.

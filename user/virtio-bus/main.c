@@ -1,9 +1,10 @@
 #include <bunix/alloc.h>
 #include <bunix/virtio.h>
 
+#define VIRTIO_BUS_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+#define VIRTIO_BUS_HANDLE_PCI (bunix_handle_find(BUNIX_CAP_PCI))
+
 enum {
-	VIRTIO_BUS_HANDLE_NAMES = 3,
-	VIRTIO_BUS_HANDLE_PCI = 4,
 	VIRTIO_BUS_MAX_RESOURCES = 16,
 	VIRTIO_BUS_MAX_QUEUES = 8,
 	PCI_VENDOR_NONE = 0xffff,

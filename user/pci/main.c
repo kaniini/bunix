@@ -1,8 +1,9 @@
 #include <bunix/alloc.h>
 #include <bunix/syscall.h>
 
+#define PCI_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	PCI_HANDLE_NAMES = 3,
 	PCI_CONFIG_ADDRESS = 0,
 	PCI_CONFIG_DATA = 4,
 	PCI_VENDOR_NONE = 0xffff,

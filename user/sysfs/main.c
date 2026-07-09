@@ -1,7 +1,8 @@
 #include <bunix/libbunix.h>
 
+#define SYSFS_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	SYSFS_HANDLE_NAMES = 3,
 	SYSFS_MAX_PATH = 4096,
 };
 

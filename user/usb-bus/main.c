@@ -1,8 +1,9 @@
 #include <bunix/alloc.h>
 #include <bunix/syscall.h>
 
+#define USB_BUS_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	USB_BUS_HANDLE_NAMES = 3,
 	USB_BUS_MAX_DESCRIPTOR = 512,
 	USB_BUS_MAX_INTERFACES = 16,
 	USB_BUS_MAX_ENDPOINTS = 32,

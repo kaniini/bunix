@@ -2,8 +2,9 @@
 #include <bunix/libbunix.h>
 #include <bunix/tree.h>
 
+#define TMPFS_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	TMPFS_HANDLE_NAMES = 3,
 	TMPFS_MAX_PATH = 4096,
 	TMPFS_OPEN_DIR = 1,
 	TMPFS_OPEN_FILE = 2,

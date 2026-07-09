@@ -1,7 +1,8 @@
 #include <bunix/libbunix.h>
 
+#define BLOCK_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	BLOCK_HANDLE_NAMES = 3,
 	BLOCK_BUFFER_MAX = 128 * 1024,
 };
 

@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 044b-named-capability-discovery-cleanup.txt
+The current exploration is: 045-management-rpc-caller-authority.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.

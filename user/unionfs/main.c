@@ -2,8 +2,9 @@
 #include <bunix/libbunix.h>
 #include <bunix/tree.h>
 
+#define UNIONFS_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	UNIONFS_HANDLE_NAMES = 3,
 	UNIONFS_MAX_PATH = 4096,
 	UNIONFS_OPEN_LOWER = 1,
 	UNIONFS_OPEN_UPPER = 2,

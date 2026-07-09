@@ -1,8 +1,9 @@
 #include <bunix/syscall.h>
 
+#define XHCI_HANDLE_PCI (bunix_handle_find(BUNIX_CAP_PCI))
+#define XHCI_HANDLE_USB (bunix_handle_find(BUNIX_CAP_USB))
+
 enum {
-	XHCI_HANDLE_PCI = 4,
-	XHCI_HANDLE_USB = 5,
 	PCI_CLASS_SERIAL_USB_XHCI = 0x0c0330,
 	XHCI_PCI_BAR = 0,
 	XHCI_CAP_LENGTH_VERSION = 0x00,

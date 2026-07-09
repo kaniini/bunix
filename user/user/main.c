@@ -1,8 +1,9 @@
 #include <bunix/id_table.h>
 #include <bunix/libbunix.h>
 
+#define USER_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	USER_HANDLE_NAMES = 3,
 	USER_DEFAULT_GROUP_CAPACITY = 4,
 	USER_WIRE_GROUPS = 2,
 	USER_ID_KEEP = (u64)-1,

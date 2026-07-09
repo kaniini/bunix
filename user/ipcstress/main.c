@@ -81,7 +81,8 @@ int main(int argc, char **argv, char **envp)
 			.words = { 0, 0, 0, 0 },
 		};
 
-		if (bunix_ipc_send(BUNIX_HANDLE_CONSOLE, &message) != 0) {
+		if (bunix_ipc_send(bunix_handle_find(BUNIX_CAP_CONS),
+				   &message) != 0) {
 			return 1;
 		}
 	}

@@ -3749,10 +3749,10 @@ int main(void)
 			return 1;
 		}
 		const struct bunix_launch_cap names_test_caps[] = {
-			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+			{ claim, BUNIX_RIGHT_SEND, BUNIX_CAP_CLAM },
 			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND,
 			  BUNIX_CAP_NAME },
-			{ claim, BUNIX_RIGHT_SEND, BUNIX_CAP_CLAM },
+			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
 		};
 		if (bunix_launch_module_with_caps(
 			    "names-test", names_test_caps,

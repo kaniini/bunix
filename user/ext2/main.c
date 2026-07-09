@@ -2,8 +2,9 @@
 #include <bunix/libbunix.h>
 #include <bunix/tree.h>
 
+#define EXT2_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+
 enum {
-	EXT2_HANDLE_NAMES = 3,
 	EXT2_SUPER_OFFSET = 1024,
 	EXT2_SUPER_SIZE = 1024,
 	EXT2_GROUP_DESC_SIZE = 32,

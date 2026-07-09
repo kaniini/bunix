@@ -1,10 +1,12 @@
 #include <bunix/libbunix.h>
 #include <bunix/id_table.h>
 
+#define LINUX_HANDLE_CONSOLE (bunix_handle_find(BUNIX_CAP_CONS))
+#define LINUX_HANDLE_VFS (bunix_handle_find(BUNIX_CAP_VFS))
+#define LINUX_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+#define LINUX_HANDLE_POWER_AUTH (bunix_handle_find(BUNIX_CAP_POWR))
+
 enum {
-	LINUX_HANDLE_VFS = 3,
-	LINUX_HANDLE_NAMES = 4,
-	LINUX_HANDLE_POWER_AUTH = BUNIX_HANDLE_POWER_AUTH,
 	LINUX_EPERM = 1,
 	LINUX_ENOENT = 2,
 	LINUX_E2BIG = 7,
@@ -1523,11 +1525,11 @@ static int linux_process_init_fds(struct linux_process *process)
 		process->fds[fd].status_flags = 0;
 	}
 
-	process->fds[0].handle = BUNIX_HANDLE_CONSOLE;
+	process->fds[0].handle = LINUX_HANDLE_CONSOLE;
 	process->fds[0].kind = LINUX_FD_CONSOLE;
-	process->fds[1].handle = BUNIX_HANDLE_CONSOLE;
+	process->fds[1].handle = LINUX_HANDLE_CONSOLE;
 	process->fds[1].kind = LINUX_FD_CONSOLE;
-	process->fds[2].handle = BUNIX_HANDLE_CONSOLE;
+	process->fds[2].handle = LINUX_HANDLE_CONSOLE;
 	process->fds[2].kind = LINUX_FD_CONSOLE;
 	return 0;
 }
@@ -3981,7 +3983,7 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	if (linux_console_path(full_path)) {
 		const u64 remote_handle = reply.words[1];
 		const long fd = alloc_fd(process, LINUX_FD_CONSOLE,
-					 BUNIX_HANDLE_CONSOLE, 0);
+					 LINUX_HANDLE_CONSOLE, 0);
 
 		(void)linux_close_vfs_handle(remote_handle);
 		return fd;

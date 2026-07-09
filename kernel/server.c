@@ -74,9 +74,12 @@ static struct boot_data_module ext2disk_module;
 
 enum {
 	SERVER_CAP_CONS = SERVER_FOURCC('C', 'O', 'N', 'S'),
+	SERVER_CAP_VM = SERVER_FOURCC('V', 'M', ' ', ' '),
 	SERVER_CAP_NAME = SERVER_FOURCC('N', 'A', 'M', 'E'),
+	SERVER_CAP_POWR = SERVER_FOURCC('P', 'O', 'W', 'R'),
 	SERVER_CAP_PCFG = SERVER_FOURCC('P', 'C', 'F', 'G'),
 	SERVER_CAP_PAUT = SERVER_FOURCC('P', 'A', 'U', 'T'),
+	SERVER_CAP_COM1 = SERVER_FOURCC('C', 'O', 'M', '1'),
 };
 
 struct task_start {
@@ -447,7 +450,11 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 
 		(void)task_set_handle_tag(task, console, SERVER_CAP_CONS);
 		(void)task_set_handle_tag(task, names, SERVER_CAP_NAME);
-		task_grant_hw_resource(task, &com1_port, TASK_RIGHT_SEND);
+		const u64 com1 =
+			task_grant_hw_resource(task, &com1_port,
+					       TASK_RIGHT_SEND);
+
+		(void)task_set_handle_tag(task, com1, SERVER_CAP_COM1);
 		return;
 	}
 
@@ -468,14 +475,23 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 		return;
 	}
 
-	task_grant_port(task, ipc_port_find("console"),
-			TASK_RIGHT_SEND | TASK_RIGHT_DUP);
-	task_grant_port(task, ipc_port_find("vm"),
-			TASK_RIGHT_SEND | TASK_RIGHT_DUP);
-	task_grant_port(task, ipc_port_find("names"),
-			TASK_RIGHT_SEND | TASK_RIGHT_DUP);
-	task_grant_hw_resource(task, &power_authority,
-			       TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+	const u64 console =
+		task_grant_port(task, ipc_port_find("console"),
+				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+	const u64 vm =
+		task_grant_port(task, ipc_port_find("vm"),
+				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+	const u64 names =
+		task_grant_port(task, ipc_port_find("names"),
+				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+	const u64 power =
+		task_grant_hw_resource(task, &power_authority,
+				       TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+
+	(void)task_set_handle_tag(task, console, SERVER_CAP_CONS);
+	(void)task_set_handle_tag(task, vm, SERVER_CAP_VM);
+	(void)task_set_handle_tag(task, names, SERVER_CAP_NAME);
+	(void)task_set_handle_tag(task, power, SERVER_CAP_POWR);
 }
 
 u64 server_launch_module_with_caps(const char *name, struct task *parent,
