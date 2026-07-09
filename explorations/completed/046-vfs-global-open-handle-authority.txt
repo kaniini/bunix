@@ -64,7 +64,7 @@ Tasks:
 - [x] Update all VFS translators to enforce the new authority model.
 - [x] Add regression tests for cross-process handle guessing, close stealing,
       and unauthorized read/write attempts.
-- [ ] Run focused VFS tests, shell tests, and then full tests before
+- [x] Run focused VFS tests, shell tests, and then full tests before
       completion.
 
 Notes:
@@ -88,3 +88,5 @@ Notes:
   `make test-vfs-authority`, `make test-management-authority`,
   `BUNIX_TEST_SET=rootfs-vfs-proc-dev,tmpfs-basic-linux-tests,tmpfs-extended,root-mount-soak make test-shell-parallel`,
   and `make test-boot-ext2`.
+- Full verification passed with `make test`, run id
+  `20260709T205548Z-8494`: 25 shards launched, 25 passed, 0 skipped.
