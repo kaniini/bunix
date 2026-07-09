@@ -14,7 +14,7 @@ sidecar_start_delay=${BUNIX_TEST_SIDECAR_START_DELAY:-1}
 sidecar_ready_timeout=${BUNIX_TEST_SIDECAR_READY_TIMEOUT:-20}
 guest_poweroff=${BUNIX_GUEST_POWEROFF:-1}
 send_line_delay=${BUNIX_SEND_LINE_DELAY:-0.35}
-send_sync_line_delay=${BUNIX_SEND_SYNC_LINE_DELAY:-0.45}
+send_sync_line_delay=${BUNIX_SEND_SYNC_LINE_DELAY:-0.75}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-shell-test.$run_id}
 log=$tmp/serial.log
@@ -36,6 +36,7 @@ shell_parts=${BUNIX_SHELL_PART:-all}
 . "$script_dir/shell-tests/privileged-native-denial.sh"
 . "$script_dir/shell-tests/rootfs-vfs-proc-dev.sh"
 . "$script_dir/shell-tests/tmpfs-basic-linux-tests.sh"
+. "$script_dir/shell-tests/linux-signaltest.sh"
 . "$script_dir/shell-tests/path-limits-statfs.sh"
 . "$script_dir/shell-tests/union-root-user.sh"
 . "$script_dir/shell-tests/tmpfs-extended.sh"
@@ -57,6 +58,7 @@ export BUNIX_COLLECT_FAILURES BUNIX_FAILURE_DIR BUNIX_QEMU_LOG BUNIX_TEST_SIDECA
 qemu_pid=
 cat_pid=
 sidecar_pid=
+sync_counter=0
 
 cleanup() {
 	if [ "${qemu_pid:-}" ]; then
@@ -102,6 +104,18 @@ send_script_sync() {
 		printf '%s\n' "$line" >&3
 		wait_for_prompt_count_gt "$prompt_probe" "$before" \
 			"shell prompt did not return after: $line" 90 220
+		sleep "$send_sync_line_delay"
+	done
+}
+
+send_script_marker_sync() {
+	while IFS= read -r line || [ -n "$line" ]; do
+		sync_counter=$((sync_counter + 1))
+		sync_marker="__BUNIX_SYNC_$$_${sync_counter}__"
+		printf '%s\n' "$line" >&3
+		printf 'printf "%s\\n"\n' "$sync_marker" >&3
+		wait_for_fixed "$log" "$sync_marker" \
+			"shell sync marker did not appear after: $line" 90 220
 		sleep "$send_sync_line_delay"
 	done
 }
@@ -253,7 +267,7 @@ part_selected() {
 	esac
 
 	case "$part" in
-	rootfs-vfs-proc-dev)
+	rootfs-vfs-proc-dev|rootfs-vfs-paths|procfs-sysfs-surface|devfs-console-surface)
 		case ",$shell_parts," in
 		*,vfs,*|*,procfs,*|*,devfs,*) return 0 ;;
 		esac
@@ -287,7 +301,7 @@ require_supported_parts() {
 	for part do
 		case "$part" in
 		all|vfs|procfs|devfs|tmpfs|path|statfs|large-io|mount|\
-		smoke|login-smoke|relogin-session|exec-argv-pipe|procfs-cmdline|rootfs-vfs-proc-dev|\
+		smoke|login-smoke|relogin-session|exec-argv-pipe|procfs-cmdline|rootfs-vfs-proc-dev|rootfs-vfs-paths|procfs-sysfs-surface|devfs-console-surface|linux-signaltest|\
 		network-loopback-ping|scheduler-bench|privileged-native-denial|tmpfs-basic-linux-tests|path-limits-statfs|union-root-user|\
 		tmpfs-extended|large-io-mount|interactive-tty|root-login-union|\
 		root-tmpfs-chown|long-login|root-mount-soak)
@@ -429,10 +443,34 @@ if part_selected rootfs-vfs-proc-dev; then
 	run_rootfs_vfs_proc_dev
 fi
 
+if part_selected rootfs-vfs-paths; then
+	begin_shard rootfs-vfs-paths
+	login_user_if_needed
+	run_rootfs_vfs_paths
+fi
+
+if part_selected procfs-sysfs-surface; then
+	begin_shard procfs-sysfs-surface
+	login_user_if_needed
+	run_procfs_sysfs_surface
+fi
+
+if part_selected devfs-console-surface; then
+	begin_shard devfs-console-surface
+	login_user_if_needed
+	run_devfs_console_surface
+fi
+
 if part_selected tmpfs-basic-linux-tests; then
 	begin_shard tmpfs-basic-linux-tests
 	login_user_if_needed
 	run_tmpfs_basic_linux_tests
+fi
+
+if part_selected linux-signaltest; then
+	begin_shard linux-signaltest
+	login_user_if_needed
+	run_linux_signaltest
 fi
 
 if part_selected path-limits-statfs; then
@@ -472,6 +510,21 @@ fi
 if part_selected rootfs-vfs-proc-dev; then
 	check_rootfs_vfs_proc_dev
 	finish_shard rootfs-vfs-proc-dev
+fi
+
+if part_selected rootfs-vfs-paths; then
+	check_rootfs_vfs_paths
+	finish_shard rootfs-vfs-paths
+fi
+
+if part_selected procfs-sysfs-surface; then
+	check_procfs_sysfs_surface
+	finish_shard procfs-sysfs-surface
+fi
+
+if part_selected devfs-console-surface; then
+	check_devfs_console_surface
+	finish_shard devfs-console-surface
 fi
 
 if part_selected procfs-cmdline; then
@@ -517,6 +570,11 @@ fi
 if part_selected tmpfs-basic-linux-tests; then
 	check_tmpfs_basic_linux_tests
 	finish_shard tmpfs-basic-linux-tests
+fi
+
+if part_selected linux-signaltest; then
+	check_linux_signaltest
+	finish_shard linux-signaltest
 fi
 
 if part_selected exec-argv-pipe; then

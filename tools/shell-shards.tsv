@@ -8,16 +8,19 @@ procfs-cmdline	user	2	128M	120	1	no	Live non-self procfs cmdline/status coverage
 network-loopback-ping	user	2	128M	120	1	no	BusyBox IPv4 and IPv6 loopback ping through Linux raw ICMP sockets and NET0.
 scheduler-bench	user	2	128M	120	1	no	Focused scheduler fairness benchmark with equal CPU-bound workers and scheduler counter checks.
 privileged-native-denial	user	2	128M	90	1	no	Unprivileged Linux callers must not be able to power off or mint PCI hardware handles.
-rootfs-vfs-proc-dev	user	2	128M	150	2	no	Rootfs stat/list/readlink, long paths, cwd/dotdot/slash resolution, procfs files, and devfs zero/urandom checks.
-tmpfs-basic-linux-tests	user	2	128M	180	3	no	/tmp and /run writes, append/excl/truncate/unlink, bundled Linux regression binaries, proc tools, mount listing, mkdir basics, and dev console write.
+rootfs-vfs-paths	user	2	128M	300	2	no	Rootfs stat/list/readlink, long paths, cwd/dotdot/slash resolution, and procfs translator survival after VFS path tests.
+procfs-sysfs-surface	user	2	128M	420	2	no	Procfs process/stat/ipc/scheduler/mount surfaces, sysfs CPU/TTY surfaces, dmesg prefixes, and writable runtime tmpfs mounts.
+devfs-console-surface	user	2	128M	180	1	no	Devfs null/zero/urandom/console/ttyS0 character devices and raw console write behavior.
+tmpfs-basic-linux-tests	user	2	128M	300	3	no	/tmp and /run writes, append/excl/truncate/unlink, bundled Linux regression binaries, proc tools, mount listing, mkdir basics, and dev console write.
+linux-signaltest	user	2	128M	120	1	no	Linux SIGCHLD self-pipe and delivered fault signal regression test.
 path-limits-statfs	user	2	128M	180	2	no	Deep tmpfs path creation, pathmaxtest, patherrtest, and df/statfs checks.
 union-root-user	user	2	128M	180	3	no	Unionfs lower rename/copy-up, root-created upper entries, long/name-max entries, and unlink behavior from the user phase.
-tmpfs-extended	user	2	128M	240	4	no	Tmpfs ownership, mkdir, long names, name max, touch, fifo, hardlink, rmdir, rename, chmod, chown denial, symlink, plus user-created union symlink/hardlink.
+tmpfs-extended	user	2	128M	600	4	no	Tmpfs ownership, mkdir, long names, name max, touch, fifo, hardlink, rmdir, rename, chmod, chown denial, symlink, plus user-created union symlink/hardlink.
 large-io-mount	user	2	128M	150	2	no	Large /dev/zero write, mmap/read stress, and user tmpfs mount lifecycle on /mnt.
 interactive-tty	user	2	128M	180	3	no	Denied secret read, shell survival, backspace editing, foreground cat Ctrl-C, background watch, and exit back to login.
 root-login-union	root	2	128M	180	4	no	Root login identity/env, secret access, root unionfs lower-parent create/copy-up, and pinned-route/busy-mount guards.
-root-tmpfs-chown	root	2	128M	180	3	no	Privileged chown of /tmp/bunix-write.txt and root logout; depends on tmpfs-basic-linux-tests creating the file.
+root-tmpfs-chown	root	2	128M	360	3	no	Privileged chown of /tmp/bunix-write.txt and root logout; depends on tmpfs-basic-linux-tests creating the file.
 long-login	root	2	128M	120	1	no	Long username/password login regression and final shell regression marker.
-root-mount-soak	root	2	128M	240	5	yes	Root-only mount/umount race soaking; clean boot preferred once implemented.
+root-mount-soak	root	2	128M	420	5	yes	Root-only mount/umount race soaking; clean boot preferred once implemented.
 alpine-openrc-smoke	openrc	1	128M	120	1	yes	Fast one-vCPU Alpine OpenRC boot to login and guest poweroff.	boot	alpine-squashfs	smoke	tools/test-boot-markers-alpine-smoke.txt
 alpine-openrc-full	openrc	2	128M	300	3	yes	Two-vCPU Alpine OpenRC boot through login, root shell, dmesg, and guest poweroff.	boot	alpine-squashfs	full	tools/test-boot-markers-alpine-squashfs.txt

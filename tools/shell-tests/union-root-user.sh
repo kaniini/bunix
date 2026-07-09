@@ -1,7 +1,7 @@
 #!/bin/sh
 
 run_union_root_user() {
-	send_script <<'EOF_UNION_RENAME'
+	send_script_sync <<'EOF_UNION_RENAME'
 busybox cat /hello.txt && echo UNION_ROOT_LOWER_OK
 busybox mv /rename-lower.txt /rename-upper.txt && echo UNION_LOWER_RENAME_CREATE_OK
 busybox cat /rename-upper.txt | busybox grep "nested rootfs file" && echo UNION_LOWER_RENAME_READ_OK
@@ -10,7 +10,7 @@ busybox test -e /.upper/rename-upper.txt && echo UNION_LOWER_RENAME_UPPER_OK
 EOF_UNION_RENAME
 	wait_for_fixed "$log" "UNION_LOWER_RENAME_UPPER_OK" "unionfs lower rename commands did not drain" 45 220
 
-	send_script <<'EOF_UNION_ROOT'
+	send_script_sync <<'EOF_UNION_ROOT'
 busybox ln /hello.txt /hello-hard.txt && echo UNION_LOWER_HARDLINK_CREATE_OK
 busybox cat /hello-hard.txt | busybox grep "rootfs: module" && echo UNION_LOWER_HARDLINK_READ_OK
 busybox test -e /.upper/hello.txt && busybox test -e /.upper/hello-hard.txt && echo UNION_LOWER_HARDLINK_COPYUP_OK

@@ -36,6 +36,5 @@ linux waitpgid checks ok
 linux execlong ok
 linux auxid ok
 linux fcntl and close_range ok
-linux sigchld self-pipe ok
 sysrace ok
 schedstress ok

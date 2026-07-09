@@ -81,6 +81,7 @@ install_file /bin/shebangtest modules/shebangtest.sh 0555
 install_file /bin/shebangloop-a modules/shebangloop-a.sh 0555
 install_file /bin/shebangloop-b modules/shebangloop-b.sh 0555
 install_file /bin/shebangbad modules/shebangbad.sh 0555
+install_file /bin/root-mount-soak modules/root-mount-soak.sh 0555
 install_file /lib/ld-musl-x86_64.so.1 "$musl_ldso" 0555
 
 for name in first alloctest ipcstress login lxtest getdentstest vforkstress \

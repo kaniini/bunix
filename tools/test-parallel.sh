@@ -91,8 +91,11 @@ selected_shards() {
 				return 1
 			if ((part == "smoke" || part == "sysrace") && name == "smoke")
 				return 1
-			if ((part == "vfs" || part == "procfs" || part == "devfs") &&
-			    name == "rootfs-vfs-proc-dev")
+			if ((part == "vfs" || part == "procfs" || part == "devfs" ||
+			     part == "rootfs-vfs-proc-dev") &&
+			    (name == "rootfs-vfs-paths" ||
+			     name == "procfs-sysfs-surface" ||
+			     name == "devfs-console-surface"))
 				return 1
 			if (part == "tmpfs" &&
 			    (name == "tmpfs-basic-linux-tests" ||

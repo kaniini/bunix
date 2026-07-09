@@ -1,7 +1,7 @@
 #!/bin/sh
 
 run_path_limits_statfs() {
-	send_script <<'EOF_PATH_LIMITS_STATFS'
+	send_script_sync <<'EOF_PATH_LIMITS_STATFS'
 LONG_TMP=/tmp/bunix-pathmax2
 busybox mkdir "$LONG_TMP"
 LONG_TMP=$LONG_TMP/segment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

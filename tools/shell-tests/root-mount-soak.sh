@@ -3,26 +3,11 @@
 run_root_mount_soak() {
 	login_root_if_needed
 
-	send_script <<'EOF_ROOT_MOUNT_SOAK'
-i=0
-while [ "$i" -lt 8 ]; do
-	target="/mnt"
-	busybox mount -t tmpfs tmpfs "$target" && echo ROOT_MOUNT_SOAK_MOUNT_OK
-	echo "ROOT_MOUNT_SOAK_PAYLOAD_$i" > "$target/soak.txt"
-	busybox cat "$target/soak.txt"
-	busybox mount | busybox grep "$target" >/dev/null && echo ROOT_MOUNT_SOAK_LIST_OK
-	busybox umount "$target" && echo ROOT_MOUNT_SOAK_UMOUNT_OK
-	busybox test ! -e "$target/soak.txt" && echo ROOT_MOUNT_SOAK_HIDE_OK
-	i=$((i + 1))
-done
-busybox mount -t tmpfs tmpfs /mnt && echo ROOT_MOUNT_SOAK_BUSY_MOUNT_OK
-echo ROOT_MOUNT_SOAK_PINNED_PAYLOAD > /mnt/pinned.txt
-busybox sh -c 'cd /mnt && busybox umount /mnt || echo ROOT_MOUNT_SOAK_BUSY_OK'
-busybox cat /mnt/pinned.txt
-busybox umount /mnt && echo ROOT_MOUNT_SOAK_FINAL_UMOUNT_OK
-busybox test ! -e /mnt/pinned.txt && echo ROOT_MOUNT_SOAK_FINAL_HIDE_OK
-echo ROOT_MOUNT_SOAK_DONE
+	send_script_sync <<'EOF_ROOT_MOUNT_SOAK'
+busybox sh /bin/root-mount-soak
 EOF_ROOT_MOUNT_SOAK
+	wait_for_fixed "$log" "ROOT_MOUNT_SOAK_DONE" \
+		"root mount soak commands did not drain" 180 260
 }
 
 check_root_mount_soak() {

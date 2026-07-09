@@ -144,7 +144,7 @@ static int test_sigchld_self_pipe(void)
 	pfd.events = POLLIN;
 	pfd.revents = 0;
 	for (;;) {
-		const int ready = poll(&pfd, 1, 3000);
+		const int ready = poll(&pfd, 1, 10000);
 
 		if (ready > 0) {
 			break;

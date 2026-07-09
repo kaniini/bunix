@@ -31,7 +31,6 @@ busybox mount && echo PROC_MOUNT_OK
 /bin/execlongtest
 /bin/auxidtest
 /bin/fcntllocktest
-/bin/signaltest
 /bin/sysracetest
 /bin/schedstress
 busybox mkdir -p /tmp/mkdir-p/a/b && echo TMP_MKDIR_P_EXISTING_ROOT_OK
