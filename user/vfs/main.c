@@ -22,6 +22,7 @@ struct vfs_mount {
 struct vfs_open {
 	struct bunix_u64_tree_node node;
 	u64 id;
+	u64 owner;
 	u64 kind;
 	u64 service;
 	u64 remote_handle;
@@ -134,6 +135,8 @@ static int path_component_eq(const char *component, const char *literal)
 }
 
 static struct vfs_open *open_from_handle(u64 handle);
+static struct vfs_open *open_from_message(u64 handle,
+					  const struct bunix_msg *message);
 
 static int vfs_resolve_path(const char *cwd, const char *input, char *out)
 {
@@ -215,7 +218,7 @@ static int vfs_resolve_path(const char *cwd, const char *input, char *out)
 	return 0;
 }
 
-static int vfs_resolve_with_base(u64 base_handle, const char *cwd,
+static int vfs_resolve_with_base(u64 base_handle, u64 owner, const char *cwd,
 				 const char *input, char *out, u64 *error)
 {
 	if (input != 0 && input[0] == '/') {
@@ -228,6 +231,7 @@ static int vfs_resolve_with_base(u64 base_handle, const char *cwd,
 	struct vfs_open *open = open_from_handle(base_handle);
 
 	if (open == 0 || open->kind != VFS_OPEN_REMOTE ||
+	    open->owner != owner ||
 	    open->type != BUNIX_VFS_TYPE_DIRECTORY || open->path == 0) {
 		if (error != 0) {
 			*error = BUNIX_VFS_ERR_NOTDIR;
@@ -313,8 +317,8 @@ static int path_copy(char *out, const char *path)
 	return 0;
 }
 
-static u64 open_remote_file(u64 service, u64 remote_handle, const char *path,
-			    u64 type)
+static u64 open_remote_file(u64 owner, u64 service, u64 remote_handle,
+			    const char *path, u64 type)
 {
 	struct vfs_open *open;
 	u64 handle;
@@ -327,6 +331,7 @@ static u64 open_remote_file(u64 service, u64 remote_handle, const char *path,
 		return 0;
 	}
 	open->kind = VFS_OPEN_REMOTE;
+	open->owner = owner;
 	open->service = service;
 	open->remote_handle = remote_handle;
 	open->path = str_dup(path);
@@ -352,6 +357,17 @@ static u64 open_remote_file(u64 service, u64 remote_handle, const char *path,
 static struct vfs_open *open_from_handle(u64 handle)
 {
 	return (struct vfs_open *)bunix_u64_tree_get(&open_files, handle);
+}
+
+static struct vfs_open *open_from_message(u64 handle,
+					  const struct bunix_msg *message)
+{
+	struct vfs_open *open = open_from_handle(handle);
+
+	if (open == 0 || message == 0 || open->owner != message->sender) {
+		return 0;
+	}
+	return open;
 }
 
 static void forget_open_file(u64 handle)
@@ -381,7 +397,8 @@ static int forward_mount_path(struct vfs_mount *mount, struct bunix_msg *message
 	if (message->type == BUNIX_VFS_OPEN_BUFFER && reply->words[0] == 0) {
 		const u64 remote_handle = reply->words[1];
 		const u64 local_handle =
-			open_remote_file(mount->service, remote_handle, path,
+			open_remote_file(message->sender, mount->service,
+					 remote_handle, path,
 					 reply->words[3]);
 
 		if (local_handle == 0) {
@@ -1237,7 +1254,8 @@ int main(void)
 						cwd) != 0 ||
 			    read_path_buffer_at(message.cap, cwd_len, path_len,
 						input) != 0 ||
-			    vfs_resolve_with_base(message.words[2], cwd,
+			    vfs_resolve_with_base(message.words[2],
+						  message.sender, cwd,
 						  input, path, &error) != 0) {
 				reply.words[0] = error;
 				break;
@@ -1258,7 +1276,8 @@ int main(void)
 						cwd) != 0 ||
 			    read_path_buffer_at(message.cap, cwd_len, path_len,
 						input) != 0 ||
-			    vfs_resolve_with_base(message.words[2], cwd,
+			    vfs_resolve_with_base(message.words[2],
+						  message.sender, cwd,
 						  input, path, &error) != 0) {
 				reply.words[0] = error;
 				break;
@@ -1279,7 +1298,8 @@ int main(void)
 						cwd) != 0 ||
 			    read_path_buffer_at(message.cap, cwd_len, path_len,
 						input) != 0 ||
-			    vfs_resolve_with_base(message.words[2], cwd,
+			    vfs_resolve_with_base(message.words[2],
+						  message.sender, cwd,
 						  input, path, &error) != 0) {
 				reply.words[0] = error;
 				break;
@@ -1305,7 +1325,8 @@ int main(void)
 						cwd) != 0 ||
 			    read_path_buffer_at(message.cap, cwd_len, path_len,
 						input) != 0 ||
-			    vfs_resolve_with_base(message.words[2], cwd,
+			    vfs_resolve_with_base(message.words[2],
+						  message.sender, cwd,
 						  input, path, &error) != 0) {
 				reply.words[0] = error;
 				break;
@@ -1326,7 +1347,8 @@ int main(void)
 						cwd) != 0 ||
 			    read_path_buffer_at(message.cap, cwd_len, path_len,
 						input) != 0 ||
-			    vfs_resolve_with_base(message.words[2], cwd,
+			    vfs_resolve_with_base(message.words[2],
+						  message.sender, cwd,
 						  input, path, &error) != 0) {
 				reply.words[0] = error;
 				break;
@@ -1354,7 +1376,8 @@ int main(void)
 						target_len + cwd_len,
 						path_len, input) != 0 ||
 			    target[0] == '\0' ||
-			    vfs_resolve_with_base(base_handle, cwd, input,
+			    vfs_resolve_with_base(base_handle, message.sender,
+						  cwd, input,
 						  path, &error) != 0) {
 				reply.words[0] = error;
 				break;
@@ -1400,10 +1423,10 @@ int main(void)
 			offset += new_cwd_len;
 			if (read_path_buffer_at(message.cap, offset,
 						new_path_len, new_input) != 0 ||
-			    vfs_resolve_with_base(old_base, old_cwd,
+			    vfs_resolve_with_base(old_base, message.sender, old_cwd,
 						  old_input, old_path,
 						  &error) != 0 ||
-			    vfs_resolve_with_base(new_base, new_cwd,
+			    vfs_resolve_with_base(new_base, message.sender, new_cwd,
 						  new_input, new_path,
 						  &error) != 0) {
 				reply.words[0] = error;
@@ -1419,7 +1442,8 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_CHMOD: {
-			struct vfs_open *open = open_from_handle(message.words[0]);
+			struct vfs_open *open =
+				open_from_message(message.words[0], &message);
 
 			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
 				(void)forward_remote_handle(open, &message, &reply);
@@ -1429,7 +1453,8 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_CHOWN: {
-			struct vfs_open *open = open_from_handle(message.words[0]);
+			struct vfs_open *open =
+				open_from_message(message.words[0], &message);
 
 			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
 				(void)forward_remote_handle(open, &message, &reply);
@@ -1439,7 +1464,8 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_TRUNCATE: {
-			struct vfs_open *open = open_from_handle(message.words[0]);
+			struct vfs_open *open =
+				open_from_message(message.words[0], &message);
 
 			if (message.cap != 0) {
 				char cwd[VFS_MAX_PATH];
@@ -1454,7 +1480,8 @@ int main(void)
 							cwd) != 0 ||
 				    read_path_buffer_at(message.cap, cwd_len,
 							path_len, input) != 0 ||
-				    vfs_resolve_with_base(message.words[2], cwd,
+				    vfs_resolve_with_base(message.words[2],
+							  message.sender, cwd,
 							  input, path,
 							  &error) != 0) {
 					reply.words[0] = error;
@@ -1483,7 +1510,8 @@ int main(void)
 						cwd) != 0 ||
 			    read_path_buffer_at(message.cap, cwd_len, path_len,
 						input) != 0 ||
-			    vfs_resolve_with_base(message.words[2], cwd,
+			    vfs_resolve_with_base(message.words[2],
+						  message.sender, cwd,
 						  input, path, &error) != 0) {
 				reply.words[0] = error;
 				break;
@@ -1492,7 +1520,8 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_STAT_META: {
-			struct vfs_open *open = open_from_handle(message.words[0]);
+			struct vfs_open *open =
+				open_from_message(message.words[0], &message);
 
 			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
 				(void)forward_remote_handle(open, &message, &reply);
@@ -1502,7 +1531,8 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_READ_FILE_BUFFER: {
-			struct vfs_open *open = open_from_handle(message.words[0]);
+			struct vfs_open *open =
+				open_from_message(message.words[0], &message);
 
 			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
 				(void)forward_remote_handle(open, &message, &reply);
@@ -1512,7 +1542,8 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_WRITE_FILE_BUFFER: {
-			struct vfs_open *open = open_from_handle(message.words[0]);
+			struct vfs_open *open =
+				open_from_message(message.words[0], &message);
 
 			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
 				(void)forward_remote_handle(open, &message, &reply);
@@ -1522,7 +1553,8 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_READDIR_BUFFER: {
-			struct vfs_open *open = open_from_handle(message.words[0]);
+			struct vfs_open *open =
+				open_from_message(message.words[0], &message);
 
 			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
 				(void)forward_remote_handle(open, &message, &reply);
@@ -1531,11 +1563,12 @@ int main(void)
 			}
 			break;
 		}
-		case BUNIX_VFS_CLOSE:
-			if (open_from_handle(message.words[0]) != 0 &&
-			    open_from_handle(message.words[0])->kind == VFS_OPEN_REMOTE) {
+		case BUNIX_VFS_CLOSE: {
+			struct vfs_open *open =
+				open_from_message(message.words[0], &message);
+
+			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
 				const u64 local_handle = message.words[0];
-				struct vfs_open *open = open_from_handle(message.words[0]);
 
 				if (forward_remote_handle(open, &message, &reply) == 0 &&
 				    reply.words[0] == 0) {
@@ -1545,6 +1578,7 @@ int main(void)
 			}
 			reply.words[0] = (u64)-1;
 			break;
+		}
 			case BUNIX_VFS_MOUNT_BUFFER: {
 				char path[VFS_MAX_PATH];
 				u64 service;

@@ -54,15 +54,37 @@ Fix plan:
 
 Tasks:
 
-- [ ] Build a local QEMU reproducer that attempts to operate on another
+- [x] Build a local QEMU reproducer that attempts to operate on another
       process's VFS handle.
-- [ ] Determine whether the exploit path is reachable directly from Linux
+- [x] Determine whether the exploit path is reachable directly from Linux
       userspace, only through Linux-server bugs, or through compromised server
       authority.
-- [ ] Replace ambient open-handle authority with scoped capabilities or
+- [x] Replace ambient open-handle authority with scoped capabilities or
       unforgeable delegated tokens.
-- [ ] Update all VFS translators to enforce the new authority model.
-- [ ] Add regression tests for cross-process handle guessing, close stealing,
+- [x] Update all VFS translators to enforce the new authority model.
+- [x] Add regression tests for cross-process handle guessing, close stealing,
       and unauthorized read/write attempts.
 - [ ] Run focused VFS tests, shell tests, and then full tests before
       completion.
+
+Notes:
+
+- Chose server-local sender-scoped open authority for this slice.  VFS and
+  translators still use integer IDs internally, but every open record now
+  stores the IPC sender that created it and all handle-based operations require
+  the same sender.  This preserves Linux-server-managed fork/dup descriptor
+  sharing while preventing a separate server with VFS or translator send
+  authority from guessing another sender's handle.
+- Linux userspace does not receive a VFS capability by default, so direct
+  Linux reachability depends on Linux-server bugs or deliberately hybrid
+  native programs that hold Bunix VFS authority.  The exposed compromised
+  server path is reachable with a send-capable VFS handle and is covered by
+  the boot fixture.
+- Added `test-vfs-authority`, implemented through `mgmt-test` when bootstrap
+  grants it `BUNIX_CAP_VFS`.  Bootstrap holds a live victim `/hello.txt` VFS
+  handle, then the fixture proves its own handle works and guessed read/close
+  operations against non-owned handles fail.
+- Focused verification passed:
+  `make test-vfs-authority`, `make test-management-authority`,
+  `BUNIX_TEST_SET=rootfs-vfs-proc-dev,tmpfs-basic-linux-tests,tmpfs-extended,root-mount-soak make test-shell-parallel`,
+  and `make test-boot-ext2`.

@@ -112,6 +112,7 @@ struct ext2_mount {
 struct ext2_open {
 	struct bunix_u64_tree_node node;
 	u64 handle;
+	u64 owner;
 	u64 ino;
 	struct ext2_inode inode;
 };
@@ -2064,7 +2065,7 @@ static int directory_is_empty(const struct ext2_mount *mount,
 	       BUNIX_VFS_ERR_NOENT;
 }
 
-static u64 remember_open(u64 ino, const struct ext2_inode *inode)
+static u64 remember_open(u64 owner, u64 ino, const struct ext2_inode *inode)
 {
 	struct ext2_open *open;
 	u64 handle;
@@ -2079,6 +2080,7 @@ static u64 remember_open(u64 ino, const struct ext2_inode *inode)
 		handle = next_open_handle++;
 	}
 	open->handle = handle;
+	open->owner = owner;
 	open->ino = ino;
 	open->inode = *inode;
 	if (bunix_u64_tree_insert_node(&open_files, &open->node, handle,
@@ -2094,11 +2096,25 @@ static struct ext2_open *open_from_handle(u64 handle)
 	return (struct ext2_open *)bunix_u64_tree_get(&open_files, handle);
 }
 
-static void forget_open(u64 handle)
+static struct ext2_open *open_from_message(const struct bunix_msg *message)
+{
+	struct ext2_open *open;
+
+	if (message == 0) {
+		return 0;
+	}
+	open = open_from_handle(message->words[0]);
+	if (open == 0 || open->owner != message->sender) {
+		return 0;
+	}
+	return open;
+}
+
+static void forget_open(u64 handle, u64 owner)
 {
 	struct ext2_open *open = open_from_handle(handle);
 
-	if (open == 0) {
+	if (open == 0 || open->owner != owner) {
 		return;
 	}
 	bunix_u64_tree_remove_node(&open_files, &open->node);
@@ -3050,7 +3066,7 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 		return;
 	}
-	handle = remember_open(ino, &inode);
+	handle = remember_open(message->sender, ino, &inode);
 	if (handle == 0) {
 		reply->words[0] = (u64)-1;
 		return;
@@ -3494,7 +3510,7 @@ int main(void)
 				break;
 			case BUNIX_VFS_STAT_META: {
 				struct ext2_open *open =
-					open_from_handle(message.words[0]);
+					open_from_message(&message);
 
 				if (open == 0) {
 					reply.words[0] = (u64)-1;
@@ -3506,34 +3522,35 @@ int main(void)
 				break;
 			}
 			case BUNIX_VFS_READDIR_BUFFER:
-				reply_readdir(open_from_handle(message.words[0]),
+				reply_readdir(open_from_message(&message),
 					      &message, &reply);
 				break;
 			case BUNIX_VFS_READ_FILE_BUFFER:
-				reply_read_file(open_from_handle(message.words[0]),
+				reply_read_file(open_from_message(&message),
 						&message, &reply);
 				break;
 			case BUNIX_VFS_WRITE_FILE_BUFFER:
-				reply_write_file(open_from_handle(message.words[0]),
+				reply_write_file(open_from_message(&message),
 						 &message, &reply);
 				break;
 			case BUNIX_VFS_TRUNCATE:
-				reply_truncate(open_from_handle(message.words[0]),
+				reply_truncate(open_from_message(&message),
 					       &message, &reply);
 				break;
 			case BUNIX_VFS_CHMOD:
-				reply_chmod(open_from_handle(message.words[0]),
+				reply_chmod(open_from_message(&message),
 					    &message, &reply);
 				break;
 			case BUNIX_VFS_CHOWN:
-				reply_chown(open_from_handle(message.words[0]),
+				reply_chown(open_from_message(&message),
 					    &message, &reply);
 				break;
 			case BUNIX_VFS_CLOSE:
-				if (open_from_handle(message.words[0]) == 0) {
+				if (open_from_message(&message) == 0) {
 					reply.words[0] = (u64)-1;
 				} else {
-					forget_open(message.words[0]);
+					forget_open(message.words[0],
+						    message.sender);
 					reply.words[0] = 0;
 				}
 				break;

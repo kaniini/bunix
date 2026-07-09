@@ -3839,6 +3839,30 @@ int main(void)
 		}
 	}
 
+	if (bunix_cmdline_has("vfs-auth-test") > 0) {
+		u64 victim_handle = 0;
+		u64 victim_type = 0;
+		const struct bunix_launch_cap vfs_auth_test_caps[] = {
+			{ vfs_launch, BUNIX_RIGHT_SEND, BUNIX_CAP_VFS },
+			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		};
+
+		if (vfs_open_path(vfs, "/hello.txt", &victim_handle,
+				  &victim_type) != 0 ||
+		    victim_type != BUNIX_VFS_TYPE_REGULAR ||
+		    bunix_launch_module_with_caps(
+			    "mgmt-test", vfs_auth_test_caps,
+			    sizeof(vfs_auth_test_caps) /
+				    sizeof(vfs_auth_test_caps[0])) < 0) {
+			return 1;
+		}
+		(void)victim_handle;
+		bunix_sleep_ns(1000000000ull);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
+		for (;;) {
+		}
+	}
+
 	if (spawn_linux_init(linux_mgmt, "/sbin/init") != 0) {
 		return 1;
 	}

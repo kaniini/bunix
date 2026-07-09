@@ -14,6 +14,7 @@ enum {
 struct unionfs_open {
 	struct bunix_u64_tree_node node;
 	u64 id;
+	u64 owner;
 	u64 kind;
 	u64 service;
 	u64 remote_handle;
@@ -907,7 +908,7 @@ static int unionfs_mount_root_path(const char *path)
 	return 0;
 }
 
-static u64 remember_upper_open(u64 service, u64 remote_handle)
+static u64 remember_upper_open(u64 owner, u64 service, u64 remote_handle)
 {
 	struct unionfs_open *open;
 	u64 id;
@@ -924,6 +925,7 @@ static u64 remember_upper_open(u64 service, u64 remote_handle)
 		id = next_open_id++;
 	}
 	open->id = id;
+	open->owner = owner;
 	open->kind = UNIONFS_OPEN_UPPER;
 	open->service = service;
 	open->remote_handle = remote_handle;
@@ -935,8 +937,9 @@ static u64 remember_upper_open(u64 service, u64 remote_handle)
 	return id;
 }
 
-static u64 remember_lower_open(u64 service, u64 remote_handle, u64 type,
-			       u64 size, const char *relative, u64 task)
+static u64 remember_lower_open(u64 owner, u64 service, u64 remote_handle,
+			       u64 type, u64 size, const char *relative,
+			       u64 task)
 {
 	struct unionfs_open *open;
 	u64 id;
@@ -953,6 +956,7 @@ static u64 remember_lower_open(u64 service, u64 remote_handle, u64 type,
 		id = next_open_id++;
 	}
 	open->id = id;
+	open->owner = owner;
 	open->kind = UNIONFS_OPEN_LOWER;
 	open->service = service;
 	open->remote_handle = remote_handle;
@@ -977,8 +981,8 @@ static u64 remember_lower_open(u64 service, u64 remote_handle, u64 type,
 	return id;
 }
 
-static u64 remember_dir_open(const char *relative, u64 upper_handle,
-			     u64 lower_handle)
+static u64 remember_dir_open(u64 owner, const char *relative,
+			     u64 upper_handle, u64 lower_handle)
 {
 	struct unionfs_open *open;
 	u64 id;
@@ -995,6 +999,7 @@ static u64 remember_dir_open(const char *relative, u64 upper_handle,
 		id = next_open_id++;
 	}
 	open->id = id;
+	open->owner = owner;
 	open->kind = UNIONFS_OPEN_DIR;
 	open->service = upper_service;
 	open->remote_handle = upper_handle;
@@ -1164,6 +1169,20 @@ static struct unionfs_open *open_from_handle(u64 handle)
 	return (struct unionfs_open *)bunix_u64_tree_get(&open_files, handle);
 }
 
+static struct unionfs_open *open_from_message(const struct bunix_msg *message)
+{
+	struct unionfs_open *open;
+
+	if (message == 0) {
+		return 0;
+	}
+	open = open_from_handle(message->words[0]);
+	if (open == 0 || open->owner != message->sender) {
+		return 0;
+	}
+	return open;
+}
+
 static int close_remote_handle(u64 service, u64 handle)
 {
 	struct bunix_msg close = {
@@ -1304,7 +1323,8 @@ retry:
 			goto retry;
 		}
 		if (lower_type == BUNIX_VFS_TYPE_DIRECTORY) {
-			handle = remember_dir_open(relative, 0, lower_handle);
+			handle = remember_dir_open(message->sender, relative, 0,
+						   lower_handle);
 			if (handle == 0) {
 				bunix_console_log("unionfs: open dir handle\n",
 						  sizeof("unionfs: open dir handle\n") - 1);
@@ -1319,7 +1339,8 @@ retry:
 			reply->words[3] = BUNIX_VFS_TYPE_DIRECTORY;
 			return;
 		}
-		handle = remember_lower_open(lower_layer_service, lower_handle,
+		handle = remember_lower_open(message->sender,
+					     lower_layer_service, lower_handle,
 					     lower_type, lower_size, relative,
 					     message->words[3]);
 		if (handle == 0) {
@@ -1366,7 +1387,7 @@ retry:
 		    layer_reply.words[0] == 0) {
 			lower_handle = layer_reply.words[1];
 		}
-		handle = remember_dir_open(relative,
+		handle = remember_dir_open(message->sender, relative,
 					   upper_type == BUNIX_VFS_TYPE_DIRECTORY ?
 					   upper_handle : 0,
 					   lower_handle);
@@ -1383,7 +1404,8 @@ retry:
 		return;
 	}
 
-	handle = remember_upper_open(upper_service, upper_handle);
+	handle = remember_upper_open(message->sender, upper_service,
+				     upper_handle);
 	if (handle == 0) {
 		(void)close_remote_handle(upper_service, upper_handle);
 		reply->words[0] = (u64)-1;
@@ -1756,7 +1778,7 @@ static void readdir_merged(struct unionfs_open *open, struct bunix_msg *message,
 static void forward_open_handle(struct bunix_msg *message,
 				struct bunix_msg *reply)
 {
-	struct unionfs_open *open = open_from_handle(message->words[0]);
+	struct unionfs_open *open = open_from_message(message);
 
 	if (open == 0) {
 		reply->words[0] = (u64)-1;

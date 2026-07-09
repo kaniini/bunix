@@ -100,6 +100,7 @@ struct squashfs_node {
 struct squashfs_open {
 	struct bunix_u64_tree_node node;
 	u64 id;
+	u64 owner;
 	u64 kind;
 	struct squashfs_node *fs_node;
 };
@@ -1168,7 +1169,7 @@ static int read_resolved_path(const struct bunix_msg *message, char *path)
 	return set_mount_relative_path(path, full_path);
 }
 
-static u64 remember_open(struct squashfs_node *node)
+static u64 remember_open(struct squashfs_node *node, u64 owner)
 {
 	struct squashfs_open *open;
 	u64 id;
@@ -1182,6 +1183,7 @@ static u64 remember_open(struct squashfs_node *node)
 		id = next_open_id++;
 	}
 	open->id = id;
+	open->owner = owner;
 	open->kind = SQUASHFS_OPEN_NODE;
 	open->fs_node = node;
 	if (bunix_u64_tree_insert_node(&open_files, &open->node, id,
@@ -1195,6 +1197,20 @@ static u64 remember_open(struct squashfs_node *node)
 static struct squashfs_open *open_from_handle(u64 handle)
 {
 	return (struct squashfs_open *)bunix_u64_tree_get(&open_files, handle);
+}
+
+static struct squashfs_open *open_from_message(const struct bunix_msg *message)
+{
+	struct squashfs_open *open;
+
+	if (message == 0) {
+		return 0;
+	}
+	open = open_from_handle(message->words[0]);
+	if (open == 0 || open->owner != message->sender) {
+		return 0;
+	}
+	return open;
 }
 
 static void forget_open(struct squashfs_open *open)
@@ -1221,7 +1237,7 @@ static void reply_open(struct bunix_msg *message, struct bunix_msg *reply,
 		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
 		return;
 	}
-	handle = remember_open(node);
+	handle = remember_open(node, message->sender);
 	if (handle == 0) {
 		reply->words[0] = (u64)-1;
 		return;
@@ -1541,7 +1557,7 @@ static void reply_read_file_buffer(struct squashfs_open *open,
 static void forward_open_handle(struct bunix_msg *message,
 				struct bunix_msg *reply)
 {
-	struct squashfs_open *open = open_from_handle(message->words[0]);
+	struct squashfs_open *open = open_from_message(message);
 
 	if (open == 0) {
 		reply->words[0] = (u64)-1;

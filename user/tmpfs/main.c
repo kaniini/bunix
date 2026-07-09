@@ -38,6 +38,7 @@ struct tmpfs_file {
 struct tmpfs_open {
 	struct bunix_u64_tree_node node;
 	u64 id;
+	u64 owner;
 	u64 kind;
 	struct tmpfs_file *file;
 	char path[TMPFS_MAX_PATH];
@@ -718,7 +719,7 @@ static int mkdir_p_path(const char *path, u64 mode, u64 task)
 	return file != 0 || status == BUNIX_VFS_ERR_EXIST ? 0 : -1;
 }
 
-static u64 open_dir(const char *path)
+static u64 open_dir(const char *path, u64 owner)
 {
 	struct tmpfs_open *open;
 	const u64 start = next_open_id;
@@ -728,6 +729,7 @@ static u64 open_dir(const char *path)
 		return 0;
 	}
 	open->kind = TMPFS_OPEN_DIR;
+	open->owner = owner;
 	for (u64 i = 0; i <= str_len(path); i++) {
 		open->path[i] = path[i];
 	}
@@ -758,7 +760,7 @@ static u64 open_dir(const char *path)
 	return 0;
 }
 
-static u64 open_file(struct tmpfs_file *file)
+static u64 open_file(struct tmpfs_file *file, u64 owner)
 {
 	struct tmpfs_open *open;
 	const u64 start = next_open_id;
@@ -771,6 +773,7 @@ static u64 open_file(struct tmpfs_file *file)
 		return 0;
 	}
 	open->kind = TMPFS_OPEN_FILE;
+	open->owner = owner;
 	open->file = file;
 	file->refs++;
 	for (;;) {
@@ -806,11 +809,22 @@ static struct tmpfs_open *open_from_handle(u64 handle)
 	return (struct tmpfs_open *)bunix_u64_tree_get(&open_files, handle);
 }
 
-static void close_handle(u64 handle)
+static struct tmpfs_open *open_from_message(u64 handle,
+					    const struct bunix_msg *message)
 {
 	struct tmpfs_open *open = open_from_handle(handle);
 
-	if (open != 0) {
+	if (open == 0 || message == 0 || open->owner != message->sender) {
+		return 0;
+	}
+	return open;
+}
+
+static void close_handle(u64 handle, u64 owner)
+{
+	struct tmpfs_open *open = open_from_handle(handle);
+
+	if (open != 0 && open->owner == owner) {
 		if (open->kind == TMPFS_OPEN_FILE) {
 			file_release(open->file);
 		}
@@ -1261,7 +1275,7 @@ int main(void)
 				break;
 			}
 			if (path_is_root(path)) {
-				reply.words[1] = open_dir(path);
+				reply.words[1] = open_dir(path, message.sender);
 				reply.words[2] = 0;
 				reply.words[3] = BUNIX_VFS_TYPE_DIRECTORY;
 				reply.words[0] = reply.words[1] == 0 ?
@@ -1273,8 +1287,10 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
-			reply.words[1] = file->inode->type == BUNIX_VFS_TYPE_DIRECTORY ?
-					 open_dir(path) : open_file(file);
+			reply.words[1] =
+				file->inode->type == BUNIX_VFS_TYPE_DIRECTORY ?
+				open_dir(path, message.sender) :
+				open_file(file, message.sender);
 			reply.words[2] = file->inode->size;
 			reply.words[3] = file->inode->type;
 			reply.words[0] = reply.words[1] == 0 ? (u64)-1 : 0;
@@ -1422,7 +1438,7 @@ int main(void)
 			}
 			break;
 		case BUNIX_VFS_STAT_META:
-			open = open_from_handle(message.words[0]);
+			open = open_from_message(message.words[0], &message);
 			if (open == 0) {
 				reply.words[0] = (u64)-1;
 			} else if (open->kind == TMPFS_OPEN_DIR) {
@@ -1432,7 +1448,7 @@ int main(void)
 			}
 			break;
 		case BUNIX_VFS_READ_FILE_BUFFER:
-			open = open_from_handle(message.words[0]);
+			open = open_from_message(message.words[0], &message);
 			if (open == 0 || open->kind != TMPFS_OPEN_FILE ||
 			    message.cap == 0 ||
 			    (message.cap_rights & BUNIX_RIGHT_SEND) == 0) {
@@ -1458,7 +1474,7 @@ int main(void)
 			}
 			break;
 		case BUNIX_VFS_WRITE_FILE_BUFFER:
-			open = open_from_handle(message.words[0]);
+			open = open_from_message(message.words[0], &message);
 			if (open == 0 || open->kind != TMPFS_OPEN_FILE ||
 			    !task_can_access(message.words[3], open->file, 02) ||
 			    message.cap == 0 ||
@@ -1496,7 +1512,7 @@ int main(void)
 				}
 				break;
 			}
-			open = open_from_handle(message.words[0]);
+			open = open_from_message(message.words[0], &message);
 			if (open == 0 || open->kind != TMPFS_OPEN_FILE) {
 				reply.words[0] = (u64)-1;
 			} else if (!task_can_access(message.words[3],
@@ -1524,7 +1540,7 @@ int main(void)
 			reply.words[0] = 0;
 			break;
 		case BUNIX_VFS_CHMOD:
-			open = open_from_handle(message.words[0]);
+			open = open_from_message(message.words[0], &message);
 			if (open == 0 ||
 			    (open->kind != TMPFS_OPEN_FILE &&
 			     open->kind != TMPFS_OPEN_DIR)) {
@@ -1565,7 +1581,7 @@ int main(void)
 			reply.words[0] = 0;
 			break;
 		case BUNIX_VFS_CHOWN:
-			open = open_from_handle(message.words[0]);
+			open = open_from_message(message.words[0], &message);
 			if (open == 0 ||
 			    (open->kind != TMPFS_OPEN_FILE &&
 			     open->kind != TMPFS_OPEN_DIR)) {
@@ -1735,7 +1751,7 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_READDIR_BUFFER:
-			open = open_from_handle(message.words[0]);
+			open = open_from_message(message.words[0], &message);
 			if (open == 0 || open->kind != TMPFS_OPEN_DIR) {
 				reply.words[0] = BUNIX_VFS_ERR_NOTDIR;
 				break;
@@ -1783,10 +1799,10 @@ int main(void)
 			}
 			break;
 		case BUNIX_VFS_CLOSE:
-			if (open_from_handle(message.words[0]) == 0) {
+			if (open_from_message(message.words[0], &message) == 0) {
 				reply.words[0] = (u64)-1;
 			} else {
-				close_handle(message.words[0]);
+				close_handle(message.words[0], message.sender);
 				reply.words[0] = 0;
 			}
 			break;

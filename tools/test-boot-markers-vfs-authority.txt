@@ -1,0 +1,4 @@
+vfs-auth-test: own handle ok
+vfs-auth-test: read denied
+vfs-auth-test: close denied
+vfs-auth-test: ok

@@ -1,3 +1,4 @@
+#include <bunix/alloc.h>
 #include <bunix/libbunix.h>
 #include <bunix/id_table.h>
 #include <bunix/tree.h>
@@ -58,6 +59,11 @@ struct procfs_mount {
 	struct bunix_tree_node node;
 	char *path;
 	u64 fstype;
+};
+
+struct procfs_open {
+	u64 owner;
+	u64 file;
 };
 
 struct proc_info {
@@ -2065,19 +2071,45 @@ static u64 build_file_text(u64 file)
 	return text_failed ? 0 : len;
 }
 
-static u64 open_file(u64 file)
+static u64 open_file(u64 owner, u64 file)
 {
-	return bunix_id_alloc(&open_files, file);
+	struct procfs_open *open;
+	u64 handle;
+
+	open = (struct procfs_open *)bunix_calloc(1, sizeof(*open));
+	if (open == 0) {
+		return 0;
+	}
+	open->owner = owner;
+	open->file = file;
+	handle = bunix_id_alloc(&open_files, (u64)open);
+	if (handle == 0) {
+		bunix_free(open);
+	}
+	return handle;
 }
 
-static u64 file_from_handle(u64 handle)
+static u64 file_from_message(u64 handle, const struct bunix_msg *message)
 {
-	return bunix_id_get(&open_files, handle);
+	struct procfs_open *open =
+		(struct procfs_open *)bunix_id_get(&open_files, handle);
+
+	if (open == 0 || message == 0 || open->owner != message->sender) {
+		return 0;
+	}
+	return open->file;
 }
 
-static void close_file(u64 handle)
+static void close_file(u64 handle, u64 owner)
 {
+	struct procfs_open *open =
+		(struct procfs_open *)bunix_id_get(&open_files, handle);
+
+	if (open == 0 || open->owner != owner) {
+		return;
+	}
 	(void)bunix_id_remove(&open_files, handle);
+	bunix_free(open);
 }
 
 static int file_is_dir(u64 file)
@@ -2316,7 +2348,7 @@ int main(void)
 			if (message.type == BUNIX_VFS_STAT_PATH_META_BUFFER) {
 				stat_reply(&message, &reply, file);
 			} else {
-				const u64 handle = open_file(file);
+				const u64 handle = open_file(message.sender, file);
 
 				if (handle == 0) {
 					reply.words[0] = (u64)-1;
@@ -2349,7 +2381,8 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_STAT_META: {
-			const u64 file = file_from_handle(message.words[0]);
+			const u64 file =
+				file_from_message(message.words[0], &message);
 
 			if (file == 0) {
 				reply.words[0] = (u64)-1;
@@ -2359,7 +2392,8 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_READ_FILE_BUFFER: {
-			const u64 file = file_from_handle(message.words[0]);
+			const u64 file =
+				file_from_message(message.words[0], &message);
 			const u64 offset = message.words[1];
 			u64 len = message.words[2];
 			u64 size;
@@ -2388,7 +2422,8 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_READDIR_BUFFER: {
-			const u64 file = file_from_handle(message.words[0]);
+			const u64 file =
+				file_from_message(message.words[0], &message);
 			const char *name = 0;
 			u64 type = BUNIX_VFS_TYPE_REGULAR;
 			u64 name_len;
@@ -2435,10 +2470,10 @@ int main(void)
 			break;
 		}
 		case BUNIX_VFS_CLOSE:
-			if (file_from_handle(message.words[0]) == 0) {
+			if (file_from_message(message.words[0], &message) == 0) {
 				reply.words[0] = (u64)-1;
 			} else {
-				close_file(message.words[0]);
+				close_file(message.words[0], message.sender);
 				reply.words[0] = 0;
 			}
 			break;
