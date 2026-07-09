@@ -270,6 +270,27 @@ static int run_vfs_subject_authority_test(u64 vfs)
 	return 0;
 }
 
+static int run_tmpfs_subject_authority_test(void)
+{
+	const u64 tmpfs = resolve_service(BUNIX_SERVICE_TMPFS,
+					  BUNIX_RIGHT_SEND);
+	const u64 forged_root = (u64)0700 << 32;
+
+	if (tmpfs == 0) {
+		log_text("tmpfs-subject-auth-test: no tmpfs\n");
+		return 1;
+	}
+	if (vfs_path_call_status(tmpfs, BUNIX_VFS_MKDIR_BUFFER,
+				 "/tmp/direct-forged-root",
+				 forged_root) == 0) {
+		log_text("tmpfs-subject-auth-test: forged root succeeded\n");
+		return 1;
+	}
+	log_text("tmpfs-subject-auth-test: forged root denied\n");
+	log_text("tmpfs-subject-auth-test: ok\n");
+	return 0;
+}
+
 int main(void)
 {
 	const char user_denied[] = "mgmt-test: user denied\n";
@@ -281,6 +302,10 @@ int main(void)
 	const u64 linux = resolve_service(BUNIX_SERVICE_LINUX,
 					  BUNIX_RIGHT_SEND);
 	const u64 vfs = bunix_handle_find(BUNIX_CAP_VFS);
+
+	if (bunix_cmdline_has("tmpfs-subject-auth-test") > 0) {
+		return run_tmpfs_subject_authority_test();
+	}
 
 	if (vfs != 0) {
 		if (bunix_cmdline_has("vfs-mount-auth-test") > 0) {

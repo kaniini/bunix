@@ -1,0 +1,2 @@
+tmpfs-subject-auth-test: forged root denied
+tmpfs-subject-auth-test: ok

@@ -44,13 +44,20 @@ struct tmpfs_open {
 	char path[TMPFS_MAX_PATH];
 };
 
+struct tmpfs_vfs_caller {
+	struct bunix_u64_tree_node node;
+	u64 task;
+};
+
 static struct bunix_tree roots;
 static struct bunix_tree files;
 static struct bunix_u64_tree open_files;
+static struct bunix_u64_tree vfs_callers;
 static u64 next_open_id = 1;
 static u64 next_inode_id = 2;
 static u64 user_service;
 static u64 vfs_service;
+static u64 vfs_caller_grantor;
 
 static u64 str_len(const char *text)
 {
@@ -1153,6 +1160,42 @@ static long register_service(u64 service, u64 handle)
 					  handle);
 }
 
+static int sender_is_vfs_caller(u64 sender)
+{
+	return sender != 0 && bunix_u64_tree_get(&vfs_callers, sender) != 0;
+}
+
+static u64 grant_vfs_caller_task(u64 sender, u64 task)
+{
+	struct tmpfs_vfs_caller *caller;
+
+	if (sender == 0) {
+		return BUNIX_VFS_ERR_ACCESS;
+	}
+	if (vfs_caller_grantor == 0) {
+		vfs_caller_grantor = sender;
+	} else if (sender != vfs_caller_grantor) {
+		return BUNIX_VFS_ERR_ACCESS;
+	}
+	if (task == 0) {
+		task = sender;
+	}
+	if (bunix_u64_tree_get(&vfs_callers, task) != 0) {
+		return 0;
+	}
+	caller = (struct tmpfs_vfs_caller *)bunix_calloc(1, sizeof(*caller));
+	if (caller == 0) {
+		return (u64)-1;
+	}
+	caller->task = task;
+	if (bunix_u64_tree_insert_node(&vfs_callers, &caller->node, task,
+				       (u64)caller) != 0) {
+		bunix_free(caller);
+		return (u64)-1;
+	}
+	return 0;
+}
+
 static long mount_path(u64 vfs, const char *path)
 {
 	struct bunix_msg reply;
@@ -1202,6 +1245,7 @@ int main(void)
 	bunix_tree_init(&roots);
 	bunix_tree_init(&files);
 	bunix_u64_tree_init(&open_files);
+	bunix_u64_tree_init(&vfs_callers);
 	next_open_id = 1;
 	vfs_service = resolve_service(BUNIX_SERVICE_VFS, BUNIX_RIGHT_SEND);
 	if (vfs_service == 0 ||
@@ -1268,6 +1312,28 @@ int main(void)
 		}
 		reply.protocol = BUNIX_PROTO_VFS;
 		reply.type = message.type;
+		if (message.type == BUNIX_VFS_GRANT_SUBJECT_TASK) {
+			reply.words[0] =
+				grant_vfs_caller_task(message.sender,
+						      message.words[0]);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			if (message.reply != 0) {
+				bunix_ipc_send(message.reply, &reply);
+			}
+			continue;
+		}
+		if (!sender_is_vfs_caller(message.sender)) {
+			reply.words[0] = BUNIX_VFS_ERR_ACCESS;
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			if (message.reply != 0) {
+				bunix_ipc_send(message.reply, &reply);
+			}
+			continue;
+		}
 		switch (message.type) {
 		case BUNIX_VFS_OPEN_BUFFER:
 			if (read_resolved_path(&message, path) != 0) {

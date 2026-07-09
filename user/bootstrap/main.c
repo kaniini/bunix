@@ -3459,11 +3459,12 @@ int main(void)
 		{ user_mgmt, BUNIX_RIGHT_RECV, BUNIX_CAP_USRM },
 	};
 
-	launch_claimed_module("user", BUNIX_NAMES_ROOT, BUNIX_SERVICE_USER,
-			      user_caps,
-			      sizeof(user_caps) / sizeof(user_caps[0]));
+	const long user_task = launch_claimed_module_task_id(
+		"user", BUNIX_NAMES_ROOT, BUNIX_SERVICE_USER,
+		user_caps, sizeof(user_caps) / sizeof(user_caps[0]));
 	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_USER,
-				      BUNIX_RIGHT_SEND) == 0) {
+				      BUNIX_RIGHT_SEND) == 0 ||
+	    user_task <= 0) {
 		return 1;
 	}
 
@@ -3478,12 +3479,12 @@ int main(void)
 		{ linux_mgmt, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 		  BUNIX_CAP_LNXM },
 	};
-	launch_claimed_module("proc", BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROC,
-			      proc_caps,
-			      sizeof(proc_caps) / sizeof(proc_caps[0]));
+	const long proc_task = launch_claimed_module_task_id(
+		"proc", BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROC,
+		proc_caps, sizeof(proc_caps) / sizeof(proc_caps[0]));
 	proc = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROC,
 					 BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
-	if (proc == 0) {
+	if (proc_task <= 0 || proc == 0) {
 		return 1;
 	}
 
@@ -3608,13 +3609,17 @@ int main(void)
 					      sizeof(fs_caps) /
 						      sizeof(fs_caps[0]));
 	}
-	launch_claimed_module("vfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS,
-			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+	const long vfs_task = launch_claimed_module_task_id(
+		"vfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS,
+		fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	vfs = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS,
 					BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
-	if (vfs == 0 ||
+	if (vfs_task <= 0 ||
+	    vfs == 0 ||
 	    vfs_grant_admin_task(vfs, 0) != 0 ||
-	    vfs_grant_subject_task(vfs, 0) != 0) {
+	    vfs_grant_subject_task(vfs, 0) != 0 ||
+	    vfs_grant_subject_task(vfs, (u64)user_task) != 0 ||
+	    vfs_grant_subject_task(vfs, (u64)proc_task) != 0) {
 		return 1;
 	}
 	vfs_launch = vfs;
@@ -3641,12 +3646,15 @@ int main(void)
 	if (tmpfs_task <= 0 || vfs_grant_admin_task(vfs, tmpfs_task) != 0) {
 		return 1;
 	}
+	u64 tmpfs = 0;
 	{
-		u64 tmpfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
-						      BUNIX_SERVICE_TMPFS,
-						      BUNIX_RIGHT_SEND);
+		tmpfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						  BUNIX_SERVICE_TMPFS,
+						  BUNIX_RIGHT_SEND);
 
-		if (tmpfs == 0 || mount_tmpfs_roots(tmpfs) != 0) {
+		if (tmpfs == 0 ||
+		    vfs_grant_subject_task(tmpfs, vfs_task) != 0 ||
+		    mount_tmpfs_roots(tmpfs) != 0) {
 			return 1;
 		}
 	}
@@ -3792,6 +3800,9 @@ int main(void)
 	if (unionfs_task <= 0 || vfs_grant_admin_task(vfs, unionfs_task) != 0) {
 		return 1;
 	}
+	if (tmpfs == 0 || vfs_grant_subject_task(tmpfs, unionfs_task) != 0) {
+		return 1;
+	}
 	{
 		u64 unionfs = wait_service_in_namespace(BUNIX_NAMES_ROOT,
 							BUNIX_SERVICE_UNIONFS,
@@ -3923,6 +3934,9 @@ int main(void)
 	    vfs_grant_subject_task(vfs_launch, linux_task) != 0) {
 		return 1;
 	}
+	if (tmpfs != 0 && vfs_grant_subject_task(tmpfs, linux_task) != 0) {
+		return 1;
+	}
 	linux = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_LINUX,
 					  BUNIX_RIGHT_SEND);
 	if (linux == 0) {
@@ -4015,11 +4029,31 @@ int main(void)
 		}
 	}
 
+	if (bunix_cmdline_has("tmpfs-subject-auth-test") > 0) {
+		const struct bunix_launch_cap tmpfs_subject_auth_test_caps[] = {
+			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND,
+			  BUNIX_CAP_NAME },
+			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		};
+
+		if (bunix_launch_module_with_caps(
+			    "mgmt-test", tmpfs_subject_auth_test_caps,
+			    sizeof(tmpfs_subject_auth_test_caps) /
+				    sizeof(tmpfs_subject_auth_test_caps[0])) < 0) {
+			return 1;
+		}
+		bunix_sleep_ns(1000000000ull);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
+		for (;;) {
+		}
+	}
+
 	if (spawn_linux_init(linux_mgmt, "/sbin/init") != 0) {
 		return 1;
 	}
 	bunix_console_log(linux_init_exec, sizeof(linux_init_exec) - 1);
-	if (bunix_cmdline_has("shell-test") > 0) {
+	if (bunix_cmdline_has("shell-test") > 0 &&
+	    bunix_cmdline_has("debug-serial-shell") <= 0) {
 		bunix_console_logs_to_ring();
 	}
 
