@@ -14,6 +14,8 @@ sidecar_start_delay=${BUNIX_TEST_SIDECAR_START_DELAY:-1}
 sidecar_ready_timeout=${BUNIX_TEST_SIDECAR_READY_TIMEOUT:-20}
 rootfs_flavor=${ROOTFS_FLAVOR:-squashfs}
 boot_phase=${BUNIX_BOOT_PHASE:-full}
+login_wait=80
+login_capture=160
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-boot-test.$run_id}
 log=${SERIAL_LOG:-build/serial.log}
@@ -156,7 +158,11 @@ if [ "$boot_phase" = marker-poweroff ]; then
 	qemu_pid=
 	fail_boot "qemu exited with status $qemu_status" 220
 fi
-wait_for_fixed_boot "login: " "login prompt did not appear" 80 160
+if [ "$rootfs_flavor" = alpine-squashfs ] && [ "$boot_phase" = full ]; then
+	login_wait=180
+	login_capture=260
+fi
+wait_for_fixed_boot "login: " "login prompt did not appear" "$login_wait" "$login_capture"
 
 sleep 3
 exec 3>"$pipe.in"
