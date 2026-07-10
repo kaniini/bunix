@@ -1,12 +1,24 @@
 Fix IP stack correctness and end-to-end userspace networking.
 
+Follow-up:
+
+- This exploration runs immediately after
+  `054-stock-alpine-networking-service.txt`.
+- Exploration 054 is about getting Alpine networking initialized by the
+  normal OpenRC/ifupdown-ng service path.  This exploration is the next slice
+  for proving that the IP stack itself is correct once the interface is up.
+
 Problem:
 
 - The stock Alpine networking work can bring up interface configuration, but
   the IP stack still has serious correctness gaps after DHCP succeeds.
+- The IP stack appears substantially broken after link and DHCP success:
+  ping TTLs are inconsistent, ping replies can be attributed to the wrong
+  source address, DNS does not work, and `wget http://example.com` does not
+  work.
 - ICMP replies have incorrect or unstable TTL/source metadata, which means
-  receive-side packet attribution, route lookup, or packet header handling is
-  not trustworthy enough yet.
+  receive-side packet attribution, route lookup, packet header handling, or
+  ICMP socket delivery is not trustworthy enough yet.
 - DNS resolution does not work from Alpine userspace.
 - `wget http://example.com` does not work, so TCP, DNS, socket, routing, and
   Linux syscall compatibility are not proven end to end.
@@ -61,6 +73,11 @@ Tasks:
 - [ ] Add a deterministic HTTP guest test using BusyBox `wget
       http://example.com`.
 - [ ] Make `wget http://example.com` complete successfully over TCP.
+- [ ] Validate DNS end to end from the guest by resolving a public hostname
+      through Alpine's normal resolver configuration.
+- [ ] Validate HTTP end to end from the guest by fetching
+      `http://example.com` with BusyBox `wget` and checking that content was
+      retrieved.
 - [ ] Validate that the fixes work after a fresh `make run` boot, not only in
       a handcrafted debug image.
 - [ ] Update networking documentation or exploration notes with the remaining
@@ -73,4 +90,3 @@ Completion criteria:
 - DNS resolution works from the guest using normal resolver configuration.
 - `wget http://example.com` succeeds from the guest.
 - Automated tests cover ping correctness, DNS, and HTTP fetch behavior.
-
