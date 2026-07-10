@@ -92,6 +92,12 @@ Notes:
   TTY session and the requested process group to exist in the same Linux
   session; bogus or cross-session pgids are rejected instead of overwriting
   foreground state.
+- The console TTY controlling-session key is the Linux session ID (`sid`), not
+  the Bunix user-server login session ID.  A failed attempt to test
+  `setsid sleep` surviving foreground Ctrl-C exposed that using the login
+  session ID let `setsid` children still look like controlling-TTY members.
+  That was corrected, but a stable cross-session generated-SIGINT regression
+  still needs to be designed before the regression-test task is complete.
 - Added `/bin/ttytest` and a `tty-foreground` shell shard.  The test exercises
   real musl `ioctl(1, TIOCGPGRP/TIOCSPGRP, ...)` calls, verifies a bogus
   foreground pgid is denied, and verifies setting/restoring the caller's own
@@ -101,3 +107,6 @@ Notes:
   `BUNIX_TEST_SET=interactive-tty,login-smoke,relogin-session make
   test-shell-parallel`, and `BUNIX_TEST_SET=tty-foreground make
   test-shell-parallel`.
+- After correcting the TTY session key, focused verification passed again with
+  `BUNIX_TEST_SET=interactive-tty make test-shell-parallel` and
+  `BUNIX_TEST_SET=tty-foreground make test-shell-parallel`.

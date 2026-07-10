@@ -17,12 +17,13 @@ EOF_SECRET_DENIED
 cat
 EOF_CAT_INTERRUPT
 	sleep 1
-	send_bytes '\003\n'
-	sleep 1
+	prompts_before_cat_interrupt=$(current_prompt_count "~ $ ")
+	send_bytes '\003'
+	wait_for_prompt_count_gt "~ $ " "$prompts_before_cat_interrupt" "foreground Ctrl-C did not return to shell" 45 180
 	send_script <<'EOF_CAT_INTERRUPT_DONE'
 echo CTRL_C_OK
 EOF_CAT_INTERRUPT_DONE
-	wait_for_fixed "$log" "CTRL_C_OK" "foreground Ctrl-C did not return to shell" 45 180
+	wait_for_fixed "$log" "CTRL_C_OK" "foreground Ctrl-C marker missing" 45 180
 
 	send_script <<'EOF_WATCH'
 busybox watch -n 1 busybox echo WATCH_OK & watch_pid=$!

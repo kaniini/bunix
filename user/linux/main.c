@@ -2178,7 +2178,7 @@ static u64 linux_process_tty_session(const struct linux_process *process)
 	if (process == 0) {
 		return 0;
 	}
-	return process->session_id != 0 ? process->session_id : process->sid;
+	return process->sid;
 }
 
 static int linux_tty_session_matches(const struct linux_tty *tty,
@@ -3372,6 +3372,10 @@ static long linux_tty_read(struct linux_tty *tty, struct linux_process *process,
 	}
 	if (len == 0) {
 		return 0;
+	}
+	if (linux_tty_session_matches(tty, process)) {
+		linux_tty_bind_session(tty, process);
+		tty->foreground_pgid = process->pgid;
 	}
 	nread = linux_tty_read_available(tty, len, buffer);
 	if (nread != -(long)LINUX_EAGAIN) {
