@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 048-vfs-caller-supplied-task-identity.txt
+The current exploration is: 049-console-tty-input-authority.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.

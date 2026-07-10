@@ -58,11 +58,11 @@ Tasks:
       caller and proves whether it can bypass file permissions.
 - [x] Define the VFS credential/subject model for Linux processes, native
       Bunix tasks, and privileged servers.
-- [ ] Update VFS and translators to derive/check authenticated subjects.
-- [ ] Remove or strictly gate privileged `task == 0` behavior.
-- [ ] Add regression tests for forged task IDs across rootfs, tmpfs, procfs,
+- [x] Update VFS and translators to derive/check authenticated subjects.
+- [x] Remove or strictly gate privileged `task == 0` behavior.
+- [x] Add regression tests for forged task IDs across rootfs, tmpfs, procfs,
       unionfs, and ext2 paths.
-- [ ] Run focused permission tests, shell tests, and full tests before
+- [x] Run focused permission tests, shell tests, and full tests before
       completion.
 
 Notes:
@@ -159,3 +159,5 @@ Notes:
 - Focused verification for the ext2 slice passed: `make
   test-ext2-subject-authority`, `make test-boot-ext2`, and `make
   test-vfs-subject-authority`.
+- Completion verification passed with `make test`
+  (`build/test-runs/20260710T002524Z-25340`): 25 shards launched, 25 passed.
