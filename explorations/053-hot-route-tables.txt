@@ -43,9 +43,9 @@ Tasks:
 - [x] Inventory current route add, route enumeration, route lookup,
       `net_addr_is_local`, packet-interface route state, and `/proc/net`
       consumers.
-- [ ] Define a route-table API for insert, delete, lookup, count, enumerate,
+- [x] Define a route-table API for insert, delete, lookup, count, enumerate,
       and snapshot/debug dumping, with separate IPv4 and IPv6 key types.
-- [ ] Define longest-prefix and tie-break policy: prefix length first, then
+- [x] Define longest-prefix and tie-break policy: prefix length first, then
       metric, then deterministic insertion or stable route id order.
 - [ ] Implement an IPv4 HOT route table with dynamic node allocation, checked
       prefix masks, default-route support, duplicate-prefix handling, and
@@ -98,3 +98,39 @@ Inventory:
 - Current route tests live in the bootstrap packet-interface self-test and
   NETCFG installs DHCP fallback IPv4 and deterministic static IPv6 routes
   through the public route RPCs.
+
+Route Table API:
+
+- Store route entries in a common `struct net_route_entry` payload containing
+  the public route fields plus a monotonic `order` used only for deterministic
+  tie-breaking and enumeration.
+- Provide separate IPv4 and IPv6 table wrappers:
+  `route_table4_insert/delete/lookup/count/at` and
+  `route_table6_insert/delete/lookup/count/at`.
+- Keep a common route collection facade for RPCs:
+  `route_collection_add/delete/count/at/lookup`.
+- `lookup(family, hi, lo)` returns the best route entry or null without
+  allocating.  It must handle IPv4 default routes, IPv6 `/0`, and IPv6 `/128`
+  host routes.
+- `at(index)` preserves deterministic RPC enumeration independent of internal
+  trie node layout by enumerating entries sorted by `order`.
+- Static loopback routes are represented as route entries in the same
+  collection with reserved low `order` values and a `static_route` flag that
+  prevents deletion.
+- Insert deduplicates exact route records to preserve current
+  `BUNIX_NET_ROUTE_ADD` behavior.  Exact duplicates are success no-ops.
+- Delete matches exact route records and refuses static entries, preserving the
+  current inability to delete built-in loopback routes.
+
+Tie-Break Policy:
+
+- Longest prefix wins.
+- For equal prefix lengths, lower metric wins.
+- For equal prefix length and metric, newer dynamic routes win over older
+  dynamic routes and over static routes.  This keeps current dynamic-route
+  behavior where head-inserted equal-prefix dynamic routes win, while making
+  the rule explicit.
+- Enumeration remains stable by route `order`: dynamic routes appear in reverse
+  insertion order followed by static routes, matching the current RPC behavior.
+  The lookup tie-break uses a separate descending dynamic order so lookup can
+  prefer newer equal-prefix routes without making trie layout observable.
