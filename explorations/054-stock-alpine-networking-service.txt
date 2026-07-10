@@ -59,11 +59,11 @@ Tasks:
 - [ ] Add a deterministic OpenRC boot test that preserves Alpine's stock
       `/etc/init.d/networking` and fails at the current blocking point with
       useful failure artifacts.
-- [ ] Add a rootfs build switch or test-only mode that disables the temporary
+- [x] Add a rootfs build switch or test-only mode that disables the temporary
       generated networking service without deleting the default working path.
 - [ ] Replace temporary generated OpenRC service hacks with general VFS,
       procfs, sysfs, mount-table, or Linux compatibility fixes.
-- [ ] Verify the packaged `openrc-run` service body is the one being executed,
+- [x] Verify the packaged `openrc-run` service body is the one being executed,
       rather than a Bunix-generated script with the same path.
 - [ ] Make stock `localmount` complete successfully on the Bunix Alpine image.
 - [ ] Make stock Alpine `/etc/init.d/networking start` and boot runlevel
@@ -83,3 +83,32 @@ Completion criteria:
 - Networking is up after login without manual intervention.
 - BusyBox init owns login respawn after OpenRC returns.
 - The temporary Bunix networking-service replacement is gone.
+
+Implementation Notes:
+
+- Added `ALPINE_NETWORKING_SERVICE=generated|stock` to
+  `tools/build-alpine-rootfs.sh`.  The default remains `generated`, preserving
+  the current working `make run` Alpine path while the stock service path is
+  investigated.
+- In `stock` mode, the rootfs builder leaves the packaged Alpine
+  `/etc/init.d/networking` untouched and records
+  `alpine_networking_service=stock` in the rootfs manifest.
+- `tools/test-alpine-rootfs.sh` now checks the selected service mode.  In
+  generated mode it requires the temporary `/bin/sh` helper body.  In stock
+  mode it requires the packaged `#!/sbin/openrc-run` service and rejects the
+  generated helper body.
+- Added `make test-alpine-rootfs-stock-networking` as the deterministic
+  packaging test for the stock service body.
+
+Validation:
+
+- `make test-alpine-rootfs-stock-networking`
+- `make test-alpine-rootfs`
+
+Notes:
+
+- Running the generated and stock rootfs packaging tests concurrently with the
+  default artifact directory is unsafe today because both use
+  `build/alpine-rootfs-test` and its apk cache.  Run them serially or give one
+  test a distinct `ALPINE_ROOTFS_ARTIFACT_DIR` until the packaging tests get
+  per-mode artifact isolation.

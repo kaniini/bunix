@@ -9,6 +9,7 @@ stage=${ALPINE_ROOTFS_TEST_STAGE:-${TMPDIR:-/tmp}/bunix-alpine-rootfs-test.$run_
 out=${ALPINE_ROOTFS_TEST_IMAGE:-$stage/rootfs.sqfs}
 artifact_dir=${ALPINE_ROOTFS_ARTIFACT_DIR:-build/alpine-rootfs-test}
 root=$stage/root
+networking_service=${ALPINE_NETWORKING_SERVICE:-generated}
 
 fail() {
 	echo "test-alpine-rootfs: $*" >&2
@@ -48,6 +49,7 @@ ROOTFS_IMAGE_FORMAT=squashfs \
 LOGIN_MODULE=${LOGIN_MODULE:-build/modules/login.user} \
 STATIDTEST_MODULE=${STATIDTEST_MODULE:-build/modules/statidtest.user} \
 NETDHCP_MODULE=${NETDHCP_MODULE:-build/modules/bunix-udhcpc-script.user} \
+ALPINE_NETWORKING_SERVICE="$networking_service" \
 	sh tools/build-alpine-rootfs.sh "$out" >/dev/null
 
 require_file "$out"
@@ -73,8 +75,25 @@ require_grep "defer	sysinit	devfs	/etc/init.d/devfs" \
 
 require_grep "networking" "$artifact_dir/openrc-initd.tsv"
 require_grep "ifupdown-ng" "$artifact_dir/manifest.txt"
+require_grep "alpine_networking_service=$networking_service" \
+	"$artifact_dir/manifest.txt"
 require_grep "openrc_policy=tools/alpine-openrc-runlevels.policy" \
 	"$artifact_dir/manifest.txt"
+
+case "$networking_service" in
+generated)
+	require_grep "#!/bin/sh" "$root/etc/init.d/networking"
+	require_grep "start_networking()" "$root/etc/init.d/networking"
+	require_grep 'ifup -i "$cfgfile" eth0' "$root/etc/init.d/networking"
+	;;
+stock)
+	require_grep "#!/sbin/openrc-run" "$root/etc/init.d/networking"
+	reject_grep "start_networking()" "$root/etc/init.d/networking"
+	;;
+*)
+	fail "unknown ALPINE_NETWORKING_SERVICE in test: $networking_service"
+	;;
+esac
 
 require_grep "::sysinit:/sbin/openrc sysinit" "$root/etc/inittab"
 require_grep "::sysinit:/sbin/openrc boot" "$root/etc/inittab"

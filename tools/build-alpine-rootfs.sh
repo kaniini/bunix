@@ -29,6 +29,7 @@ netdhcp=${NETDHCP_MODULE:-build/modules/bunix-udhcpc-script.user}
 bunix_overlay=${BUNIX_ALPINE_OVERLAY:-1}
 init_command=${BUNIX_ALPINE_INIT_COMMAND:-/bin/login}
 extra_dir=${BUNIX_ALPINE_EXTRA_DIR:-}
+networking_service=${ALPINE_NETWORKING_SERVICE:-generated}
 
 merge_account_file() {
 	base=$1
@@ -209,7 +210,9 @@ iface eth0 inet dhcp
 EOF_INTERFACES
 chmod 0444 "$root/etc/network/interfaces"
 
-cat > "$root/etc/init.d/networking" <<'EOF_NETWORKING'
+case "$networking_service" in
+generated)
+	cat > "$root/etc/init.d/networking" <<'EOF_NETWORKING'
 #!/bin/sh
 
 cfgfile=${cfgfile:-/etc/network/interfaces}
@@ -268,7 +271,19 @@ status)
 	;;
 esac
 EOF_NETWORKING
-chmod 0755 "$root/etc/init.d/networking"
+	chmod 0755 "$root/etc/init.d/networking"
+	;;
+stock)
+	if [ ! -f "$root/etc/init.d/networking" ]; then
+		echo "stock Alpine networking service is missing" >&2
+		exit 2
+	fi
+	;;
+*)
+	echo "unknown ALPINE_NETWORKING_SERVICE: $networking_service" >&2
+	exit 2
+	;;
+esac
 
 materialize_openrc_policy
 write_runlevel_inventory "$root" "$bunix_runlevels"
@@ -284,6 +299,7 @@ find "$root/var/cache/apk" -type f -delete 2>/dev/null || true
 	echo "bunix_overlay=$bunix_overlay"
 	echo "init_command=$init_command"
 	echo "extra_dir=$extra_dir"
+	echo "alpine_networking_service=$networking_service"
 	echo "openrc_policy=$runlevel_policy"
 	echo "openrc_reference_runlevels=$reference_runlevels"
 	echo "openrc_bunix_runlevels=$bunix_runlevels"
