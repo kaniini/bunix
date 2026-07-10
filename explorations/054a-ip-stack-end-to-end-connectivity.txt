@@ -1,0 +1,76 @@
+Fix IP stack correctness and end-to-end userspace networking.
+
+Problem:
+
+- The stock Alpine networking work can bring up interface configuration, but
+  the IP stack still has serious correctness gaps after DHCP succeeds.
+- ICMP replies have incorrect or unstable TTL/source metadata, which means
+  receive-side packet attribution, route lookup, or packet header handling is
+  not trustworthy enough yet.
+- DNS resolution does not work from Alpine userspace.
+- `wget http://example.com` does not work, so TCP, DNS, socket, routing, and
+  Linux syscall compatibility are not proven end to end.
+
+Intended outcome:
+
+- A fresh `make run` Alpine environment boots, logs in, and has usable
+  userspace networking through the normal configured interface path.
+- IPv4 ICMP replies report the real remote source address and sane TTL values.
+- DNS works through Alpine's normal resolver configuration.
+- `wget http://example.com` succeeds from the Bunix guest and retrieves HTTP
+  content over TCP.
+- The validation exercises the real userspace stack rather than a synthetic
+  kernel-only shortcut.
+
+Constraints:
+
+- Do not write a new DHCP client; use the Alpine/BusyBox userspace already in
+  the image.
+- Do not special-case `example.com`, DNS, or ICMP in the test harness.
+- Keep network policy in userspace and keep packet mechanics in the network
+  servers.
+- Preserve localhost IPv4/IPv6 behavior while fixing external networking.
+- Treat incorrect TTL/source reporting as a stack correctness bug, not a
+  display-only problem.
+
+Investigation targets:
+
+- Audit IPv4 receive dispatch from virtio-net through the network server into
+  Linux socket wakeups.
+- Verify ICMP echo reply parsing, source-address selection, TTL propagation,
+  route lookup, and socket receive metadata.
+- Verify UDP sockets used by DNS, including ephemeral port binding, reply
+  demultiplexing, timeouts, and `recvfrom()`/`poll()` semantics.
+- Verify resolver inputs: `/etc/resolv.conf`, DHCP-provided nameservers, and
+  any Bunix-generated fallback configuration.
+- Verify TCP connect/send/recv/close behavior against an external HTTP server,
+  including nonblocking/error paths used by BusyBox `wget`.
+- Check missing Linux networking APIs by running the failing BusyBox commands
+  under `log=debug` strace and accounting for every unsupported or incorrect
+  syscall result.
+
+Tasks:
+
+- [ ] Add a deterministic guest test for external IPv4 ping that verifies the
+      remote source address and sane TTL values for multiple replies.
+- [ ] Reproduce and fix the reported ping behavior where replies from
+      `4.2.2.1` are displayed as coming from `0.0.0.0` or have inconsistent
+      TTLs.
+- [ ] Add a deterministic DNS guest test using Alpine's normal resolver path.
+- [ ] Make DNS resolution work from BusyBox/Alpine userspace.
+- [ ] Add a deterministic HTTP guest test using BusyBox `wget
+      http://example.com`.
+- [ ] Make `wget http://example.com` complete successfully over TCP.
+- [ ] Validate that the fixes work after a fresh `make run` boot, not only in
+      a handcrafted debug image.
+- [ ] Update networking documentation or exploration notes with the remaining
+      known limits after DNS and HTTP work.
+
+Completion criteria:
+
+- `make run` boots to an Alpine login with networking initialized.
+- `ping -c 4 4.2.2.1` returns four replies from `4.2.2.1` with plausible TTLs.
+- DNS resolution works from the guest using normal resolver configuration.
+- `wget http://example.com` succeeds from the guest.
+- Automated tests cover ping correctness, DNS, and HTTP fetch behavior.
+
