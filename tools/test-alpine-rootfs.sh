@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+. "$script_dir/path-safety.sh"
+
 run_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
 stage=${ALPINE_ROOTFS_TEST_STAGE:-${TMPDIR:-/tmp}/bunix-alpine-rootfs-test.$run_id}
 out=${ALPINE_ROOTFS_TEST_IMAGE:-$stage/rootfs.sqfs}
@@ -35,7 +38,8 @@ reject_grep() {
 	fi
 }
 
-rm -rf "$stage" "$artifact_dir"
+safe_rm_rf "$stage" "ALPINE_ROOTFS_TEST_STAGE"
+safe_rm_rf "$artifact_dir" "ALPINE_ROOTFS_ARTIFACT_DIR"
 mkdir -p "$stage" "$artifact_dir"
 
 ALPINE_ROOTFS_STAGE="$stage" \

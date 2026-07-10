@@ -1,10 +1,13 @@
 #!/bin/sh
 set -eu
 
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+. "$script_dir/path-safety.sh"
+
 out=${1:?output image required}
 stage=${TMPDIR:-/tmp}/bunix-riscv64-rootfs.$$
 
-rm -rf "$stage"
+safe_rm_rf "$stage" "riscv64 smoke rootfs scratch directory"
 mkdir -p "$stage/bin" "$stage/etc" "$stage/lib"
 printf 'hello from riscv64 squashfs\n' > "$stage/hello.txt"
 printf 'riscv64-smoke\n' > "$stage/etc/hostname"
@@ -31,4 +34,4 @@ mkdir -p "$(dirname "$out")"
 mksquashfs "$stage" "$out" -noappend -no-compression -no-fragments \
 	-no-exports -no-xattrs -all-root -root-mode 0755 -b 128K \
 	-repro-time 0 >/dev/null
-rm -rf "$stage"
+safe_rm_rf "$stage" "riscv64 smoke rootfs scratch directory"

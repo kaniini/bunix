@@ -61,8 +61,28 @@ Tasks:
 
 - [ ] Build local reproducers for unsafe cleanup path selection and the
       `mkrootfs --tree` lstat/open race.
-- [ ] Add a shared shell path-safety helper and convert build/test scripts.
+- [x] Add a shared shell path-safety helper and convert build/test scripts.
 - [ ] Harden `mkrootfs --tree` against symlink and replacement races.
-- [ ] Add tests for refused unsafe cleanup/output paths.
+- [x] Add tests for refused unsafe cleanup/output paths.
 - [ ] Add a rootfs import race regression test.
 - [ ] Run focused tooling tests and full tests before completion.
+
+Notes:
+
+- Added `tools/path-safety.sh` as a shared POSIX shell helper for generated
+  scratch/output paths.  It rejects empty paths, `/`, `.`, the repository root,
+  the user home directory, and generated paths outside the repository `build/`
+  tree or a tmp directory.  `BUNIX_PATH_SAFETY_EXTRA_PREFIXES` is available as
+  an explicit escape hatch for controlled host tooling.
+- Converted cleanup/output deletion in the boot, command, shell, prune,
+  Alpine rootfs, RISC-V rootfs, synthetic SquashFS, ext2 image, and Linux
+  syscall audit scripts to use `safe_rm_rf` or `safe_rm_f`.
+- Added `tools/test-path-safety.sh` and `make test-path-safety` for direct
+  refusal coverage.  The test verifies safe generated paths under `/tmp` and
+  `build/`, and refusal of empty, root, current-directory, repository-root,
+  home-directory, and non-generated relative paths.
+- Unsafe cleanup reproducers now fail before deletion: `BUNIX_TEST_RUN_ROOT=/
+  sh tools/test-prune-artifacts.sh`, `SQUASHFS_ROOTFS_STAGE=/ sh
+  tools/build-synthetic-squashfs-rootfs.sh /tmp/bunix-path-safety.sqfs`, and
+  `TMPDIR=/ sh tools/build-ext2-test-image.sh /tmp/bunix-path-safety.ext2`.
+- Focused verification passed: `make test-path-safety`.

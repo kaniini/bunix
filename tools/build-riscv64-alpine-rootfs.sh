@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+. "$script_dir/path-safety.sh"
+
 out=${1:?output rootfs image required}
 artifact_dir=${RISCV64_ALPINE_ROOTFS_ARTIFACT_DIR:-build/riscv64-alpine-rootfs}
 repositories=${RISCV64_ALPINE_REPOSITORIES_FILE:-$artifact_dir/repositories}
@@ -16,7 +19,7 @@ https://dl-cdn.alpinelinux.org/alpine/edge/community
 EOF_REPOSITORIES
 fi
 
-rm -rf "$overlay_dir"
+safe_rm_rf "$overlay_dir" "riscv64 Alpine overlay directory"
 if [ -n "${RISCV64_DYN_HELLO_MODULE:-}" ] ||
    [ -n "${RISCV64_MUSL_LDSO:-}" ]; then
 	if [ ! -s "${RISCV64_DYN_HELLO_MODULE:-}" ]; then

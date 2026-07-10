@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+. "$script_dir/path-safety.sh"
+
 arch=${ARCH_USER_C:-arch/x86_64/user.c}
 server=${LINUX_SERVER_C:-user/linux/main.c}
 proto=${BUNIX_SYSCALL_H:-user/include/bunix/syscall.h}
@@ -8,7 +11,7 @@ test_paths=${LINUX_AUDIT_TEST_PATHS:-"tools user"}
 tmp=${TMPDIR:-/tmp}/bunix-linux-audit.$$
 
 cleanup() {
-	rm -rf "$tmp"
+	safe_rm_rf "$tmp" "Linux syscall audit scratch directory"
 }
 trap cleanup EXIT INT TERM
 

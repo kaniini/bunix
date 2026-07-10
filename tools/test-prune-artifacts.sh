@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+. "$script_dir/path-safety.sh"
+
 run_root=${BUNIX_TEST_RUN_ROOT:-build/test-runs}
 keep=${BUNIX_TEST_KEEP_RUNS:-10}
 dry_run=${BUNIX_TEST_PRUNE_DRY_RUN:-0}
@@ -21,12 +24,7 @@ case "$dry_run" in
 	;;
 esac
 
-case "$run_root" in
-''|/|.)
-	echo "refusing unsafe BUNIX_TEST_RUN_ROOT: $run_root" >&2
-	exit 2
-	;;
-esac
+run_root=$(path_safety_require_generated_path "$run_root" "BUNIX_TEST_RUN_ROOT")
 
 if [ ! -d "$run_root" ]; then
 	echo "test-prune-artifacts status=ok reason=no-run-root path=$run_root"
@@ -69,7 +67,7 @@ for name in $(ls -1 "$run_root" 2>/dev/null | sort -r); do
 	if [ "$dry_run" -eq 1 ]; then
 		echo "test-prune-artifacts name=$name status=would-prune artifact=$dir"
 	else
-		rm -rf "$dir"
+		safe_rm_rf "$dir" "test run artifact"
 		echo "test-prune-artifacts name=$name status=pruned artifact=$dir"
 	fi
 	pruned=$((pruned + 1))

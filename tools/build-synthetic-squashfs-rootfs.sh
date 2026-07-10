@@ -1,21 +1,13 @@
 #!/bin/sh
 set -eu
 
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+. "$script_dir/path-safety.sh"
+
 out=${1:?output SquashFS image required}
 run_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
 stage=${SQUASHFS_ROOTFS_STAGE:-${TMPDIR:-/tmp}/bunix-squashfs-rootfs.$run_id}
 root=$stage/root
-
-safe_rm_tree() {
-	path=$1
-	case "$path" in
-	''|/|.|"$HOME")
-		echo "refusing unsafe scratch path: $path" >&2
-		exit 2
-		;;
-	esac
-	rm -rf "$path"
-}
 
 install_file() {
 	path=$1
@@ -49,7 +41,7 @@ long_root=/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two
 long_exec=/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/linux-execve-path-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components
 long_proc=/usr/share/bunix/alpine/very/long/rootfs/path/that/exceeds/the/old/two-hundred-fifty-six-byte/proc-exec-registry-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/path-component-that-forces-the-rootfs-image-format-past-the-old-limit/with-extra-components
 
-safe_rm_tree "$stage"
+safe_rm_rf "$stage" "SQUASHFS_ROOTFS_STAGE"
 mkdir -p "$root" "$(dirname "$out")"
 
 install_file /hello.txt modules/hello.txt 0444

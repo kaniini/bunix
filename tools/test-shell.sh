@@ -26,6 +26,7 @@ failure_dir=${FAILURE_DIR:-build/failures/$run_id}
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 shell_parts=${BUNIX_SHELL_PART:-all}
 . "$script_dir/test-lib.sh"
+. "$script_dir/path-safety.sh"
 . "$script_dir/shell-tests/smoke.sh"
 . "$script_dir/shell-tests/login-smoke.sh"
 . "$script_dir/shell-tests/relogin-session.sh"
@@ -73,7 +74,7 @@ cleanup() {
 		kill "$sidecar_pid" 2>/dev/null || true
 	fi
 	if [ "${KEEP_TMP:-0}" != 1 ]; then
-		rm -rf "$tmp"
+		safe_rm_rf "$tmp" "BUNIX_TEST_RUNTIME_DIR"
 	else
 		echo "kept test tmp: $tmp" >&2
 	fi
@@ -201,7 +202,7 @@ start_qemu() {
 		echo "ESP directory is not readable: $esp" >&2
 		exit 1
 	fi
-	rm -rf "$runtime_esp"
+	safe_rm_rf "$runtime_esp" "runtime ESP directory"
 	mkdir -p "$runtime_esp"
 	cp -R "$esp/." "$runtime_esp/"
 

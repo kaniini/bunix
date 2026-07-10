@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+. "$script_dir/path-safety.sh"
+
 out=${1:?output rootfs image required}
 run_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
 stage=${ALPINE_ROOTFS_STAGE:-${TMPDIR:-/tmp}/bunix-alpine-rootfs.$run_id}
@@ -120,7 +123,7 @@ apk_add_rootfs() {
 	fi
 }
 
-rm -rf "$stage"
+safe_rm_rf "$stage" "ALPINE_ROOTFS_STAGE"
 mkdir -p "$root" "$(dirname "$out")" "$artifact_dir" "$apk_cache"
 apk_cache=$(CDPATH= cd "$apk_cache" && pwd)
 
@@ -130,7 +133,7 @@ if ! apk_add_rootfs \
 	--repositories-file "$repositories" \
 	>"$apk_log" 2>&1; then
 	mv "$apk_log" "$apk_plain_log"
-	rm -rf "$root"
+	safe_rm_rf "$root" "Alpine rootfs retry tree"
 	mkdir -p "$root"
 	if ! apk_add_rootfs \
 		--root "$root" --initdb --usermode --allow-untrusted \
