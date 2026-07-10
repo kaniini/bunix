@@ -324,6 +324,36 @@ Validation:
   remaining scan is mostly immutable `/etc` state, the next fix should narrow
   path-cache invalidation by mount or path class instead of clearing all Linux
   path caches for unrelated `/run` mutations.
+- Added a Linux-server-global path metadata cache for normalized `/etc` and
+  `/run` paths, with separate mutation epochs for `/etc`, `/run`, and other
+  paths.  VFS FDs now remember their normalized path when known, so
+  dirfd-relative `faccessat()` and `newfstatat()` calls such as
+  `newfstatat(initd_fd, "networking", ...)` can share cached metadata across
+  OpenRC helper processes without guessing about arbitrary directory FDs.
+- Narrow guards after the FD-aware metadata cache pass:
+  - `make build/modules/linux.server`
+  - `BUNIX_SHELL_PART=linux-signaltest make test-shell-part` passed in 65
+    seconds.
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 96
+    seconds.
+- The FD-aware metadata cache is not sufficient to complete stock OpenRC boot.
+  A normal stock-networking boot still timed out before `login:` at
+  `build/failures/20260710T224045Z-1804/20260710T224346Z-1804`.
+  A short debug capture at
+  `build/failures/20260710T224359Z-2819/20260710T224444Z-2819`
+  still shows a fork/exec-heavy `gendepends.sh` path: small helpers such as
+  `/usr/libexec/rc/bin/shell_var` exec quickly and exit, but each parent
+  service wrapper spends roughly 1-2 seconds before spawning the helper and
+  then exits with status 1.  This points away from plain metadata lookup as
+  the dominant cost.
+- The next likely stock-OpenRC blocker is Linux process creation cost.  The
+  x86_64 Linux syscall path recognizes `vfork()` and `clone(CLONE_VFORK)`,
+  but it still creates the child through `server_task_fork_current_stopped()`,
+  which clones every user VM region before the parent blocks.  OpenRC's
+  shell-heavy startup pays that full VM clone cost repeatedly.  A real vfork
+  optimization will need explicit task VM ownership/detach semantics so the
+  child can run in the parent's address space until `execve()` without letting
+  child exec teardown destroy the parent's VM space.
 
 Notes:
 
