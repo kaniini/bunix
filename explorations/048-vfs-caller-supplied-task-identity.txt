@@ -126,3 +126,18 @@ Notes:
   `BUNIX_TEST_SET=tmpfs-basic-linux-tests make test-shell-parallel`,
   `BUNIX_TEST_SET=procfs make test-shell-parallel`, `make test-vfs-authority`,
   and `make test-vfs-mount-authority`.
+- Added `test-unionfs-subject-authority`, which resolves the unionfs
+  translator directly and verifies that a caller with only names/console
+  authority cannot forge task 0 to create
+  `/tmp/direct-unionfs-forged-root`.  This closes the laundering path where an
+  untrusted direct caller could otherwise enter unionfs and have unionfs
+  forward the forged subject to already-authorized lower translators.
+- Unionfs now gates direct VFS-protocol callers with
+  `BUNIX_VFS_GRANT_SUBJECT_TASK`, while leaving unionfs setup on
+  `BUNIX_PROTO_UNIONFS`.  Bootstrap delegates VFS as the legitimate direct
+  unionfs VFS caller before mounting `/`.
+- Focused verification for the unionfs slice passed: `make
+  test-unionfs-subject-authority`, `make test-vfs-subject-authority`, `make
+  test-tmpfs-subject-authority`, `make test-squashfs-subject-authority`, `make
+  test-procfs-subject-authority`, and
+  `BUNIX_TEST_SET=tmpfs-basic-linux-tests make test-shell-parallel`.

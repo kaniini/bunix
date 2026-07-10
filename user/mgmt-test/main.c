@@ -329,6 +329,27 @@ static int run_procfs_subject_authority_test(void)
 	return 0;
 }
 
+static int run_unionfs_subject_authority_test(void)
+{
+	const u64 unionfs = resolve_service(BUNIX_SERVICE_UNIONFS,
+					    BUNIX_RIGHT_SEND);
+	const u64 forged_root = (u64)0700 << 32;
+
+	if (unionfs == 0) {
+		log_text("unionfs-subject-auth-test: no unionfs\n");
+		return 1;
+	}
+	if (vfs_path_call_status(unionfs, BUNIX_VFS_MKDIR_BUFFER,
+				 "/tmp/direct-unionfs-forged-root",
+				 forged_root) == 0) {
+		log_text("unionfs-subject-auth-test: forged root succeeded\n");
+		return 1;
+	}
+	log_text("unionfs-subject-auth-test: forged root denied\n");
+	log_text("unionfs-subject-auth-test: ok\n");
+	return 0;
+}
+
 int main(void)
 {
 	const char user_denied[] = "mgmt-test: user denied\n";
@@ -349,6 +370,9 @@ int main(void)
 	}
 	if (bunix_cmdline_has("procfs-subject-auth-test") > 0) {
 		return run_procfs_subject_authority_test();
+	}
+	if (bunix_cmdline_has("unionfs-subject-auth-test") > 0) {
+		return run_unionfs_subject_authority_test();
 	}
 
 	if (vfs != 0) {

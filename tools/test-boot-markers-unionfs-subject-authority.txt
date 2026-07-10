@@ -1,0 +1,2 @@
+unionfs-subject-auth-test: forged root denied
+unionfs-subject-auth-test: ok
