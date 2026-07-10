@@ -225,6 +225,26 @@ Validation:
   `build/failures/20260710T204030Z-17038/20260710T204150Z-17038`.  Resolve or
   re-baseline that failure before relying on the shell shard as a guard for
   stock OpenRC performance changes.
+- The synthetic shell guard regression was resolved without changing the
+  intended login ownership model.  `proc.server` now accepts
+  `BUNIX_PROC_EXIT` from a native task for its own process record, while still
+  requiring the management capability for killing some other task.  This lets
+  native one-shot boot spawns report completion instead of leaving bootstrap
+  stuck waiting.
+- A trial bootstrap `::respawn:/bin/login` entry was rejected.  BusyBox init
+  already starts the synthetic `/etc/inittab` login while `/etc/spawns` is
+  still running one-shot smoke programs, so bootstrap-level login supervision
+  creates a second login that races for serial input.  Keep login respawn owned
+  by BusyBox init, matching the Alpine constraint.
+- The login prompt storm was caused by `/bin/login` treating empty reads as an
+  immediate reason to print another prompt.  Login now waits and backs off
+  through the time service when `read(0, ...)` returns no input, so it prints a
+  prompt once and waits for console input instead of consuming later shell
+  commands as a password.
+- The synthetic shell guard is usable again:
+  `BUNIX_SHELL_PART=linux-signaltest make test-shell-part` passed in 5
+  seconds after the proc/login fixes, and passed again in 65 seconds after a
+  full harness rebuild with the login fallback-yield path.
 
 Notes:
 

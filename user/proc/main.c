@@ -2296,13 +2296,17 @@ int main(void)
 			struct process *process = message.words[2] != 0 ?
 						  process_find_linux_pid(message.words[0]) :
 						  process_find(message.words[0]);
+			const int self_exit =
+				process != 0 &&
+				message.sender != 0 &&
+				process->task_id == message.sender;
 
-			if (!management) {
+			if (!management && !self_exit) {
 				reply.words[0] = (u64)-1;
 				break;
 			}
 			if (process != 0) {
-				if (message.words[3] != 0 &&
+				if (management && message.words[3] != 0 &&
 				    process->task_handle != 0) {
 					(void)bunix_task_kill(process->task_handle);
 				}

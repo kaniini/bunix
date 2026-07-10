@@ -7,6 +7,7 @@ enum {
 	LINUX_SYSCALL_CHDIR = 80,
 	LINUX_SYSCALL_IOCTL = 16,
 	LINUX_SYSCALL_EXECVE = 59,
+	LINUX_SYSCALL_SCHED_YIELD = 24,
 	LINUX_SYSCALL_SETUID = 105,
 	LINUX_SYSCALL_SETGID = 106,
 	LINUX_SYSCALL_SETGROUPS = 116,
@@ -52,6 +53,39 @@ static void write_text(const char *text)
 static long read_text(char *text, u64 len)
 {
 	return linux_syscall4(LINUX_SYSCALL_READ, 0, (u64)text, len, 0);
+}
+
+static void sleep_ns(u64 time, u64 ns)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_TIME,
+		.type = BUNIX_TIME_SLEEP_NS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { ns, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (time != 0) {
+		(void)bunix_ipc_call(time, &request, &reply);
+	} else {
+		(void)linux_syscall4(LINUX_SYSCALL_SCHED_YIELD, 0, 0, 0, 0);
+	}
+}
+
+static long read_wait(u64 time, char *text, u64 len)
+{
+	long nread;
+
+	for (;;) {
+		nread = read_text(text, len);
+		if (nread > 0) {
+			return nread;
+		}
+		sleep_ns(time, 100000000ull);
+	}
 }
 
 static unsigned int load_u32(const char *buffer, u64 offset)
@@ -462,6 +496,7 @@ int main(int argc, char **argv, char **envp)
 	u64 user;
 	u64 user_mgmt;
 	u64 linux_mgmt;
+	u64 time;
 	u64 session_id;
 	long nread;
 	char saved_termios[60];
@@ -472,30 +507,23 @@ int main(int argc, char **argv, char **envp)
 	load_auxv(envp, &aux);
 	user = resolve_service(aux.names_handle, BUNIX_SERVICE_USER,
 			       BUNIX_RIGHT_SEND);
+	time = resolve_service(aux.names_handle, BUNIX_SERVICE_TIME,
+			       BUNIX_RIGHT_SEND);
 	user_mgmt = bunix_handle_find(BUNIX_CAP_USRM);
 	linux_mgmt = bunix_handle_find(BUNIX_CAP_LNXM);
 	for (;;) {
 		restore_termios = tty_set_echo(0, saved_termios) == 0;
 		write_text("login: ");
-		nread = read_text(name, sizeof(name));
-		if (nread <= 0) {
-			if (restore_termios) {
-				tty_restore(saved_termios);
-			}
-			continue;
-		}
+		nread = read_wait(time, name, sizeof(name));
 		strip_line(name, (u64)nread);
 		write_text(name);
 		write_text("\n");
 		write_text("password: ");
-		nread = read_text(password, sizeof(password));
+		nread = read_wait(time, password, sizeof(password));
 		if (restore_termios) {
 			tty_restore(saved_termios);
 		}
 		write_text("\n");
-		if (nread <= 0) {
-			continue;
-		}
 		strip_line(password, (u64)nread);
 
 		if (user == 0) {
