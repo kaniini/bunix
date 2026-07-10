@@ -173,6 +173,27 @@ Validation:
   did not advance to networking, default runlevel, or login.  This rules out a
   small timeout adjustment; the service wrapper is effectively stuck or doing
   unbounded OpenRC state/path probing after fsck succeeds.
+- Added and tested a conservative VFS symlink-resolution cache keyed by
+  subject task and absolute path.  The cache only stores fully-followed
+  resolution results and is cleared on VFS mutations and mount changes.  This
+  reduces repeated prefix symlink walks, but it is not sufficient to get the
+  stock OpenRC boot to `login:` inside the current 180 second stock-networking
+  boot test.
+- A targeted userspace-serial debug boot with `debug-linux-wait`,
+  `debug-linux-exec`, and late path tracing shows the post-`fsck` slowdown is a
+  fork/exec storm of tiny OpenRC helpers, especially
+  `/usr/libexec/rc/bin/shell_var`.  Each helper itself exits quickly, but the
+  parent shell/OpenRC wrapper exits with status 1 and OpenRC continues to the
+  next dependency/provider query.  This is normal OpenRC behavior made
+  pathological by Bunix's current per-process/per-exec cost.
+- A trial SquashFS regular-file data-block cache was rejected.  Caching full
+  128 KiB data blocks on first read made the stock boot slower before the fsck
+  phase, because OpenRC dependency generation touches many tiny service/helper
+  files.  Do not reintroduce a first-touch full-block SquashFS cache without a
+  narrower hot-block policy or measured evidence that it helps.
+- The next likely fix is in the Linux process/exec path or a much narrower
+  filesystem/page-cache design: reduce repeated dynamic helper startup cost
+  without turning cold reads of many small OpenRC files into full-block reads.
 
 Notes:
 
