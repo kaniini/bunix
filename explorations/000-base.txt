@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 050-host-tooling-path-safety.txt
+The current exploration is: 051-procfs-self-pipe-hang.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.

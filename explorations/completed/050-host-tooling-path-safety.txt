@@ -73,7 +73,7 @@ Tasks:
 - [x] Add tests for refused unsafe cleanup/output paths.
 - [x] Add a regression test that the retired `mkrootfs` importer remains
       absent and current rootfs tooling uses guarded generated paths.
-- [ ] Run focused tooling tests and full tests before completion.
+- [x] Run focused tooling tests and full tests before completion.
 
 Notes:
 
@@ -100,3 +100,7 @@ Notes:
   --diff-filter=D --summary -- tools/mkrootfs.c` identifies `4bed5e3 Retire
   legacy rootfs format` as deleting `tools/mkrootfs.c`, and source searches
   find no live `mkrootfs` source path.
+- Completion verification passed: `make test-path-safety`, `make
+  test-alpine-rootfs`, `BUNIX_TEST_PRUNE_DRY_RUN=1 sh
+  tools/test-prune-artifacts.sh`, and full `make test`
+  (`build/test-runs/20260710T013408Z-9767`, 27 shards launched, 0 skipped).
