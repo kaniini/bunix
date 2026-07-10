@@ -30,7 +30,7 @@ Tasks:
       equivalent to `/proc/net/arp`.
 - [x] Add router solicitation/advertisement parsing sufficient for deterministic
       smoke tests, or document an explicit static-route-only first phase.
-- [ ] Add duplicate-address-detection behavior or explicitly defer it with
+- [x] Add duplicate-address-detection behavior or explicitly defer it with
       tests proving the deferral is isolated from configured static addresses.
 - [x] Add packet-interface IPv6 ICMP echo egress/ingress smokes with the
       host-side peer.
@@ -74,3 +74,9 @@ Progress:
   accepted socket and emit SYN-ACK.  `make test-boot-virtio-net-socket-peer-tcp6`
   passed with `/bin/nettest tcp6-external-connect` and
   `/bin/nettest tcp6-external-accept`.
+- Duplicate-address detection is explicitly deferred for this static-route
+  phase.  The deferral is isolated from configured static addresses by the
+  socket-peer ICMPv6, UDPv6, and TCPv6 smokes: NETCFG installs
+  `2001:db8:18::15/64` directly, NET0 uses it for source address selection, and
+  the deterministic peer resolves and exchanges traffic with that address
+  without requiring tentative address state or SLAAC.
