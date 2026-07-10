@@ -354,6 +354,32 @@ Validation:
   optimization will need explicit task VM ownership/detach semantics so the
   child can run in the parent's address space until `execve()` without letting
   child exec teardown destroy the parent's VM space.
+- Implemented borrowed-VM task support for Linux `vfork()` and
+  `clone(CLONE_VFORK)`.  Vfork children now run in the parent's VM space until
+  `execve()` or exit; `task_clear()` detaches a borrowed child onto a fresh VM
+  before proc maps the replacement image, and borrowed children do not tear
+  down the parent's VM on exit.  This preserves the existing Linux vfork wait
+  path while avoiding full VM-region cloning for true vfork users.
+- Narrow vfork/process guards pass after the borrowed-VM change:
+  - `make`
+  - `BUNIX_SHELL_PART=linux-signaltest make test-shell-part` passed in 64
+    seconds.
+  - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part` passed in 105
+    seconds and covers the synthetic `vforkstress` binary.
+- The borrowed-VM vfork change does not complete stock OpenRC boot by itself.
+  `make test-boot-alpine-stock-networking` still timed out before `login:` at
+  `build/failures/20260710T225805Z-10068/20260710T230105Z-10068`.
+- A shorter debug stock probe with `log=debug debug-serial-userspace
+  debug-linux-wait debug-linux-exec debug-linux-paths` timed out at
+  `build/failures/20260710T230147Z-11250/20260710T230307Z-11250`.  It proves
+  the new vfork path is exercised: task 27 vforks task 35 for
+  `/usr/libexec/rc/bin/mountinfo`, the child execs in under a second, and the
+  parent resumes after exec as expected.  The remaining visible cost is a
+  plain `fork()` path: task 27 forks task 34 at 65.35s, and that child spends
+  roughly 11.5 debug-log seconds running shell/helper file scans before
+  exiting.  The next fix should focus on full-fork/subshell cost or the
+  repeated VFS/mmap/read behavior in those stock OpenRC mount helpers, not on
+  vfork cloning.
 
 Notes:
 

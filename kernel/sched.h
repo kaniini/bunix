@@ -179,7 +179,12 @@ int task_handle_lifetime_selftest(void);
 u32 sched_current_cpu_id(void);
 void sched_secondary_start(u32 cpu_id) __attribute__((noreturn));
 struct task *task_create(const char *name, struct vm_space *vm_space);
+struct task *task_create_borrowed_vm(const char *name,
+				     struct vm_space *vm_space);
 struct vm_space *task_vm_space(struct task *task);
+int task_vm_space_owned(const struct task *task);
+int task_replace_borrowed_vm_space(struct task *task,
+				   struct vm_space *vm_space);
 void task_set_ipc_affinity(struct task *task, u32 cpu_id);
 void task_set_sched_policy(struct task *task, enum sched_class sched_class,
 			   u32 priority, u32 rights);

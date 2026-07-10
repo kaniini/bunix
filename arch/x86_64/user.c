@@ -4253,7 +4253,9 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		if (number == LINUX_SYSCALL_CLONE && arg1 != 0) {
 			child_frame.user_rsp = arg1;
 		}
-		child = server_task_fork_current_stopped(&child_frame);
+		child = is_vfork ?
+			server_task_vfork_current_stopped(&child_frame) :
+			server_task_fork_current_stopped(&child_frame);
 		if (child == 0) {
 			return (u64)-LINUX_ENOMEM;
 		}

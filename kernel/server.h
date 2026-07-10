@@ -52,6 +52,8 @@ int server_task_kill(struct task *parent, u64 task_handle);
 int server_task_clear(struct task *parent, u64 task_handle);
 struct task *server_task_fork_current_stopped(
 	const struct arch_syscall_frame *frame);
+struct task *server_task_vfork_current_stopped(
+	const struct arch_syscall_frame *frame);
 int server_task_start_fork(struct task *child,
 			   const struct arch_syscall_frame *frame);
 struct task *server_task_fork_current(const struct arch_syscall_frame *frame);

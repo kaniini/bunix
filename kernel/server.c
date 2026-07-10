@@ -851,6 +851,18 @@ int server_task_clear(struct task *parent, u64 task_handle)
 	}
 	int result = -1;
 
+	if (!task_vm_space_owned(task)) {
+		struct vm_space *space = vm_server_bootstrap_space(task_name(task));
+
+		if (space == 0 ||
+		    task_replace_borrowed_vm_space(task, space) != 0) {
+			if (space != 0) {
+				vm_rpc_destroy_space(space);
+			}
+			goto out;
+		}
+	}
+
 	while (task_vm_region_count(task) != 0) {
 		const struct task_vm_region *region = task_vm_region_at(task, 0);
 
@@ -917,6 +929,35 @@ struct task *server_task_fork_current_stopped(
 			(void)task_kill(child);
 			return 0;
 		}
+	}
+
+	const u64 brk = task_linux_brk(parent);
+	const u64 mmap_next = task_linux_mmap_next(parent);
+	const u64 fs_base = task_linux_fs_base(parent);
+	task_set_linux_brk(child, brk);
+	task_set_linux_mmap_next(child, mmap_next);
+	task_set_linux_fs_base(child, fs_base);
+
+	return child;
+}
+
+struct task *server_task_vfork_current_stopped(
+	const struct arch_syscall_frame *frame)
+{
+	struct task *parent = task_current();
+	if (parent == 0 || frame == 0) {
+		return 0;
+	}
+
+	struct task *child = task_create_borrowed_vm(task_name(parent),
+						     task_vm_space(parent));
+	if (child == 0) {
+		return 0;
+	}
+	task_inherit_sched_policy(child, parent);
+	if (task_clone_handles(child, parent) != 0) {
+		(void)task_kill(child);
+		return 0;
 	}
 
 	const u64 brk = task_linux_brk(parent);

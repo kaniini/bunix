@@ -49,6 +49,7 @@ struct task {
 	u32 thread_count;
 	struct thread *threads;
 	struct vm_space *vm_space;
+	u32 owns_vm_space;
 	u64 linux_brk;
 	u64 linux_mmap_next;
 	u64 linux_fs_base;
@@ -731,7 +732,9 @@ void sched_secondary_start(u32 cpu_id)
 	sched_idle_loop();
 }
 
-struct task *task_create(const char *name, struct vm_space *vm_space)
+static struct task *task_create_with_vm_ownership(const char *name,
+						  struct vm_space *vm_space,
+						  u32 owns_vm_space)
 {
 	if (vm_space == 0) {
 		console_printf("sched: refusing task %s without vm space\n", name);
@@ -762,6 +765,7 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	task->thread_count = 0;
 	task->threads = 0;
 	task->vm_space = vm_space;
+	task->owns_vm_space = owns_vm_space;
 	task->linux_brk = 0x900000;
 	task->linux_mmap_next = 0x10000000;
 	task->linux_fs_base = 0;
@@ -791,6 +795,16 @@ struct task *task_create(const char *name, struct vm_space *vm_space)
 	return task;
 }
 
+struct task *task_create(const char *name, struct vm_space *vm_space)
+{
+	return task_create_with_vm_ownership(name, vm_space, 1);
+}
+
+struct task *task_create_borrowed_vm(const char *name, struct vm_space *vm_space)
+{
+	return task_create_with_vm_ownership(name, vm_space, 0);
+}
+
 static char *task_name_copy(const char *name)
 {
 	u64 len = 0;
@@ -818,6 +832,36 @@ static char *task_name_copy(const char *name)
 struct vm_space *task_vm_space(struct task *task)
 {
 	return task != 0 ? task->vm_space : 0;
+}
+
+int task_vm_space_owned(const struct task *task)
+{
+	return task != 0 && task->owns_vm_space != 0;
+}
+
+int task_replace_borrowed_vm_space(struct task *task, struct vm_space *vm_space)
+{
+	struct task_vm_region *old_regions;
+
+	if (task == 0 || vm_space == 0) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	if (task->owns_vm_space != 0) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		return -1;
+	}
+	old_regions = task->vm_regions;
+	task->vm_space = vm_space;
+	task->owns_vm_space = 1;
+	task->vm_regions = 0;
+	task->vm_region_count = 0;
+	task->vm_region_capacity = 0;
+	spin_unlock_irqrestore(&task->lock, flags);
+
+	slab_free(old_regions);
+	return 0;
 }
 
 void task_set_ipc_affinity(struct task *task, u32 cpu_id)
@@ -1749,17 +1793,21 @@ static void task_teardown(struct task *task)
 	struct task_vm_region *vm_regions;
 	const u32 pid = task->pid;
 	const char *name = task->name;
+	u32 owns_vm_space;
 
-	while (task_vm_region_count(task) != 0) {
-		const struct task_vm_region *region = task_vm_region_at(task, 0);
-		if (region == 0) {
-			break;
+	if (task_vm_space_owned(task)) {
+		while (task_vm_region_count(task) != 0) {
+			const struct task_vm_region *region =
+				task_vm_region_at(task, 0);
+			if (region == 0) {
+				break;
+			}
+			const u64 base = region->base;
+			const u64 len = region->len;
+
+			(void)vm_unmap_user_range(task->vm_space, base, len);
+			(void)task_remove_vm_region(task, base, len);
 		}
-		const u64 base = region->base;
-		const u64 len = region->len;
-
-		(void)vm_unmap_user_range(task->vm_space, base, len);
-		(void)task_remove_vm_region(task, base, len);
 	}
 
 	const u64 flags = spin_lock_irqsave(&task->lock);
@@ -1770,7 +1818,9 @@ static void task_teardown(struct task *task)
 	reply_port = task->reply_port;
 	task->reply_port = 0;
 	space = task->vm_space;
+	owns_vm_space = task->owns_vm_space;
 	task->vm_space = 0;
+	task->owns_vm_space = 0;
 	vm_regions = task->vm_regions;
 	task->vm_regions = 0;
 	task->vm_region_capacity = 0;
@@ -1782,7 +1832,9 @@ static void task_teardown(struct task *task)
 	slab_free(handles);
 	slab_free(vm_regions);
 	ipc_port_release(reply_port);
-	vm_rpc_destroy_space(space);
+	if (owns_vm_space) {
+		vm_rpc_destroy_space(space);
+	}
 	task_remove_from_list(task);
 	console_printf("sched: task pid=%u name=%s destroyed\n", pid, name);
 	slab_free((void *)name);
