@@ -22,11 +22,14 @@ Tasks:
 - [ ] Give each riscv64 boot target its own default serial log path.
 - [ ] Allow callers to override each log path without affecting other riscv64
       targets.
-- [ ] Update BPI-F3 helper scripts and summaries to consume the correct log
-      for the gate they are checking.
 - [ ] Add a narrow host-side or make-level check that proves two riscv64 boot
       targets do not write the same log by default.
 - [ ] Update test-efficiency notes with the riscv64 log-isolation contract.
+
+Deferred:
+
+- BPI-F3 helper-script log isolation belongs with the postponed BPI-F3 block.
+  Do not do BPI-F3-specific script work in this exploration.
 
 Verification:
 

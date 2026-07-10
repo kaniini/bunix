@@ -2,7 +2,7 @@ Bring up BPI-F3 eMMC and microSD storage as Bunix block devices.
 
 Status:
 
-- Planned.  Start after exploration 035 proves the BPI-F3 first hardware boot
+- Planned.  Start after exploration 070 proves the BPI-F3 first hardware boot
   milestone and the firmware device tree has been captured from real hardware.
 
 Problem:

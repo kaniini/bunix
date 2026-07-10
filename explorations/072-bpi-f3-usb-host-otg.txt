@@ -2,7 +2,7 @@ Bring up BPI-F3 USB host and USB-C OTG controller paths.
 
 Status:
 
-- Planned.  Start after exploration 035 proves the BPI-F3 first hardware boot
+- Planned.  Start after exploration 070 proves the BPI-F3 first hardware boot
   milestone.  Coordinate this with the generic USB HID and USB mass-storage
   explorations so controller work does not duplicate class-driver work.
 
