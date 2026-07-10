@@ -698,13 +698,12 @@ static void notify_proc_exit(u64 linux_pid, u64 status, u64 kill_task)
 		.cap = 0,
 		.words = { linux_pid, status, 1, kill_task },
 	};
-
 	if (proc != 0) {
 		(void)bunix_ipc_send(proc, &request);
 	}
 }
 
-static void notify_proc_register_linux(u64 linux_pid, u64 bunix_task,
+static long notify_proc_register_linux(u64 linux_pid, u64 bunix_task,
 				       u64 parent_linux_pid)
 {
 	const u64 proc = LINUX_HANDLE_PROC_MGMT;
@@ -717,10 +716,14 @@ static void notify_proc_register_linux(u64 linux_pid, u64 bunix_task,
 		.cap = 0,
 		.words = { linux_pid, bunix_task, parent_linux_pid, 0 },
 	};
+	struct bunix_msg reply;
 
-	if (proc != 0) {
-		(void)bunix_ipc_send(proc, &request);
+	if (proc == 0 ||
+	    bunix_ipc_call(proc, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -LINUX_ESRCH;
 	}
+	return 0;
 }
 
 static long linux_proc_spawn_path(u64 proc, const char *path)
@@ -2156,7 +2159,12 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 		linux_process_reset(process);
 		return -LINUX_ESRCH;
 	}
-	notify_proc_register_linux(pid, child_task, parent->pid);
+	if (notify_proc_register_linux(pid, child_task, parent->pid) != 0) {
+		bunix_console_log("linux-server: fork proc failed\n",
+				  sizeof("linux-server: fork proc failed\n") - 1);
+		linux_process_reset(process);
+		return -LINUX_ESRCH;
+	}
 	return (long)pid;
 }
 
@@ -2306,7 +2314,7 @@ static long linux_wait4(struct linux_process *parent, long pid, u64 options,
 			const u64 waited_pid = candidate->pid;
 			if (linux_store_wait_status(status_buffer,
 						    candidate->exit_status) != 0) {
-				return -LINUX_EINVAL;
+				return -LINUX_EFAULT;
 			}
 			candidate->waited = 1;
 			linux_process_reset(candidate);
@@ -2359,6 +2367,9 @@ static void linux_wake_parent(struct linux_process *child)
 		bunix_console_log(wait4_ok, sizeof(wait4_ok) - 1);
 		bunix_ipc_send(parent->waiter, &reply);
 		linux_process_reset(child);
+	} else {
+		reply.words[0] = (u64)-LINUX_EFAULT;
+		bunix_ipc_send(parent->waiter, &reply);
 	}
 	if (parent->wait_buffer != 0) {
 		bunix_handle_close(parent->wait_buffer);

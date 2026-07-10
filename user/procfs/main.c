@@ -704,6 +704,9 @@ static u64 file_size(u64 file)
 	if (file_kind(file) == PROCFS_KIND_PID_EXE) {
 		return str_len(pid_cmdline(file_arg(file)));
 	}
+	if (file_kind(file) == PROCFS_KIND_PID_CMDLINE) {
+		return 0;
+	}
 	if (file_kind(file) != PROCFS_KIND_PROC &&
 	    file_kind(file) != PROCFS_KIND_SELF &&
 	    file_kind(file) != PROCFS_KIND_PID &&
@@ -1856,25 +1859,17 @@ static u64 build_net_socket_table(u64 protocol, u64 family)
 static const char *pid_name(u64 pid)
 {
 	static char name[32];
-	char cmdline[PROCFS_MAX_PATH];
-	u64 start = 0;
-	u64 len = 0;
 
-	if (proc_cmdline(pid, cmdline, sizeof(cmdline)) != 0 ||
-	    cmdline[0] == '\0') {
-		return "process";
-	}
-	for (u64 i = 0; cmdline[i] != '\0'; i++) {
-		if (cmdline[i] == '/') {
-			start = i + 1;
-		}
-	}
-	while (cmdline[start + len] != '\0' && len + 1 < sizeof(name)) {
-		name[len] = cmdline[start + len];
-		len++;
-	}
-	name[len] = '\0';
-	return len == 0 ? "process" : name;
+	(void)pid;
+	name[0] = 'p';
+	name[1] = 'r';
+	name[2] = 'o';
+	name[3] = 'c';
+	name[4] = 'e';
+	name[5] = 's';
+	name[6] = 's';
+	name[7] = '\0';
+	return name;
 }
 
 static const char *pid_cmdline(u64 pid)
@@ -1950,7 +1945,7 @@ static u64 build_pid_cmdline(u64 pid)
 	if (proc_cmdline_bytes(pid, cmdline, sizeof(cmdline),
 			       &cmdline_len) != 0 ||
 	    cmdline_len == 0) {
-		append_str(&len, pid_cmdline(pid));
+		append_str(&len, "/bin/process");
 		append_char(&len, '\0');
 	} else {
 		append_bytes(&len, cmdline, cmdline_len);

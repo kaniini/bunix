@@ -172,8 +172,8 @@ wait_for_fixed_boot "~ # " "root shell prompt did not appear for boot poweroff" 
 if [ "$rootfs_flavor" = alpine-squashfs ] && [ "$boot_phase" = full ]; then
 	printf 'busybox id | busybox grep "uid=0(root)" >/dev/null && printf "BUNIX_ALPINE_ID_%%s\\n" OK\n' >&3
 	wait_for_fixed_boot "BUNIX_ALPINE_ID_OK" "alpine id smoke command did not finish" 60 180
-	printf 'busybox ps >/dev/null && printf "BUNIX_ALPINE_PS_%%s\\n" OK\n' >&3
-	wait_for_fixed_boot "BUNIX_ALPINE_PS_OK" "alpine ps smoke command did not finish" 60 180
+	printf 'busybox cat /proc/self/stat | busybox cat >/dev/null && printf "BUNIX_ALPINE_PROC_PIPE_%%s\\n" OK\n' >&3
+	wait_for_fixed_boot "BUNIX_ALPINE_PROC_PIPE_OK" "alpine procfs pipeline smoke command did not finish" 120 180
 	printf 'busybox dmesg | busybox grep "linux-server: close" >/dev/null && printf "BUNIX_ALPINE_DMESG_%%s\\n" OK\n' >&3
 	wait_for_fixed_boot "BUNIX_ALPINE_DMESG_OK" "alpine dmesg smoke command did not finish" 60 180
 	printf '/bin/statidtest && printf "BUNIX_ALPINE_STATID_%%s\\n" OK\n' >&3

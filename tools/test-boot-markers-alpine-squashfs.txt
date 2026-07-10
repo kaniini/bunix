@@ -32,7 +32,7 @@ Caching service dependencies ... [ ok ]
 login:
 login: shell exec
 BUNIX_ALPINE_ID_OK
-BUNIX_ALPINE_PS_OK
+BUNIX_ALPINE_PROC_PIPE_OK
 BUNIX_ALPINE_DMESG_OK
 linux statid ok
 BUNIX_ALPINE_STATID_OK

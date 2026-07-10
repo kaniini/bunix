@@ -306,7 +306,7 @@ static void sched_stats_max_cpu(u64 *global, u64 cpu_values[SCHED_STATS_CPUS],
 	spin_unlock_irqrestore(&sched_stats_lock, flags);
 }
 
-static void sched_account_runtime(struct cpu_sched *cpu)
+static void sched_account_runtime(struct cpu_sched *cpu, int charge_min)
 {
 	struct thread *thread = cpu->current;
 	const u64 now = timer_ticks();
@@ -321,10 +321,14 @@ static void sched_account_runtime(struct cpu_sched *cpu)
 		return;
 	}
 	if (now <= thread->exec_start_tick) {
-		return;
+		if (!charge_min) {
+			return;
+		}
+		delta = 1;
+	} else {
+		delta = now - thread->exec_start_tick;
 	}
 
-	delta = now - thread->exec_start_tick;
 	thread->exec_start_tick = now;
 	thread->total_runtime_ticks += delta;
 	sched_stats_add_cpu(&sched_counters.runtime_ticks,
@@ -1917,7 +1921,7 @@ void thread_yield(void)
 		thread_exit();
 	}
 
-	sched_account_runtime(cpu);
+	sched_account_runtime(cpu, 1);
 	console_printf("sched: yield tid=%u cpu=%u\n", prev->tid, cpu->id);
 	sched_enqueue_on(cpu, prev);
 	cpu->current = &cpu->scheduler_thread;
@@ -1977,7 +1981,7 @@ void sched_tick(void)
 		return;
 	}
 
-	sched_account_runtime(cpu);
+	sched_account_runtime(cpu, 0);
 	if (cpu->quantum_left > 1) {
 		cpu->quantum_left--;
 		return;
@@ -2006,7 +2010,7 @@ void thread_prepare_block(void)
 		thread_exit();
 	}
 
-	sched_account_runtime(cpu);
+	sched_account_runtime(cpu, 1);
 	console_printf("sched: block tid=%u cpu=%u\n", prev->tid, cpu->id);
 	prev->blocked_since_tick = timer_ticks();
 	prev->state = THREAD_BLOCKED;
@@ -2049,7 +2053,7 @@ void thread_sleep_ticks(u64 ticks)
 		thread_exit();
 	}
 
-	sched_account_runtime(cpu);
+	sched_account_runtime(cpu, 1);
 	const u64 flags = spin_lock_irqsave(&sleep_lock);
 	prev->wake_tick = timer_ticks() + ticks;
 	prev->blocked_since_tick = timer_ticks();
@@ -2140,7 +2144,7 @@ int thread_handoff(struct thread *thread)
 		thread_exit();
 	}
 
-	sched_account_runtime(cpu);
+	sched_account_runtime(cpu, 1);
 	sched_enqueue_on(cpu, prev);
 	thread->state = THREAD_RUNNING;
 	thread->blocked_since_tick = 0;
@@ -2274,7 +2278,7 @@ void thread_exit(void)
 	struct thread *prev = cpu->current;
 
 	console_printf("sched: thread tid=%u exited\n", prev->tid);
-	sched_account_runtime(cpu);
+	sched_account_runtime(cpu, 1);
 	prev->state = THREAD_DEAD;
 	cpu->reap = prev;
 	cpu->current = &cpu->scheduler_thread;

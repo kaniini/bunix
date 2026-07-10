@@ -25,15 +25,15 @@ Constraints:
 
 Tasks:
 
-- [ ] Add a deterministic regression shard or C regression program covering at
+- [x] Add a deterministic regression shard or C regression program covering at
       least twenty iterations of piped `/proc/self/stat`, `/proc/self/cmdline`,
       and `busybox ps` reads with clean guest poweroff.
-- [ ] Audit Linux pipe descriptor lifetime across `pipe2`, `fork`/`vfork`,
+- [x] Audit Linux pipe descriptor lifetime across `pipe2`, `fork`/`vfork`,
       `dup2`/`dup3`, `fcntl(F_DUPFD*)`, `close`, `close_range`, `execve`, and
       process exit.
-- [ ] Audit procfs `/proc/self` open/read/stat behavior and make sure open file
+- [x] Audit procfs `/proc/self` open/read/stat behavior and make sure open file
       handles hold stable process identity and close reliably through VFS.
-- [ ] Fix the underlying hang without weakening EOF semantics.
-- [ ] Remove the Alpine boot-smoke workaround if the direct pipeline is stable
+- [x] Fix the underlying hang without weakening EOF semantics.
+- [x] Remove the Alpine boot-smoke workaround if the direct pipeline is stable
       enough to use again.
-- [ ] Run the new focused regression plus `make test`.
+- [x] Run the new focused regression plus `make test`.

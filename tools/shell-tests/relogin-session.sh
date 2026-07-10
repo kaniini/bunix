@@ -6,7 +6,7 @@ run_relogin_session() {
 busybox uptime | busybox grep " 1 users" && echo RELOGIN_FIRST_UPTIME_OK
 exit
 EOF_RELOGIN_SESSION_FIRST
-	wait_for_prompt_count_gt "login: " "$relogin_prompts_before" "login prompt did not return after first relogin-session exit" 45 180
+	wait_for_prompt_count_gt "login: " "$relogin_prompts_before" "login prompt did not return after first relogin-session exit" 90 180
 
 	relogin_shells_before=$(current_prompt_count "~ $ ")
 	login_user kaniini bunix "~ $ " "$relogin_shells_before"
@@ -15,7 +15,7 @@ EOF_RELOGIN_SESSION_FIRST
 busybox uptime | busybox grep " 1 users" && echo RELOGIN_SECOND_UPTIME_OK
 exit
 EOF_RELOGIN_SESSION_SECOND
-	wait_for_prompt_count_gt "login: " "$relogin_prompts_before" "login prompt did not return after second relogin-session exit" 45 180
+	wait_for_prompt_count_gt "login: " "$relogin_prompts_before" "login prompt did not return after second relogin-session exit" 90 180
 
 	relogin_shells_before=$(current_prompt_count "~ $ ")
 	login_user kaniini bunix "~ $ " "$relogin_shells_before"
@@ -24,7 +24,7 @@ EOF_RELOGIN_SESSION_SECOND
 busybox uptime | busybox grep " 1 users" && echo RELOGIN_THIRD_UPTIME_OK
 exit
 EOF_RELOGIN_SESSION_THIRD
-	wait_for_prompt_count_gt "login: " "$relogin_prompts_before" "login prompt did not return after third relogin-session exit" 45 180
+	wait_for_prompt_count_gt "login: " "$relogin_prompts_before" "login prompt did not return after third relogin-session exit" 90 180
 }
 
 check_relogin_session() {

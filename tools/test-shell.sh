@@ -32,6 +32,7 @@ shell_parts=${BUNIX_SHELL_PART:-all}
 . "$script_dir/shell-tests/relogin-session.sh"
 . "$script_dir/shell-tests/exec-argv-pipe.sh"
 . "$script_dir/shell-tests/procfs-cmdline.sh"
+. "$script_dir/shell-tests/procfs-self-pipe.sh"
 . "$script_dir/shell-tests/network-loopback-ping.sh"
 . "$script_dir/shell-tests/scheduler-bench.sh"
 . "$script_dir/shell-tests/privileged-native-denial.sh"
@@ -304,7 +305,7 @@ require_supported_parts() {
 	for part do
 		case "$part" in
 		all|vfs|procfs|devfs|tmpfs|path|statfs|large-io|mount|\
-		smoke|login-smoke|relogin-session|exec-argv-pipe|procfs-cmdline|rootfs-vfs-proc-dev|rootfs-vfs-paths|procfs-sysfs-surface|devfs-console-surface|linux-signaltest|tty-foreground|tty-sigint-session|\
+		smoke|login-smoke|relogin-session|exec-argv-pipe|procfs-cmdline|procfs-self-pipe|rootfs-vfs-proc-dev|rootfs-vfs-paths|procfs-sysfs-surface|devfs-console-surface|linux-signaltest|tty-foreground|tty-sigint-session|\
 		network-loopback-ping|scheduler-bench|privileged-native-denial|tmpfs-basic-linux-tests|path-limits-statfs|union-root-user|\
 		tmpfs-extended|large-io-mount|interactive-tty|root-login-union|\
 		root-tmpfs-chown|long-login|root-mount-soak)
@@ -420,6 +421,12 @@ if part_selected procfs-cmdline; then
 	begin_shard procfs-cmdline
 	login_user_if_needed
 	run_procfs_cmdline
+fi
+
+if part_selected procfs-self-pipe; then
+	begin_shard procfs-self-pipe
+	login_user_if_needed
+	run_procfs_self_pipe
 fi
 
 if part_selected network-loopback-ping; then
@@ -539,6 +546,11 @@ fi
 if part_selected procfs-cmdline; then
 	check_procfs_cmdline
 	finish_shard procfs-cmdline
+fi
+
+if part_selected procfs-self-pipe; then
+	check_procfs_self_pipe
+	finish_shard procfs-self-pipe
 fi
 
 if part_selected network-loopback-ping; then

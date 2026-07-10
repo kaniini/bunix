@@ -5,6 +5,7 @@ login-smoke	user	2	128M	120	1	no	Login environment, uptime/uname/id/groups, /usr
 relogin-session	user	2	128M	120	1	no	Same-console logout and relogin session accounting; uptime must report one active user after relogin.
 exec-argv-pipe	user	2	128M	120	1	no	Pipes, argv/env expansion, large argv/env, and initial procfs read through the login shell.
 procfs-cmdline	user	2	128M	120	1	no	Live non-self procfs cmdline/status coverage without shell $$ assumptions.
+procfs-self-pipe	user	2	128M	600	3	no	Repeated piped reads of /proc/self/stat, /proc/self/cmdline, and busybox ps.
 network-loopback-ping	user	2	128M	120	1	no	BusyBox IPv4 and IPv6 loopback ping through Linux raw ICMP sockets and NET0.
 scheduler-bench	user	2	128M	120	1	no	Focused scheduler fairness benchmark with equal CPU-bound workers and scheduler counter checks.
 privileged-native-denial	user	2	128M	90	1	no	Unprivileged Linux callers must not be able to power off or mint PCI hardware handles.
