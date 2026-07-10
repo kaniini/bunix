@@ -3737,6 +3737,7 @@ int main(void)
 						  BUNIX_SERVICE_EXT2,
 						  BUNIX_RIGHT_SEND);
 		if (ext2 == 0 ||
+		    vfs_grant_subject_task(ext2, vfs_task) != 0 ||
 		    vfs_mount_service(vfs, "/mnt/ext2",
 				      BUNIX_SERVICE_EXT2) != 0 ||
 		    ext2_readonly_selftest(vfs) != 0) {
@@ -3761,6 +3762,7 @@ int main(void)
 						  BUNIX_SERVICE_EXT2,
 						  BUNIX_RIGHT_SEND);
 		if (ext2 == 0 ||
+		    vfs_grant_subject_task(ext2, vfs_task) != 0 ||
 		    vfs_mount_service(vfs, "/", BUNIX_SERVICE_EXT2) != 0) {
 			return 1;
 		}
@@ -3832,7 +3834,8 @@ int main(void)
 		return 1;
 	}
 	bunix_console_log(netcfg_ready, sizeof(netcfg_ready) - 1);
-	if (bunix_cmdline_has("ext2-test") > 0 &&
+	if ((bunix_cmdline_has("ext2-test") > 0 ||
+	     bunix_cmdline_has("ext2-subject-auth-test") > 0) &&
 	    bunix_cmdline_has("ext2-fsck-test") <= 0) {
 		u64 ext2;
 
@@ -3853,6 +3856,7 @@ int main(void)
 						  BUNIX_SERVICE_EXT2,
 						  BUNIX_RIGHT_SEND);
 		if (ext2 == 0 ||
+		    vfs_grant_subject_task(ext2, vfs_task) != 0 ||
 		    vfs_mount_service(vfs, "/mnt/ext2",
 				      BUNIX_SERVICE_EXT2) != 0 ||
 		    ext2_readonly_selftest(vfs) != 0) {
@@ -4038,7 +4042,8 @@ int main(void)
 	if (bunix_cmdline_has("tmpfs-subject-auth-test") > 0 ||
 	    bunix_cmdline_has("squashfs-subject-auth-test") > 0 ||
 	    bunix_cmdline_has("procfs-subject-auth-test") > 0 ||
-	    bunix_cmdline_has("unionfs-subject-auth-test") > 0) {
+	    bunix_cmdline_has("unionfs-subject-auth-test") > 0 ||
+	    bunix_cmdline_has("ext2-subject-auth-test") > 0) {
 		const struct bunix_launch_cap translator_subject_auth_test_caps[] = {
 			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND,
 			  BUNIX_CAP_NAME },

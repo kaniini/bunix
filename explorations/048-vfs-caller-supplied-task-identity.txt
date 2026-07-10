@@ -141,3 +141,21 @@ Notes:
   test-tmpfs-subject-authority`, `make test-squashfs-subject-authority`, `make
   test-procfs-subject-authority`, and
   `BUNIX_TEST_SET=tmpfs-basic-linux-tests make test-shell-parallel`.
+- `user/rootfs` is currently an empty source directory rather than an active
+  rootfs translator.  The synthetic root filesystem is covered through VFS and
+  its mounted backing translators: squashfs for the read-only lower root, tmpfs
+  for writable upper paths, and unionfs for the merged `/` mount.
+- Added `test-ext2-subject-authority`, which boots the ext2-specific test
+  image, runs the normal ext2 readonly/selftest path through VFS, then launches
+  `mgmt-test` with only names/console authority and verifies direct ext2
+  `BUNIX_PROTO_VFS` open traffic is denied.
+- Ext2 now gates direct VFS-protocol callers with
+  `BUNIX_VFS_GRANT_SUBJECT_TASK`.  Bootstrap delegates VFS as ext2's
+  legitimate direct caller in the ext2 readonly, ext2 root, and ext2 fsck/test
+  launch paths before any VFS-mediated ext2 operation.
+- The ext2-specific EFI test image now packages `mgmt-test.server` so
+  ext2-only authority regressions can use the same marker harness as the
+  generic boot image.
+- Focused verification for the ext2 slice passed: `make
+  test-ext2-subject-authority`, `make test-boot-ext2`, and `make
+  test-vfs-subject-authority`.

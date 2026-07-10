@@ -350,6 +350,25 @@ static int run_unionfs_subject_authority_test(void)
 	return 0;
 }
 
+static int run_ext2_subject_authority_test(void)
+{
+	const u64 ext2 = resolve_service(BUNIX_SERVICE_EXT2,
+					 BUNIX_RIGHT_SEND);
+
+	if (ext2 == 0) {
+		log_text("ext2-subject-auth-test: no ext2\n");
+		return 1;
+	}
+	if (vfs_path_call_status(ext2, BUNIX_VFS_OPEN_BUFFER,
+				 "/hello.txt", 0) == 0) {
+		log_text("ext2-subject-auth-test: direct open succeeded\n");
+		return 1;
+	}
+	log_text("ext2-subject-auth-test: direct open denied\n");
+	log_text("ext2-subject-auth-test: ok\n");
+	return 0;
+}
+
 int main(void)
 {
 	const char user_denied[] = "mgmt-test: user denied\n";
@@ -373,6 +392,9 @@ int main(void)
 	}
 	if (bunix_cmdline_has("unionfs-subject-auth-test") > 0) {
 		return run_unionfs_subject_authority_test();
+	}
+	if (bunix_cmdline_has("ext2-subject-auth-test") > 0) {
+		return run_ext2_subject_authority_test();
 	}
 
 	if (vfs != 0) {

@@ -1,0 +1,5 @@
+ext2: online
+ext2: super ok
+bootstrap: ext2 readonly ok
+ext2-subject-auth-test: direct open denied
+ext2-subject-auth-test: ok
