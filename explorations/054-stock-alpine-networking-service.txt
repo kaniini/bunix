@@ -245,6 +245,37 @@ Validation:
   `BUNIX_SHELL_PART=linux-signaltest make test-shell-part` passed in 5
   seconds after the proc/login fixes, and passed again in 65 seconds after a
   full harness rebuild with the login fallback-yield path.
+- A fresh post-reboot stock OpenRC debug probe reproduced the slow path with
+  current artifacts at
+  `build/failures/20260710T211208Z-30499/20260710T211508Z-30499`.  The late
+  trace is still one OpenRC process repeatedly issuing `faccessat()` and
+  `openat()` against service/provider names such as `devfs`, `bunix-dev`,
+  `hwclock`, `osclock`, `swclock`, `dmesg`, and `modloop`.
+- Added a conservative Linux-server `faccessat()` result cache keyed by process,
+  VFS base handle, path, mode, and flags.  The cache is invalidated by a global
+  VFS mutation epoch bumped on create, remove, link, rename, chmod, chown,
+  truncate, mount, and unmount operations.  This reduces repeated Linux-to-VFS
+  access RPCs without caching across filesystem mutations.
+- The access cache is not sufficient by itself.  A normal stock-networking boot
+  still timed out before `login:` with artifacts at
+  `build/failures/20260710T212042Z-974/20260710T212342Z-974`.
+- The stock networking service declares `need localmount hostname` and orders
+  after `bootmisc`, `hwdrivers`, and `modules`, while `localmount` pulls in
+  `root`, `fsck`, and a `clock` provider.  The previous stock-networking policy
+  enabled only `networking`, which forced OpenRC to resolve a graph full of
+  absent providers.  The policy now enables the stock provider chain in boot
+  using `osclock` as the lightweight clock provider and exposes `bunix-dev` to
+  boot dependencies as well as sysinit.
+- The runlevel-policy change packages correctly:
+  `make test-alpine-rootfs-stock-networking` passed.  A boot probe after adding
+  the provider chain still timed out before `login:` at
+  `build/failures/20260710T212521Z-3051/20260710T212821Z-3051`, and a debug
+  probe still shows repeated provider probing at
+  `build/failures/20260710T212844Z-4237/20260710T213144Z-4237`.
+- Narrow guards after the access-cache change:
+  `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 78
+  seconds, and `BUNIX_SHELL_PART=linux-signaltest make test-shell-part` passed
+  in 5 seconds.
 
 Notes:
 

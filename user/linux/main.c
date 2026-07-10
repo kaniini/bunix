@@ -138,6 +138,7 @@ enum {
 	LINUX_STATFS_FREE_BLOCKS = 16384,
 	LINUX_INITIAL_FDS = 16,
 	LINUX_PIPE_CAPACITY = 65536,
+	LINUX_ACCESS_CACHE_SIZE = 64,
 	LINUX_PROC_SPAWN_LINUX = 2,
 	LINUX_S_IFCHR = 0020000,
 	LINUX_S_IFBLK = 0060000,
@@ -267,6 +268,15 @@ struct linux_fd {
 	struct linux_open_file *open_file;
 };
 
+struct linux_access_cache_entry {
+	u64 valid;
+	u64 base_handle;
+	u64 mode;
+	u64 flags;
+	long result;
+	char path[LINUX_MAX_PATH];
+};
+
 struct linux_process {
 	u64 pid;
 	u64 tid;
@@ -299,6 +309,9 @@ struct linux_process {
 	char *cwd;
 	struct linux_fd *fds;
 	u64 fd_capacity;
+	u64 access_cache_epoch;
+	u64 access_cache_next;
+	struct linux_access_cache_entry access_cache[LINUX_ACCESS_CACHE_SIZE];
 };
 
 struct linux_pipe {
@@ -338,6 +351,7 @@ static struct bunix_map process_by_pid;
 static struct bunix_id_table pipe_ids;
 static char write_buffer[LINUX_MAX_WRITE];
 static struct linux_tty console_tty;
+static u64 linux_vfs_mutation_epoch;
 static struct bunix_map file_refs;
 static struct bunix_map net_socket_refs;
 static struct bunix_map tty_input_tasks;
@@ -1083,6 +1097,22 @@ static void string_copy(char *dst, const char *src)
 	dst[i] = '\0';
 }
 
+static int path_eq(const char *left, const char *right)
+{
+	u64 i = 0;
+
+	if (left == 0 || right == 0) {
+		return left == right;
+	}
+	while (left[i] != '\0' && right[i] != '\0') {
+		if (left[i] != right[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return left[i] == right[i];
+}
+
 static char *path_dup(const char *src)
 {
 	u64 len;
@@ -1577,7 +1607,74 @@ static int linux_process_set_cwd(struct linux_process *process,
 	}
 	bunix_free(process->cwd);
 	process->cwd = copy;
+	process->access_cache_epoch = 0;
 	return 0;
+}
+
+static void linux_vfs_note_mutation(void)
+{
+	linux_vfs_mutation_epoch++;
+	if (linux_vfs_mutation_epoch == 0) {
+		linux_vfs_mutation_epoch = 1;
+	}
+}
+
+static void linux_access_cache_sync(struct linux_process *process)
+{
+	if (process == 0 ||
+	    process->access_cache_epoch == linux_vfs_mutation_epoch) {
+		return;
+	}
+	for (u64 i = 0; i < LINUX_ACCESS_CACHE_SIZE; i++) {
+		process->access_cache[i].valid = 0;
+	}
+	process->access_cache_epoch = linux_vfs_mutation_epoch;
+	process->access_cache_next = 0;
+}
+
+static int linux_access_cache_get(struct linux_process *process,
+				  u64 base_handle, const char *path,
+				  u64 mode, u64 flags, long *result)
+{
+	if (process == 0 || path == 0 || result == 0) {
+		return 0;
+	}
+	linux_access_cache_sync(process);
+	for (u64 i = 0; i < LINUX_ACCESS_CACHE_SIZE; i++) {
+		const struct linux_access_cache_entry *entry =
+			&process->access_cache[i];
+
+		if (entry->valid &&
+		    entry->base_handle == base_handle &&
+		    entry->mode == mode &&
+		    entry->flags == flags &&
+		    path_eq(entry->path, path)) {
+			*result = entry->result;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void linux_access_cache_put(struct linux_process *process,
+				   u64 base_handle, const char *path,
+				   u64 mode, u64 flags, long result)
+{
+	struct linux_access_cache_entry *entry;
+
+	if (process == 0 || path == 0) {
+		return;
+	}
+	linux_access_cache_sync(process);
+	entry = &process->access_cache[process->access_cache_next %
+				      LINUX_ACCESS_CACHE_SIZE];
+	entry->valid = 1;
+	entry->base_handle = base_handle;
+	entry->mode = mode;
+	entry->flags = flags;
+	entry->result = result;
+	string_copy(entry->path, path);
+	process->access_cache_next++;
 }
 
 static long linux_check_name_max(const char *path)
@@ -4411,6 +4508,7 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		if (reply.words[0] != 0) {
 			return linux_vfs_error(reply.words[0]);
 		}
+		linux_vfs_note_mutation();
 		if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER,
 					base_handle, path, &reply) != 0) {
 			return -LINUX_EIO;
@@ -4503,6 +4601,7 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 	struct bunix_msg reply;
 	u64 base_handle;
 	long base_result;
+	long cached_result;
 	long path_result;
 
 	if ((mode & ~(LINUX_R_OK | LINUX_W_OK | LINUX_X_OK)) != 0 ||
@@ -4520,6 +4619,10 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 	if (base_result != 0) {
 		return base_result;
 	}
+	if (linux_access_cache_get(process, base_handle, path, mode, flags,
+				   &cached_result)) {
+		return cached_result;
+	}
 
 	if (linux_vfs_path_call_flags(process, BUNIX_VFS_ACCESS_BUFFER,
 				      base_handle, path, mode,
@@ -4527,8 +4630,13 @@ static long linux_faccessat(struct linux_process *process, u64 dirfd,
 		return -LINUX_EIO;
 	}
 	if (reply.words[0] != 0) {
-		return linux_vfs_error(reply.words[0]);
+		const long result = linux_vfs_error(reply.words[0]);
+
+		linux_access_cache_put(process, base_handle, path, mode, flags,
+				       result);
+		return result;
 	}
+	linux_access_cache_put(process, base_handle, path, mode, flags, 0);
 	return 0;
 }
 
@@ -4570,6 +4678,7 @@ static long linux_unlinkat(struct linux_process *process, u64 dirfd,
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
+	linux_vfs_note_mutation();
 	return 0;
 }
 
@@ -4606,6 +4715,7 @@ static long linux_rmdir(struct linux_process *process, u64 path_len,
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
+	linux_vfs_note_mutation();
 	return 0;
 }
 
@@ -4684,6 +4794,7 @@ static long linux_mkdirat(struct linux_process *process, u64 dirfd,
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
+	linux_vfs_note_mutation();
 	return 0;
 }
 
@@ -4734,6 +4845,7 @@ static long linux_mknodat(struct linux_process *process, u64 dirfd,
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
+	linux_vfs_note_mutation();
 	return 0;
 }
 
@@ -4777,6 +4889,7 @@ static long linux_symlinkat(struct linux_process *process, u64 dirfd,
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
+	linux_vfs_note_mutation();
 	return 0;
 }
 
@@ -4834,6 +4947,7 @@ static long linux_renameat2(struct linux_process *process, u64 olddirfd,
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
+	linux_vfs_note_mutation();
 	return 0;
 }
 
@@ -4892,6 +5006,7 @@ static long linux_linkat(struct linux_process *process, u64 olddirfd,
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
+	linux_vfs_note_mutation();
 	return 0;
 }
 
@@ -4934,6 +5049,7 @@ static long linux_chmodat(struct linux_process *process, u64 dirfd,
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
+	linux_vfs_note_mutation();
 	return 0;
 }
 
@@ -4963,6 +5079,7 @@ static long linux_fchmod(struct linux_process *process, u64 fd, u64 mode)
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
+	linux_vfs_note_mutation();
 	return 0;
 }
 
@@ -4997,6 +5114,7 @@ static long linux_fchown(struct linux_process *process, u64 fd, u64 uid,
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
+	linux_vfs_note_mutation();
 	return 0;
 }
 
@@ -5383,7 +5501,11 @@ static long linux_mount_path_command(u64 service, unsigned int protocol,
 				&reply) != 0) {
 		return -LINUX_ENODEV;
 	}
-	return reply.words[0] == 0 ? 0 : -LINUX_EBUSY;
+	if (reply.words[0] != 0) {
+		return -LINUX_EBUSY;
+	}
+	linux_vfs_note_mutation();
+	return 0;
 }
 
 static long linux_vfs_unmount(const char *target)
@@ -5395,7 +5517,11 @@ static long linux_vfs_unmount(const char *target)
 				&reply) != 0) {
 		return -LINUX_ENOSYS;
 	}
-	return reply.words[0] == 0 ? 0 : linux_vfs_error(reply.words[0]);
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
+	}
+	linux_vfs_note_mutation();
+	return 0;
 }
 
 static long linux_mount(struct linux_process *process, u64 target_len,
@@ -5554,6 +5680,7 @@ static long linux_ftruncate(struct linux_process *process, u64 fd, u64 length)
 		return linux_vfs_error(reply.words[0]);
 	}
 	linux_fd_set_size(process, fd, length);
+	linux_vfs_note_mutation();
 	return 0;
 }
 

@@ -1,5 +1,14 @@
 # action	runlevel	service	target	reason
-add	boot	networking	/etc/init.d/networking	Temporary Bunix networking service using ifupdown-ng and udhcpc until stock Alpine networking is restored.
+add	boot	osclock	/etc/init.d/osclock	Lightweight stock OpenRC clock provider for fsck/root/localmount dependencies.
+add	boot	fsck	/etc/init.d/fsck	Stock networking needs localmount, which needs root/fsck.
+add	boot	root	/etc/init.d/root	Stock localmount expects the root filesystem service to be available.
+add	boot	localmount	/etc/init.d/localmount	Stock networking declares need localmount.
+add	boot	hostname	/etc/init.d/hostname	Stock networking declares need hostname.
+add	boot	bootmisc	/etc/init.d/bootmisc	Normal Alpine boot service required before networking.
+add	boot	modules	/etc/init.d/modules	Stock networking orders after modules.
+add	boot	bunix-dev	/etc/init.d/bunix-dev	Expose the already-mounted Bunix devfs provider to boot-runlevel dependencies.
+add	boot	hwdrivers	/etc/init.d/hwdrivers	Stock networking orders after hwdrivers.
+add	boot	networking	/etc/init.d/networking	Stock Alpine networking service using ifupdown-ng and udhcpc.
 replace	inittab	getty	/bin/login	Bunix login contacts the user server; BusyBox getty/login is intentionally not enabled yet.
 defer	sysinit	devfs	/etc/init.d/devfs	Device filesystem is provided by the Bunix devfs server.
 defer	sysinit/procfs	/proc	/etc/init.d/procfs	Procfs is provided by the Bunix procfs server and mounted through VFS.
