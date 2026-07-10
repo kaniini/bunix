@@ -209,6 +209,22 @@ Validation:
   repeated shell-side service/dependency probing cost without replacing the
   stock scripts or turning cold reads of many small OpenRC files into full-block
   reads.
+- A trial Linux signal-pending optimization was rejected.  Narrowing the
+  kernel's post-syscall signal-pending RPC to selected syscall classes reduced
+  stock OpenRC `signal_pending` volume in debug captures, but it broke the
+  synthetic shell path: `BUNIX_SHELL_PART=linux-signaltest make
+  test-shell-part` stopped after `/bin/first` exited and never reached the
+  login prompt.  The current Linux/SIGCHLD contract still depends on broad
+  post-syscall signal polling, so this should not be reduced without first
+  adding an explicit wakeup/pending-signal mechanism between linux.server and
+  blocked Linux tasks.
+- While investigating the slowdown, a clean-HEAD rebuild of `proc.server` and
+  `linux.server` still reproduced the synthetic shell stop-after-first-exit
+  failure with `BUNIX_SHELL_PART=linux-signaltest make test-shell-part`; latest
+  artifact from this turn:
+  `build/failures/20260710T204030Z-17038/20260710T204150Z-17038`.  Resolve or
+  re-baseline that failure before relying on the shell shard as a guard for
+  stock OpenRC performance changes.
 
 Notes:
 
