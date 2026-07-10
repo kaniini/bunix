@@ -302,6 +302,10 @@ static unsigned short net_checksum_finish(u64 sum);
 static unsigned short icmp_ipv6_checksum(const unsigned char *data, u64 len,
 					 u64 source_hi, u64 source_lo,
 					 u64 dest_hi, u64 dest_lo);
+static unsigned short ipv6_l4_checksum(const unsigned char *data, u64 len,
+				       u64 protocol, u64 source_hi,
+				       u64 source_lo, u64 dest_hi,
+				       u64 dest_lo);
 
 static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo);
 static int net_addr_is_local(u64 family, u64 hi, u64 lo);
@@ -2040,6 +2044,110 @@ static int udp_sendto_external_ipv4(struct udp_socket *socket,
 	return 0;
 }
 
+static int udp_sendto_external_ipv6(struct udp_socket *socket,
+				    const struct net_addr *dest,
+				    const unsigned char *data, u64 len)
+{
+	const struct net_route *route;
+	struct net_interface *iface;
+	unsigned char *frame;
+	u64 source_hi = 0;
+	u64 source_lo = 0;
+	u64 next_hop_hi;
+	u64 next_hop_lo;
+	u64 dest_mac = 0;
+	u64 udp_len;
+	u64 frame_len;
+	unsigned short udp_checksum;
+
+	if (socket == 0 || dest == 0 || data == 0 ||
+	    socket->family != BUNIX_NET_ADDR_FAMILY_IPV6 ||
+	    dest->family != BUNIX_NET_ADDR_FAMILY_IPV6 ||
+	    (dest->hi == 0 && dest->lo == 0) || dest->port == 0 ||
+	    dest->port > 65535 || len > NET_PACKET_MAX) {
+		return -1;
+	}
+	route = net_route_lookup(BUNIX_NET_ADDR_FAMILY_IPV6, dest->hi,
+				 dest->lo);
+	if (route == 0 || (route->flags & BUNIX_NET_ROUTE_FLAG_UP) == 0) {
+		return -1;
+	}
+	iface = interface_find(route->iface);
+	next_hop_hi = (route->flags & BUNIX_NET_ROUTE_FLAG_GATEWAY) != 0 ?
+		      route->gateway_hi : dest->hi;
+	next_hop_lo = (route->flags & BUNIX_NET_ROUTE_FLAG_GATEWAY) != 0 ?
+		      route->gateway_lo : dest->lo;
+	udp_len = 8 + len;
+	frame_len = 14 + 40 + udp_len;
+	if (iface == 0 || iface_ipv6_addr(route->iface, &source_hi,
+					  &source_lo) != 0 ||
+	    iface->mac_hi == 0 || udp_len > 0xffff ||
+	    frame_len > NET_PACKET_MAX ||
+	    (next_hop_hi == 0 && next_hop_lo == 0)) {
+		return -1;
+	}
+	{
+		struct net_neighbor *neighbor =
+			neighbor_find(BUNIX_NET_ADDR_FAMILY_IPV6, next_hop_hi,
+				      next_hop_lo, route->iface);
+
+		if (neighbor != 0) {
+			dest_mac = neighbor->mac_hi;
+		}
+	}
+	if (!socket->bound && udp_bind_socket(socket, 0, 0, 0) != 0) {
+		return -1;
+	}
+	frame = (unsigned char *)bunix_alloc(frame_len);
+	if (frame == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < 6; i++) {
+		frame[i] = dest_mac != 0 ?
+			   (unsigned char)((dest_mac >> ((5 - i) * 8)) & 0xff) :
+			   0xff;
+		frame[6 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	frame[12] = 0x86;
+	frame[13] = 0xdd;
+	ndp_write_ipv6_header(frame, udp_len, NET_PROTO_UDP, 64, source_hi,
+			      source_lo, dest->hi, dest->lo);
+	net_write_be16(frame + 54, socket->local.port);
+	net_write_be16(frame + 56, dest->port);
+	net_write_be16(frame + 58, udp_len);
+	net_write_be16(frame + 60, 0);
+	for (u64 i = 0; i < len; i++) {
+		frame[62 + i] = data[i];
+	}
+	udp_checksum = ipv6_l4_checksum(frame + 54, udp_len, NET_PROTO_UDP,
+					source_hi, source_lo, dest->hi,
+					dest->lo);
+	if (udp_checksum == 0) {
+		udp_checksum = 0xffff;
+	}
+	frame[60] = (unsigned char)((udp_checksum >> 8) & 0xff);
+	frame[61] = (unsigned char)(udp_checksum & 0xff);
+	if (dest_mac == 0) {
+		if (pending_frame_add(BUNIX_NET_ADDR_FAMILY_IPV6, next_hop_hi,
+				      next_hop_lo, route->iface, frame,
+				      frame_len) != 0) {
+			bunix_free(frame);
+			return -1;
+		}
+		ndp_request_ipv6(iface, source_hi, source_lo, next_hop_hi,
+				 next_hop_lo);
+		bunix_free(frame);
+		return 0;
+	}
+	if (packet_tx_enqueue_copy(iface, frame, frame_len) != 0) {
+		bunix_free(frame);
+		return -1;
+	}
+	bunix_free(frame);
+	return 0;
+}
+
 static void udp_enqueue_external_ipv4(struct udp_socket *socket, u64 src_ip,
 				      u64 src_port, const unsigned char *data,
 				      u64 len)
@@ -2119,6 +2227,100 @@ static void packet_ingress_udp_ipv4(const unsigned char *packet, u64 len)
 		if (udp_socket_accepts_ipv4(socket, dst_ip, dst_port)) {
 			udp_enqueue_external_ipv4(socket, src_ip, src_port,
 						  udp + 8, udp_len - 8);
+		}
+	}
+}
+
+static int udp_socket_accepts_ipv6(struct udp_socket *socket, u64 dst_hi,
+				   u64 dst_lo, u64 dst_port)
+{
+	if (socket == 0 || !socket->bound ||
+	    socket->family != BUNIX_NET_ADDR_FAMILY_IPV6 ||
+	    socket->local.port != dst_port) {
+		return 0;
+	}
+	return (socket->local.hi == 0 && socket->local.lo == 0) ||
+	       (socket->local.hi == dst_hi && socket->local.lo == dst_lo);
+}
+
+static void udp_enqueue_external_ipv6(struct udp_socket *socket, u64 src_hi,
+				      u64 src_lo, u64 src_port,
+				      const unsigned char *data, u64 len)
+{
+	struct udp_datagram *datagram;
+
+	if (socket == 0 || len > NET_PACKET_MAX) {
+		return;
+	}
+	datagram = (struct udp_datagram *)bunix_alloc(sizeof(*datagram) + len);
+	if (datagram == 0) {
+		return;
+	}
+	datagram->next = 0;
+	datagram->source.family = BUNIX_NET_ADDR_FAMILY_IPV6;
+	datagram->source.hi = src_hi;
+	datagram->source.lo = src_lo;
+	datagram->source.port = src_port;
+	datagram->checksum = 0;
+	datagram->len = len;
+	for (u64 i = 0; i < len; i++) {
+		datagram->data[i] = data[i];
+	}
+	if (socket->rx_tail != 0) {
+		socket->rx_tail->next = datagram;
+	} else {
+		socket->rx_head = datagram;
+	}
+	socket->rx_tail = datagram;
+	socket->rx_len++;
+}
+
+static void packet_ingress_udp_ipv6(const unsigned char *packet, u64 len)
+{
+	const unsigned char *ip;
+	const unsigned char *udp;
+	u64 payload_len;
+	u64 udp_len;
+	u64 src_hi;
+	u64 src_lo;
+	u64 dst_hi;
+	u64 dst_lo;
+	u64 src_port;
+	u64 dst_port;
+
+	if (packet == 0 || len < 14 + 40 + 8 ||
+	    net_read_be16(packet + 12) != NET_ETH_IPV6) {
+		return;
+	}
+	ip = packet + 14;
+	if ((ip[0] >> 4) != 6 || ip[6] != NET_PROTO_UDP) {
+		return;
+	}
+	payload_len = net_read_be16(ip + 4);
+	if (payload_len < 8 || len < 14 + 40 + payload_len) {
+		return;
+	}
+	udp = ip + 40;
+	udp_len = net_read_be16(udp + 4);
+	if (udp_len < 8 || udp_len > payload_len) {
+		return;
+	}
+	src_hi = net_read_be64(ip + 8);
+	src_lo = net_read_be64(ip + 16);
+	dst_hi = net_read_be64(ip + 24);
+	dst_lo = net_read_be64(ip + 32);
+	if (!net_addr_is_local(BUNIX_NET_ADDR_FAMILY_IPV6, dst_hi, dst_lo)) {
+		return;
+	}
+	src_port = net_read_be16(udp);
+	dst_port = net_read_be16(udp + 2);
+	for (struct udp_socket *socket = udp_sockets; socket != 0;
+	     socket = socket->next) {
+		if (udp_socket_accepts_ipv6(socket, dst_hi, dst_lo,
+					    dst_port)) {
+			udp_enqueue_external_ipv6(socket, src_hi, src_lo,
+						  src_port, udp + 8,
+						  udp_len - 8);
 		}
 	}
 }
@@ -2218,6 +2420,7 @@ static void reply_packet_rx_submit(struct bunix_msg *reply,
 	packet_ingress_learn_ipv6_neighbor(iface, packet->data, packet->len);
 	packet_ingress_ndp_ipv6(iface, packet->data, packet->len);
 	packet_ingress_udp_ipv4(packet->data, packet->len);
+	packet_ingress_udp_ipv6(packet->data, packet->len);
 	packet_ingress_tcp_ipv4(iface, packet->data, packet->len);
 	packet_ingress_icmp_ipv4(packet->data, packet->len);
 	packet_ingress_icmp_ipv6(packet->data, packet->len);
@@ -2747,8 +2950,11 @@ static void reply_udp_connect(struct bunix_msg *reply,
 				socket->family == BUNIX_NET_ADDR_FAMILY_IPV4 &&
 				hi == 0 &&
 				net_route_lookup(socket->family, hi, lo) != 0;
+	const int routed_ipv6 = socket != 0 &&
+				socket->family == BUNIX_NET_ADDR_FAMILY_IPV6 &&
+				net_route_lookup(socket->family, hi, lo) != 0;
 
-	if (socket == 0 || (!local && !routed_ipv4) ||
+	if (socket == 0 || (!local && !routed_ipv4 && !routed_ipv6) ||
 	    port == 0 || port > 65535) {
 		reply->words[0] = (u64)-1;
 		return;
@@ -2822,7 +3028,9 @@ static int udp_deliver_to(struct udp_socket *source, const struct net_addr *dest
 		return -1;
 	}
 	if (!net_addr_is_local(source->family, dest_addr->hi, dest_addr->lo)) {
-		return udp_sendto_external_ipv4(source, dest_addr, data, len);
+		return source->family == BUNIX_NET_ADDR_FAMILY_IPV6 ?
+		       udp_sendto_external_ipv6(source, dest_addr, data, len) :
+		       udp_sendto_external_ipv4(source, dest_addr, data, len);
 	}
 	if (!source->bound && udp_bind_socket(source, 0, 0, 0) != 0) {
 		return -1;
@@ -2864,7 +3072,10 @@ static void reply_udp_send(struct bunix_msg *reply,
 			      socket->peer.lo)) {
 		delivered = udp_deliver(socket, data, len);
 	} else {
-		delivered = udp_sendto_external_ipv4(socket, &socket->peer,
+		delivered = socket->family == BUNIX_NET_ADDR_FAMILY_IPV6 ?
+			    udp_sendto_external_ipv6(socket, &socket->peer,
+						     data, len) :
+			    udp_sendto_external_ipv4(socket, &socket->peer,
 						     data, len);
 	}
 	bunix_free(data);
@@ -3781,9 +3992,10 @@ static unsigned short icmp_ipv4_checksum(const unsigned char *data, u64 len)
 	return net_checksum_finish(net_checksum_sum(data, len, 0));
 }
 
-static unsigned short icmp_ipv6_checksum(const unsigned char *data, u64 len,
-					 u64 source_hi, u64 source_lo,
-					 u64 dest_hi, u64 dest_lo)
+static unsigned short ipv6_l4_checksum(const unsigned char *data, u64 len,
+				       u64 protocol, u64 source_hi,
+				       u64 source_lo, u64 dest_hi,
+				       u64 dest_lo)
 {
 	unsigned char pseudo[40];
 
@@ -3798,11 +4010,19 @@ static unsigned short icmp_ipv6_checksum(const unsigned char *data, u64 len,
 	}
 	pseudo[34] = (unsigned char)((len >> 8) & 0xff);
 	pseudo[35] = (unsigned char)(len & 0xff);
-	pseudo[39] = NET_PROTO_ICMPV6;
+	pseudo[39] = (unsigned char)protocol;
 	return net_checksum_finish(net_checksum_sum(data, len,
 						    net_checksum_sum(pseudo,
 								     sizeof(pseudo),
 								     0)));
+}
+
+static unsigned short icmp_ipv6_checksum(const unsigned char *data, u64 len,
+					 u64 source_hi, u64 source_lo,
+					 u64 dest_hi, u64 dest_lo)
+{
+	return ipv6_l4_checksum(data, len, NET_PROTO_ICMPV6, source_hi,
+				source_lo, dest_hi, dest_lo);
 }
 
 static void icmp_set_checksum(unsigned char *data, u64 len, u64 family,

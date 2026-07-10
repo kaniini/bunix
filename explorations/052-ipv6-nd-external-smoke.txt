@@ -22,7 +22,7 @@ Constraints:
 
 Tasks:
 
-- [ ] Add IPv6 Ethernet encapsulation and decapsulation in NET0 for
+- [x] Add IPv6 Ethernet encapsulation and decapsulation in NET0 for
       packet-interface routes.
 - [x] Implement ICMPv6 neighbor solicitation and neighbor advertisement parsing
       and generation.
@@ -34,7 +34,7 @@ Tasks:
       tests proving the deferral is isolated from configured static addresses.
 - [x] Add packet-interface IPv6 ICMP echo egress/ingress smokes with the
       host-side peer.
-- [ ] Add packet-interface IPv6 UDP egress/ingress smokes with the host-side
+- [x] Add packet-interface IPv6 UDP egress/ingress smokes with the host-side
       peer.
 - [ ] Add packet-interface IPv6 TCP SYN connect/accept smokes with the
       host-side peer.
@@ -64,3 +64,7 @@ Progress:
 - `make test-boot-virtio-net-socket-peer-ipv6` passed, covering BusyBox
   `ping -6 2001:db8:18::2`, `/proc/net/ndisc`, `/proc/net/dev` counters, and
   clean guest poweroff.
+- NET0 now supports IPv6 UDP packet-interface egress and ingress using the
+  same route, neighbor-cache, NDP, and pending-frame path as ICMPv6.  The host
+  peer echoes UDPv6 datagrams, and `make test-boot-virtio-net-socket-peer-udp6`
+  passed with `/bin/nettest udp6-external`.

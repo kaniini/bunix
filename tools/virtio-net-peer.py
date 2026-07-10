@@ -12,6 +12,7 @@ ETH_IPV4 = 0x0800
 ETH_ARP = 0x0806
 ETH_IPV6 = 0x86DD
 IP_ICMP = 1
+IP_UDP = 17
 IP_ICMPV6 = 58
 ICMPV6_ECHO_REQUEST = 128
 ICMPV6_ECHO_REPLY = 129
@@ -146,6 +147,23 @@ def icmpv6_echo_reply(peer_mac, peer_ip6, guest_mac, guest_ip6,
     return ethernet(guest_mac, peer_mac, ETH_IPV6, ip + bytes(icmp))
 
 
+def udp6_echo_reply(peer_mac, peer_ip6, guest_mac, guest_ip6, payload):
+    if len(payload) < 8:
+        return None
+    src_port, dst_port, udp_len, _ = struct.unpack("!HHHH", payload[:8])
+    if udp_len < 8 or udp_len > len(payload):
+        return None
+    udp = bytearray(payload[:udp_len])
+    struct.pack_into("!HHH", udp, 0, dst_port, src_port, udp_len)
+    struct.pack_into("!H", udp, 6, 0)
+    csum = ipv6_checksum(peer_ip6, guest_ip6, IP_UDP, udp)
+    if csum == 0:
+        csum = 0xffff
+    struct.pack_into("!H", udp, 6, csum)
+    ip = ipv6_header(peer_ip6, guest_ip6, IP_UDP, len(udp))
+    return ethernet(guest_mac, peer_mac, ETH_IPV6, ip + bytes(udp))
+
+
 def parse_mcast(text):
     host, sep, port = text.rpartition(":")
     if not sep or not host:
@@ -235,21 +253,28 @@ class Peer:
         next_header = ip[6]
         src_ip = ip[8:24]
         dst_ip = ip[24:40]
-        if len(ip) < 40 + payload_len or next_header != IP_ICMPV6:
+        if len(ip) < 40 + payload_len:
             return
         payload = ip[40:40 + payload_len]
         if not payload:
             return
-        if payload[0] == ICMPV6_NEIGHBOR_SOLICIT:
+        if next_header == IP_ICMPV6 and payload[0] == ICMPV6_NEIGHBOR_SOLICIT:
             reply = icmpv6_neighbor_advert(self.peer_mac, self.peer_ip6,
                                            frame[6:12], src_ip, payload)
             if reply is not None:
                 self.log(f"ndp ns from {ipaddress.IPv6Address(src_ip)}")
                 self.send(reply)
-        elif payload[0] == ICMPV6_ECHO_REQUEST and dst_ip == self.peer_ip6:
+        elif (next_header == IP_ICMPV6 and
+              payload[0] == ICMPV6_ECHO_REQUEST and dst_ip == self.peer_ip6):
             self.log(f"icmp6 echo from {ipaddress.IPv6Address(src_ip)}")
             reply = icmpv6_echo_reply(self.peer_mac, self.peer_ip6,
                                       frame[6:12], src_ip, payload)
+            if reply is not None:
+                self.send(reply)
+        elif next_header == IP_UDP and dst_ip == self.peer_ip6:
+            self.log(f"udp6 from {ipaddress.IPv6Address(src_ip)}")
+            reply = udp6_echo_reply(self.peer_mac, self.peer_ip6,
+                                    frame[6:12], src_ip, payload)
             if reply is not None:
                 self.send(reply)
 

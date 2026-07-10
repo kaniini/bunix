@@ -232,6 +232,45 @@ static void udp6_test(void)
 	say("nettest: udp6 ok\n");
 }
 
+static void udp6_external_test(void)
+{
+	const char payload[] = "udp6-external";
+	char buffer[32];
+	struct sockaddr_in6 peer;
+	struct pollfd pfd;
+	int fd = socket(AF_INET6, SOCK_DGRAM, 0);
+	ssize_t nread;
+
+	if (fd < 0) {
+		die("nettest: udp6 external socket failed\n");
+	}
+	memset(&peer, 0, sizeof(peer));
+	peer.sin6_family = AF_INET6;
+	peer.sin6_port = htons(12345);
+	if (inet_pton(AF_INET6, "2001:db8:18::2", &peer.sin6_addr) != 1) {
+		die("nettest: udp6 external addr failed\n");
+	}
+	if (connect(fd, (struct sockaddr *)&peer, sizeof(peer)) != 0) {
+		die("nettest: udp6 external connect failed\n");
+	}
+	if (write(fd, payload, sizeof(payload)) != (ssize_t)sizeof(payload)) {
+		die("nettest: udp6 external write failed\n");
+	}
+	pfd.fd = fd;
+	pfd.events = POLLIN;
+	pfd.revents = 0;
+	if (poll(&pfd, 1, 4000) != 1 || (pfd.revents & POLLIN) == 0) {
+		die("nettest: udp6 external poll failed\n");
+	}
+	nread = read(fd, buffer, sizeof(buffer));
+	if (nread != (ssize_t)sizeof(payload) ||
+	    memcmp(buffer, payload, sizeof(payload)) != 0) {
+		die("nettest: udp6 external read failed\n");
+	}
+	close(fd);
+	say("nettest: udp6 external ok\n");
+}
+
 static void tcp_test(void)
 {
 	const char client_payload[] = "tcp-client";
@@ -530,8 +569,12 @@ static void edge_test(void)
 	say("nettest: edges ok\n");
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+	if (argc == 2 && strcmp(argv[1], "udp6-external") == 0) {
+		udp6_external_test();
+		return 0;
+	}
 	udp_test();
 	udp6_test();
 	tcp_test();
