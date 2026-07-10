@@ -2,8 +2,10 @@ Plan BPI-F3 WiFi and Bluetooth support.
 
 Status:
 
-- Planned.  Start after USB, PCIe/M.2, and core networking are stable enough
-  to identify how the board's wireless hardware is attached.
+- Postponed.  Do not start BPI-F3-specific WiFi/Bluetooth work until the
+  generic riscv64 port boots an Alpine environment in QEMU, exploration 070 has
+  been explicitly resumed, and USB, PCIe/M.2, and core networking are stable
+  enough to identify how the board's wireless hardware is attached.
 
 Problem:
 

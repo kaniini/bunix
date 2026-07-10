@@ -2,8 +2,11 @@ Bring up BPI-F3 eMMC and microSD storage as Bunix block devices.
 
 Status:
 
-- Planned.  Start after exploration 070 proves the BPI-F3 first hardware boot
-  milestone and the firmware device tree has been captured from real hardware.
+- Postponed.  Do not start BPI-F3-specific storage work until the generic
+  riscv64 port boots an Alpine environment in QEMU and exploration 070 has
+  been explicitly resumed.
+- Start after exploration 070 proves the BPI-F3 first hardware boot milestone
+  and the firmware device tree has been captured from real hardware.
 
 Problem:
 

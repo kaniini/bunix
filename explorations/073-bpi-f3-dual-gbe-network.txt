@@ -2,9 +2,12 @@ Bring up the BPI-F3 dual Gigabit Ethernet ports.
 
 Status:
 
-- Planned.  Start after the first BPI-F3 boot milestone and after the generic
-  Bunix networking stack has enough physical-NIC hooks to avoid hardcoding
-  board policy in the kernel.
+- Postponed.  Do not start BPI-F3-specific Ethernet work until the generic
+  riscv64 port boots an Alpine environment in QEMU and exploration 070 has
+  been explicitly resumed.
+- Start after the first BPI-F3 boot milestone and after the generic Bunix
+  networking stack has enough physical-NIC hooks to avoid hardcoding board
+  policy in the kernel.
 
 Problem:
 

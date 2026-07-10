@@ -2,8 +2,10 @@ Bring up BPI-F3 watchdog, reset, and board power controls.
 
 Status:
 
-- Planned.  Start after SBI poweroff/reboot behavior is characterized on real
-  hardware.
+- Postponed.  Do not start BPI-F3-specific watchdog/reset work until the
+  generic riscv64 port boots an Alpine environment in QEMU and exploration 070
+  has been explicitly resumed.
+- Start after SBI poweroff/reboot behavior is characterized on real hardware.
 
 Problem:
 
