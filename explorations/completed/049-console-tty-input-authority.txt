@@ -66,7 +66,7 @@ Tasks:
       generated terminal signals.
 - [x] Add regression tests for input injection, cross-session SIGINT, and
       unauthorized `TIOCSPGRP`.
-- [ ] Run focused login/TTY shell tests and full tests before completion.
+- [x] Run focused login/TTY shell tests and full tests before completion.
 
 Notes:
 
@@ -96,8 +96,8 @@ Notes:
   the Bunix user-server login session ID.  A failed attempt to test
   `setsid sleep` surviving foreground Ctrl-C exposed that using the login
   session ID let `setsid` children still look like controlling-TTY members.
-  That was corrected, but a stable cross-session generated-SIGINT regression
-  still needs to be designed before the regression-test task is complete.
+  That was corrected and then covered with a dedicated cross-session
+  generated-SIGINT regression.
 - Added `/bin/ttytest` and a `tty-foreground` shell shard.  The test exercises
   real musl `ioctl(1, TIOCGPGRP/TIOCSPGRP, ...)` calls, verifies a bogus
   foreground pgid is denied, and verifies setting/restoring the caller's own
@@ -116,3 +116,7 @@ Notes:
   foreground reader while the separate session survives.
 - Focused verification for the generated-signal regression passed:
   `BUNIX_TEST_SET=tty-sigint-session make test-shell-parallel`.
+- Completion verification passed: `make test-tty-input-authority`,
+  `BUNIX_TEST_SET=tty-foreground,tty-sigint-session,interactive-tty,login-smoke,relogin-session
+  make test-shell-parallel`, and full `make test`
+  (`build/test-runs/20260710T010851Z-20783`, 27 shards launched, 0 skipped).
