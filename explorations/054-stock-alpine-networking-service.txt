@@ -168,6 +168,11 @@ Validation:
   missing provider state through VFS.  The next fix should improve the general
   VFS/Linux path behavior that makes those probes expensive or incorrect,
   rather than adding another generated networking-service workaround.
+- A later no-debug stock boot measurement was allowed to run past 390 seconds
+  of host time.  It eventually printed the visible fsck `[ ok ]` line but still
+  did not advance to networking, default runlevel, or login.  This rules out a
+  small timeout adjustment; the service wrapper is effectively stuck or doing
+  unbounded OpenRC state/path probing after fsck succeeds.
 
 Notes:
 
