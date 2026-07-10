@@ -309,6 +309,9 @@ struct linux_pipe {
 };
 
 struct linux_tty {
+	u64 session_id;
+	u64 owner_pid;
+	u64 foreground_pgid;
 	char termios[LINUX_TERM_SIZE];
 	char line[256];
 	u64 line_len;
@@ -331,7 +334,6 @@ static struct bunix_map file_refs;
 static struct bunix_map net_socket_refs;
 static struct bunix_map tty_input_tasks;
 static u64 next_pid = 1;
-static u64 foreground_pgid = 1;
 static u64 user_service;
 static u64 utmpfs_service;
 static u64 procfs_service;
@@ -350,6 +352,12 @@ static int linux_tty_read_queue_push(struct linux_tty *tty, char c);
 static void linux_tty_wake_reader(struct linux_tty *tty);
 static void linux_tty_cancel_reader(struct linux_tty *tty,
 				    struct linux_process *process);
+static int linux_tty_session_matches(const struct linux_tty *tty,
+				     const struct linux_process *process);
+static void linux_tty_bind_session(struct linux_tty *tty,
+				   const struct linux_process *process);
+static void linux_tty_note_process(struct linux_tty *tty,
+				   const struct linux_process *process);
 static u64 string_len(const char *text);
 static long linux_check_name_max(const char *path);
 static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
@@ -564,6 +572,8 @@ static long linux_attach_session(struct linux_process *process, u64 session_id)
 	}
 	process->session_id = session_id;
 	process->session_owner = 1;
+	linux_tty_bind_session(&console_tty, process);
+	console_tty.foreground_pgid = process->pgid;
 	return linux_user_session_set_foreground(session_id, process->pgid);
 }
 
@@ -2042,9 +2052,7 @@ static long linux_register_process(u64 bunix_task, u64 ppid, u64 session_id,
 		bunix_free(process);
 		return -LINUX_ESRCH;
 	}
-	if (foreground_pgid == 0 || pid == 1) {
-		foreground_pgid = pid;
-	}
+	linux_tty_note_process(&console_tty, process);
 	if (session_id != 0) {
 		(void)linux_user_session_set_foreground(session_id,
 							process->pgid);
@@ -2163,6 +2171,36 @@ static int linux_same_session(const struct linux_process *left,
 		       left->session_id == right->session_id;
 	}
 	return left->sid == right->sid;
+}
+
+static u64 linux_process_tty_session(const struct linux_process *process)
+{
+	if (process == 0) {
+		return 0;
+	}
+	return process->session_id != 0 ? process->session_id : process->sid;
+}
+
+static int linux_tty_session_matches(const struct linux_tty *tty,
+				     const struct linux_process *process)
+{
+	const u64 session = linux_process_tty_session(process);
+
+	return tty != 0 && process != 0 && session != 0 &&
+	       (tty->session_id == 0 || tty->session_id == session);
+}
+
+static void linux_tty_bind_session(struct linux_tty *tty,
+				   const struct linux_process *process)
+{
+	if (tty == 0 || process == 0) {
+		return;
+	}
+	tty->session_id = linux_process_tty_session(process);
+	tty->owner_pid = process->pid;
+	if (tty->foreground_pgid == 0) {
+		tty->foreground_pgid = process->pgid;
+	}
 }
 
 static int linux_pgrp_exists(u64 pgid)
@@ -2546,6 +2584,40 @@ static long linux_rt_sigaction(struct linux_process *process, u64 signal,
 	return 0;
 }
 
+static int linux_pgrp_exists_in_session(u64 pgid,
+					const struct linux_process *source)
+{
+	for (u64 i = 0;; i++) {
+		struct linux_process *process =
+			(struct linux_process *)bunix_map_at(&process_by_pid,
+							     i);
+
+		if (process == 0) {
+			break;
+		}
+		if (!process->exited &&
+		    process->pgid == pgid &&
+		    linux_same_session(source, process)) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void linux_tty_note_process(struct linux_tty *tty,
+				   const struct linux_process *process)
+{
+	if (tty == 0 || process == 0) {
+		return;
+	}
+	if (tty->session_id == 0) {
+		linux_tty_bind_session(tty, process);
+	}
+	if (tty->foreground_pgid == 0 || process->pid == 1) {
+		tty->foreground_pgid = process->pgid;
+	}
+}
+
 static u64 linux_signal_deliverable(const struct linux_process *process)
 {
 	if (process == 0) {
@@ -2639,18 +2711,29 @@ static long linux_rt_sigtimedwait(struct linux_process *process, u64 set,
 
 static u64 linux_foreground_pgid(const struct linux_process *process)
 {
-	(void)process;
-	return foreground_pgid;
+	if (!linux_tty_session_matches(&console_tty, process)) {
+		return 0;
+	}
+	return console_tty.foreground_pgid;
 }
 
 static long linux_set_foreground_pgid(struct linux_process *process, u64 pgid)
 {
-	(void)process;
-
-	if (pgid == 0) {
+	if (process == 0 || pgid == 0) {
 		return -LINUX_EINVAL;
 	}
-	foreground_pgid = pgid;
+	if (!linux_tty_session_matches(&console_tty, process)) {
+		return -LINUX_ENOTTY;
+	}
+	if (!linux_pgrp_exists_in_session(pgid, process)) {
+		return -LINUX_EPERM;
+	}
+	linux_tty_bind_session(&console_tty, process);
+	console_tty.foreground_pgid = pgid;
+	if (process->session_id != 0) {
+		(void)linux_user_session_set_foreground(process->session_id,
+							pgid);
+	}
 	return 0;
 }
 
@@ -2956,7 +3039,9 @@ static long linux_setsid(struct linux_process *process)
 
 	process->sid = process->pid;
 	process->pgid = process->pid;
-	(void)linux_set_foreground_pgid(process, process->pgid);
+	if (linux_tty_session_matches(&console_tty, process)) {
+		console_tty.foreground_pgid = process->pgid;
+	}
 	return (long)process->sid;
 }
 
@@ -3176,8 +3261,8 @@ static void linux_tty_interrupt_foreground(struct linux_tty *tty)
 		}
 	}
 
-	if (foreground_pgid != 0) {
-		(void)linux_signal_pgrp(0, foreground_pgid, LINUX_SIGINT);
+	if (tty != 0 && tty->foreground_pgid != 0) {
+		(void)linux_signal_pgrp(0, tty->foreground_pgid, LINUX_SIGINT);
 	}
 }
 
@@ -3580,9 +3665,12 @@ static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
 		if (buffer == 0) {
 			return -LINUX_EFAULT;
 		}
+		pgid = linux_foreground_pgid(process);
+		if (pgid == 0) {
+			return -LINUX_ENOTTY;
+		}
 		zero_bytes(data, sizeof(data));
-		store_u32(data, 0,
-			  (unsigned int)linux_foreground_pgid(process));
+		store_u32(data, 0, (unsigned int)pgid);
 		return bunix_buffer_write(buffer, 0, data, 4) == 0 ?
 		       0 : -LINUX_EFAULT;
 	case LINUX_TIOCSPGRP:

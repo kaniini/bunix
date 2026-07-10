@@ -37,6 +37,7 @@ shell_parts=${BUNIX_SHELL_PART:-all}
 . "$script_dir/shell-tests/rootfs-vfs-proc-dev.sh"
 . "$script_dir/shell-tests/tmpfs-basic-linux-tests.sh"
 . "$script_dir/shell-tests/linux-signaltest.sh"
+. "$script_dir/shell-tests/tty-foreground.sh"
 . "$script_dir/shell-tests/path-limits-statfs.sh"
 . "$script_dir/shell-tests/union-root-user.sh"
 . "$script_dir/shell-tests/tmpfs-extended.sh"
@@ -301,7 +302,7 @@ require_supported_parts() {
 	for part do
 		case "$part" in
 		all|vfs|procfs|devfs|tmpfs|path|statfs|large-io|mount|\
-		smoke|login-smoke|relogin-session|exec-argv-pipe|procfs-cmdline|rootfs-vfs-proc-dev|rootfs-vfs-paths|procfs-sysfs-surface|devfs-console-surface|linux-signaltest|\
+		smoke|login-smoke|relogin-session|exec-argv-pipe|procfs-cmdline|rootfs-vfs-proc-dev|rootfs-vfs-paths|procfs-sysfs-surface|devfs-console-surface|linux-signaltest|tty-foreground|\
 		network-loopback-ping|scheduler-bench|privileged-native-denial|tmpfs-basic-linux-tests|path-limits-statfs|union-root-user|\
 		tmpfs-extended|large-io-mount|interactive-tty|root-login-union|\
 		root-tmpfs-chown|long-login|root-mount-soak)
@@ -473,6 +474,12 @@ if part_selected linux-signaltest; then
 	run_linux_signaltest
 fi
 
+if part_selected tty-foreground; then
+	begin_shard tty-foreground
+	login_user_if_needed
+	run_tty_foreground
+fi
+
 if part_selected path-limits-statfs; then
 	begin_shard path-limits-statfs
 	login_user_if_needed
@@ -564,6 +571,11 @@ fi
 if part_selected linux-signaltest; then
 	check_linux_signaltest
 	finish_shard linux-signaltest
+fi
+
+if part_selected tty-foreground; then
+	check_tty_foreground
+	finish_shard tty-foreground
 fi
 
 if part_selected exec-argv-pipe; then

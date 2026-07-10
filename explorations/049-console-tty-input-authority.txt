@@ -61,8 +61,8 @@ Tasks:
       non-console principal and observes whether input is delivered.
 - [x] Define the console/TTY input authority and how bootstrap delegates it.
 - [x] Gate TTY input messages on that authority.
-- [ ] Replace global foreground terminal state with per-TTY/session state.
-- [ ] Add controlling-terminal checks for foreground process-group ioctls and
+- [x] Replace global foreground terminal state with per-TTY/session state.
+- [x] Add controlling-terminal checks for foreground process-group ioctls and
       generated terminal signals.
 - [ ] Add regression tests for input injection, cross-session SIGINT, and
       unauthorized `TIOCSPGRP`.
@@ -83,3 +83,21 @@ Notes:
   non-console sender cannot inject a TTY input buffer.
 - Focused verification passed: `make test-tty-input-authority` and
   `BUNIX_TEST_SET=interactive-tty make test-shell-parallel`.
+- Moved foreground process-group state from the global `foreground_pgid` to
+  `struct linux_tty`, with a session owner and foreground pgid on the console
+  TTY object.  Linux registration, session attach, and `setsid` now update the
+  console TTY through that object rather than ambient global state.
+- `TIOCGPGRP`, `TIOCSPGRP`, and terminal-generated SIGINT now consult the
+  console TTY object.  `TIOCSPGRP` requires the caller to own the controlling
+  TTY session and the requested process group to exist in the same Linux
+  session; bogus or cross-session pgids are rejected instead of overwriting
+  foreground state.
+- Added `/bin/ttytest` and a `tty-foreground` shell shard.  The test exercises
+  real musl `ioctl(1, TIOCGPGRP/TIOCSPGRP, ...)` calls, verifies a bogus
+  foreground pgid is denied, and verifies setting/restoring the caller's own
+  process group still works.
+- Focused verification for the foreground slice passed: `make
+  test-tty-input-authority`,
+  `BUNIX_TEST_SET=interactive-tty,login-smoke,relogin-session make
+  test-shell-parallel`, and `BUNIX_TEST_SET=tty-foreground make
+  test-shell-parallel`.

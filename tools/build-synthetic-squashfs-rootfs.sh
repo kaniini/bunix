@@ -88,7 +88,7 @@ for name in first alloctest ipcstress login lxtest getdentstest vforkstress \
 	execok readbig mmapbig mmaphuge execbig phdrstress musl-hello dyn-hello \
 	fputest iovtest fchmodattest waitpgidtest execlongtest auxidtest \
 	pathmaxtest patherrtest statidtest fcntllocktest sysracetest \
-	signaltest faulttest lowmemtest schedstress schedbench uptimetest nettest \
+	signaltest ttytest faulttest lowmemtest schedstress schedbench uptimetest nettest \
 	privtest; do
 	install_file "/bin/$name" "$module_dir/$name.user" 0555
 done
