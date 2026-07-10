@@ -64,7 +64,7 @@ Tasks:
 - [x] Replace global foreground terminal state with per-TTY/session state.
 - [x] Add controlling-terminal checks for foreground process-group ioctls and
       generated terminal signals.
-- [ ] Add regression tests for input injection, cross-session SIGINT, and
+- [x] Add regression tests for input injection, cross-session SIGINT, and
       unauthorized `TIOCSPGRP`.
 - [ ] Run focused login/TTY shell tests and full tests before completion.
 
@@ -110,3 +110,9 @@ Notes:
 - After correcting the TTY session key, focused verification passed again with
   `BUNIX_TEST_SET=interactive-tty make test-shell-parallel` and
   `BUNIX_TEST_SET=tty-foreground make test-shell-parallel`.
+- Added `/bin/ttysigtest` and a `tty-sigint-session` shell shard.  The test
+  forks a foreground reader and a separate `setsid()` sleeper, sends terminal
+  Ctrl-C from the harness, and verifies the generated SIGINT reaches only the
+  foreground reader while the separate session survives.
+- Focused verification for the generated-signal regression passed:
+  `BUNIX_TEST_SET=tty-sigint-session make test-shell-parallel`.
