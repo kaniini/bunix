@@ -114,6 +114,28 @@ materialize_openrc_policy() {
 	done < "$runlevel_policy"
 }
 
+install_bunix_dev_provider() {
+	cat > "$root/etc/init.d/bunix-dev" <<'EOF_BUNIX_DEV'
+#!/sbin/openrc-run
+
+description="Declare Bunix devfs availability to OpenRC"
+
+depend()
+{
+	provide dev dev-mount
+	before hwdrivers machine-id fsck
+}
+
+start()
+{
+	return 0
+}
+EOF_BUNIX_DEV
+	chmod 0755 "$root/etc/init.d/bunix-dev"
+	mkdir -p "$root/etc/runlevels/sysinit"
+	ln -sf /etc/init.d/bunix-dev "$root/etc/runlevels/sysinit/bunix-dev"
+}
+
 apk_add_rootfs() {
 	if [ -n "$apk_arch" ]; then
 		# shellcheck disable=SC2086
@@ -286,6 +308,9 @@ stock)
 esac
 
 materialize_openrc_policy
+if [ "$networking_service" = stock ]; then
+	install_bunix_dev_provider
+fi
 write_runlevel_inventory "$root" "$bunix_runlevels"
 
 find "$root/var/cache/apk" -type f -delete 2>/dev/null || true

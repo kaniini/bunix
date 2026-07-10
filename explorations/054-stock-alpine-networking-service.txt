@@ -103,6 +103,16 @@ Implementation Notes:
   `build/modules/alpine-stock-networking-disk0.sqfs` with the stock service,
   packages it into a separate VirtIO-net ESP, and runs the Alpine smoke boot
   markers without disturbing the default generated-service image.
+- Added a stock-mode-only `/etc/init.d/bunix-dev` OpenRC provider that declares
+  the already-mounted Bunix devfs as `dev` and `dev-mount`.  This keeps the
+  generated networking-service rootfs unchanged while allowing stock OpenRC
+  dependency resolution for services such as `hwdrivers`, `machine-id`, and
+  `fsck` to progress without missing-provider warnings.
+- A trial `/etc/fstab` root entry moved the timeout from after `fsck` into the
+  visible `Checking local filesystems` step, so it was removed.  The remaining
+  blocker is still in the stock OpenRC fsck/root/localmount band and should be
+  solved as a general mount-table or Linux/VFS compatibility issue, not by
+  adding a synthetic root fstab row.
 
 Validation:
 
@@ -111,6 +121,16 @@ Validation:
 - `make test-boot-alpine-stock-networking` currently fails deterministically
   before login, with failure artifacts from the first run at
   `build/failures/20260710T085814Z-6344/20260710T090114Z-6344`.
+- After adding the stock-mode dev provider, the narrow packaging checks pass:
+  - `make test-alpine-rootfs`
+  - `make test-alpine-rootfs-stock-networking`
+- The stock boot probe still times out before `login:`.  The provider removes
+  the previous `Service 'hwdrivers' needs non existent service 'dev'` and
+  `Service 'machine-id' needs non existent service 'dev'` warnings.  The latest
+  clean failure artifact is
+  `build/failures/20260710T093004Z-20138/20260710T093304Z-20138`; it reaches
+  OpenRC startup, mounts `/proc`, creates `/run/openrc` and `/run/lock`, caches
+  dependencies, reports clock-skew warnings, and then times out before login.
 
 Notes:
 

@@ -85,10 +85,16 @@ generated)
 	require_grep "#!/bin/sh" "$root/etc/init.d/networking"
 	require_grep "start_networking()" "$root/etc/init.d/networking"
 	require_grep 'ifup -i "$cfgfile" eth0' "$root/etc/init.d/networking"
+	if [ -e "$root/etc/init.d/bunix-dev" ]; then
+		fail "generated mode unexpectedly installed bunix-dev provider"
+	fi
 	;;
 stock)
 	require_grep "#!/sbin/openrc-run" "$root/etc/init.d/networking"
 	reject_grep "start_networking()" "$root/etc/init.d/networking"
+	require_grep "provide dev dev-mount" "$root/etc/init.d/bunix-dev"
+	require_grep "sysinit/bunix-dev	/etc/init.d/bunix-dev" \
+		"$artifact_dir/openrc-bunix-runlevels.tsv"
 	;;
 *)
 	fail "unknown ALPINE_NETWORKING_SERVICE in test: $networking_service"
