@@ -37,6 +37,7 @@ static void mem_zero(void *ptr, u64 len)
 static void page_list_push(struct pmm_page *page)
 {
 	page->is_free = 1;
+	page->ref_count = 0;
 	page->next = free_pages;
 	free_pages = page;
 	free_pages_count++;
@@ -247,6 +248,7 @@ struct pmm_page *pmm_page_alloc(void)
 
 	free_pages = page->next;
 	page->is_free = 0;
+	page->ref_count = 1;
 	page->next = 0;
 	free_pages_count--;
 	spin_unlock_irqrestore(&pmm_lock, flags);
@@ -280,12 +282,28 @@ u64 pmm_pages_alloc_contiguous(u64 count)
 		for (u64 j = 0; j < count; j++) {
 			page_list_remove(&pages[i + j]);
 			pages[i + j].is_free = 0;
+			pages[i + j].ref_count = 1;
 		}
 		free_pages_count -= count;
 		spin_unlock_irqrestore(&pmm_lock, flags);
 		return start;
 	}
 
+	spin_unlock_irqrestore(&pmm_lock, flags);
+	return 0;
+}
+
+int pmm_page_retain_addr(u64 addr)
+{
+	const u64 flags = spin_lock_irqsave(&pmm_lock);
+	struct pmm_page *page = find_page(addr);
+
+	if (page == 0 || page->is_free || page->ref_count == 0) {
+		spin_unlock_irqrestore(&pmm_lock, flags);
+		return -1;
+	}
+
+	page->ref_count++;
 	spin_unlock_irqrestore(&pmm_lock, flags);
 	return 0;
 }
@@ -299,6 +317,11 @@ void pmm_page_free(struct pmm_page *page)
 		return;
 	}
 
+	if (page->ref_count > 1) {
+		page->ref_count--;
+		spin_unlock_irqrestore(&pmm_lock, flags);
+		return;
+	}
 	page_list_push(page);
 	spin_unlock_irqrestore(&pmm_lock, flags);
 }

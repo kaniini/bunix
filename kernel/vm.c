@@ -338,6 +338,37 @@ int vm_clone_user_range(struct vm_space *dst, struct vm_space *src,
 	return 0;
 }
 
+int vm_share_user_range(struct vm_space *dst, struct vm_space *src,
+			u64 vaddr, u64 len, u32 writable)
+{
+	if (dst == 0 || src == 0 || len == 0 || vaddr + len < vaddr) {
+		return -1;
+	}
+
+	const u64 start = align_down(vaddr, VM_PAGE_SIZE);
+	const u64 end = align_up(vaddr + len, VM_PAGE_SIZE);
+	if (end <= start) {
+		return -1;
+	}
+
+	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
+		const u64 src_phys =
+			arch_vm_translate_user(&src->arch, page, 0);
+
+		if (src_phys == 0 || pmm_page_retain_addr(src_phys) != 0) {
+			(void)vm_unmap_user_range(dst, start, page - start);
+			return -1;
+		}
+		if (arch_vm_map_page(&dst->arch, page, src_phys, writable, 1) != 0) {
+			vm_rpc_free_frame((struct vm_frame){ .addr = src_phys });
+			(void)vm_unmap_user_range(dst, start, page - start);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
 u64 vm_rpc_total_frames(void)
 {
 	return pmm_total_page_count();

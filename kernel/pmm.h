@@ -10,6 +10,7 @@ enum {
 struct pmm_page {
 	u64 addr;
 	u32 is_free;
+	u32 ref_count;
 	struct pmm_page *next;
 };
 
@@ -30,6 +31,7 @@ void pmm_init_from_ranges(const struct pmm_memory_range *available,
 			  u64 reserved_count);
 struct pmm_page *pmm_page_alloc(void);
 u64 pmm_pages_alloc_contiguous(u64 count);
+int pmm_page_retain_addr(u64 addr);
 void pmm_page_free(struct pmm_page *page);
 void pmm_page_free_addr(u64 addr);
 void pmm_pages_free_contiguous(u64 addr, u64 count);

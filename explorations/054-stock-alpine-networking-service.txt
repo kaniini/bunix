@@ -424,6 +424,26 @@ Validation:
 - The read-cache slice does not complete stock OpenRC boot by itself.  A
   normal stock-networking boot still timed out before `login:` at
   `build/failures/20260710T232921Z-21621/20260710T233222Z-21621`.
+- A longer focused debug probe with the fixed read cache confirms that
+  `/usr/libexec/rc/bin/mountinfo` exits; the remaining path is still
+  shell/OpenRC process churn.  Around 150 seconds, a shell reads
+  `shell_var` output one byte at a time, waits for the helper, then continues
+  into another plain `fork()` at roughly 158 seconds.  The artifact is
+  `build/failures/20260710T233850Z-25460/20260710T234130Z-25460`.
+- Added PMM frame refcounts and a conservative VM sharing helper so full
+  Linux `fork()` can share non-writable file-backed regions instead of copying
+  every ELF/text page eagerly.  Writable mappings, stacks, heaps, and
+  anonymous mappings are still copied, preserving normal fork isolation until
+  a real copy-on-write design exists.
+- Narrow guards for the fork-sharing slice pass:
+  - `make`
+  - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part` passed in 97
+    seconds.
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 97
+    seconds.
+- The fork-sharing slice does not complete stock OpenRC boot by itself.  A
+  normal stock-networking boot still timed out before `login:` at
+  `build/failures/20260710T234723Z-28674/20260710T235024Z-28674`.
 
 Notes:
 
