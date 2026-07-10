@@ -40,7 +40,7 @@ Constraints:
 
 Tasks:
 
-- [ ] Inventory current route add, route enumeration, route lookup,
+- [x] Inventory current route add, route enumeration, route lookup,
       `net_addr_is_local`, packet-interface route state, and `/proc/net`
       consumers.
 - [ ] Define a route-table API for insert, delete, lookup, count, enumerate,
@@ -67,3 +67,34 @@ Tasks:
 - [ ] Document follow-up work for routing observability: `/proc/net/route`,
       `/proc/net/ipv6_route`, route cache counters, miss counters, and admin
       tooling.
+
+Inventory:
+
+- NET0 stores static loopback routes in the fixed `routes[]` array and dynamic
+  routes in the `dynamic_routes` singly linked list.
+- `BUNIX_NET_ROUTE_ADD` rejects invalid prefixes and unknown interfaces,
+  deduplicates only exact route records, then inserts new dynamic routes at the
+  list head.
+- `BUNIX_NET_ROUTE_DELETE` deletes only exact dynamic route records. Static
+  loopback routes cannot be deleted.
+- `BUNIX_NET_ROUTE_COUNT` returns dynamic plus static route count.
+- `BUNIX_NET_ROUTE_AT` enumerates dynamic routes first in current list order
+  (reverse insertion order), then static loopback routes in array order.
+- `net_route_lookup()` scans dynamic routes, then static routes, and currently
+  chooses the highest prefix length only. Metrics do not participate in lookup
+  tie-breaking yet, so equal-prefix ties keep the first matching route in
+  dynamic enumeration order and dynamic routes beat equal-prefix static routes.
+- IPv4 route matching uses `hi == 0`, `prefix_hi == 0`, and a 32-bit mask over
+  `lo`. IPv6 route matching supports `/0` through `/128` over the `hi:lo`
+  128-bit key.
+- `net_addr_is_local()` is independent of routes and scans dynamic addresses
+  followed by static addresses.
+- Packet-interface send paths using `net_route_lookup()` are external IPv4 and
+  IPv6 UDP, TCP SYN, and ICMP/ICMPv6.
+- `default_route()` relies on `net_route_lookup()` and then requires
+  `prefix_len == 0`.
+- `/proc/net/route` consumes `BUNIX_NET_ROUTE_COUNT` and `BUNIX_NET_ROUTE_AT`,
+  filters to IPv4, and prints route records in NET0 enumeration order.
+- Current route tests live in the bootstrap packet-interface self-test and
+  NETCFG installs DHCP fallback IPv4 and deterministic static IPv6 routes
+  through the public route RPCs.
