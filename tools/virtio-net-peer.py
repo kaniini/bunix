@@ -10,7 +10,13 @@ import time
 
 ETH_IPV4 = 0x0800
 ETH_ARP = 0x0806
+ETH_IPV6 = 0x86DD
 IP_ICMP = 1
+IP_ICMPV6 = 58
+ICMPV6_ECHO_REQUEST = 128
+ICMPV6_ECHO_REPLY = 129
+ICMPV6_NEIGHBOR_SOLICIT = 135
+ICMPV6_NEIGHBOR_ADVERT = 136
 
 
 def parse_mac(text):
@@ -28,6 +34,10 @@ def parse_mac(text):
 
 def parse_ipv4(text):
     return ipaddress.IPv4Address(text).packed
+
+
+def parse_ipv6(text):
+    return ipaddress.IPv6Address(text).packed
 
 
 def checksum(data):
@@ -49,6 +59,19 @@ def ipv4_header(src_ip, dst_ip, proto, payload_len, ident=0):
                      64, proto, 0, src_ip, dst_ip)
     struct.pack_into("!H", header, 10, checksum(header))
     return bytes(header)
+
+
+def ipv6_header(src_ip, dst_ip, next_header, payload_len, hop_limit=64):
+    header = bytearray(40)
+    header[0] = 0x60
+    struct.pack_into("!HBB16s16s", header, 4, payload_len, next_header,
+                     hop_limit, src_ip, dst_ip)
+    return bytes(header)
+
+
+def ipv6_checksum(src_ip, dst_ip, next_header, payload):
+    pseudo = src_ip + dst_ip + struct.pack("!I3xB", len(payload), next_header)
+    return checksum(pseudo + payload)
 
 
 def arp_packet(opcode, sender_mac, sender_ip, target_mac, target_ip):
@@ -84,6 +107,45 @@ def icmp_echo_reply(peer_mac, peer_ip, guest_mac, guest_ip, request_payload):
     return ethernet(guest_mac, peer_mac, ETH_IPV4, ip + bytes(icmp))
 
 
+def solicited_node_ipv6(target_ip):
+    return ipaddress.IPv6Address("ff02::1:ff00:0").packed[:13] + target_ip[-3:]
+
+
+def icmpv6_neighbor_advert(peer_mac, peer_ip6, guest_mac, guest_ip6,
+                           request_payload):
+    if len(request_payload) < 24:
+        return None
+    target_ip = request_payload[8:24]
+    if target_ip != peer_ip6:
+        return None
+    icmp = bytearray(32)
+    icmp[0] = ICMPV6_NEIGHBOR_ADVERT
+    icmp[4] = 0x60
+    icmp[8:24] = peer_ip6
+    icmp[24] = 2
+    icmp[25] = 1
+    icmp[26:32] = peer_mac
+    csum = ipv6_checksum(peer_ip6, guest_ip6, IP_ICMPV6, icmp)
+    struct.pack_into("!H", icmp, 2, csum)
+    ip = ipv6_header(peer_ip6, guest_ip6, IP_ICMPV6, len(icmp), 255)
+    return ethernet(guest_mac, peer_mac, ETH_IPV6, ip + bytes(icmp))
+
+
+def icmpv6_echo_reply(peer_mac, peer_ip6, guest_mac, guest_ip6,
+                      request_payload):
+    if len(request_payload) < 8:
+        return None
+    icmp = bytearray(request_payload)
+    icmp[0] = ICMPV6_ECHO_REPLY
+    icmp[1] = 0
+    icmp[2] = 0
+    icmp[3] = 0
+    csum = ipv6_checksum(peer_ip6, guest_ip6, IP_ICMPV6, icmp)
+    struct.pack_into("!H", icmp, 2, csum)
+    ip = ipv6_header(peer_ip6, guest_ip6, IP_ICMPV6, len(icmp))
+    return ethernet(guest_mac, peer_mac, ETH_IPV6, ip + bytes(icmp))
+
+
 def parse_mcast(text):
     host, sep, port = text.rpartition(":")
     if not sep or not host:
@@ -109,6 +171,8 @@ class Peer:
         self.peer_mac = parse_mac(args.peer_mac)
         self.guest_ip = parse_ipv4(args.guest_ip)
         self.peer_ip = parse_ipv4(args.peer_ip)
+        self.guest_ip6 = parse_ipv6(args.guest_ip6)
+        self.peer_ip6 = parse_ipv6(args.peer_ip6)
         self.sock = open_mcast(self.group, self.port)
         self.end_at = time.monotonic() + args.duration
         self.verbose = args.verbose
@@ -161,6 +225,34 @@ class Peer:
                 if reply is not None:
                     self.send(reply)
 
+    def handle_ipv6(self, frame):
+        if len(frame) < 54:
+            return
+        ip = frame[14:]
+        if (ip[0] >> 4) != 6:
+            return
+        payload_len = struct.unpack("!H", ip[4:6])[0]
+        next_header = ip[6]
+        src_ip = ip[8:24]
+        dst_ip = ip[24:40]
+        if len(ip) < 40 + payload_len or next_header != IP_ICMPV6:
+            return
+        payload = ip[40:40 + payload_len]
+        if not payload:
+            return
+        if payload[0] == ICMPV6_NEIGHBOR_SOLICIT:
+            reply = icmpv6_neighbor_advert(self.peer_mac, self.peer_ip6,
+                                           frame[6:12], src_ip, payload)
+            if reply is not None:
+                self.log(f"ndp ns from {ipaddress.IPv6Address(src_ip)}")
+                self.send(reply)
+        elif payload[0] == ICMPV6_ECHO_REQUEST and dst_ip == self.peer_ip6:
+            self.log(f"icmp6 echo from {ipaddress.IPv6Address(src_ip)}")
+            reply = icmpv6_echo_reply(self.peer_mac, self.peer_ip6,
+                                      frame[6:12], src_ip, payload)
+            if reply is not None:
+                self.send(reply)
+
     def handle(self, frame):
         if len(frame) < 14:
             return
@@ -172,6 +264,8 @@ class Peer:
             self.handle_arp(frame)
         elif ethertype == ETH_IPV4:
             self.handle_ipv4(frame)
+        elif ethertype == ETH_IPV6:
+            self.handle_ipv6(frame)
 
     def run(self, send_arp):
         self.log(f"virtio-net-peer mcast={self.group}:{self.port}")
@@ -204,6 +298,20 @@ def self_test():
     assert frame[12:14] == b"\x08\x00"
     assert frame[23] == IP_ICMP
     assert frame[34] == 0
+    guest_ip6 = parse_ipv6("2001:db8:18::15")
+    peer_ip6 = parse_ipv6("2001:db8:18::2")
+    ns = bytearray(32)
+    ns[0] = ICMPV6_NEIGHBOR_SOLICIT
+    ns[8:24] = peer_ip6
+    ns[24] = 1
+    ns[25] = 1
+    ns[26:32] = guest_mac
+    frame6 = icmpv6_neighbor_advert(peer_mac, peer_ip6, guest_mac,
+                                    guest_ip6, ns)
+    assert frame6[:6] == guest_mac
+    assert frame6[12:14] == b"\x86\xdd"
+    assert frame6[20] == IP_ICMPV6
+    assert frame6[54] == ICMPV6_NEIGHBOR_ADVERT
     print("virtio-net-peer self-test ok")
 
 
@@ -216,6 +324,8 @@ def main():
     parser.add_argument("--peer-mac", default="52:54:00:18:00:fe")
     parser.add_argument("--guest-ip", default="10.0.2.15")
     parser.add_argument("--peer-ip", default="10.0.2.2")
+    parser.add_argument("--guest-ip6", default="2001:db8:18::15")
+    parser.add_argument("--peer-ip6", default="2001:db8:18::2")
     parser.add_argument("--duration", type=float, default=30.0)
     parser.add_argument("--ready-file")
     parser.add_argument("--send-arp", action="store_true")

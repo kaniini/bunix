@@ -7,6 +7,8 @@ enum {
 	NETCFG_IFACE_LO = 1,
 	NETCFG_QEMU_USER_IPV4 = 0x0a00020full,
 	NETCFG_QEMU_USER_GW = 0x0a000202ull,
+	NETCFG_TEST_IPV6_HI = 0x20010db800180000ull,
+	NETCFG_TEST_IPV6_LO = 0x15ull,
 };
 
 static u64 str_len(const char *text)
@@ -225,6 +227,25 @@ static int add_addr(u64 net, const struct bunix_net_addr_info *addr)
 	return result;
 }
 
+static int add_route(u64 net, const struct bunix_net_route_info *route)
+{
+	struct bunix_msg reply;
+	long buffer = bunix_buffer_create(sizeof(*route));
+	int result;
+
+	if (buffer <= 0) {
+		return -1;
+	}
+	result = bunix_buffer_write((u64)buffer, 0, route,
+				    sizeof(*route)) == 0 &&
+			 net_call_buffer(net, BUNIX_NET_ROUTE_ADD, (u64)buffer,
+					 BUNIX_RIGHT_RECV, 0, &reply) == 0 ?
+		 0 :
+		 -1;
+	bunix_handle_close((u64)buffer);
+	return result;
+}
+
 static int configure_loopback(u64 net, int want4, int want6)
 {
 	const struct bunix_net_addr_info lo4 = {
@@ -304,6 +325,34 @@ static int install_qemu_user_lease(u64 net, u64 iface)
 	return result;
 }
 
+static int install_static_ipv6(u64 net, u64 iface)
+{
+	const struct bunix_net_addr_info addr = {
+		.family = BUNIX_NET_ADDR_FAMILY_IPV6,
+		.addr_hi = NETCFG_TEST_IPV6_HI,
+		.addr_lo = NETCFG_TEST_IPV6_LO,
+		.prefix_len = 64,
+		.iface = iface,
+		.flags = 1,
+		.preferred_lifetime = 0,
+		.valid_lifetime = 0,
+	};
+	const struct bunix_net_route_info route = {
+		.family = BUNIX_NET_ADDR_FAMILY_IPV6,
+		.prefix_hi = NETCFG_TEST_IPV6_HI,
+		.prefix_lo = 0,
+		.prefix_len = 64,
+		.iface = iface,
+		.gateway_hi = 0,
+		.gateway_lo = 0,
+		.flags = BUNIX_NET_ROUTE_FLAG_UP,
+		.metric = 25,
+	};
+
+	return add_addr(net, &addr) == 0 && add_route(net, &route) == 0 ? 0 :
+									 -1;
+}
+
 static int log_status(u64 net)
 {
 	struct bunix_net_config_status status;
@@ -329,6 +378,9 @@ static int log_status(u64 net)
 	}
 	if ((status.flags & BUNIX_NET_CONFIG_DEFAULT_IPV4) != 0) {
 		log_text("netcfg: default ipv4 route configured\n");
+	}
+	if ((status.flags & BUNIX_NET_CONFIG_DEFAULT_IPV6) != 0) {
+		log_text("netcfg: default ipv6 route configured\n");
 	}
 	return 0;
 }
@@ -372,8 +424,12 @@ int main(void)
 		} else if (install_qemu_user_lease(net, (u64)iface) != 0) {
 			log_text("netcfg: dhcp fallback failed\n");
 			return 1;
+		} else if (install_static_ipv6(net, (u64)iface) != 0) {
+			log_text("netcfg: static ipv6 failed\n");
+			return 1;
 		} else {
 			log_text("netcfg: dhcp fallback lease installed\n");
+			log_text("netcfg: static ipv6 installed\n");
 		}
 	}
 	if (log_status(net) != 0) {

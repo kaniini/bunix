@@ -25,6 +25,15 @@ enum {
 	NET_PROTO_TCP = 6,
 	NET_PROTO_ICMP = 1,
 	NET_PROTO_ICMPV6 = 58,
+	NET_ETH_IPV4 = 0x0800,
+	NET_ETH_ARP = 0x0806,
+	NET_ETH_IPV6 = 0x86dd,
+	NET_ICMPV6_ECHO_REQUEST = 128,
+	NET_ICMPV6_ECHO_REPLY = 129,
+	NET_ICMPV6_ROUTER_SOLICIT = 133,
+	NET_ICMPV6_ROUTER_ADVERT = 134,
+	NET_ICMPV6_NEIGHBOR_SOLICIT = 135,
+	NET_ICMPV6_NEIGHBOR_ADVERT = 136,
 	NET_ICMP_POLLIN = 1 << 0,
 	NET_ICMP_POLLOUT = 1 << 1,
 	NET_PACKET_SOCKADDR_LL_SIZE = 20,
@@ -283,12 +292,16 @@ static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
 static void packet_ingress_tcp_ipv4(struct net_interface *iface,
 				    const unsigned char *packet, u64 len);
 static u64 iface_ipv4_addr(u64 iface_id);
+static int iface_ipv6_addr(u64 iface_id, u64 *hi, u64 *lo);
 static int packet_tx_enqueue_copy(struct net_interface *iface,
 				  const unsigned char *data, u64 len);
 static long udp_bind_socket(struct udp_socket *socket, u64 hi, u64 lo,
 			    u64 port);
 static u64 net_checksum_sum(const unsigned char *data, u64 len, u64 sum);
 static unsigned short net_checksum_finish(u64 sum);
+static unsigned short icmp_ipv6_checksum(const unsigned char *data, u64 len,
+					 u64 source_hi, u64 source_lo,
+					 u64 dest_hi, u64 dest_lo);
 
 static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo);
 static int net_addr_is_local(u64 family, u64 hi, u64 lo);
@@ -1391,6 +1404,23 @@ static void net_write_be32(unsigned char *data, u64 value)
 	data[3] = (unsigned char)(value & 0xff);
 }
 
+static void net_write_be64(unsigned char *data, u64 value)
+{
+	for (u64 i = 0; i < 8; i++) {
+		data[i] = (unsigned char)((value >> ((7 - i) * 8)) & 0xff);
+	}
+}
+
+static u64 net_read_be64(const unsigned char *data)
+{
+	u64 value = 0;
+
+	for (u64 i = 0; i < 8; i++) {
+		value = (value << 8) | data[i];
+	}
+	return value;
+}
+
 static void neighbor_prune_expired(void)
 {
 	struct net_neighbor **link = &dynamic_neighbors;
@@ -1431,7 +1461,8 @@ static int pending_frame_add(u64 family, u64 hi, u64 lo, u64 iface,
 	struct net_pending_frame *pending;
 
 	if (data == 0 || len == 0 || len > NET_PACKET_MAX ||
-	    family != BUNIX_NET_ADDR_FAMILY_IPV4 || hi != 0 || lo == 0) {
+	    !((family == BUNIX_NET_ADDR_FAMILY_IPV4 && hi == 0 && lo != 0) ||
+	      (family == BUNIX_NET_ADDR_FAMILY_IPV6 && (hi != 0 || lo != 0)))) {
 		return -1;
 	}
 	pending = (struct net_pending_frame *)bunix_alloc(sizeof(*pending) +
@@ -1493,7 +1524,7 @@ static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
 {
 	struct net_neighbor *neighbor;
 
-	if (iface == NET_IFACE_LO || lo == 0 || mac_hi == 0) {
+	if (iface == NET_IFACE_LO || (hi == 0 && lo == 0) || mac_hi == 0) {
 		return;
 	}
 	neighbor = neighbor_find(family, hi, lo, iface);
@@ -1542,6 +1573,33 @@ static void packet_ingress_learn_ipv4_neighbor(const struct net_interface *iface
 	src_ip = net_read_be32(ip + 12);
 	src_mac = net_read_mac48(packet + 6);
 	neighbor_learn(BUNIX_NET_ADDR_FAMILY_IPV4, 0, src_ip, iface->id,
+		       src_mac, 0);
+}
+
+static void packet_ingress_learn_ipv6_neighbor(const struct net_interface *iface,
+					       const unsigned char *packet,
+					       u64 len)
+{
+	const unsigned char *ip;
+	u64 src_hi;
+	u64 src_lo;
+	u64 src_mac;
+
+	if (iface == 0 || packet == 0 || len < 14 + 40 ||
+	    net_read_be16(packet + 12) != NET_ETH_IPV6) {
+		return;
+	}
+	ip = packet + 14;
+	if ((ip[0] >> 4) != 6) {
+		return;
+	}
+	src_hi = net_read_be64(ip + 8);
+	src_lo = net_read_be64(ip + 16);
+	if (src_hi == 0 && src_lo == 0) {
+		return;
+	}
+	src_mac = net_read_mac48(packet + 6);
+	neighbor_learn(BUNIX_NET_ADDR_FAMILY_IPV6, src_hi, src_lo, iface->id,
 		       src_mac, 0);
 }
 
@@ -1635,6 +1693,237 @@ static void arp_request_ipv4(struct net_interface *iface, u64 source_ip,
 	net_write_be32(frame + 28, source_ip);
 	net_write_be32(frame + 38, target_ip);
 	(void)packet_tx_enqueue_copy(iface, frame, sizeof(frame));
+}
+
+static void ndp_write_ipv6_header(unsigned char *frame, u64 payload_len,
+				  u64 next_header, u64 hop_limit,
+				  u64 source_hi, u64 source_lo,
+				  u64 dest_hi, u64 dest_lo)
+{
+	frame[14] = 0x60;
+	frame[15] = 0;
+	frame[16] = 0;
+	frame[17] = 0;
+	net_write_be16(frame + 18, payload_len);
+	frame[20] = (unsigned char)next_header;
+	frame[21] = (unsigned char)hop_limit;
+	net_write_be64(frame + 22, source_hi);
+	net_write_be64(frame + 30, source_lo);
+	net_write_be64(frame + 38, dest_hi);
+	net_write_be64(frame + 46, dest_lo);
+}
+
+static void ipv6_multicast_mac(u64 group_lo, unsigned char *mac)
+{
+	mac[0] = 0x33;
+	mac[1] = 0x33;
+	mac[2] = (unsigned char)((group_lo >> 24) & 0xff);
+	mac[3] = (unsigned char)((group_lo >> 16) & 0xff);
+	mac[4] = (unsigned char)((group_lo >> 8) & 0xff);
+	mac[5] = (unsigned char)(group_lo & 0xff);
+}
+
+static void ndp_solicited_node_addr(u64 target_lo, u64 *hi, u64 *lo)
+{
+	*hi = 0xff02000000000000ull;
+	*lo = 0x00000001ff000000ull | (target_lo & 0xffffffull);
+}
+
+static void ndp_request_ipv6(struct net_interface *iface, u64 source_hi,
+			     u64 source_lo, u64 target_hi, u64 target_lo)
+{
+	unsigned char frame[86];
+	unsigned char *icmp = frame + 54;
+	u64 dest_hi;
+	u64 dest_lo;
+	unsigned short checksum;
+
+	if (iface == 0 || iface == &loopback || iface->mac_hi == 0 ||
+	    (source_hi == 0 && source_lo == 0) ||
+	    (target_hi == 0 && target_lo == 0)) {
+		return;
+	}
+	ndp_solicited_node_addr(target_lo, &dest_hi, &dest_lo);
+	ipv6_multicast_mac(dest_lo, frame);
+	for (u64 i = 0; i < 6; i++) {
+		frame[6 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	frame[12] = 0x86;
+	frame[13] = 0xdd;
+	ndp_write_ipv6_header(frame, 32, NET_PROTO_ICMPV6, 255, source_hi,
+			      source_lo, dest_hi, dest_lo);
+	for (u64 i = 0; i < 32; i++) {
+		icmp[i] = 0;
+	}
+	icmp[0] = NET_ICMPV6_NEIGHBOR_SOLICIT;
+	net_write_be64(icmp + 8, target_hi);
+	net_write_be64(icmp + 16, target_lo);
+	icmp[24] = 1;
+	icmp[25] = 1;
+	for (u64 i = 0; i < 6; i++) {
+		icmp[26 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	checksum = icmp_ipv6_checksum(icmp, 32, source_hi, source_lo, dest_hi,
+				      dest_lo);
+	icmp[2] = (unsigned char)((checksum >> 8) & 0xff);
+	icmp[3] = (unsigned char)(checksum & 0xff);
+	(void)packet_tx_enqueue_copy(iface, frame, sizeof(frame));
+}
+
+static void ndp_advertise_ipv6(struct net_interface *iface, u64 dest_mac,
+			       u64 dest_hi, u64 dest_lo, u64 target_hi,
+			       u64 target_lo)
+{
+	unsigned char frame[86];
+	unsigned char *icmp = frame + 54;
+	unsigned short checksum;
+
+	if (iface == 0 || iface == &loopback || iface->mac_hi == 0 ||
+	    dest_mac == 0 || (dest_hi == 0 && dest_lo == 0) ||
+	    (target_hi == 0 && target_lo == 0)) {
+		return;
+	}
+	for (u64 i = 0; i < 6; i++) {
+		frame[i] = (unsigned char)((dest_mac >> ((5 - i) * 8)) &
+					   0xff);
+		frame[6 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	frame[12] = 0x86;
+	frame[13] = 0xdd;
+	ndp_write_ipv6_header(frame, 32, NET_PROTO_ICMPV6, 255, target_hi,
+			      target_lo, dest_hi, dest_lo);
+	for (u64 i = 0; i < 32; i++) {
+		icmp[i] = 0;
+	}
+	icmp[0] = NET_ICMPV6_NEIGHBOR_ADVERT;
+	icmp[4] = 0x60;
+	net_write_be64(icmp + 8, target_hi);
+	net_write_be64(icmp + 16, target_lo);
+	icmp[24] = 2;
+	icmp[25] = 1;
+	for (u64 i = 0; i < 6; i++) {
+		icmp[26 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	checksum = icmp_ipv6_checksum(icmp, 32, target_hi, target_lo, dest_hi,
+				      dest_lo);
+	icmp[2] = (unsigned char)((checksum >> 8) & 0xff);
+	icmp[3] = (unsigned char)(checksum & 0xff);
+	(void)packet_tx_enqueue_copy(iface, frame, sizeof(frame));
+}
+
+static void packet_ingress_ndp_ipv6(struct net_interface *iface,
+				    const unsigned char *packet, u64 len)
+{
+	const unsigned char *ip;
+	const unsigned char *icmp;
+	u64 payload_len;
+	u64 src_hi;
+	u64 src_lo;
+	u64 target_hi;
+	u64 target_lo;
+	u64 src_mac;
+
+	if (iface == 0 || packet == 0 || len < 14 + 40 + 24 ||
+	    net_read_be16(packet + 12) != NET_ETH_IPV6) {
+		return;
+	}
+	ip = packet + 14;
+	if ((ip[0] >> 4) != 6 || ip[6] != NET_PROTO_ICMPV6) {
+		return;
+	}
+	payload_len = net_read_be16(ip + 4);
+	if (payload_len < 24 || len < 14 + 40 + payload_len) {
+		return;
+	}
+	icmp = ip + 40;
+	src_hi = net_read_be64(ip + 8);
+	src_lo = net_read_be64(ip + 16);
+	src_mac = net_read_mac48(packet + 6);
+	if (icmp[0] == NET_ICMPV6_NEIGHBOR_SOLICIT) {
+		target_hi = net_read_be64(icmp + 8);
+		target_lo = net_read_be64(icmp + 16);
+		if (payload_len >= 32 && icmp[24] == 1 && icmp[25] == 1) {
+			src_mac = net_read_mac48(icmp + 26);
+		}
+		if ((src_hi != 0 || src_lo != 0) && src_mac != 0) {
+			neighbor_learn(BUNIX_NET_ADDR_FAMILY_IPV6, src_hi,
+				       src_lo, iface->id, src_mac, 0);
+		}
+		if (net_addr_is_local(BUNIX_NET_ADDR_FAMILY_IPV6, target_hi,
+				      target_lo) &&
+		    (src_hi != 0 || src_lo != 0) && src_mac != 0) {
+			ndp_advertise_ipv6(iface, src_mac, src_hi, src_lo,
+					   target_hi, target_lo);
+		}
+		return;
+	}
+	if (icmp[0] == NET_ICMPV6_NEIGHBOR_ADVERT) {
+		target_hi = net_read_be64(icmp + 8);
+		target_lo = net_read_be64(icmp + 16);
+		if (payload_len >= 32 && icmp[24] == 2 && icmp[25] == 1) {
+			src_mac = net_read_mac48(icmp + 26);
+		}
+		if (src_mac != 0) {
+			neighbor_learn(BUNIX_NET_ADDR_FAMILY_IPV6, target_hi,
+				       target_lo, iface->id, src_mac, 0);
+		}
+	}
+}
+
+static int icmp_socket_accepts_ipv6(struct icmp_socket *socket)
+{
+	return socket != 0 &&
+	       socket->family == BUNIX_NET_ADDR_FAMILY_IPV6 &&
+	       socket->protocol == NET_PROTO_ICMPV6;
+}
+
+static void packet_ingress_icmp_ipv6(const unsigned char *packet, u64 len)
+{
+	const unsigned char *ip;
+	const unsigned char *icmp;
+	u64 payload_len;
+	u64 src_hi;
+	u64 src_lo;
+	u64 dst_hi;
+	u64 dst_lo;
+
+	if (packet == 0 || len < 14 + 40 + 8 ||
+	    net_read_be16(packet + 12) != NET_ETH_IPV6) {
+		return;
+	}
+	ip = packet + 14;
+	if ((ip[0] >> 4) != 6 || ip[6] != NET_PROTO_ICMPV6) {
+		return;
+	}
+	payload_len = net_read_be16(ip + 4);
+	if (payload_len < 8 || len < 14 + 40 + payload_len) {
+		return;
+	}
+	icmp = ip + 40;
+	if (icmp[0] == NET_ICMPV6_NEIGHBOR_SOLICIT ||
+	    icmp[0] == NET_ICMPV6_NEIGHBOR_ADVERT ||
+	    icmp[0] == NET_ICMPV6_ROUTER_SOLICIT ||
+	    icmp[0] == NET_ICMPV6_ROUTER_ADVERT) {
+		return;
+	}
+	src_hi = net_read_be64(ip + 8);
+	src_lo = net_read_be64(ip + 16);
+	dst_hi = net_read_be64(ip + 24);
+	dst_lo = net_read_be64(ip + 32);
+	if (!net_addr_is_local(BUNIX_NET_ADDR_FAMILY_IPV6, dst_hi, dst_lo)) {
+		return;
+	}
+	for (struct icmp_socket *socket = icmp_sockets; socket != 0;
+	     socket = socket->next) {
+		if (icmp_socket_accepts_ipv6(socket)) {
+			(void)icmp_enqueue(socket, BUNIX_NET_ADDR_FAMILY_IPV6,
+					   src_hi, src_lo, icmp, payload_len);
+		}
+	}
 }
 
 static int udp_socket_accepts_ipv4(struct udp_socket *socket, u64 dst_ip,
@@ -1926,9 +2215,12 @@ static void reply_packet_rx_submit(struct bunix_msg *reply,
 	}
 	packet_ingress_arp_ipv4(iface, packet->data, packet->len);
 	packet_ingress_learn_ipv4_neighbor(iface, packet->data, packet->len);
+	packet_ingress_learn_ipv6_neighbor(iface, packet->data, packet->len);
+	packet_ingress_ndp_ipv6(iface, packet->data, packet->len);
 	packet_ingress_udp_ipv4(packet->data, packet->len);
 	packet_ingress_tcp_ipv4(iface, packet->data, packet->len);
 	packet_ingress_icmp_ipv4(packet->data, packet->len);
+	packet_ingress_icmp_ipv6(packet->data, packet->len);
 	if (iface->rx_tail != 0) {
 		iface->rx_tail->next = packet;
 	} else {
@@ -2216,9 +2508,26 @@ static int net_route_matches(const struct net_route *route, u64 family,
 		return hi == 0 && route->prefix_hi == 0 &&
 		       ((lo & mask) == (route->prefix_lo & mask));
 	}
-	if (family == BUNIX_NET_ADDR_FAMILY_IPV6 &&
-	    route->prefix_len == 128) {
-		return hi == route->prefix_hi && lo == route->prefix_lo;
+	if (family == BUNIX_NET_ADDR_FAMILY_IPV6) {
+		if (route->prefix_len == 0) {
+			return 1;
+		}
+		if (route->prefix_len <= 64) {
+			const u64 mask = route->prefix_len == 64 ?
+					 ~0ull :
+					 ~((1ull << (64 - route->prefix_len)) - 1);
+
+			return (hi & mask) == (route->prefix_hi & mask);
+		}
+		{
+			const u64 low_bits = 128 - route->prefix_len;
+			const u64 mask = low_bits == 0 ?
+					 ~0ull :
+					 ~((1ull << low_bits) - 1);
+
+			return hi == route->prefix_hi &&
+			       ((lo & mask) == (route->prefix_lo & mask));
+		}
 	}
 	return 0;
 }
@@ -3533,6 +3842,33 @@ static u64 iface_ipv4_addr(u64 iface_id)
 	return 0;
 }
 
+static int iface_ipv6_addr(u64 iface_id, u64 *hi, u64 *lo)
+{
+	for (const struct net_addr_record *addr = dynamic_addrs; addr != 0;
+	     addr = addr->next) {
+		if (addr->family == BUNIX_NET_ADDR_FAMILY_IPV6 &&
+		    addr->iface == iface_id &&
+		    (addr->addr_hi != 0 || addr->addr_lo != 0)) {
+			*hi = addr->addr_hi;
+			*lo = addr->addr_lo;
+			return 0;
+		}
+	}
+	for (u64 i = 0; i < sizeof(static_addrs) / sizeof(static_addrs[0]); i++) {
+		if (static_addrs[i].family == BUNIX_NET_ADDR_FAMILY_IPV6 &&
+		    static_addrs[i].iface == iface_id &&
+		    (static_addrs[i].addr_hi != 0 ||
+		     static_addrs[i].addr_lo != 0)) {
+			*hi = static_addrs[i].addr_hi;
+			*lo = static_addrs[i].addr_lo;
+			return 0;
+		}
+	}
+	*hi = 0;
+	*lo = 0;
+	return -1;
+}
+
 static int packet_tx_enqueue_copy(struct net_interface *iface,
 				  const unsigned char *data, u64 len)
 {
@@ -3645,6 +3981,91 @@ static int icmp_sendto_external_ipv4(struct icmp_socket *socket,
 			return -1;
 		}
 		arp_request_ipv4(iface, source_ip, next_hop_ip);
+		bunix_free(frame);
+		return 0;
+	}
+	if (packet_tx_enqueue_copy(iface, frame, frame_len) != 0) {
+		bunix_free(frame);
+		return -1;
+	}
+	bunix_free(frame);
+	return 0;
+}
+
+static int icmp_sendto_external_ipv6(struct icmp_socket *socket,
+				     u64 dest_hi, u64 dest_lo,
+				     unsigned char *data, u64 len)
+{
+	const struct net_route *route;
+	struct net_interface *iface;
+	unsigned char *frame;
+	u64 source_hi = 0;
+	u64 source_lo = 0;
+	u64 next_hop_hi;
+	u64 next_hop_lo;
+	u64 dest_mac = 0;
+	u64 frame_len;
+
+	if (socket == 0 || socket->family != BUNIX_NET_ADDR_FAMILY_IPV6 ||
+	    data == 0 || len < 8 || len > NET_PACKET_MAX ||
+	    (dest_hi == 0 && dest_lo == 0)) {
+		return -1;
+	}
+	route = net_route_lookup(BUNIX_NET_ADDR_FAMILY_IPV6, dest_hi,
+				 dest_lo);
+	if (route == 0 || (route->flags & BUNIX_NET_ROUTE_FLAG_UP) == 0) {
+		return -1;
+	}
+	iface = interface_find(route->iface);
+	next_hop_hi = (route->flags & BUNIX_NET_ROUTE_FLAG_GATEWAY) != 0 ?
+		      route->gateway_hi : dest_hi;
+	next_hop_lo = (route->flags & BUNIX_NET_ROUTE_FLAG_GATEWAY) != 0 ?
+		      route->gateway_lo : dest_lo;
+	frame_len = 14 + 40 + len;
+	if (iface == 0 || iface_ipv6_addr(route->iface, &source_hi,
+					  &source_lo) != 0 ||
+	    iface->mac_hi == 0 || frame_len > NET_PACKET_MAX ||
+	    (next_hop_hi == 0 && next_hop_lo == 0)) {
+		return -1;
+	}
+	{
+		struct net_neighbor *neighbor =
+			neighbor_find(BUNIX_NET_ADDR_FAMILY_IPV6, next_hop_hi,
+				      next_hop_lo, route->iface);
+
+		if (neighbor != 0) {
+			dest_mac = neighbor->mac_hi;
+		}
+	}
+	frame = (unsigned char *)bunix_alloc(frame_len);
+	if (frame == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < 6; i++) {
+		frame[i] = dest_mac != 0 ?
+			   (unsigned char)((dest_mac >> ((5 - i) * 8)) & 0xff) :
+			   0xff;
+		frame[6 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	frame[12] = 0x86;
+	frame[13] = 0xdd;
+	ndp_write_ipv6_header(frame, len, NET_PROTO_ICMPV6, 64, source_hi,
+			      source_lo, dest_hi, dest_lo);
+	icmp_set_checksum(data, len, socket->family, source_hi, source_lo,
+			  dest_hi, dest_lo);
+	for (u64 i = 0; i < len; i++) {
+		frame[54 + i] = data[i];
+	}
+	if (dest_mac == 0) {
+		if (pending_frame_add(BUNIX_NET_ADDR_FAMILY_IPV6, next_hop_hi,
+				      next_hop_lo, route->iface, frame,
+				      frame_len) != 0) {
+			bunix_free(frame);
+			return -1;
+		}
+		ndp_request_ipv6(iface, source_hi, source_lo, next_hop_hi,
+				 next_hop_lo);
 		bunix_free(frame);
 		return 0;
 	}
@@ -3786,6 +4207,18 @@ static void reply_icmp_sendto(struct bunix_msg *reply,
 	local = net_addr_is_local(socket->family, dest.hi, dest.lo);
 	if (!local && socket->family == BUNIX_NET_ADDR_FAMILY_IPV4) {
 		if (icmp_sendto_external_ipv4(socket, dest.lo, data, len) != 0) {
+			bunix_free(data);
+			reply->words[0] = (u64)-1;
+			return;
+		}
+		bunix_free(data);
+		reply->words[0] = 0;
+		reply->words[1] = len;
+		return;
+	}
+	if (!local && socket->family == BUNIX_NET_ADDR_FAMILY_IPV6) {
+		if (icmp_sendto_external_ipv6(socket, dest.hi, dest.lo, data,
+					      len) != 0) {
 			bunix_free(data);
 			reply->words[0] = (u64)-1;
 			return;

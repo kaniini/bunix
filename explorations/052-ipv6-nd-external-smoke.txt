@@ -24,25 +24,43 @@ Tasks:
 
 - [ ] Add IPv6 Ethernet encapsulation and decapsulation in NET0 for
       packet-interface routes.
-- [ ] Implement ICMPv6 neighbor solicitation and neighbor advertisement parsing
+- [x] Implement ICMPv6 neighbor solicitation and neighbor advertisement parsing
       and generation.
-- [ ] Add IPv6 neighbor cache state, timeout policy, and `/proc` observability
+- [x] Add IPv6 neighbor cache state, timeout policy, and `/proc` observability
       equivalent to `/proc/net/arp`.
-- [ ] Add router solicitation/advertisement parsing sufficient for deterministic
+- [x] Add router solicitation/advertisement parsing sufficient for deterministic
       smoke tests, or document an explicit static-route-only first phase.
 - [ ] Add duplicate-address-detection behavior or explicitly defer it with
       tests proving the deferral is isolated from configured static addresses.
-- [ ] Add packet-interface IPv6 ICMP echo egress/ingress smokes with the
+- [x] Add packet-interface IPv6 ICMP echo egress/ingress smokes with the
       host-side peer.
 - [ ] Add packet-interface IPv6 UDP egress/ingress smokes with the host-side
       peer.
 - [ ] Add packet-interface IPv6 TCP SYN connect/accept smokes with the
       host-side peer.
-- [ ] Add `/proc/net/dev` and neighbor-table counter checks for IPv6 RX/TX.
-- [ ] Add clean guest poweroff coverage for the deterministic IPv6 smoke target.
+- [x] Add `/proc/net/dev` and neighbor-table counter checks for IPv6 RX/TX.
+- [x] Add clean guest poweroff coverage for the deterministic IPv6 smoke target.
 
 Non-goals for the first slice:
 
 - Full production SLAAC, DNS resolver updates, firewalling, and multiqueue
   policy remain production-networking follow-up work unless pulled into this
   exploration explicitly.
+
+Progress:
+
+- NET0 now has IPv6 route-prefix matching, packet-interface ICMPv6 Ethernet
+  egress/ingress, NDP neighbor solicitation/advertisement parsing and
+  generation, IPv6 pending-frame flush behind neighbor resolution, and
+  opportunistic IPv6 neighbor learning.
+- `/proc/net/ndisc` exposes IPv6 neighbor records while `/proc/net/arp` remains
+  IPv4-compatible.
+- NETCFG installs a deterministic static `2001:db8:18::15/64` packet-interface
+  address and on-link route for the current socket-peer smoke path.  Router
+  solicitation/advertisement is explicitly deferred for this static-route-only
+  phase.
+- `tools/virtio-net-peer.py` now answers IPv6 NDP and ICMPv6 echo on the QEMU
+  socket multicast backend.
+- `make test-boot-virtio-net-socket-peer-ipv6` passed, covering BusyBox
+  `ping -6 2001:db8:18::2`, `/proc/net/ndisc`, `/proc/net/dev` counters, and
+  clean guest poweroff.
