@@ -380,6 +380,28 @@ Validation:
   exiting.  The next fix should focus on full-fork/subshell cost or the
   repeated VFS/mmap/read behavior in those stock OpenRC mount helpers, not on
   vfork cloning.
+- A trial Linux-server exact small-file read cache was rejected.  The cache
+  stored path+offset+length results for repeated `/etc`, `/usr`, `/bin`,
+  `/sbin`, and `/lib` reads and passed focused shell guards, but the debug
+  stock probe showed cache hits could not write into the caller's read buffer:
+  the Linux server only holds send/dup rights to that buffer, producing
+  `sched: buffer handle denied task=23 handle=27 need=0x2 rights=0x5` before
+  falling back to VFS.  Do not reintroduce a userspace file-read cache unless
+  the buffer capability direction is fixed or the read path is redesigned so
+  the cache can legally return data to the caller.
+- Kept the useful correctness piece from that experiment: successful
+  Linux-server regular-file writes now call `linux_vfs_note_mutation()` for
+  the normalized FD path.  This keeps the existing path/stat caches coherent
+  when a file is modified through `write(2)`.
+- Validation for the write-invalidation fix:
+  - `make build/modules/linux.server`
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 91
+    seconds.
+- A normal stock-networking boot after the rejected cache experiment still
+  timed out before `login:` at
+  `build/failures/20260710T231315Z-15756/20260710T231615Z-15756`.  The debug
+  artifact for the rejected cache attempt is
+  `build/failures/20260710T231624Z-16604/20260710T231744Z-16604`.
 
 Notes:
 

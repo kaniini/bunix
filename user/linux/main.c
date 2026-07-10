@@ -8080,6 +8080,10 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 			linux_fd_set_size(process, fd,
 					  linux_fd_offset(&process->fds[fd]));
 		}
+		if (done != 0) {
+			linux_vfs_note_mutation(process->fds[fd].path[0] != '\0' ?
+						process->fds[fd].path : 0);
+		}
 		return (long)done;
 	}
 	if (process->fds[fd].kind != LINUX_FD_CONSOLE) {
