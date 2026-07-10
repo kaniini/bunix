@@ -191,9 +191,24 @@ Validation:
   phase, because OpenRC dependency generation touches many tiny service/helper
   files.  Do not reintroduce a first-touch full-block SquashFS cache without a
   narrower hot-block policy or measured evidence that it helps.
-- The next likely fix is in the Linux process/exec path or a much narrower
-  filesystem/page-cache design: reduce repeated dynamic helper startup cost
-  without turning cold reads of many small OpenRC files into full-block reads.
+- A trial proc-server ELF segment batching change was also rejected.  Raising
+  the proc loader buffer to 64 KiB and calling `task_map` on larger aligned
+  chunks reduced the theoretical syscall/RPC count, but it regressed both the
+  synthetic shell boot and the stock OpenRC probe.  The synthetic image stopped
+  after `/bin/first` printed `first: exit 0`, and the stock Alpine image timed
+  out before the visible fsck phase.  Keep the page-at-a-time loader until the
+  lower-level task-map/process-exit interaction is understood.
+- Added `debug-proc-exec-timing` to measure proc-server loader phases.  A
+  stock OpenRC capture with this flag shows `shell_var` and `fstabinfo` exec
+  image loading completes in 0-2 timer ticks; the visible 1-2 second gaps occur
+  before the helper reaches `execve`, while the parent shell/OpenRC wrapper is
+  running script logic and Linux syscalls.  This rules out proc-server ELF
+  mapping as the dominant post-`fsck` cost.
+- The next likely fix is therefore in Linux syscall/VFS behavior exercised by
+  the parent shell/OpenRC scripts, or in a narrower path/stat cache.  Reduce
+  repeated shell-side service/dependency probing cost without replacing the
+  stock scripts or turning cold reads of many small OpenRC files into full-block
+  reads.
 
 Notes:
 

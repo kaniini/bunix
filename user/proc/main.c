@@ -512,6 +512,92 @@ static void log_exec_line(const char *path)
 	bunix_console_log(line, cursor);
 }
 
+static void append_text_bounded(char *line, u64 size, u64 *cursor,
+				const char *text)
+{
+	if (line == 0 || cursor == 0 || text == 0) {
+		return;
+	}
+	for (u64 i = 0; text[i] != '\0' && *cursor + 1 < size; i++) {
+		line[(*cursor)++] = text[i];
+	}
+}
+
+static void append_dec_bounded(char *line, u64 size, u64 *cursor, u64 value)
+{
+	char digits[20];
+	u64 count = 0;
+
+	if (line == 0 || cursor == 0 || *cursor >= size) {
+		return;
+	}
+	if (value == 0) {
+		if (*cursor + 1 < size) {
+			line[(*cursor)++] = '0';
+		}
+		return;
+	}
+	while (value != 0 && count < sizeof(digits)) {
+		digits[count++] = (char)('0' + (value % 10));
+		value /= 10;
+	}
+	while (count != 0 && *cursor + 1 < size) {
+		line[(*cursor)++] = digits[--count];
+	}
+}
+
+static u64 elapsed_ticks(u64 start, u64 end)
+{
+	return end >= start ? end - start : 0;
+}
+
+static void log_exec_timing_line(const char *path, long result,
+				 u64 start, u64 headers, u64 interp,
+				 u64 mapped, u64 relocated, u64 stacked,
+				 u64 done)
+{
+	char line[512];
+	u64 cursor = 0;
+
+	if (bunix_cmdline_has("debug-proc-exec-timing") <= 0) {
+		return;
+	}
+
+	append_text_bounded(line, sizeof(line), &cursor,
+			    "proc-exec-timing: result=");
+	if (result < 0) {
+		append_text_bounded(line, sizeof(line), &cursor, "-");
+		append_dec_bounded(line, sizeof(line), &cursor,
+				   (u64)(-result));
+	} else {
+		append_dec_bounded(line, sizeof(line), &cursor, (u64)result);
+	}
+	append_text_bounded(line, sizeof(line), &cursor, " total=");
+	append_dec_bounded(line, sizeof(line), &cursor,
+			   elapsed_ticks(start, done));
+	append_text_bounded(line, sizeof(line), &cursor, " headers=");
+	append_dec_bounded(line, sizeof(line), &cursor,
+			   elapsed_ticks(start, headers));
+	append_text_bounded(line, sizeof(line), &cursor, " interp=");
+	append_dec_bounded(line, sizeof(line), &cursor,
+			   elapsed_ticks(headers, interp));
+	append_text_bounded(line, sizeof(line), &cursor, " map=");
+	append_dec_bounded(line, sizeof(line), &cursor,
+			   elapsed_ticks(interp, mapped));
+	append_text_bounded(line, sizeof(line), &cursor, " reloc=");
+	append_dec_bounded(line, sizeof(line), &cursor,
+			   elapsed_ticks(mapped, relocated));
+	append_text_bounded(line, sizeof(line), &cursor, " stack=");
+	append_dec_bounded(line, sizeof(line), &cursor,
+			   elapsed_ticks(relocated, stacked));
+	append_text_bounded(line, sizeof(line), &cursor, " path=");
+	append_text_bounded(line, sizeof(line), &cursor, path);
+	if (cursor < sizeof(line)) {
+		line[cursor++] = '\n';
+	}
+	bunix_console_log(line, cursor);
+}
+
 static void log_exit_line(const char *prefix, u64 pid, u64 status)
 {
 	char line[96];
@@ -1431,6 +1517,12 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 	u64 interp_bias = 0;
 	u64 start_entry = 0;
 	long result = -1;
+	const u64 timing_start = bunix_timer_ticks();
+	u64 timing_headers = timing_start;
+	u64 timing_interp = timing_start;
+	u64 timing_mapped = timing_start;
+	u64 timing_relocated = timing_start;
+	u64 timing_stacked = timing_start;
 
 	if (load_path == 0 || execfn_path == 0 || entry == 0 || stack == 0) {
 		return -1;
@@ -1478,6 +1570,7 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 				  sizeof("proc: exec phdr read failed\n") - 1);
 		goto out;
 	}
+	timing_headers = bunix_timer_ticks();
 	load_bias = ehdr.type == ET_DYN ? PROC_DYN_LOAD_BIAS : 0;
 	for (u64 i = 0; i < ehdr.phnum; i++) {
 		aux_phdrs[i] = phdrs[i];
@@ -1525,6 +1618,7 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 			      PROC_INTERP_LOAD_BIAS : 0;
 		start_entry = interp_ehdr.entry + interp_bias;
 	}
+	timing_interp = bunix_timer_ticks();
 
 	if (clear_existing && bunix_task_clear(task) != 0) {
 		goto out;
@@ -1538,6 +1632,7 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 			       interp_bias, (u64)io_buffer) != 0)) {
 		goto out;
 	}
+	timing_mapped = bunix_timer_ticks();
 
 	if (interp_file.handle == 0 &&
 	    apply_relative_relocations(vfs, &file, phdrs, ehdr.phnum,
@@ -1545,6 +1640,7 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 				       (u64)io_buffer) != 0) {
 		goto out;
 	}
+	timing_relocated = bunix_timer_ticks();
 
 	if (clear_existing &&
 	    bunix_task_alloc(task, USER_STACK_TOP - PROC_INIT_STACK_MAX,
@@ -1556,11 +1652,15 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 				interp_bias, strings, creds, handles, stack) != 0) {
 		goto out;
 	}
+	timing_stacked = bunix_timer_ticks();
 
 	*entry = start_entry;
 	result = 0;
 
 out:
+	log_exec_timing_line(load_path, result, timing_start, timing_headers,
+			     timing_interp, timing_mapped, timing_relocated,
+			     timing_stacked, bunix_timer_ticks());
 	if (interp_file.handle != 0) {
 		vfs_close(vfs, interp_file.handle);
 	}
