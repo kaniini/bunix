@@ -369,6 +369,41 @@ static int run_ext2_subject_authority_test(void)
 	return 0;
 }
 
+static int run_tty_input_authority_test(u64 linux)
+{
+	const char injected[] = "tty-inject\n";
+	const u64 len = sizeof(injected) - 1;
+	const long buffer = bunix_buffer_create(len);
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_LINUX,
+		.type = BUNIX_LINUX_TTY_INPUT_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { len, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (linux == 0 || buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, injected, len) != 0 ||
+	    bunix_ipc_call(linux, &request, &reply) != 0) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		log_text("tty-input-auth-test: call failed\n");
+		return 1;
+	}
+	bunix_handle_close((u64)buffer);
+	if ((long)reply.words[0] != -1) {
+		log_text("tty-input-auth-test: injection succeeded\n");
+		return 1;
+	}
+	log_text("tty-input-auth-test: injection denied\n");
+	log_text("tty-input-auth-test: ok\n");
+	return 0;
+}
+
 int main(void)
 {
 	const char user_denied[] = "mgmt-test: user denied\n";
@@ -395,6 +430,9 @@ int main(void)
 	}
 	if (bunix_cmdline_has("ext2-subject-auth-test") > 0) {
 		return run_ext2_subject_authority_test();
+	}
+	if (bunix_cmdline_has("tty-input-auth-test") > 0) {
+		return run_tty_input_authority_test(linux);
 	}
 
 	if (vfs != 0) {

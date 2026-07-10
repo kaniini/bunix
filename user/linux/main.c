@@ -329,6 +329,7 @@ static char write_buffer[LINUX_MAX_WRITE];
 static struct linux_tty console_tty;
 static struct bunix_map file_refs;
 static struct bunix_map net_socket_refs;
+static struct bunix_map tty_input_tasks;
 static u64 next_pid = 1;
 static u64 foreground_pgid = 1;
 static u64 user_service;
@@ -613,6 +614,20 @@ static long register_service(u64 service)
 	(void)service;
 	return bunix_names_register_claim(bunix_handle_find(BUNIX_CAP_CLAM),
 					  BUNIX_HANDLE_SELF);
+}
+
+static int linux_tty_input_authorized(u64 sender)
+{
+	return sender != 0 && bunix_map_get(&tty_input_tasks, sender) != 0;
+}
+
+static long linux_grant_tty_input_task(u64 task)
+{
+	if (task == 0) {
+		return -LINUX_EINVAL;
+	}
+	return bunix_map_set(&tty_input_tasks, task, 1) == 0 ? 0 :
+	       -LINUX_ENOMEM;
 }
 
 static int recv_linux_message(struct bunix_msg *message, int *management)
@@ -7584,6 +7599,7 @@ int main(void)
 	bunix_map_init(&process_by_pid);
 	bunix_map_init(&file_refs);
 	bunix_map_init(&net_socket_refs);
+	bunix_map_init(&tty_input_tasks);
 	bunix_id_table_init(&pipe_ids);
 	bunix_console_log(online, sizeof(online) - 1);
 	for (;;) {
@@ -7605,20 +7621,55 @@ int main(void)
 		}
 
 		reply.type = message.type;
-		if (message.type == BUNIX_LINUX_TTY_INPUT) {
-			linux_tty_input_event(&console_tty,
-					      (char)(unsigned char)
-					      message.words[0]);
-			continue;
-		}
-		if (message.type == BUNIX_LINUX_TTY_INPUT_BUFFER) {
-			if ((message.cap_rights & BUNIX_RIGHT_RECV) != 0) {
-				linux_tty_input_buffer_event(&console_tty,
-							     message.cap,
-							     message.words[0]);
+		if (message.type == BUNIX_LINUX_GRANT_TTY_INPUT_TASK) {
+			if (!management) {
+				reply.words[0] = (u64)-LINUX_EPERM;
+			} else {
+				reply.words[0] =
+					(u64)linux_grant_tty_input_task(
+						message.words[0]);
 			}
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
+			}
+			if (message.reply != 0) {
+				bunix_ipc_send(message.reply, &reply);
+			}
+			continue;
+		}
+		if (message.type == BUNIX_LINUX_TTY_INPUT) {
+			if (!linux_tty_input_authorized(message.sender)) {
+				reply.words[0] = (u64)-LINUX_EPERM;
+			} else {
+				linux_tty_input_event(&console_tty,
+						      (char)(unsigned char)
+						      message.words[0]);
+				reply.words[0] = 0;
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			if (message.reply != 0) {
+				bunix_ipc_send(message.reply, &reply);
+			}
+			continue;
+		}
+		if (message.type == BUNIX_LINUX_TTY_INPUT_BUFFER) {
+			if (!linux_tty_input_authorized(message.sender)) {
+				reply.words[0] = (u64)-LINUX_EPERM;
+			} else if ((message.cap_rights & BUNIX_RIGHT_RECV) != 0) {
+				linux_tty_input_buffer_event(&console_tty,
+							     message.cap,
+							     message.words[0]);
+				reply.words[0] = 0;
+			} else {
+				reply.words[0] = (u64)-LINUX_EINVAL;
+			}
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			if (message.reply != 0) {
+				bunix_ipc_send(message.reply, &reply);
 			}
 			continue;
 		}

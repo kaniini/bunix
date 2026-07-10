@@ -57,13 +57,29 @@ Fix plan:
 
 Tasks:
 
-- [ ] Build a local reproducer that sends `BUNIX_LINUX_TTY_INPUT` from a
+- [x] Build a local reproducer that sends `BUNIX_LINUX_TTY_INPUT` from a
       non-console principal and observes whether input is delivered.
-- [ ] Define the console/TTY input authority and how bootstrap delegates it.
-- [ ] Gate TTY input messages on that authority.
+- [x] Define the console/TTY input authority and how bootstrap delegates it.
+- [x] Gate TTY input messages on that authority.
 - [ ] Replace global foreground terminal state with per-TTY/session state.
 - [ ] Add controlling-terminal checks for foreground process-group ioctls and
       generated terminal signals.
 - [ ] Add regression tests for input injection, cross-session SIGINT, and
       unauthorized `TIOCSPGRP`.
 - [ ] Run focused login/TTY shell tests and full tests before completion.
+
+Notes:
+
+- Added `BUNIX_LINUX_GRANT_TTY_INPUT_TASK` as a Linux management RPC.  Bootstrap
+  resolves the kernel-launched `consoled` task and grants that task as the only
+  authorized source of Linux TTY input after linux-server registers.
+- Linux-server now tracks authorized TTY input senders and rejects both
+  `BUNIX_LINUX_TTY_INPUT` and `BUNIX_LINUX_TTY_INPUT_BUFFER` with `-EPERM`
+  unless the authenticated message sender has that authority.  Fire-and-forget
+  console input still works, while tests can use reply ports to observe
+  denial.
+- Added `test-tty-input-authority`, which launches `mgmt-test` with only
+  names/console authority, resolves linux-server directly, and proves a
+  non-console sender cannot inject a TTY input buffer.
+- Focused verification passed: `make test-tty-input-authority` and
+  `BUNIX_TEST_SET=interactive-tty make test-shell-parallel`.

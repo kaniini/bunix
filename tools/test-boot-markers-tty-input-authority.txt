@@ -1,0 +1,2 @@
+tty-input-auth-test: injection denied
+tty-input-auth-test: ok

@@ -1352,6 +1352,9 @@ test-names-authority:
 test-management-authority:
 	$(MAKE) KERNEL_CMDLINE="log=info mgmt-auth-test" BUNIX_BOOT_PHASE=marker-poweroff BUNIX_BOOT_MARKER="mgmt-test: ok" TEST_BOOT_MARKERS=tools/test-boot-markers-management-authority.txt test-boot
 
+test-tty-input-authority:
+	$(MAKE) KERNEL_CMDLINE="log=info tty-input-auth-test" BUNIX_BOOT_PHASE=marker-poweroff BUNIX_BOOT_MARKER="tty-input-auth-test: ok" TEST_BOOT_MARKERS=tools/test-boot-markers-tty-input-authority.txt test-boot
+
 test-vfs-authority:
 	$(MAKE) KERNEL_CMDLINE="log=info vfs-auth-test" BUNIX_BOOT_PHASE=marker-poweroff BUNIX_BOOT_MARKER="vfs-auth-test: ok" TEST_BOOT_MARKERS=tools/test-boot-markers-vfs-authority.txt test-boot
 

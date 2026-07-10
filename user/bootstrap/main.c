@@ -1785,6 +1785,27 @@ static long spawn_linux_init(u64 linux, const char *path)
 	return 0;
 }
 
+static long linux_grant_tty_input_task(u64 linux_mgmt, u64 task)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_LINUX,
+		.type = BUNIX_LINUX_GRANT_TTY_INPUT_TASK,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { task, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (linux_mgmt == 0 || task == 0 ||
+	    bunix_ipc_call(linux_mgmt, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+	return 0;
+}
+
 static long net_loopback_selftest(u64 net)
 {
 	const char payload[] = "bunix-loopback";
@@ -3952,6 +3973,15 @@ int main(void)
 	if (linux == 0) {
 		return 1;
 	}
+	{
+		const long console_task = task_id_by_name("consoled");
+
+		if (console_task <= 0 ||
+		    linux_grant_tty_input_task(linux_mgmt,
+					       (u64)console_task) != 0) {
+			return 1;
+		}
+	}
 
 	if (bunix_cmdline_has("mgmt-auth-test") > 0) {
 		const struct bunix_launch_cap mgmt_test_caps[] = {
@@ -3963,6 +3993,25 @@ int main(void)
 			    "mgmt-test", mgmt_test_caps,
 			    sizeof(mgmt_test_caps) /
 				    sizeof(mgmt_test_caps[0])) < 0) {
+			return 1;
+		}
+		bunix_sleep_ns(1000000000ull);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
+		for (;;) {
+		}
+	}
+
+	if (bunix_cmdline_has("tty-input-auth-test") > 0) {
+		const struct bunix_launch_cap tty_input_auth_test_caps[] = {
+			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND,
+			  BUNIX_CAP_NAME },
+			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		};
+
+		if (bunix_launch_module_with_caps(
+			    "mgmt-test", tty_input_auth_test_caps,
+			    sizeof(tty_input_auth_test_caps) /
+				    sizeof(tty_input_auth_test_caps[0])) < 0) {
 			return 1;
 		}
 		bunix_sleep_ns(1000000000ull);
