@@ -92,3 +92,49 @@ int kernel_cmdline_has(const char *token)
 
 	return 0;
 }
+
+int kernel_cmdline_get_u64(const char *prefix, u64 *value)
+{
+	const char *cmdline = kernel_cmdline;
+	const u64 prefix_len = prefix == 0 ? 0 : str_len(prefix);
+
+	if (cmdline == 0 || prefix_len == 0 || value == 0) {
+		return 0;
+	}
+
+	while (*cmdline != '\0') {
+		u64 len = 0;
+		u64 parsed = 0;
+		u64 i;
+
+		while (*cmdline == ' ') {
+			cmdline++;
+		}
+		while (cmdline[len] != '\0' && cmdline[len] != ' ') {
+			len++;
+		}
+		if (len <= prefix_len) {
+			cmdline += len;
+			continue;
+		}
+		for (i = 0; i < prefix_len; i++) {
+			if (cmdline[i] != prefix[i]) {
+				break;
+			}
+		}
+		if (i != prefix_len) {
+			cmdline += len;
+			continue;
+		}
+		for (i = prefix_len; i < len; i++) {
+			if (cmdline[i] < '0' || cmdline[i] > '9') {
+				return 0;
+			}
+			parsed = parsed * 10 + (u64)(cmdline[i] - '0');
+		}
+		*value = parsed;
+		return 1;
+	}
+
+	return 0;
+}

@@ -16,6 +16,8 @@ rootfs_flavor=${ROOTFS_FLAVOR:-squashfs}
 boot_phase=${BUNIX_BOOT_PHASE:-full}
 login_wait=80
 login_capture=160
+login_wait_override=${BUNIX_BOOT_LOGIN_WAIT:-}
+login_capture_override=${BUNIX_BOOT_LOGIN_CAPTURE:-}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-boot-test.$run_id}
 log=${SERIAL_LOG:-build/serial.log}
@@ -162,6 +164,12 @@ fi
 if [ "$rootfs_flavor" = alpine-squashfs ] && [ "$boot_phase" = full ]; then
 	login_wait=180
 	login_capture=260
+fi
+if [ -n "$login_wait_override" ]; then
+	login_wait=$login_wait_override
+fi
+if [ -n "$login_capture_override" ]; then
+	login_capture=$login_capture_override
 fi
 wait_for_fixed_boot "login: " "login prompt did not appear" "$login_wait" "$login_capture"
 

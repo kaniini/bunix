@@ -3059,6 +3059,18 @@ static int linux_exec_prepare_shebang(struct task *task, char *load_path,
 	return result;
 }
 
+static void linux_debug_exec_log(struct task *task, const char *phase,
+				 const char *path, int result)
+{
+	if (!kernel_cmdline_has("debug-linux-exec")) {
+		return;
+	}
+
+	console_printf("linux-exec: task=%u phase=%s result=%d path=%s\n",
+		       task != 0 ? task_id(task) : 0, phase, result,
+		       path != 0 ? path : "");
+}
+
 static int linux_exec_replace_write_string(struct shared_buffer *buffer,
 					   u64 *offset, u64 limit,
 					   const char *text)
@@ -3278,32 +3290,41 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 
 	path_result = copy_cstr_from_user_errno(path, user_path, sizeof(path));
 	if (path_result != 0) {
+		linux_debug_exec_log(task, "copy-path", "", path_result);
 		return (u64)path_result;
 	}
+	linux_debug_exec_log(task, "copy-path", path, 0);
 	mem_copy((u8 *)load_path, (const u8 *)path, str_len(path) + 1);
 	arg_result = linux_exec_collect_args(path, frame->arg1, &args);
 	if (arg_result == 0) {
 		arg_result = linux_exec_collect_env(frame->arg2, &args);
 	}
 	if (arg_result != 0) {
+		linux_debug_exec_log(task, "collect-args", path, arg_result);
 		linux_exec_args_free(&args);
 		return (u64)arg_result;
 	}
+	linux_debug_exec_log(task, "collect-args", path, 0);
 
 	for (u64 depth = 0; depth < LINUX_SHEBANG_MAX_DEPTH; depth++) {
 		read_result = linux_vfs_read_prefix(task, load_path, prefix,
 						    sizeof(prefix),
 						    &prefix_size);
 		if (read_result != 0) {
+			linux_debug_exec_log(task, "read-prefix", load_path,
+					     read_result);
 			linux_exec_args_free(&args);
 			return read_result == -2 ? (u64)-LINUX_ENOMEM :
 			       (read_result == -1 ? (u64)-LINUX_EIO :
 				(u64)read_result);
 		}
+		linux_debug_exec_log(task, "read-prefix", load_path, 0);
 		if (prefix_size < 2 || prefix[0] != '#' || prefix[1] != '!') {
 			break;
 		}
 		if (depth + 1 == LINUX_SHEBANG_MAX_DEPTH) {
+			linux_debug_exec_log(task, "shebang-depth", load_path,
+					     -LINUX_EINVAL);
 			linux_exec_args_free(&args);
 			return linux_einval_u64(__func__, __LINE__);
 		}
@@ -3311,17 +3332,23 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			linux_exec_prepare_shebang(task, load_path, &args,
 						   prefix, prefix_size);
 		if (script_result != 0) {
+			linux_debug_exec_log(task, "prepare-shebang",
+					     load_path, script_result);
 			linux_exec_args_free(&args);
 			return (u64)script_result;
 		}
+		linux_debug_exec_log(task, "prepare-shebang", load_path, 0);
 	}
 
 	replace_result = linux_proc_exec_replace(task, load_path, path, &args,
 						 &entry, &new_sp);
 	if (replace_result != 0) {
+		linux_debug_exec_log(task, "replace", load_path,
+				     replace_result);
 		linux_exec_args_free(&args);
 		return (u64)replace_result;
 	}
+	linux_debug_exec_log(task, "replace", load_path, 0);
 
 	task_set_linux_brk(task, LINUX_INITIAL_BRK);
 	task_set_linux_mmap_next(task, LINUX_MMAP_BASE);
@@ -3329,9 +3356,12 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 	frame->user_rsp = new_sp;
 	const u64 exec_result = linux_exec_process(task);
 	if ((i64)exec_result < 0) {
+		linux_debug_exec_log(task, "linux-exec-process", load_path,
+				     (int)(i64)exec_result);
 		linux_exec_args_free(&args);
 		return exec_result;
 	}
+	linux_debug_exec_log(task, "linux-exec-process", load_path, 0);
 	linux_proc_set_cmdline(task, exec_result, &args);
 	linux_vfork_complete_task(task_id(task));
 	console_printf("linux: execve task=%u path=%s entry=%p stack=%p\n",
@@ -3644,6 +3674,8 @@ static const char *linux_syscall_name(u64 number)
 		return "newfstatat";
 	case LINUX_SYSCALL_READLINKAT:
 		return "readlinkat";
+	case LINUX_SYSCALL_READLINK:
+		return "readlink";
 	case LINUX_SYSCALL_FCHMODAT:
 		return "fchmodat";
 	case LINUX_SYSCALL_FACCESSAT:
@@ -5377,10 +5409,34 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 	struct ipc_port *linux = ipc_port_find("linux");
 	struct ipc_port *reply_port = task_reply_port(task);
 	u64 result;
+	u64 debug_task = 0;
+	const int debug_late =
+		(kernel_cmdline_has("debug-linux-syscalls") &&
+		 task_id(task) >= 140) ||
+		(kernel_cmdline_get_u64("debug-linux-syscall-task=",
+					&debug_task) &&
+		 debug_task == task_id(task));
 
+	if (debug_late) {
+		console_printf("linux-debug: enter task=%u name=%s syscall=%s nr=%u rip=%p arg0=%p arg1=%p arg2=%p arg3=%p\n",
+			       task_id(task), task_name(task),
+			       linux_syscall_name(frame->number),
+			       (u32)frame->number,
+			       (const void *)frame->user_rip,
+			       (const void *)frame->arg0,
+			       (const void *)frame->arg1,
+			       (const void *)frame->arg2,
+			       (const void *)frame->arg3);
+	}
 	linux_strace_enter(frame);
 	result = linux_syscall_handle(frame);
 	linux_strace_log(frame, result);
+	if (debug_late) {
+		console_printf("linux-debug: exit task=%u name=%s syscall=%s nr=%u ret=%p\n",
+			       task_id(task), task_name(task),
+			       linux_syscall_name(frame->number),
+			       (u32)frame->number, (const void *)result);
+	}
 	if (frame->number != LINUX_SYSCALL_RT_SIGRETURN &&
 	    linux != 0 && reply_port != 0 &&
 	    (i64)linux_signal_pending(linux, reply_port) > 0 &&

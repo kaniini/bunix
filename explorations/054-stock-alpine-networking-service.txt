@@ -131,6 +131,43 @@ Validation:
   `build/failures/20260710T093004Z-20138/20260710T093304Z-20138`; it reaches
   OpenRC startup, mounts `/proc`, creates `/run/openrc` and `/run/lock`, caches
   dependencies, reports clock-skew warnings, and then times out before login.
+- Added targeted debug controls while investigating the post-`fsck` stall:
+  - `debug-serial-userspace` keeps server/userspace logs on serial after the
+    Linux init handoff.
+  - `debug-linux-rpc`, `debug-linux-wait`, `debug-linux-exec`,
+    `debug-linux-path-taskNNN`, and `debug-linux-syscall-task=NNN` allow
+    focused Linux-server and Linux-syscall tracing without enabling the full
+    noisy strace path.
+  - `BUNIX_BOOT_LOGIN_WAIT` and `BUNIX_BOOT_LOGIN_CAPTURE` let the boot harness
+    run longer stock-OpenRC probes without changing the default test timeout.
+- Added Linux-server open-file descriptions for VFS file and directory FDs.
+  `openat()` now creates a per-open description, while `dup()` and `fork()`
+  share that description.  This gives directory streams and regular files
+  Linux-style shared offsets only for duplicated/inherited FDs, instead of
+  accidentally sharing offsets through a global VFS handle table.
+- A quiet stock boot probe with `BUNIX_BOOT_LOGIN_WAIT=360` still exceeded the
+  old 180s login window and was interrupted after it remained at the stock
+  OpenRC fsck/localmount band, confirming that this is not only serial logging
+  overhead.
+- Targeted `debug-linux-wait` and `debug-linux-exec` runs show BusyBox init
+  waits on `/sbin/openrc boot`; OpenRC boot waits on the `/etc/init.d/fsck`
+  wrapper; the wrapper execs through `/sbin/openrc-run` into the shell runner.
+- Targeted syscall/path diagnostics for task 143 show the fsck wrapper is not
+  asleep in `wait4`; it is actively walking OpenRC runlevel/provider state with
+  repeated `faccessat`, `openat`, `getdents64`, and `newfstatat` calls.  The
+  repeated paths include `bunix-dev`, `devfs`, `hwclock`, `osclock`, `swclock`,
+  and `/etc/runlevels/boot/...`.
+- The rootfs runlevel layout is intentionally minimal in stock-networking
+  mode: `/etc/runlevels/sysinit/bunix-dev` exists to provide `dev` and
+  `dev-mount`, while `/etc/runlevels/boot/networking` is the only boot
+  runlevel symlink.  The repeated `boot` runlevel checks are OpenRC dependency
+  resolution looking for providers/services, not a Bunix service respawn loop.
+- The current blocker is therefore narrower than the first failure: stock
+  OpenRC progresses through sysinit and into `/sbin/openrc boot`, but the
+  OpenRC fsck/service wrapper path is still too slow or is repeatedly probing
+  missing provider state through VFS.  The next fix should improve the general
+  VFS/Linux path behavior that makes those probes expensive or incorrect,
+  rather than adding another generated networking-service workaround.
 
 Notes:
 

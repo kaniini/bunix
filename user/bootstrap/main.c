@@ -4343,7 +4343,8 @@ int main(void)
 	if (run_boot_spawns(proc_mgmt, vfs) != 0) {
 		return 1;
 	}
-	if (bunix_cmdline_has("shell-test") <= 0) {
+	if (bunix_cmdline_has("shell-test") <= 0 &&
+	    bunix_cmdline_has("debug-serial-userspace") <= 0) {
 		bunix_console_logs_to_ring();
 	}
 
