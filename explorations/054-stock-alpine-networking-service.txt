@@ -402,6 +402,28 @@ Validation:
   `build/failures/20260710T231315Z-15756/20260710T231615Z-15756`.  The debug
   artifact for the rejected cache attempt is
   `build/failures/20260710T231624Z-16604/20260710T231744Z-16604`.
+- Reintroduced the Linux-server exact small-file read cache after fixing the
+  underlying buffer authority problem.  Linux read and mmap read buffers now
+  grant the Linux server both send and receive rights, which matches the real
+  flow: VFS writes file data into the buffer, the Linux server reads the
+  buffer to populate a cache entry, and later cache hits write data back into
+  the caller's buffer.  The cache remains conservative: exact path, offset, and
+  length matches only; maximum 4096 byte reads; immutable-looking `/etc`,
+  `/usr`, `/bin`, `/sbin`, and `/lib` paths only; and mutation-epoch checks.
+- Validation for the fixed read-cache slice:
+  - `make`
+  - `make build/modules/linux.server`
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 108
+    seconds.
+  - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part` passed in 91
+    seconds.
+- A short stock OpenRC debug probe after the buffer-rights fix no longer
+  reports the previous `sched: buffer handle denied ... need=0x2 rights=0x5`
+  cache failure.  The artifact is
+  `build/failures/20260710T232756Z-21200/20260710T232916Z-21200`.
+- The read-cache slice does not complete stock OpenRC boot by itself.  A
+  normal stock-networking boot still timed out before `login:` at
+  `build/failures/20260710T232921Z-21621/20260710T233222Z-21621`.
 
 Notes:
 

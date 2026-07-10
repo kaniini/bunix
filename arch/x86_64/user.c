@@ -995,7 +995,8 @@ static int linux_mmap_file_into_task(struct task *task, struct ipc_port *linux,
 			.protocol = USER_FOURCC_LINX,
 			.type = LINUX_SYSCALL_MMAP,
 			.sender = 0,
-			.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+			.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+				      TASK_RIGHT_DUP,
 			.reply_port = reply_port,
 			.cap_type = IPC_CAP_BUFFER,
 			.cap_object = buffer,
@@ -4732,7 +4733,7 @@ poll_again:
 	case LINUX_SYSCALL_READ: {
 		return linux_read_chunked(linux, reply_port, arg0, arg1,
 					  arg2, TASK_RIGHT_SEND |
-					  TASK_RIGHT_DUP);
+					  TASK_RIGHT_RECV | TASK_RIGHT_DUP);
 	}
 	case LINUX_SYSCALL_GETDENTS64: {
 		return linux_getdents64_chunked(linux, reply_port, &request,
