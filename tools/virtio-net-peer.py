@@ -12,6 +12,7 @@ ETH_IPV4 = 0x0800
 ETH_ARP = 0x0806
 ETH_IPV6 = 0x86DD
 IP_ICMP = 1
+IP_TCP = 6
 IP_UDP = 17
 IP_ICMPV6 = 58
 ICMPV6_ECHO_REQUEST = 128
@@ -164,6 +165,41 @@ def udp6_echo_reply(peer_mac, peer_ip6, guest_mac, guest_ip6, payload):
     return ethernet(guest_mac, peer_mac, ETH_IPV6, ip + bytes(udp))
 
 
+def tcp6_checksum(src_ip, dst_ip, tcp):
+    return ipv6_checksum(src_ip, dst_ip, IP_TCP, tcp)
+
+
+def tcp6_segment(src_port, dst_port, seq, ack, flags):
+    tcp = bytearray(20)
+    struct.pack_into("!HHII", tcp, 0, src_port, dst_port, seq, ack)
+    tcp[12] = 0x50
+    tcp[13] = flags
+    struct.pack_into("!H", tcp, 14, 65535)
+    return tcp
+
+
+def tcp6_synack_reply(peer_mac, peer_ip6, guest_mac, guest_ip6, payload):
+    if len(payload) < 20:
+        return None
+    src_port, dst_port, seq = struct.unpack("!HHI", payload[:8])
+    flags = payload[13]
+    if (flags & 0x02) == 0 or (flags & 0x10) != 0:
+        return None
+    tcp = tcp6_segment(dst_port, src_port, 0, (seq + 1) & 0xffffffff, 0x12)
+    csum = tcp6_checksum(peer_ip6, guest_ip6, tcp)
+    struct.pack_into("!H", tcp, 16, csum)
+    ip = ipv6_header(peer_ip6, guest_ip6, IP_TCP, len(tcp))
+    return ethernet(guest_mac, peer_mac, ETH_IPV6, ip + bytes(tcp))
+
+
+def tcp6_syn(peer_mac, peer_ip6, guest_mac, guest_ip6, src_port, dst_port):
+    tcp = tcp6_segment(src_port, dst_port, 0x01020304, 0, 0x02)
+    csum = tcp6_checksum(peer_ip6, guest_ip6, tcp)
+    struct.pack_into("!H", tcp, 16, csum)
+    ip = ipv6_header(peer_ip6, guest_ip6, IP_TCP, len(tcp))
+    return ethernet(guest_mac, peer_mac, ETH_IPV6, ip + bytes(tcp))
+
+
 def parse_mcast(text):
     host, sep, port = text.rpartition(":")
     if not sep or not host:
@@ -194,6 +230,8 @@ class Peer:
         self.sock = open_mcast(self.group, self.port)
         self.end_at = time.monotonic() + args.duration
         self.verbose = args.verbose
+        self.tcp6_syn_port = args.tcp6_syn_port
+        self.next_tcp6_syn = time.monotonic() + 1.0
         self.rx = 0
         self.tx = 0
 
@@ -277,6 +315,12 @@ class Peer:
                                     frame[6:12], src_ip, payload)
             if reply is not None:
                 self.send(reply)
+        elif next_header == IP_TCP and dst_ip == self.peer_ip6:
+            self.log(f"tcp6 from {ipaddress.IPv6Address(src_ip)}")
+            reply = tcp6_synack_reply(self.peer_mac, self.peer_ip6,
+                                      frame[6:12], src_ip, payload)
+            if reply is not None:
+                self.send(reply)
 
     def handle(self, frame):
         if len(frame) < 14:
@@ -297,6 +341,12 @@ class Peer:
         if send_arp:
             self.send(arp_request(self.peer_mac, self.peer_ip, self.guest_ip))
         while time.monotonic() < self.end_at:
+            now = time.monotonic()
+            if self.tcp6_syn_port is not None and now >= self.next_tcp6_syn:
+                self.send(tcp6_syn(self.peer_mac, self.peer_ip6,
+                                   self.guest_mac, self.guest_ip6, 45678,
+                                   self.tcp6_syn_port))
+                self.next_tcp6_syn = now + 0.5
             remaining = max(0.0, self.end_at - time.monotonic())
             readable, _, _ = select.select([self.sock], [], [],
                                            min(0.25, remaining))
@@ -337,6 +387,14 @@ def self_test():
     assert frame6[12:14] == b"\x86\xdd"
     assert frame6[20] == IP_ICMPV6
     assert frame6[54] == ICMPV6_NEIGHBOR_ADVERT
+    syn = tcp6_syn(peer_mac, peer_ip6, guest_mac, guest_ip6, 45678, 23459)
+    assert syn[12:14] == b"\x86\xdd"
+    assert syn[20] == IP_TCP
+    assert syn[54:56] == b"\xb2\x6e"
+    synack = tcp6_synack_reply(peer_mac, peer_ip6, guest_mac, guest_ip6,
+                               syn[54:])
+    assert synack[54:56] == b"\x5b\xa3"
+    assert synack[67] == 0x12
     print("virtio-net-peer self-test ok")
 
 
@@ -354,6 +412,7 @@ def main():
     parser.add_argument("--duration", type=float, default=30.0)
     parser.add_argument("--ready-file")
     parser.add_argument("--send-arp", action="store_true")
+    parser.add_argument("--tcp6-syn-port", type=int)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()

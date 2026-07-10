@@ -36,7 +36,7 @@ Tasks:
       host-side peer.
 - [x] Add packet-interface IPv6 UDP egress/ingress smokes with the host-side
       peer.
-- [ ] Add packet-interface IPv6 TCP SYN connect/accept smokes with the
+- [x] Add packet-interface IPv6 TCP SYN connect/accept smokes with the
       host-side peer.
 - [x] Add `/proc/net/dev` and neighbor-table counter checks for IPv6 RX/TX.
 - [x] Add clean guest poweroff coverage for the deterministic IPv6 smoke target.
@@ -68,3 +68,9 @@ Progress:
   same route, neighbor-cache, NDP, and pending-frame path as ICMPv6.  The host
   peer echoes UDPv6 datagrams, and `make test-boot-virtio-net-socket-peer-udp6`
   passed with `/bin/nettest udp6-external`.
+- NET0 now supports the same minimal external TCP SYN scope for IPv6 that the
+  IPv4 smoke path has: routed connect emits an Ethernet+IPv6+TCP SYN through
+  NDP-backed packet-interface egress, and inbound IPv6 TCP SYN frames create an
+  accepted socket and emit SYN-ACK.  `make test-boot-virtio-net-socket-peer-tcp6`
+  passed with `/bin/nettest tcp6-external-connect` and
+  `/bin/nettest tcp6-external-accept`.

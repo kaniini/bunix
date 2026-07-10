@@ -459,6 +459,63 @@ static void tcp6_test(void)
 	say("nettest: tcp6 ok\n");
 }
 
+static void tcp6_external_connect_test(void)
+{
+	struct sockaddr_in6 peer;
+	int fd = socket(AF_INET6, SOCK_STREAM, 0);
+
+	if (fd < 0) {
+		die("nettest: tcp6 external socket failed\n");
+	}
+	memset(&peer, 0, sizeof(peer));
+	peer.sin6_family = AF_INET6;
+	peer.sin6_port = htons(23456);
+	if (inet_pton(AF_INET6, "2001:db8:18::2", &peer.sin6_addr) != 1) {
+		die("nettest: tcp6 external addr failed\n");
+	}
+	if (connect(fd, (struct sockaddr *)&peer, sizeof(peer)) != 0) {
+		die("nettest: tcp6 external connect failed\n");
+	}
+	close(fd);
+	say("nettest: tcp6 external connect ok\n");
+}
+
+static void tcp6_external_accept_test(void)
+{
+	struct sockaddr_in6 local;
+	struct sockaddr_in6 peer;
+	struct pollfd pfd;
+	socklen_t peer_len = sizeof(peer);
+	int listener = socket(AF_INET6, SOCK_STREAM, 0);
+	int accepted;
+
+	if (listener < 0) {
+		die("nettest: tcp6 external listen socket failed\n");
+	}
+	memset(&local, 0, sizeof(local));
+	local.sin6_family = AF_INET6;
+	local.sin6_port = htons(23459);
+	local.sin6_addr = in6addr_any;
+	if (bind(listener, (struct sockaddr *)&local, sizeof(local)) != 0 ||
+	    listen(listener, 4) != 0) {
+		die("nettest: tcp6 external listen failed\n");
+	}
+	pfd.fd = listener;
+	pfd.events = POLLIN;
+	pfd.revents = 0;
+	if (poll(&pfd, 1, 5000) != 1 || (pfd.revents & POLLIN) == 0) {
+		die("nettest: tcp6 external poll failed\n");
+	}
+	accepted = accept(listener, (struct sockaddr *)&peer, &peer_len);
+	if (accepted < 0 || peer_len != sizeof(peer) ||
+	    peer.sin6_family != AF_INET6 || ntohs(peer.sin6_port) != 45678) {
+		die("nettest: tcp6 external accept failed\n");
+	}
+	close(accepted);
+	close(listener);
+	say("nettest: tcp6 external accept ok\n");
+}
+
 static void proc_net_test(void)
 {
 	expect_file_contains("/proc/net/dev", "lo:",
@@ -573,6 +630,14 @@ int main(int argc, char **argv)
 {
 	if (argc == 2 && strcmp(argv[1], "udp6-external") == 0) {
 		udp6_external_test();
+		return 0;
+	}
+	if (argc == 2 && strcmp(argv[1], "tcp6-external-connect") == 0) {
+		tcp6_external_connect_test();
+		return 0;
+	}
+	if (argc == 2 && strcmp(argv[1], "tcp6-external-accept") == 0) {
+		tcp6_external_accept_test();
 		return 0;
 	}
 	udp_test();

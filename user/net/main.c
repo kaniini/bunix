@@ -291,6 +291,8 @@ static void neighbor_learn(u64 family, u64 hi, u64 lo, u64 iface,
 			   u64 mac_hi, u64 mac_lo);
 static void packet_ingress_tcp_ipv4(struct net_interface *iface,
 				    const unsigned char *packet, u64 len);
+static void packet_ingress_tcp_ipv6(struct net_interface *iface,
+				    const unsigned char *packet, u64 len);
 static u64 iface_ipv4_addr(u64 iface_id);
 static int iface_ipv6_addr(u64 iface_id, u64 *hi, u64 *lo);
 static int packet_tx_enqueue_copy(struct net_interface *iface,
@@ -2422,6 +2424,7 @@ static void reply_packet_rx_submit(struct bunix_msg *reply,
 	packet_ingress_udp_ipv4(packet->data, packet->len);
 	packet_ingress_udp_ipv6(packet->data, packet->len);
 	packet_ingress_tcp_ipv4(iface, packet->data, packet->len);
+	packet_ingress_tcp_ipv6(iface, packet->data, packet->len);
 	packet_ingress_icmp_ipv4(packet->data, packet->len);
 	packet_ingress_icmp_ipv6(packet->data, packet->len);
 	if (iface->rx_tail != 0) {
@@ -3417,6 +3420,14 @@ static unsigned short tcp_ipv4_checksum(const unsigned char *tcp, u64 len,
 								     0)));
 }
 
+static unsigned short tcp_ipv6_checksum(const unsigned char *tcp, u64 len,
+					u64 source_hi, u64 source_lo,
+					u64 dest_hi, u64 dest_lo)
+{
+	return ipv6_l4_checksum(tcp, len, NET_PROTO_TCP, source_hi, source_lo,
+				dest_hi, dest_lo);
+}
+
 static void tcp_send_synack_ipv4(struct net_interface *iface,
 				 const unsigned char *request,
 				 u64 source_ip, u64 dest_ip,
@@ -3466,6 +3477,47 @@ static void tcp_send_synack_ipv4(struct net_interface *iface,
 	tcp_checksum = tcp_ipv4_checksum(frame + 34, 20, source_ip, dest_ip);
 	frame[50] = (unsigned char)((tcp_checksum >> 8) & 0xff);
 	frame[51] = (unsigned char)(tcp_checksum & 0xff);
+	(void)packet_tx_enqueue_copy(iface, frame, sizeof(frame));
+}
+
+static void tcp_send_synack_ipv6(struct net_interface *iface,
+				 const unsigned char *request,
+				 u64 source_hi, u64 source_lo,
+				 u64 dest_hi, u64 dest_lo,
+				 u64 source_port, u64 dest_port,
+				 u64 ack_seq)
+{
+	unsigned char frame[74];
+	unsigned short tcp_checksum;
+	const u64 source_mac = net_read_mac48(request + 6);
+
+	if (iface == 0 || iface == &loopback || source_mac == 0 ||
+	    iface->mac_hi == 0) {
+		return;
+	}
+	for (u64 i = 0; i < 6; i++) {
+		frame[i] = (unsigned char)((source_mac >> ((5 - i) * 8)) &
+					   0xff);
+		frame[6 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	frame[12] = 0x86;
+	frame[13] = 0xdd;
+	ndp_write_ipv6_header(frame, 20, NET_PROTO_TCP, 64, source_hi,
+			      source_lo, dest_hi, dest_lo);
+	net_write_be16(frame + 54, source_port);
+	net_write_be16(frame + 56, dest_port);
+	net_write_be32(frame + 58, 0);
+	net_write_be32(frame + 62, ack_seq);
+	frame[66] = 0x50;
+	frame[67] = 0x12;
+	net_write_be16(frame + 68, 65535);
+	net_write_be16(frame + 70, 0);
+	net_write_be16(frame + 72, 0);
+	tcp_checksum = tcp_ipv6_checksum(frame + 54, 20, source_hi, source_lo,
+					 dest_hi, dest_lo);
+	frame[70] = (unsigned char)((tcp_checksum >> 8) & 0xff);
+	frame[71] = (unsigned char)(tcp_checksum & 0xff);
 	(void)packet_tx_enqueue_copy(iface, frame, sizeof(frame));
 }
 
@@ -3549,6 +3601,82 @@ static void packet_ingress_tcp_ipv4(struct net_interface *iface,
 	}
 	tcp_send_synack_ipv4(iface, packet, dst_ip, src_ip, dst_port,
 			     src_port, seq + 1);
+}
+
+static void packet_ingress_tcp_ipv6(struct net_interface *iface,
+				    const unsigned char *packet, u64 len)
+{
+	const unsigned char *ip;
+	const unsigned char *tcp;
+	struct tcp_socket *listener;
+	struct tcp_socket *server;
+	u64 payload_len;
+	u64 tcp_header_len;
+	u64 src_hi;
+	u64 src_lo;
+	u64 dst_hi;
+	u64 dst_lo;
+	u64 src_port;
+	u64 dst_port;
+	u64 seq;
+	u64 flags;
+
+	if (iface == 0 || packet == 0 || len < 14 + 40 + 20 ||
+	    net_read_be16(packet + 12) != NET_ETH_IPV6) {
+		return;
+	}
+	ip = packet + 14;
+	if ((ip[0] >> 4) != 6 || ip[6] != NET_PROTO_TCP) {
+		return;
+	}
+	payload_len = net_read_be16(ip + 4);
+	if (payload_len < 20 || len < 14 + 40 + payload_len) {
+		return;
+	}
+	src_hi = net_read_be64(ip + 8);
+	src_lo = net_read_be64(ip + 16);
+	dst_hi = net_read_be64(ip + 24);
+	dst_lo = net_read_be64(ip + 32);
+	if (!net_addr_is_local(BUNIX_NET_ADDR_FAMILY_IPV6, dst_hi, dst_lo)) {
+		return;
+	}
+	tcp = ip + 40;
+	tcp_header_len = (tcp[12] >> 4) * 4;
+	if (tcp_header_len < 20 || payload_len < tcp_header_len) {
+		return;
+	}
+	src_port = net_read_be16(tcp);
+	dst_port = net_read_be16(tcp + 2);
+	flags = tcp[13];
+	if ((src_hi == 0 && src_lo == 0) || src_port == 0 || dst_port == 0 ||
+	    (flags & 0x02) == 0 || (flags & 0x10) != 0) {
+		return;
+	}
+	listener = tcp_find_listener(BUNIX_NET_ADDR_FAMILY_IPV6, dst_hi,
+				     dst_lo, dst_port);
+	if (listener == 0) {
+		return;
+	}
+	server = tcp_alloc_socket(BUNIX_NET_ADDR_FAMILY_IPV6);
+	if (server == 0) {
+		return;
+	}
+	server->state = NET_TCP_STATE_ESTABLISHED;
+	server->local.family = BUNIX_NET_ADDR_FAMILY_IPV6;
+	server->local.hi = dst_hi;
+	server->local.lo = dst_lo;
+	server->local.port = dst_port;
+	server->peer_addr.family = BUNIX_NET_ADDR_FAMILY_IPV6;
+	server->peer_addr.hi = src_hi;
+	server->peer_addr.lo = src_lo;
+	server->peer_addr.port = src_port;
+	seq = net_read_be32(tcp + 4);
+	if (tcp_pending_push(listener, server->id) != 0) {
+		server->state = NET_TCP_STATE_CLOSED;
+		return;
+	}
+	tcp_send_synack_ipv6(iface, packet, dst_hi, dst_lo, src_hi, src_lo,
+			     dst_port, src_port, seq + 1);
 }
 
 static int tcp_connect_external_ipv4(struct tcp_socket *client, u64 dest_ip,
@@ -3652,6 +3780,104 @@ static int tcp_connect_external_ipv4(struct tcp_socket *client, u64 dest_ip,
 	return 0;
 }
 
+static int tcp_connect_external_ipv6(struct tcp_socket *client, u64 dest_hi,
+				     u64 dest_lo, u64 dest_port)
+{
+	const struct net_route *route;
+	struct net_interface *iface;
+	unsigned char *frame;
+	u64 source_hi = 0;
+	u64 source_lo = 0;
+	u64 next_hop_hi;
+	u64 next_hop_lo;
+	u64 dest_mac = 0;
+	unsigned short tcp_checksum;
+
+	if (client == 0 || client->state != NET_TCP_STATE_OPEN ||
+	    client->family != BUNIX_NET_ADDR_FAMILY_IPV6 ||
+	    (dest_hi == 0 && dest_lo == 0) || dest_port == 0 ||
+	    dest_port > 65535) {
+		return -1;
+	}
+	route = net_route_lookup(BUNIX_NET_ADDR_FAMILY_IPV6, dest_hi,
+				 dest_lo);
+	if (route == 0 || (route->flags & BUNIX_NET_ROUTE_FLAG_UP) == 0) {
+		return -1;
+	}
+	iface = interface_find(route->iface);
+	next_hop_hi = (route->flags & BUNIX_NET_ROUTE_FLAG_GATEWAY) != 0 ?
+		      route->gateway_hi : dest_hi;
+	next_hop_lo = (route->flags & BUNIX_NET_ROUTE_FLAG_GATEWAY) != 0 ?
+		      route->gateway_lo : dest_lo;
+	if (iface == 0 || iface_ipv6_addr(route->iface, &source_hi,
+					  &source_lo) != 0 ||
+	    iface->mac_hi == 0 || (next_hop_hi == 0 && next_hop_lo == 0)) {
+		return -1;
+	}
+	if (client->local.port == 0 &&
+	    tcp_bind_socket(client, 0, 0, 0) != 0) {
+		return -1;
+	}
+	{
+		struct net_neighbor *neighbor =
+			neighbor_find(BUNIX_NET_ADDR_FAMILY_IPV6, next_hop_hi,
+				      next_hop_lo, route->iface);
+
+		if (neighbor != 0) {
+			dest_mac = neighbor->mac_hi;
+		}
+	}
+	frame = (unsigned char *)bunix_alloc(74);
+	if (frame == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < 6; i++) {
+		frame[i] = dest_mac != 0 ?
+			   (unsigned char)((dest_mac >> ((5 - i) * 8)) & 0xff) :
+			   0xff;
+		frame[6 + i] = (unsigned char)((iface->mac_hi >>
+						((5 - i) * 8)) & 0xff);
+	}
+	frame[12] = 0x86;
+	frame[13] = 0xdd;
+	ndp_write_ipv6_header(frame, 20, NET_PROTO_TCP, 64, source_hi,
+			      source_lo, dest_hi, dest_lo);
+	net_write_be16(frame + 54, client->local.port);
+	net_write_be16(frame + 56, dest_port);
+	net_write_be32(frame + 58, 0);
+	net_write_be32(frame + 62, 0);
+	frame[66] = 0x50;
+	frame[67] = 0x02;
+	net_write_be16(frame + 68, 65535);
+	net_write_be16(frame + 70, 0);
+	net_write_be16(frame + 72, 0);
+	tcp_checksum = tcp_ipv6_checksum(frame + 54, 20, source_hi, source_lo,
+					 dest_hi, dest_lo);
+	frame[70] = (unsigned char)((tcp_checksum >> 8) & 0xff);
+	frame[71] = (unsigned char)(tcp_checksum & 0xff);
+	if (dest_mac == 0) {
+		if (pending_frame_add(BUNIX_NET_ADDR_FAMILY_IPV6, next_hop_hi,
+				      next_hop_lo, route->iface, frame,
+				      74) != 0) {
+			bunix_free(frame);
+			return -1;
+		}
+		ndp_request_ipv6(iface, source_hi, source_lo, next_hop_hi,
+				 next_hop_lo);
+	} else if (packet_tx_enqueue_copy(iface, frame, 74) != 0) {
+		bunix_free(frame);
+		return -1;
+	}
+	bunix_free(frame);
+	client->state = NET_TCP_STATE_ESTABLISHED;
+	client->peer_addr.family = BUNIX_NET_ADDR_FAMILY_IPV6;
+	client->peer_addr.hi = dest_hi;
+	client->peer_addr.lo = dest_lo;
+	client->peer_addr.port = dest_port;
+	client->peer_socket = 0;
+	return 0;
+}
+
 static void reply_tcp_connect(struct bunix_msg *reply,
 			      const struct bunix_msg *message)
 {
@@ -3667,14 +3893,20 @@ static void reply_tcp_connect(struct bunix_msg *reply,
 				client->family == BUNIX_NET_ADDR_FAMILY_IPV4 &&
 				hi == 0 &&
 				net_route_lookup(client->family, hi, lo) != 0;
+	const int routed_ipv6 = client != 0 &&
+				client->family == BUNIX_NET_ADDR_FAMILY_IPV6 &&
+				net_route_lookup(client->family, hi, lo) != 0;
 
 	if (client == 0 || client->state != NET_TCP_STATE_OPEN ||
-	    (!local && !routed_ipv4) || port == 0 || port > 65535) {
+	    (!local && !routed_ipv4 && !routed_ipv6) || port == 0 ||
+	    port > 65535) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
 	if (!local) {
-		if (tcp_connect_external_ipv4(client, lo, port) != 0) {
+		if ((client->family == BUNIX_NET_ADDR_FAMILY_IPV6 ?
+		     tcp_connect_external_ipv6(client, hi, lo, port) :
+		     tcp_connect_external_ipv4(client, lo, port)) != 0) {
 			reply->words[0] = (u64)-1;
 			return;
 		}
