@@ -258,6 +258,7 @@ X86_USER_LD_MODULES := \
 	PING_MODULE
 SYNTHETIC_SQUASHFS_IMAGE := $(BUILD_DIR)/modules/disk0.sqfs
 ALPINE_SQUASHFS_IMAGE := $(BUILD_DIR)/modules/alpine-disk0.sqfs
+ALPINE_STOCK_NETWORKING_SQUASHFS_IMAGE := $(BUILD_DIR)/modules/alpine-stock-networking-disk0.sqfs
 ROOTFS_FLAVOR ?= squashfs
 BLOCK_IMAGE := $(if $(filter alpine-squashfs,$(ROOTFS_FLAVOR)),$(ALPINE_SQUASHFS_IMAGE),$(SYNTHETIC_SQUASHFS_IMAGE))
 VIRTIO_BLOCK_IMAGE ?= $(BLOCK_IMAGE)
@@ -481,7 +482,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-path-safety test-boot test-boot-net-route test-boot-handle-race test-lowmem-isolation test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-lowmem-isolation test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -990,6 +991,9 @@ $(RISCV64_SMOKE_SQUASHFS_IMAGE): tools/build-riscv64-smoke-rootfs.sh $(RISCV64_D
 $(ALPINE_SQUASHFS_IMAGE): $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy modules/passwd modules/shadow modules/group
 	ROOTFS_IMAGE_FORMAT=squashfs LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/build-alpine-rootfs.sh $@
 
+$(ALPINE_STOCK_NETWORKING_SQUASHFS_IMAGE): $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy modules/passwd modules/shadow modules/group
+	ALPINE_NETWORKING_SERVICE=stock ALPINE_ROOTFS_ARTIFACT_DIR=$(BUILD_DIR)/alpine-rootfs-stock-networking ROOTFS_IMAGE_FORMAT=squashfs LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/build-alpine-rootfs.sh $@
+
 $(RISCV64_ALPINE_SQUASHFS_IMAGE): tools/build-riscv64-alpine-rootfs.sh tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO)
 	RISCV64_DYN_HELLO_MODULE=$(RISCV64_DYN_HELLO_MODULE) RISCV64_MUSL_LDSO=$(RISCV64_MUSL_LDSO) sh tools/build-riscv64-alpine-rootfs.sh $@
 
@@ -1363,6 +1367,12 @@ test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-b
 		BUNIX_BOOT_PHASE="$(BUNIX_BOOT_PHASE)" BUNIX_BOOT_MARKER="$(BUNIX_BOOT_MARKER)" \
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
+
+test-boot-alpine-stock-networking: $(ALPINE_STOCK_NETWORKING_SQUASHFS_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-alpine-smoke.txt
+	$(MAKE) ROOTFS_FLAVOR=alpine-squashfs BLOCK_IMAGE=$(ALPINE_STOCK_NETWORKING_SQUASHFS_IMAGE) VIRTIO_NET_TEST_ESP_DIR=$(BUILD_DIR)/esp-virtio-net-alpine-stock-networking $(BUILD_DIR)/esp-virtio-net-alpine-stock-networking/EFI/BOOT/BOOTX64.EFI
+	ESP_DIR=$(BUILD_DIR)/esp-virtio-net-alpine-stock-networking OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) QEMU_TIMEOUT=180s \
+		ROOTFS_FLAVOR=alpine-squashfs SERIAL_LOG=$(BUILD_DIR)/serial.log QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" sh tools/test-boot.sh
+	sh tools/check-markers.sh $(BUILD_DIR)/serial.log tools/test-boot-markers-alpine-smoke.txt
 
 test-boot-net-route:
 	$(MAKE) TEST_BOOT_MARKERS=tools/test-boot-markers-net-route.txt test-boot

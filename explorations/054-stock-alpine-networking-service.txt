@@ -56,7 +56,7 @@ Investigation targets:
 
 Tasks:
 
-- [ ] Add a deterministic OpenRC boot test that preserves Alpine's stock
+- [x] Add a deterministic OpenRC boot test that preserves Alpine's stock
       `/etc/init.d/networking` and fails at the current blocking point with
       useful failure artifacts.
 - [x] Add a rootfs build switch or test-only mode that disables the temporary
@@ -99,11 +99,18 @@ Implementation Notes:
   generated helper body.
 - Added `make test-alpine-rootfs-stock-networking` as the deterministic
   packaging test for the stock service body.
+- Added `make test-boot-alpine-stock-networking`, which builds
+  `build/modules/alpine-stock-networking-disk0.sqfs` with the stock service,
+  packages it into a separate VirtIO-net ESP, and runs the Alpine smoke boot
+  markers without disturbing the default generated-service image.
 
 Validation:
 
 - `make test-alpine-rootfs-stock-networking`
 - `make test-alpine-rootfs`
+- `make test-boot-alpine-stock-networking` currently fails deterministically
+  before login, with failure artifacts from the first run at
+  `build/failures/20260710T085814Z-6344/20260710T090114Z-6344`.
 
 Notes:
 
@@ -112,3 +119,11 @@ Notes:
   `build/alpine-rootfs-test` and its apk cache.  Run them serially or give one
   test a distinct `ALPINE_ROOTFS_ARTIFACT_DIR` until the packaging tests get
   per-mode artifact isolation.
+- The first stock boot failure reaches:
+  - `OpenRC 0.63.2 is starting up Bunix 0.1 (x86_64)`
+  - `Mounting /proc ... [ ok ]`
+  - `Service 'hwdrivers' needs non existent service 'dev'`
+  - `Service 'machine-id' needs non existent service 'dev'`
+  - `Caching service dependencies ... [ ok ]`
+  - clock-skew warnings while adjusting `/run/openrc/deptree`
+  It then never reaches `login:` before the 180s boot-harness timeout.
