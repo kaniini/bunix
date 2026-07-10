@@ -115,7 +115,7 @@ materialize_openrc_policy() {
 }
 
 install_bunix_dev_provider() {
-	cat > "$root/etc/init.d/bunix-dev" <<'EOF_BUNIX_DEV'
+	cat > "$root/etc/init.d/devfs" <<'EOF_BUNIX_DEV'
 #!/sbin/openrc-run
 
 description="Declare Bunix devfs availability to OpenRC"
@@ -131,9 +131,9 @@ start()
 	return 0
 }
 EOF_BUNIX_DEV
-	chmod 0755 "$root/etc/init.d/bunix-dev"
+	chmod 0755 "$root/etc/init.d/devfs"
 	mkdir -p "$root/etc/runlevels/sysinit"
-	ln -sf /etc/init.d/bunix-dev "$root/etc/runlevels/sysinit/bunix-dev"
+	ln -sf /etc/init.d/devfs "$root/etc/runlevels/sysinit/devfs"
 }
 
 apk_add_rootfs() {

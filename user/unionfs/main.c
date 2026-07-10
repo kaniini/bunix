@@ -439,13 +439,15 @@ static int service_path_call(u64 service, u64 type, const char *path, u64 word3,
 	const char root[] = "/";
 	const u64 cwd_len = 2;
 	const u64 path_len = str_len(path) + 1;
+	const u64 payload_len = type == BUNIX_VFS_UTIMENS_BUFFER ? 16 : 0;
 	const u64 stat_out = type == BUNIX_VFS_STAT_PATH_META_BUFFER &&
 			     source != 0 &&
 			     (source->cap_rights & BUNIX_RIGHT_SEND) != 0 ?
 			     BUNIX_VFS_STAT_BYTES : 0;
 	const u64 out_cap = type == BUNIX_VFS_READLINK_BUFFER && source != 0 ?
 			    source->words[3] >> 32 : stat_out;
-	const long buffer = bunix_buffer_create(cwd_len + path_len + out_cap);
+	const long buffer = bunix_buffer_create(cwd_len + path_len +
+						payload_len + out_cap);
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
 		.type = type,
@@ -453,11 +455,28 @@ static int service_path_call(u64 service, u64 type, const char *path, u64 word3,
 			      (out_cap != 0 ? BUNIX_RIGHT_SEND : 0),
 		.words = { cwd_len, path_len, 0, word3 },
 	};
+	unsigned char payload[16];
 	int result = -1;
 
+	for (u64 i = 0; i < sizeof(payload); i++) {
+		payload[i] = 0;
+	}
+	if (payload_len != 0 &&
+	    (source == 0 || source->cap == 0 ||
+	     (source->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	     bunix_buffer_read(source->cap, source->words[1],
+			       payload, payload_len) != 0)) {
+		if (buffer >= 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
 	if (buffer < 0 ||
 	    bunix_buffer_write((u64)buffer, 0, root, cwd_len) != 0 ||
-	    bunix_buffer_write((u64)buffer, cwd_len, path, path_len) != 0) {
+	    bunix_buffer_write((u64)buffer, cwd_len, path, path_len) != 0 ||
+	    (payload_len != 0 &&
+	     bunix_buffer_write((u64)buffer, cwd_len + path_len,
+				payload, payload_len) != 0)) {
 		if (buffer >= 0) {
 			bunix_handle_close((u64)buffer);
 		}
@@ -474,7 +493,7 @@ static int service_path_call(u64 service, u64 type, const char *path, u64 word3,
 	    out_cap != 0 && reply->words[0] == 0) {
 		char target[UNIONFS_MAX_PATH];
 		const u64 source_offset = source->words[0] + source->words[1];
-		const u64 temp_offset = cwd_len + path_len;
+		const u64 temp_offset = cwd_len + path_len + payload_len;
 		const u64 written = reply->words[3];
 
 		if (source->cap == 0 ||
@@ -493,7 +512,7 @@ static int service_path_call(u64 service, u64 type, const char *path, u64 word3,
 	    stat_out != 0 && reply->words[0] == 0) {
 		unsigned char stat[BUNIX_VFS_STAT_BYTES];
 		const u64 source_offset = source->words[0] + source->words[1];
-		const u64 temp_offset = cwd_len + path_len;
+		const u64 temp_offset = cwd_len + path_len + payload_len;
 
 		if (source->cap == 0 ||
 		    (source->cap_rights & BUNIX_RIGHT_SEND) == 0 ||
@@ -2000,6 +2019,7 @@ int main(void)
 		case BUNIX_VFS_CHOWN_BUFFER:
 		case BUNIX_VFS_UNLINK_BUFFER:
 		case BUNIX_VFS_RMDIR_BUFFER:
+		case BUNIX_VFS_UTIMENS_BUFFER:
 			if (read_resolved_path(&message, path) != 0) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 			} else {

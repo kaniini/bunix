@@ -276,6 +276,54 @@ Validation:
   `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 78
   seconds, and `BUNIX_SHELL_PART=linux-signaltest make test-shell-part` passed
   in 5 seconds.
+- Added a shared per-process Linux path metadata cache by extending the
+  existing access-cache ring to also hold `newfstatat()` results.  The cache is
+  still invalidated by the Linux server's VFS mutation epoch, so it is a
+  correctness-preserving improvement but not sufficient for OpenRC boot by
+  itself.  The current OpenRC path mutates `/run/openrc` often enough that
+  immutable `/etc` provider probes still lose cache locality.
+- Implemented real path-based `utimensat()` plumbing instead of the previous
+  Linux-server stub that only validated the target with `newfstatat()`.
+  `utimensat()` now forwards atime/mtime seconds from the x86 Linux syscall
+  trampoline to `linux.server`, through VFS and unionfs, and into tmpfs inode
+  timestamps.  This fixes a real OpenRC compatibility gap around
+  `/run/openrc/deptree` clock-skew recovery, although it did not by itself get
+  the stock boot to `login:`.
+- Reworked the stock-mode Bunix devfs OpenRC provider to use Alpine's normal
+  `/etc/init.d/devfs` service name and `sysinit/devfs` runlevel slot, while
+  still declaring `provide dev dev-mount`.  The earlier `bunix-dev` synthetic
+  provider added another provider name for OpenRC to resolve and was noisier
+  than using the stock devfs compatibility point.
+- Current validation after the `utimensat()` and devfs-provider changes:
+  - `make`
+  - `make build/modules/linux.server`
+  - `make build/modules/vfs.server`
+  - `make build/modules/tmpfs.server`
+  - `make build/modules/unionfs.server`
+  - `make test-alpine-rootfs`
+  - `make test-alpine-rootfs-stock-networking`
+  - `BUNIX_SHELL_PART=linux-signaltest make test-shell-part` passed in 3
+    seconds after a full rebuild.
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 92
+    seconds when run alone.
+- A parallel run of `path-limits-statfs` and `linux-signaltest` hit the known
+  shared build artifact race while linking `bootstrap.server`, producing a
+  transient `undefined reference to main`.  The shard passed when rerun
+  serially; do not treat that parallel build failure as a guest regression.
+- The stock boot probe still times out before `login:` after these fixes, with
+  latest artifacts at
+  `build/failures/20260710T220507Z-20911/20260710T220808Z-20911`.
+  A targeted debug run at
+  `build/failures/20260710T220003Z-18602/20260710T220303Z-18602`
+  shows sysinit eventually exits and BusyBox init then starts
+  `/sbin/openrc boot` as `pid=119 task=142`.  The remaining hot loop is still
+  OpenRC boot repeatedly probing provider/service names through
+  `faccessat()`/`openat()`, especially `devfs`, `bunix-dev`, `hwclock`,
+  `swclock`, `modloop`, and `dmesg`.  After the provider rename, future debug
+  should confirm whether `bunix-dev` disappears from the hot path; if the
+  remaining scan is mostly immutable `/etc` state, the next fix should narrow
+  path-cache invalidation by mount or path class instead of clearing all Linux
+  path caches for unrelated `/run` mutations.
 
 Notes:
 

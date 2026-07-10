@@ -25,6 +25,9 @@ struct tmpfs_inode {
 	unsigned int mode;
 	unsigned int uid;
 	unsigned int gid;
+	u64 atime;
+	u64 mtime;
+	u64 ctime;
 };
 
 struct tmpfs_file {
@@ -426,6 +429,9 @@ static struct tmpfs_inode root_inode = {
 	.mode = 0777,
 	.uid = 0,
 	.gid = 0,
+	.atime = 0,
+	.mtime = 0,
+	.ctime = 0,
 };
 
 static struct tmpfs_file *parent_file_for_path(const char *path)
@@ -685,6 +691,9 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 	file->inode->mode = (unsigned int)(mode & 0777);
 	file->inode->uid = (unsigned int)uid;
 	file->inode->gid = (unsigned int)gid;
+	file->inode->atime = 0;
+	file->inode->mtime = 0;
+	file->inode->ctime = 0;
 	if (files_insert_file(file) != 0) {
 		if (status != 0) {
 			*status = bunix_tree_find_node(&files, file->path) != 0 ?
@@ -1073,12 +1082,14 @@ static void stat_file(const struct bunix_msg *message, struct bunix_msg *reply,
 	reply->words[3] = file->inode->uid | ((u64)file->inode->gid << 32);
 	if (message->cap != 0 &&
 	    (message->cap_rights & BUNIX_RIGHT_SEND) != 0) {
-		(void)bunix_vfs_stat_write(
+		(void)bunix_vfs_stat_write_times(
 			message->cap, stat_buffer_offset(message),
 			file->inode->size, reply->words[2], reply->words[3],
 			BUNIX_VFS_DEV_TMPFS, file->inode->ino,
 			file->inode->refs, 0, 4096,
-			(file->inode->size + 511) / 512);
+			(file->inode->size + 511) / 512,
+			file->inode->atime, file->inode->mtime,
+			file->inode->ctime);
 	}
 }
 
@@ -1095,6 +1106,48 @@ static void stat_dir(const struct bunix_msg *message, struct bunix_msg *reply)
 			reply->words[2], 0, BUNIX_VFS_DEV_TMPFS,
 			root_inode.ino, root_inode.refs, 0, 4096, 0);
 	}
+}
+
+static int read_utimens_payload(const struct bunix_msg *message,
+				u64 *atime, u64 *mtime)
+{
+	unsigned char payload[16];
+	const u64 offset = message->words[0] + message->words[1];
+
+	if (message == 0 || atime == 0 || mtime == 0 ||
+	    message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    bunix_buffer_read(message->cap, offset, payload,
+			      sizeof(payload)) != 0) {
+		return -1;
+	}
+	*atime = bunix_load_u64_le(payload, 0);
+	*mtime = bunix_load_u64_le(payload, 8);
+	return 0;
+}
+
+static void reply_utimens(const struct bunix_msg *message,
+			  struct bunix_msg *reply, struct tmpfs_file *file)
+{
+	u64 atime;
+	u64 mtime;
+	const u64 flags = message->words[3] >> 32;
+	const u64 now = bunix_clock_monotonic_ns() / 1000000000ull;
+
+	if (file == 0 || file->inode == 0 ||
+	    !task_can_access(message->words[3] & 0xffffffff, file, 02) ||
+	    read_utimens_payload(message, &atime, &mtime) != 0) {
+		reply->words[0] = BUNIX_VFS_ERR_ACCESS;
+		return;
+	}
+	if ((flags & 1) == 0) {
+		file->inode->atime = (flags & 4) != 0 ? now : atime;
+	}
+	if ((flags & 2) == 0) {
+		file->inode->mtime = (flags & 8) != 0 ? now : mtime;
+	}
+	file->inode->ctime = now;
+	reply->words[0] = 0;
 }
 
 static void reply_readlink(const struct bunix_msg *message,
@@ -1479,6 +1532,7 @@ int main(void)
 		case BUNIX_VFS_STAT_PATH_META_BUFFER:
 		case BUNIX_VFS_ACCESS_BUFFER:
 		case BUNIX_VFS_READLINK_BUFFER:
+		case BUNIX_VFS_UTIMENS_BUFFER:
 			if (read_resolved_path(&message, path) != 0) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
@@ -1499,6 +1553,8 @@ int main(void)
 							file,
 							message.words[3] >> 32) ?
 					0 : BUNIX_VFS_ERR_ACCESS;
+			} else if (message.type == BUNIX_VFS_UTIMENS_BUFFER) {
+				reply_utimens(&message, &reply, file);
 			} else {
 				stat_file(&message, &reply, file);
 			}

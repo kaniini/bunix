@@ -350,6 +350,11 @@ enum {
 	USER_PROC_EXEC_REPLACE_BUFFER = 17,
 };
 
+static int linux_forward_message(struct ipc_port *linux,
+				 struct ipc_port *reply_port,
+				 struct ipc_message *request,
+				 struct ipc_message *reply);
+
 static int linux_einval_int(const char *function, u64 line)
 {
 	console_printf("linux-einval: kernel %s:%u\n", function, (u32)line);
@@ -618,6 +623,99 @@ static int linux_validate_utimens(u64 vaddr)
 		}
 	}
 	return 0;
+}
+
+static void linux_store_u64_le(unsigned char *buffer, u64 offset, u64 value)
+{
+	for (u64 i = 0; i < 8; i++) {
+		buffer[offset + i] = (unsigned char)((value >> (i * 8)) & 0xff);
+	}
+}
+
+static u64 linux_forward_utimensat(struct ipc_port *linux,
+				   struct ipc_port *reply_port,
+				   struct ipc_message *request,
+				   struct ipc_message *reply,
+				   const char *path, u64 times_addr,
+				   u64 path_flags)
+{
+	enum {
+		LINUX_UTIMENS_ATIME_OMIT = 1,
+		LINUX_UTIMENS_MTIME_OMIT = 2,
+		LINUX_UTIMENS_ATIME_NOW = 4,
+		LINUX_UTIMENS_MTIME_NOW = 8,
+	};
+	struct shared_buffer *buffer;
+	char *copy;
+	u64 len = 0;
+	u64 timespec[4];
+	u64 time_flags = 0;
+	u64 atime = 0;
+	u64 mtime = 0;
+	unsigned char payload[16];
+	int rc;
+
+	if (times_addr == 0) {
+		time_flags = LINUX_UTIMENS_ATIME_NOW |
+			     LINUX_UTIMENS_MTIME_NOW;
+	} else if (read_current_user(times_addr, timespec,
+				     sizeof(timespec)) != 0) {
+		return (u64)-LINUX_EFAULT;
+	} else {
+		if (timespec[1] == LINUX_UTIME_OMIT) {
+			time_flags |= LINUX_UTIMENS_ATIME_OMIT;
+		} else if (timespec[1] == LINUX_UTIME_NOW) {
+			time_flags |= LINUX_UTIMENS_ATIME_NOW;
+		} else {
+			atime = timespec[0];
+		}
+		if (timespec[3] == LINUX_UTIME_OMIT) {
+			time_flags |= LINUX_UTIMENS_MTIME_OMIT;
+		} else if (timespec[3] == LINUX_UTIME_NOW) {
+			time_flags |= LINUX_UTIMENS_MTIME_NOW;
+		} else {
+			mtime = timespec[2];
+		}
+	}
+
+	if (path == 0) {
+		return (u64)-LINUX_EFAULT;
+	}
+	copy = (char *)slab_alloc(LINUX_MAX_SYSCALL_BUFFER);
+	if (copy == 0) {
+		return (u64)-LINUX_ENOMEM;
+	}
+	rc = copy_cstr_from_user_errno(copy, path, LINUX_MAX_SYSCALL_BUFFER);
+	if (rc != 0) {
+		slab_free(copy);
+		return (u64)rc;
+	}
+	len = str_len(copy) + 1;
+	buffer = buffer_create(len + sizeof(payload));
+	if (buffer == 0 ||
+	    buffer_write(buffer, 0, copy, len) != 0) {
+		buffer_release(buffer);
+		slab_free(copy);
+		return (u64)-LINUX_ENOMEM;
+	}
+	slab_free(copy);
+	linux_store_u64_le(payload, 0, atime);
+	linux_store_u64_le(payload, 8, mtime);
+	if (buffer_write(buffer, len, payload, sizeof(payload)) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOMEM;
+	}
+	request->words[1] = len;
+	request->words[2] = path_flags | (time_flags << 32);
+	request->cap_type = IPC_CAP_BUFFER;
+	request->cap_rights = TASK_RIGHT_RECV;
+	request->cap_object = buffer;
+	if (linux_forward_message(linux, reply_port, request, reply) != 0) {
+		buffer_release(buffer);
+		return (u64)-LINUX_ENOSYS;
+	}
+	buffer_release(buffer);
+	return reply->words[0];
 }
 
 static u64 linux_sleep_relative(u64 request, u64 remainder)
@@ -5281,11 +5379,10 @@ poll_again:
 		}
 		request.type = LINUX_SYSCALL_UTIMENSAT;
 		request.words[0] = arg0;
-		request.words[2] = arg3;
 		request.words[3] = 0;
-		return linux_forward_path(linux, reply_port, &request, &reply,
-					  (const char *)arg1, 0, 1,
-					  TASK_RIGHT_RECV);
+		return linux_forward_utimensat(linux, reply_port, &request,
+					       &reply, (const char *)arg1,
+					       arg2, arg3);
 	}
 	case LINUX_SYSCALL_STAT:
 	case LINUX_SYSCALL_LSTAT:

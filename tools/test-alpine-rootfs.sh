@@ -88,12 +88,15 @@ generated)
 	if [ -e "$root/etc/init.d/bunix-dev" ]; then
 		fail "generated mode unexpectedly installed bunix-dev provider"
 	fi
+	if grep -q "Declare Bunix devfs availability" "$root/etc/init.d/devfs"; then
+		fail "generated mode unexpectedly replaced stock devfs provider"
+	fi
 	;;
 stock)
 	require_grep "#!/sbin/openrc-run" "$root/etc/init.d/networking"
 	reject_grep "start_networking()" "$root/etc/init.d/networking"
-	require_grep "provide dev dev-mount" "$root/etc/init.d/bunix-dev"
-	require_grep "sysinit/bunix-dev	/etc/init.d/bunix-dev" \
+	require_grep "provide dev dev-mount" "$root/etc/init.d/devfs"
+	require_grep "sysinit/devfs	/etc/init.d/devfs" \
 		"$artifact_dir/openrc-bunix-runlevels.tsv"
 	;;
 *)

@@ -676,19 +676,40 @@ static int forward_mount_buffer_path(struct vfs_mount *mount,
 	const char root[] = "/";
 	const u64 cwd_len = 2;
 	const u64 path_len = str_len(path) + 1;
+	const u64 payload_len = message->type == BUNIX_VFS_UTIMENS_BUFFER ?
+				16 : 0;
 	const u64 stat_out = message->type == BUNIX_VFS_STAT_PATH_META_BUFFER &&
 			     (message->cap_rights & BUNIX_RIGHT_SEND) != 0 ?
 			     BUNIX_VFS_STAT_BYTES : 0;
 	const u64 out_cap = message->type == BUNIX_VFS_READLINK_BUFFER ?
 			    message->words[3] >> 32 : stat_out;
-	const u64 buffer_len = cwd_len + path_len + out_cap;
+	const u64 buffer_len = cwd_len + path_len + payload_len + out_cap;
 	const long buffer = bunix_buffer_create(buffer_len);
 	struct bunix_msg forwarded = *message;
+	unsigned char payload[16];
 	int result;
+
+	for (u64 i = 0; i < sizeof(payload); i++) {
+		payload[i] = 0;
+	}
+	if (payload_len != 0 &&
+	    (message->cap == 0 ||
+	     (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	     bunix_buffer_read(message->cap, message->words[1],
+			       payload, payload_len) != 0)) {
+		if (buffer >= 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		reply->words[0] = (u64)-1;
+		return -1;
+	}
 
 	if (buffer < 0 ||
 	    bunix_buffer_write((u64)buffer, 0, root, cwd_len) != 0 ||
-	    bunix_buffer_write((u64)buffer, cwd_len, path, path_len) != 0) {
+	    bunix_buffer_write((u64)buffer, cwd_len, path, path_len) != 0 ||
+	    (payload_len != 0 &&
+	     bunix_buffer_write((u64)buffer, cwd_len + path_len,
+				payload, payload_len) != 0)) {
 		if (buffer >= 0) {
 			bunix_handle_close((u64)buffer);
 		}
@@ -712,7 +733,7 @@ static int forward_mount_buffer_path(struct vfs_mount *mount,
 	    out_cap != 0 && reply->words[0] == 0) {
 		char target[VFS_MAX_PATH];
 		const u64 offset = message->words[0] + message->words[1];
-		const u64 temp_offset = cwd_len + path_len;
+		const u64 temp_offset = cwd_len + path_len + payload_len;
 		const u64 written = reply->words[3];
 
 		if (message->cap == 0 ||
@@ -731,7 +752,7 @@ static int forward_mount_buffer_path(struct vfs_mount *mount,
 	    stat_out != 0 && reply->words[0] == 0) {
 		unsigned char stat[BUNIX_VFS_STAT_BYTES];
 		const u64 offset = message->words[0] + message->words[1];
-		const u64 temp_offset = cwd_len + path_len;
+		const u64 temp_offset = cwd_len + path_len + payload_len;
 
 		if (message->cap == 0 ||
 		    (message->cap_rights & BUNIX_RIGHT_SEND) == 0 ||
@@ -1630,7 +1651,8 @@ int main(void)
 		case BUNIX_VFS_CHOWN_BUFFER:
 		case BUNIX_VFS_MKDIR_BUFFER:
 		case BUNIX_VFS_RMDIR_BUFFER:
-		case BUNIX_VFS_UNLINK_BUFFER: {
+		case BUNIX_VFS_UNLINK_BUFFER:
+		case BUNIX_VFS_UTIMENS_BUFFER: {
 			char cwd[VFS_MAX_PATH];
 			char input[VFS_MAX_PATH];
 			char path[VFS_MAX_PATH];

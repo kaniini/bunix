@@ -139,6 +139,8 @@ enum {
 	LINUX_INITIAL_FDS = 16,
 	LINUX_PIPE_CAPACITY = 65536,
 	LINUX_ACCESS_CACHE_SIZE = 64,
+	LINUX_UTIME_NOW = 0x3fffffff,
+	LINUX_UTIME_OMIT = 0x3ffffffe,
 	LINUX_PROC_SPAWN_LINUX = 2,
 	LINUX_S_IFCHR = 0020000,
 	LINUX_S_IFBLK = 0060000,
@@ -268,12 +270,31 @@ struct linux_fd {
 	struct linux_open_file *open_file;
 };
 
+struct linux_vfs_stat {
+	u64 size;
+	u64 mode_type;
+	u64 owner;
+	u64 dev;
+	u64 ino;
+	u64 nlink;
+	u64 rdev;
+	u64 blksize;
+	u64 blocks;
+	u64 atime;
+	u64 mtime;
+	u64 ctime;
+};
+
 struct linux_access_cache_entry {
 	u64 valid;
+	u64 stat_valid;
 	u64 base_handle;
 	u64 mode;
 	u64 flags;
+	u64 nofollow;
 	long result;
+	long stat_result;
+	struct linux_vfs_stat stat;
 	char path[LINUX_MAX_PATH];
 };
 
@@ -366,6 +387,7 @@ static u64 net_service;
 
 static u64 resolve_service(u64 service, unsigned int rights);
 static void linux_process_reset(struct linux_process *process);
+static void linux_access_cache_clear(struct linux_process *process);
 static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
@@ -1607,7 +1629,7 @@ static int linux_process_set_cwd(struct linux_process *process,
 	}
 	bunix_free(process->cwd);
 	process->cwd = copy;
-	process->access_cache_epoch = 0;
+	linux_access_cache_clear(process);
 	return 0;
 }
 
@@ -1619,17 +1641,26 @@ static void linux_vfs_note_mutation(void)
 	}
 }
 
+static void linux_access_cache_clear(struct linux_process *process)
+{
+	if (process == 0) {
+		return;
+	}
+	for (u64 i = 0; i < LINUX_ACCESS_CACHE_SIZE; i++) {
+		process->access_cache[i].valid = 0;
+		process->access_cache[i].stat_valid = 0;
+	}
+	process->access_cache_epoch = linux_vfs_mutation_epoch;
+	process->access_cache_next = 0;
+}
+
 static void linux_access_cache_sync(struct linux_process *process)
 {
 	if (process == 0 ||
 	    process->access_cache_epoch == linux_vfs_mutation_epoch) {
 		return;
 	}
-	for (u64 i = 0; i < LINUX_ACCESS_CACHE_SIZE; i++) {
-		process->access_cache[i].valid = 0;
-	}
-	process->access_cache_epoch = linux_vfs_mutation_epoch;
-	process->access_cache_next = 0;
+	linux_access_cache_clear(process);
 }
 
 static int linux_access_cache_get(struct linux_process *process,
@@ -1669,10 +1700,67 @@ static void linux_access_cache_put(struct linux_process *process,
 	entry = &process->access_cache[process->access_cache_next %
 				      LINUX_ACCESS_CACHE_SIZE];
 	entry->valid = 1;
+	entry->stat_valid = 0;
 	entry->base_handle = base_handle;
 	entry->mode = mode;
 	entry->flags = flags;
+	entry->nofollow = 0;
 	entry->result = result;
+	string_copy(entry->path, path);
+	process->access_cache_next++;
+}
+
+static int linux_stat_cache_get(struct linux_process *process,
+				u64 base_handle, const char *path,
+				u64 nofollow, long *result,
+				struct linux_vfs_stat *stat)
+{
+	if (process == 0 || path == 0 || result == 0 || stat == 0) {
+		return 0;
+	}
+	linux_access_cache_sync(process);
+	for (u64 i = 0; i < LINUX_ACCESS_CACHE_SIZE; i++) {
+		const struct linux_access_cache_entry *entry =
+			&process->access_cache[i];
+
+		if (entry->stat_valid &&
+		    entry->base_handle == base_handle &&
+		    entry->nofollow == nofollow &&
+		    path_eq(entry->path, path)) {
+			*result = entry->stat_result;
+			if (entry->stat_result == 0) {
+				*stat = entry->stat;
+			}
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void linux_stat_cache_put(struct linux_process *process,
+				 u64 base_handle, const char *path,
+				 u64 nofollow, long result,
+				 const struct linux_vfs_stat *stat)
+{
+	struct linux_access_cache_entry *entry;
+
+	if (process == 0 || path == 0) {
+		return;
+	}
+	linux_access_cache_sync(process);
+	entry = &process->access_cache[process->access_cache_next %
+				      LINUX_ACCESS_CACHE_SIZE];
+	entry->valid = 0;
+	entry->stat_valid = 1;
+	entry->base_handle = base_handle;
+	entry->mode = 0;
+	entry->flags = 0;
+	entry->nofollow = nofollow;
+	entry->result = 0;
+	entry->stat_result = result;
+	if (result == 0 && stat != 0) {
+		entry->stat = *stat;
+	}
 	string_copy(entry->path, path);
 	process->access_cache_next++;
 }
@@ -5202,21 +5290,6 @@ static long linux_stat_write(u64 stat_buffer, u64 mode, u64 uid, u64 gid,
 					 (size + 511) / 512, 0, 0, 0);
 }
 
-struct linux_vfs_stat {
-	u64 size;
-	u64 mode_type;
-	u64 owner;
-	u64 dev;
-	u64 ino;
-	u64 nlink;
-	u64 rdev;
-	u64 blksize;
-	u64 blocks;
-	u64 atime;
-	u64 mtime;
-	u64 ctime;
-};
-
 static void linux_vfs_stat_from_reply(struct linux_vfs_stat *stat,
 				      const struct bunix_msg *reply,
 				      u64 fallback_ino)
@@ -5427,6 +5500,60 @@ static long linux_vfs_path_stat_call(struct linux_process *process,
 		linux_vfs_stat_from_reply(stat, &reply, 1);
 	}
 	bunix_handle_close((u64)path_buffer);
+	return 0;
+}
+
+static long linux_vfs_utimens_call(struct linux_process *process,
+				   u64 base_handle, const char *path,
+				   u64 atime, u64 mtime, u64 flags)
+{
+	const u64 cwd_len = string_len(process->cwd) + 1;
+	const u64 path_len = string_len(path) + 1;
+	const u64 payload_offset = cwd_len + path_len;
+	const u64 len = payload_offset + 16;
+	const long path_buffer = bunix_buffer_create(len);
+	unsigned char payload[16];
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_UTIMENS_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = path_buffer < 0 ? 0 : (u64)path_buffer,
+		.words = { cwd_len, path_len, base_handle,
+			   process->bunix_task | (flags << 32) },
+	};
+	struct bunix_msg reply;
+
+	if (path_buffer < 0) {
+		return -LINUX_ENOMEM;
+	}
+	if (cwd_len == 0 || path_len == 0 ||
+	    cwd_len > LINUX_MAX_PATH || path_len > LINUX_MAX_PATH ||
+	    len > LINUX_MAX_PATH * 2 + sizeof(payload) ||
+	    bunix_buffer_write((u64)path_buffer, 0, process->cwd,
+			       cwd_len) != 0 ||
+	    bunix_buffer_write((u64)path_buffer, cwd_len, path,
+			       path_len) != 0) {
+		bunix_handle_close((u64)path_buffer);
+		return -LINUX_EIO;
+	}
+	bunix_store_u64_le(payload, 0, atime);
+	bunix_store_u64_le(payload, 8, mtime);
+	if (bunix_buffer_write((u64)path_buffer, payload_offset, payload,
+			       sizeof(payload)) != 0) {
+		bunix_handle_close((u64)path_buffer);
+		return -LINUX_EIO;
+	}
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0) {
+		bunix_handle_close((u64)path_buffer);
+		return -LINUX_EIO;
+	}
+	bunix_handle_close((u64)path_buffer);
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
+	}
+	linux_vfs_note_mutation();
 	return 0;
 }
 
@@ -5690,7 +5817,10 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 {
 	char path[LINUX_MAX_PATH];
 	u64 base_handle;
+	u64 nofollow;
 	long base_result;
+	long cached_result;
+	long result;
 	long path_result;
 	const u64 allowed_flags = LINUX_AT_SYMLINK_NOFOLLOW |
 				  LINUX_AT_NO_AUTOMOUNT |
@@ -5719,9 +5849,17 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 		return base_result;
 	}
 
-	return linux_vfs_path_stat_call(
-		process, base_handle, path,
-		(flags & LINUX_AT_SYMLINK_NOFOLLOW) != 0 ? 1 : 0, out);
+	nofollow = (flags & LINUX_AT_SYMLINK_NOFOLLOW) != 0 ? 1 : 0;
+	if (linux_stat_cache_get(process, base_handle, path, nofollow,
+				 &cached_result, out)) {
+		return cached_result;
+	}
+
+	result = linux_vfs_path_stat_call(process, base_handle, path,
+					  nofollow, out);
+	linux_stat_cache_put(process, base_handle, path, nofollow, result,
+			     out);
+	return result;
 }
 
 static long linux_statx(struct linux_process *process, u64 dirfd,
@@ -5752,14 +5890,39 @@ static long linux_statx(struct linux_process *process, u64 dirfd,
 static long linux_utimensat(struct linux_process *process, u64 dirfd,
 			    u64 path_len, u64 flags, u64 path_buffer)
 {
-	struct linux_vfs_stat meta;
+	char path[LINUX_MAX_PATH];
+	unsigned char payload[16];
+	u64 base_handle;
+	u64 atime;
+	u64 mtime;
+	const u64 path_flags = flags & 0xffffffff;
+	const u64 time_flags = flags >> 32;
+	long base_result;
+	long path_result;
 
-	if ((flags & ~LINUX_AT_SYMLINK_NOFOLLOW) != 0) {
+	if ((path_flags & ~LINUX_AT_SYMLINK_NOFOLLOW) != 0 ||
+	    (time_flags & ~15UL) != 0) {
 		return -LINUX_EINVAL;
 	}
-	return linux_newfstatat(process, dirfd, path_len, path_buffer,
-				flags & LINUX_AT_SYMLINK_NOFOLLOW ? 1 : 0,
-				&meta);
+	path_result = linux_read_path_arg(path_buffer, path_len, path,
+					  sizeof(path));
+	if (path_result != 0) {
+		return path_result;
+	}
+	linux_debug_path_log(process, "utimensat", path);
+	if (bunix_buffer_read(path_buffer, path_len, payload,
+			      sizeof(payload)) != 0) {
+		return -LINUX_EFAULT;
+	}
+	atime = bunix_load_u64_le(payload, 0);
+	mtime = bunix_load_u64_le(payload, 8);
+	base_result = linux_dirfd_base_handle(process, dirfd, path,
+					      &base_handle);
+	if (base_result != 0) {
+		return base_result;
+	}
+	return linux_vfs_utimens_call(process, base_handle, path, atime,
+				      mtime, time_flags);
 }
 
 static long linux_readlinkat(struct linux_process *process, u64 dirfd,
