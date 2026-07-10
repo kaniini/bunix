@@ -79,7 +79,8 @@ struct net_addr {
 };
 
 struct net_route {
-	struct net_route *next;
+	struct net_route *enum_next;
+	struct net_route *node_next;
 	u64 family;
 	u64 prefix_hi;
 	u64 prefix_lo;
@@ -89,6 +90,18 @@ struct net_route {
 	u64 gateway_lo;
 	u64 flags;
 	u64 metric;
+	u64 order;
+	u64 static_route;
+};
+
+struct net_route_node {
+	struct net_route_node *child[16];
+	struct net_route *routes;
+};
+
+struct net_route_table {
+	struct net_route_node *root;
+	u64 count;
 };
 
 struct net_neighbor {
@@ -220,33 +233,12 @@ static struct net_interface loopback = {
 };
 static struct net_interface *packet_ifaces;
 static u64 next_packet_iface_id = 2;
-static const struct net_route routes[] = {
-	{
-		.next = 0,
-		.family = BUNIX_NET_ADDR_FAMILY_IPV4,
-		.prefix_hi = 0,
-		.prefix_lo = 0x7f000000,
-		.prefix_len = 8,
-		.iface = NET_IFACE_LO,
-		.gateway_hi = 0,
-		.gateway_lo = 0,
-		.flags = 1,
-		.metric = 0,
-	},
-	{
-		.next = 0,
-		.family = BUNIX_NET_ADDR_FAMILY_IPV6,
-		.prefix_hi = 0,
-		.prefix_lo = 1,
-		.prefix_len = 128,
-		.iface = NET_IFACE_LO,
-		.gateway_hi = 0,
-		.gateway_lo = 0,
-		.flags = 1,
-		.metric = 0,
-	},
-};
-static struct net_route *dynamic_routes;
+static struct net_route_table route_table4;
+static struct net_route_table route_table6;
+static struct net_route *route_enum_head;
+static u64 route_enum_count;
+static u64 next_route_order = 1;
+static int route_tables_ready;
 static const struct net_addr_record static_addrs[] = {
 	{
 		.next = 0,
@@ -310,6 +302,8 @@ static unsigned short ipv6_l4_checksum(const unsigned char *data, u64 len,
 				       u64 dest_lo);
 
 static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo);
+static int net_route_matches(const struct net_route *route, u64 family,
+			     u64 hi, u64 lo);
 static int net_addr_is_local(u64 family, u64 hi, u64 lo);
 static int icmp_enqueue(struct icmp_socket *socket, u64 family,
 			u64 source_hi, u64 source_lo,
@@ -740,30 +734,413 @@ static void reply_addr_at(struct bunix_msg *reply,
 	reply->words[3] = addr->prefix_len;
 }
 
-static u64 route_count(void)
+static struct net_route_table *route_table_for_family(u64 family)
 {
-	u64 count = sizeof(routes) / sizeof(routes[0]);
-
-	for (const struct net_route *route = dynamic_routes; route != 0;
-	     route = route->next) {
-		count++;
+	if (family == BUNIX_NET_ADDR_FAMILY_IPV4) {
+		return &route_table4;
 	}
-	return count;
+	if (family == BUNIX_NET_ADDR_FAMILY_IPV6) {
+		return &route_table6;
+	}
+	return 0;
 }
 
-static const struct net_route *route_at(u64 index)
+static u64 route_table_max_nibbles(u64 family)
 {
-	for (const struct net_route *route = dynamic_routes; route != 0;
-	     route = route->next) {
+	return family == BUNIX_NET_ADDR_FAMILY_IPV4 ? 8 : 32;
+}
+
+static u64 route_key_nibble(u64 family, u64 hi, u64 lo, u64 depth)
+{
+	if (family == BUNIX_NET_ADDR_FAMILY_IPV4) {
+		return (lo >> (28 - depth * 4)) & 0xf;
+	}
+	if (depth < 16) {
+		return (hi >> (60 - depth * 4)) & 0xf;
+	}
+	return (lo >> (60 - (depth - 16) * 4)) & 0xf;
+}
+
+static int route_node_empty(const struct net_route_node *node)
+{
+	if (node == 0 || node->routes != 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < 16; i++) {
+		if (node->child[i] != 0) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static struct net_route_node *route_node_create(void)
+{
+	return (struct net_route_node *)bunix_calloc(1,
+						    sizeof(struct net_route_node));
+}
+
+static struct net_route_node *route_table_node_for(struct net_route_table *table,
+						   u64 family, u64 hi, u64 lo,
+						   u64 prefix_len, int create)
+{
+	struct net_route_node *node;
+	const u64 nibbles = prefix_len / 4;
+
+	if (table == 0) {
+		return 0;
+	}
+	if (table->root == 0) {
+		if (!create) {
+			return 0;
+		}
+		table->root = route_node_create();
+		if (table->root == 0) {
+			return 0;
+		}
+	}
+	node = table->root;
+	for (u64 depth = 0; depth < nibbles; depth++) {
+		const u64 nibble = route_key_nibble(family, hi, lo, depth);
+
+		if (node->child[nibble] == 0) {
+			if (!create) {
+				return 0;
+			}
+			node->child[nibble] = route_node_create();
+			if (node->child[nibble] == 0) {
+				return 0;
+			}
+		}
+		node = node->child[nibble];
+	}
+	return node;
+}
+
+static int route_entry_equal_info(const struct net_route *route,
+				  const struct bunix_net_route_info *info)
+{
+	return route != 0 && info != 0 &&
+	       route->family == info->family &&
+	       route->prefix_hi == info->prefix_hi &&
+	       route->prefix_lo == info->prefix_lo &&
+	       route->prefix_len == info->prefix_len &&
+	       route->iface == info->iface &&
+	       route->gateway_hi == info->gateway_hi &&
+	       route->gateway_lo == info->gateway_lo &&
+	       route->flags == info->flags &&
+	       route->metric == info->metric;
+}
+
+static struct net_route *route_table_find_exact(struct net_route_table *table,
+						const struct bunix_net_route_info *info)
+{
+	(void)table;
+	for (struct net_route *route = route_enum_head;
+	     route != 0; route = route->enum_next) {
+		if (route_entry_equal_info(route, info)) {
+			return route;
+		}
+	}
+	return 0;
+}
+
+static void route_collection_enum_insert(struct net_route *route)
+{
+	if (route->static_route) {
+		struct net_route **link = &route_enum_head;
+
+		while (*link != 0) {
+			link = &(*link)->enum_next;
+		}
+		*link = route;
+		route_enum_count++;
+		return;
+	}
+	route->enum_next = route_enum_head;
+	route_enum_head = route;
+	route_enum_count++;
+}
+
+static int route_table_insert(struct net_route_table *table,
+			      const struct bunix_net_route_info *info,
+			      u64 order, int static_route)
+{
+	struct net_route_node *node;
+	struct net_route *route;
+
+	if (table == 0 || info == 0) {
+		return -1;
+	}
+	if (route_table_find_exact(table, info) != 0) {
+		return 0;
+	}
+	node = route_table_node_for(table, info->family, info->prefix_hi,
+				    info->prefix_lo, info->prefix_len, 1);
+	if (node == 0) {
+		return -1;
+	}
+	route = (struct net_route *)bunix_calloc(1, sizeof(*route));
+	if (route == 0) {
+		return -1;
+	}
+	route->family = info->family;
+	route->prefix_hi = info->prefix_hi;
+	route->prefix_lo = info->prefix_lo;
+	route->prefix_len = info->prefix_len;
+	route->iface = info->iface;
+	route->gateway_hi = info->gateway_hi;
+	route->gateway_lo = info->gateway_lo;
+	route->flags = info->flags;
+	route->metric = info->metric;
+	route->order = order;
+	route->static_route = static_route ? 1 : 0;
+	route->node_next = node->routes;
+	node->routes = route;
+	route_collection_enum_insert(route);
+	table->count++;
+	return 1;
+}
+
+static int route_table4_insert(const struct bunix_net_route_info *info,
+			       u64 order, int static_route)
+{
+	return route_table_insert(&route_table4, info, order, static_route);
+}
+
+static int route_table6_insert(const struct bunix_net_route_info *info,
+			       u64 order, int static_route)
+{
+	return route_table_insert(&route_table6, info, order, static_route);
+}
+
+static void route_collection_remove_enum(struct net_route *target)
+{
+	struct net_route **link = &route_enum_head;
+
+	while (*link != 0) {
+		if (*link == target) {
+			*link = target->enum_next;
+			target->enum_next = 0;
+			if (route_enum_count != 0) {
+				route_enum_count--;
+			}
+			return;
+		}
+		link = &(*link)->enum_next;
+	}
+}
+
+static int route_table_remove_from_node(struct net_route_node *node,
+					struct net_route *target)
+{
+	struct net_route **link;
+
+	if (node == 0) {
+		return -1;
+	}
+	link = &node->routes;
+	while (*link != 0) {
+		if (*link == target) {
+			*link = target->node_next;
+			target->node_next = 0;
+			return 0;
+		}
+		link = &(*link)->node_next;
+	}
+	return -1;
+}
+
+static void route_table_prune_path(struct net_route_table *table, u64 family,
+				   u64 hi, u64 lo, u64 prefix_len)
+{
+	struct net_route_node *path[33];
+	u64 child_index[32];
+	u64 nibbles = prefix_len / 4;
+	struct net_route_node *node = table->root;
+
+	if (node == 0 || nibbles > route_table_max_nibbles(family)) {
+		return;
+	}
+	path[0] = node;
+	for (u64 depth = 0; depth < nibbles; depth++) {
+		const u64 nibble = route_key_nibble(family, hi, lo, depth);
+
+		child_index[depth] = nibble;
+		node = node->child[nibble];
+		if (node == 0) {
+			return;
+		}
+		path[depth + 1] = node;
+	}
+	while (nibbles != 0 && route_node_empty(path[nibbles])) {
+		struct net_route_node *parent = path[nibbles - 1];
+
+		bunix_free(path[nibbles]);
+		parent->child[child_index[nibbles - 1]] = 0;
+		nibbles--;
+	}
+	if (nibbles == 0 && route_node_empty(table->root)) {
+		bunix_free(table->root);
+		table->root = 0;
+	}
+}
+
+static int route_table_delete(struct net_route_table *table,
+			      const struct bunix_net_route_info *info)
+{
+	struct net_route *route;
+	struct net_route_node *node;
+
+	if (table == 0 || info == 0) {
+		return -1;
+	}
+	route = route_table_find_exact(table, info);
+	if (route == 0 || route->static_route) {
+		return -1;
+	}
+	node = route_table_node_for(table, route->family, route->prefix_hi,
+				    route->prefix_lo, route->prefix_len, 0);
+	if (route_table_remove_from_node(node, route) != 0) {
+		return -1;
+	}
+	route_collection_remove_enum(route);
+	table->count--;
+	route_table_prune_path(table, route->family, route->prefix_hi,
+			       route->prefix_lo, route->prefix_len);
+	bunix_free(route);
+	return 0;
+}
+
+static int route_table4_delete(const struct bunix_net_route_info *info)
+{
+	return route_table_delete(&route_table4, info);
+}
+
+static int route_table6_delete(const struct bunix_net_route_info *info)
+{
+	return route_table_delete(&route_table6, info);
+}
+
+static const struct net_route *route_table_at(const struct net_route_table *table,
+					      u64 index)
+{
+	(void)table;
+	for (const struct net_route *route = route_enum_head;
+	     route != 0; route = route->enum_next) {
 		if (index == 0) {
 			return route;
 		}
 		index--;
 	}
-	if (index < sizeof(routes) / sizeof(routes[0])) {
-		return &routes[index];
-	}
 	return 0;
+}
+
+static int route_better(const struct net_route *candidate,
+			const struct net_route *best)
+{
+	if (candidate == 0) {
+		return 0;
+	}
+	if (best == 0) {
+		return 1;
+	}
+	if (candidate->prefix_len != best->prefix_len) {
+		return candidate->prefix_len > best->prefix_len;
+	}
+	if (candidate->metric != best->metric) {
+		return candidate->metric < best->metric;
+	}
+	return candidate->order > best->order;
+}
+
+static const struct net_route *route_table_lookup(const struct net_route_table *table,
+						  u64 family, u64 hi, u64 lo)
+{
+	const struct net_route_node *node = table != 0 ? table->root : 0;
+	const struct net_route *best = 0;
+	const u64 max_nibbles = route_table_max_nibbles(family);
+
+	for (u64 depth = 0; node != 0; depth++) {
+		for (const struct net_route *route = node->routes; route != 0;
+		     route = route->node_next) {
+			if (net_route_matches(route, family, hi, lo) &&
+			    route_better(route, best)) {
+				best = route;
+			}
+		}
+		if (depth == max_nibbles) {
+			break;
+		}
+		node = node->child[route_key_nibble(family, hi, lo, depth)];
+	}
+	return best;
+}
+
+static const struct net_route *route_table4_lookup(u64 lo)
+{
+	return route_table_lookup(&route_table4, BUNIX_NET_ADDR_FAMILY_IPV4, 0,
+				  lo);
+}
+
+static const struct net_route *route_table6_lookup(u64 hi, u64 lo)
+{
+	return route_table_lookup(&route_table6, BUNIX_NET_ADDR_FAMILY_IPV6, hi,
+				  lo);
+}
+
+static int route_collection_add_static(u64 family, u64 prefix_hi,
+				       u64 prefix_lo, u64 prefix_len,
+				       u64 iface, u64 order)
+{
+	const struct bunix_net_route_info info = {
+		.family = family,
+		.prefix_hi = prefix_hi,
+		.prefix_lo = prefix_lo,
+		.prefix_len = prefix_len,
+		.iface = iface,
+		.gateway_hi = 0,
+		.gateway_lo = 0,
+		.flags = BUNIX_NET_ROUTE_FLAG_UP,
+		.metric = 0,
+	};
+
+	return family == BUNIX_NET_ADDR_FAMILY_IPV4 ?
+	       route_table4_insert(&info, order, 1) :
+	       route_table6_insert(&info, order, 1);
+}
+
+static int route_collection_ensure(void)
+{
+	if (route_tables_ready) {
+		return 0;
+	}
+	if (route_collection_add_static(BUNIX_NET_ADDR_FAMILY_IPV4, 0,
+					0x7f000000, 8, NET_IFACE_LO,
+					1) < 0 ||
+	    route_collection_add_static(BUNIX_NET_ADDR_FAMILY_IPV6, 0, 1,
+					128, NET_IFACE_LO, 2) < 0) {
+		return -1;
+	}
+	next_route_order = 100;
+	route_tables_ready = 1;
+	return 0;
+}
+
+static u64 route_count(void)
+{
+	if (route_collection_ensure() != 0) {
+		return 0;
+	}
+	return route_enum_count;
+}
+
+static const struct net_route *route_at(u64 index)
+{
+	if (route_collection_ensure() != 0) {
+		return 0;
+	}
+	return route_table_at(0, index);
 }
 
 static void route_info_store(struct bunix_net_route_info *info,
@@ -783,42 +1160,12 @@ static void route_info_store(struct bunix_net_route_info *info,
 	info->metric = route->metric;
 }
 
-static int route_equal_info(const struct net_route *route,
-			    const struct bunix_net_route_info *info)
-{
-	return route != 0 && info != 0 &&
-	       route->family == info->family &&
-	       route->prefix_hi == info->prefix_hi &&
-	       route->prefix_lo == info->prefix_lo &&
-	       route->prefix_len == info->prefix_len &&
-	       route->iface == info->iface &&
-	       route->gateway_hi == info->gateway_hi &&
-	       route->gateway_lo == info->gateway_lo &&
-	       route->flags == info->flags &&
-	       route->metric == info->metric;
-}
-
-static int route_exists(const struct bunix_net_route_info *info)
-{
-	for (const struct net_route *route = dynamic_routes; route != 0;
-	     route = route->next) {
-		if (route_equal_info(route, info)) {
-			return 1;
-		}
-	}
-	for (u64 i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
-		if (route_equal_info(&routes[i], info)) {
-			return 1;
-		}
-	}
-	return 0;
-}
-
 static void reply_route_add(struct bunix_msg *reply,
 			    const struct bunix_msg *message)
 {
 	struct bunix_net_route_info info;
-	struct net_route *route;
+	struct net_route_table *table;
+	int rc;
 
 	if (message->cap == 0 ||
 	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
@@ -829,41 +1176,28 @@ static void reply_route_add(struct bunix_msg *reply,
 		reply->words[0] = (u64)-1;
 		return;
 	}
-	if (route_exists(&info)) {
-		reply->words[0] = 0;
-		reply->words[1] = info.iface;
-		reply->words[2] = route_count();
-		reply->words[3] = info.prefix_len;
-		return;
-	}
-	route = (struct net_route *)bunix_calloc(1, sizeof(*route));
-	if (route == 0) {
+	if (route_collection_ensure() != 0) {
 		last_config_error = BUNIX_NET_ROUTE_ADD;
 		reply->words[0] = (u64)-1;
 		return;
 	}
-	route->family = info.family;
-	route->prefix_hi = info.prefix_hi;
-	route->prefix_lo = info.prefix_lo;
-	route->prefix_len = info.prefix_len;
-	route->iface = info.iface;
-	route->gateway_hi = info.gateway_hi;
-	route->gateway_lo = info.gateway_lo;
-	route->flags = info.flags;
-	route->metric = info.metric;
-	route->next = dynamic_routes;
-	dynamic_routes = route;
+	table = route_table_for_family(info.family);
+	rc = route_table_insert(table, &info, next_route_order++, 0);
+	if (rc < 0) {
+		last_config_error = BUNIX_NET_ROUTE_ADD;
+		reply->words[0] = (u64)-1;
+		return;
+	}
 	reply->words[0] = 0;
-	reply->words[1] = route->iface;
+	reply->words[1] = info.iface;
 	reply->words[2] = route_count();
-	reply->words[3] = route->prefix_len;
+	reply->words[3] = info.prefix_len;
 }
 
 static void reply_route_delete(struct bunix_msg *reply,
 			       const struct bunix_msg *message)
 {
 	struct bunix_net_route_info info;
-	struct net_route **link = &dynamic_routes;
 
 	if (message->cap == 0 ||
 	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
@@ -872,17 +1206,16 @@ static void reply_route_delete(struct bunix_msg *reply,
 		reply->words[0] = (u64)-1;
 		return;
 	}
-	while (*link != 0) {
-		struct net_route *route = *link;
-
-		if (route_equal_info(route, &info)) {
-			*link = route->next;
-			bunix_free(route);
-			reply->words[0] = 0;
-			reply->words[1] = route_count();
-			return;
-		}
-		link = &route->next;
+	if (route_collection_ensure() != 0) {
+		last_config_error = BUNIX_NET_ROUTE_DELETE;
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if ((info.family == BUNIX_NET_ADDR_FAMILY_IPV4 ?
+	     route_table4_delete(&info) : route_table6_delete(&info)) == 0) {
+		reply->words[0] = 0;
+		reply->words[1] = route_count();
+		return;
 	}
 	last_config_error = BUNIX_NET_ROUTE_DELETE;
 	reply->words[0] = (u64)-1;
@@ -2738,32 +3071,18 @@ static int net_route_matches(const struct net_route *route, u64 family,
 	return 0;
 }
 
-static const struct net_route *net_route_lookup_in_list(
-	const struct net_route *list, u64 family, u64 hi, u64 lo,
-	const struct net_route *best)
-{
-	for (const struct net_route *route = list; route != 0;
-	     route = route->next) {
-		if (net_route_matches(route, family, hi, lo) &&
-		    (best == 0 || route->prefix_len > best->prefix_len)) {
-			best = route;
-		}
-	}
-	return best;
-}
-
 static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo)
 {
-	const struct net_route *best = 0;
-
-	best = net_route_lookup_in_list(dynamic_routes, family, hi, lo, best);
-	for (u64 i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
-		if (net_route_matches(&routes[i], family, hi, lo) &&
-		    (best == 0 || routes[i].prefix_len > best->prefix_len)) {
-			best = &routes[i];
-		}
+	if (route_collection_ensure() != 0) {
+		return 0;
 	}
-	return best;
+	if (family == BUNIX_NET_ADDR_FAMILY_IPV4) {
+		return hi == 0 ? route_table4_lookup(lo) : 0;
+	}
+	if (family == BUNIX_NET_ADDR_FAMILY_IPV6) {
+		return route_table6_lookup(hi, lo);
+	}
+	return 0;
 }
 
 static int net_addr_is_local(u64 family, u64 hi, u64 lo)
@@ -4771,14 +5090,236 @@ static void reply_icmp_close(struct bunix_msg *reply,
 	reply->words[0] = (u64)-1;
 }
 
+static int route_selftest_expect(int condition)
+{
+	return condition ? 0 : -1;
+}
+
+static int route_table_selftest(void)
+{
+	const struct bunix_net_route_info v4_default = {
+		.family = BUNIX_NET_ADDR_FAMILY_IPV4,
+		.prefix_hi = 0,
+		.prefix_lo = 0,
+		.prefix_len = 0,
+		.iface = 10,
+		.flags = BUNIX_NET_ROUTE_FLAG_UP,
+		.metric = 50,
+	};
+	const struct bunix_net_route_info v4_8 = {
+		.family = BUNIX_NET_ADDR_FAMILY_IPV4,
+		.prefix_hi = 0,
+		.prefix_lo = 0x0a000000,
+		.prefix_len = 8,
+		.iface = 11,
+		.flags = BUNIX_NET_ROUTE_FLAG_UP,
+		.metric = 10,
+	};
+	const struct bunix_net_route_info v4_16_hi_metric = {
+		.family = BUNIX_NET_ADDR_FAMILY_IPV4,
+		.prefix_hi = 0,
+		.prefix_lo = 0x0a120000,
+		.prefix_len = 16,
+		.iface = 12,
+		.flags = BUNIX_NET_ROUTE_FLAG_UP,
+		.metric = 100,
+	};
+	const struct bunix_net_route_info v4_16_low_metric = {
+		.family = BUNIX_NET_ADDR_FAMILY_IPV4,
+		.prefix_hi = 0,
+		.prefix_lo = 0x0a120000,
+		.prefix_len = 16,
+		.iface = 13,
+		.flags = BUNIX_NET_ROUTE_FLAG_UP,
+		.metric = 10,
+	};
+	const struct bunix_net_route_info v4_17 = {
+		.family = BUNIX_NET_ADDR_FAMILY_IPV4,
+		.prefix_hi = 0,
+		.prefix_lo = 0x0a128000,
+		.prefix_len = 17,
+		.iface = 14,
+		.flags = BUNIX_NET_ROUTE_FLAG_UP,
+		.metric = 0,
+	};
+	const struct bunix_net_route_info v6_default = {
+		.family = BUNIX_NET_ADDR_FAMILY_IPV6,
+		.prefix_hi = 0,
+		.prefix_lo = 0,
+		.prefix_len = 0,
+		.iface = 20,
+		.flags = BUNIX_NET_ROUTE_FLAG_UP,
+		.metric = 100,
+	};
+	const struct bunix_net_route_info v6_64_hi_metric = {
+		.family = BUNIX_NET_ADDR_FAMILY_IPV6,
+		.prefix_hi = 0x20010db800000000ull,
+		.prefix_lo = 0,
+		.prefix_len = 64,
+		.iface = 21,
+		.flags = BUNIX_NET_ROUTE_FLAG_UP,
+		.metric = 20,
+	};
+	const struct bunix_net_route_info v6_64_low_metric = {
+		.family = BUNIX_NET_ADDR_FAMILY_IPV6,
+		.prefix_hi = 0x20010db800000000ull,
+		.prefix_lo = 0,
+		.prefix_len = 64,
+		.iface = 22,
+		.flags = BUNIX_NET_ROUTE_FLAG_UP,
+		.metric = 5,
+	};
+	const struct bunix_net_route_info v6_host = {
+		.family = BUNIX_NET_ADDR_FAMILY_IPV6,
+		.prefix_hi = 0x20010db800000000ull,
+		.prefix_lo = 0x1234,
+		.prefix_len = 128,
+		.iface = 23,
+		.flags = BUNIX_NET_ROUTE_FLAG_UP,
+		.metric = 0,
+	};
+	struct bunix_net_route_info stress4[32];
+	struct bunix_net_route_info stress6[16];
+	const struct net_route *route;
+
+	if (route_table_insert(&route_table4, &v4_default, 1, 0) < 0 ||
+	    route_table_insert(&route_table4, &v4_8, 2, 0) < 0 ||
+	    route_table_insert(&route_table4, &v4_16_hi_metric, 3, 0) < 0 ||
+	    route_table_insert(&route_table4, &v4_16_low_metric, 4, 0) < 0 ||
+	    route_table_insert(&route_table4, &v4_17, 5, 0) < 0 ||
+	    route_table_insert(&route_table6, &v6_default, 6, 0) < 0 ||
+	    route_table_insert(&route_table6, &v6_64_hi_metric, 7, 0) < 0 ||
+	    route_table_insert(&route_table6, &v6_64_low_metric, 8, 0) < 0 ||
+	    route_table_insert(&route_table6, &v6_host, 9, 0) < 0) {
+		return -1;
+	}
+	if (route_table_insert(&route_table4, &v4_default, 10, 0) != 0 ||
+	    route_enum_count != 9) {
+		return -1;
+	}
+
+	route = route_table4_lookup(0x0a128001);
+	if (route_selftest_expect(route != 0 && route->iface == 14) != 0) {
+		return -1;
+	}
+	route = route_table4_lookup(0x0a120001);
+	if (route_selftest_expect(route != 0 && route->iface == 13) != 0) {
+		return -1;
+	}
+	route = route_table4_lookup(0x0a130001);
+	if (route_selftest_expect(route != 0 && route->iface == 11) != 0) {
+		return -1;
+	}
+	route = route_table4_lookup(0x0b000001);
+	if (route_selftest_expect(route != 0 && route->iface == 10) != 0) {
+		return -1;
+	}
+	route = route_table6_lookup(0x20010db800000000ull, 0x1234);
+	if (route_selftest_expect(route != 0 && route->iface == 23) != 0) {
+		return -1;
+	}
+	route = route_table6_lookup(0x20010db800000000ull, 0x5678);
+	if (route_selftest_expect(route != 0 && route->iface == 22) != 0) {
+		return -1;
+	}
+	route = route_table6_lookup(0x20010db900000000ull, 1);
+	if (route_selftest_expect(route != 0 && route->iface == 20) != 0) {
+		return -1;
+	}
+
+	for (u64 i = 0; i < 32; i++) {
+		stress4[i].family = BUNIX_NET_ADDR_FAMILY_IPV4;
+		stress4[i].prefix_hi = 0;
+		stress4[i].prefix_lo = 0xac100000 | (i << 8);
+		stress4[i].prefix_len = 24;
+		stress4[i].iface = 1000 + i;
+		stress4[i].gateway_hi = 0;
+		stress4[i].gateway_lo = 0;
+		stress4[i].flags = BUNIX_NET_ROUTE_FLAG_UP;
+		stress4[i].metric = i;
+		if (route_table_insert(&route_table4, &stress4[i],
+				       100 + i, 0) < 0) {
+			return -1;
+		}
+	}
+	for (u64 i = 0; i < 32; i++) {
+		route = route_table4_lookup(0xac100007 | (i << 8));
+		if (route_selftest_expect(route != 0 &&
+					  route->iface == 1000 + i) != 0) {
+			return -1;
+		}
+	}
+	for (u64 i = 0; i < 16; i++) {
+		stress6[i].family = BUNIX_NET_ADDR_FAMILY_IPV6;
+		stress6[i].prefix_hi = 0xfd00000000000000ull | (i << 48);
+		stress6[i].prefix_lo = 0;
+		stress6[i].prefix_len = 48;
+		stress6[i].iface = 2000 + i;
+		stress6[i].gateway_hi = 0;
+		stress6[i].gateway_lo = 0;
+		stress6[i].flags = BUNIX_NET_ROUTE_FLAG_UP;
+		stress6[i].metric = i;
+		if (route_table_insert(&route_table6, &stress6[i],
+				       200 + i, 0) < 0) {
+			return -1;
+		}
+	}
+	for (u64 i = 0; i < 16; i++) {
+		route = route_table6_lookup(0xfd00000000000000ull | (i << 48),
+					    0x1234);
+		if (route_selftest_expect(route != 0 &&
+					  route->iface == 2000 + i) != 0) {
+			return -1;
+		}
+	}
+
+	if (route_table4_delete(&v4_17) != 0) {
+		return -1;
+	}
+	route = route_table4_lookup(0x0a128001);
+	if (route_selftest_expect(route != 0 && route->iface == 13) != 0) {
+		return -1;
+	}
+
+	for (u64 i = 0; i < 32; i++) {
+		if (route_table4_delete(&stress4[i]) != 0) {
+			return -1;
+		}
+	}
+	for (u64 i = 0; i < 16; i++) {
+		if (route_table6_delete(&stress6[i]) != 0) {
+			return -1;
+		}
+	}
+
+	if (route_table4_delete(&v4_default) != 0 ||
+	    route_table4_delete(&v4_8) != 0 ||
+	    route_table4_delete(&v4_16_hi_metric) != 0 ||
+	    route_table4_delete(&v4_16_low_metric) != 0 ||
+	    route_table6_delete(&v6_default) != 0 ||
+	    route_table6_delete(&v6_64_hi_metric) != 0 ||
+	    route_table6_delete(&v6_64_low_metric) != 0 ||
+	    route_table6_delete(&v6_host) != 0 ||
+	    route_enum_count != 0) {
+		return -1;
+	}
+	return 0;
+}
+
 int main(void)
 {
 	const char online[] = "net: online\n";
 	const char loopback_online[] =
 		"net: loopback lo ipv4=127.0.0.1 ipv6=::1\n";
+	const char route_selftest_failed[] = "net: route selftest failed\n";
 	struct bunix_msg message;
 
 	bunix_console_log(online, sizeof(online) - 1);
+	if (route_table_selftest() != 0) {
+		bunix_console_log(route_selftest_failed,
+				  sizeof(route_selftest_failed) - 1);
+		return 1;
+	}
 	if (register_service(BUNIX_SERVICE_NET, BUNIX_HANDLE_SELF) != 0) {
 		return 1;
 	}

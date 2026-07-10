@@ -47,24 +47,24 @@ Tasks:
       and snapshot/debug dumping, with separate IPv4 and IPv6 key types.
 - [x] Define longest-prefix and tie-break policy: prefix length first, then
       metric, then deterministic insertion or stable route id order.
-- [ ] Implement an IPv4 HOT route table with dynamic node allocation, checked
+- [x] Implement an IPv4 HOT route table with dynamic node allocation, checked
       prefix masks, default-route support, duplicate-prefix handling, and
       deterministic enumeration.
-- [ ] Implement an IPv6 HOT route table with 128-bit keys, prefix ranges from
+- [x] Implement an IPv6 HOT route table with 128-bit keys, prefix ranges from
       `/0` through `/128`, default-route support, duplicate-prefix handling,
       and deterministic enumeration.
-- [ ] Refactor NET0 route add/count/at/lookup to use the route-table API while
+- [x] Refactor NET0 route add/count/at/lookup to use the route-table API while
       preserving the current RPC contract and static loopback route behavior.
-- [ ] Add route deletion and replacement primitives if current admin-facing
+- [x] Add route deletion and replacement primitives if current admin-facing
       protocol lacks enough operations to keep the HOT tables maintainable.
-- [ ] Add focused unit or userspace-server tests for IPv4 lookup, IPv6 lookup,
+- [x] Add focused unit or userspace-server tests for IPv4 lookup, IPv6 lookup,
       default routes, host routes, overlapping prefixes, duplicate prefixes,
       metrics, enumeration stability, and deletion/replacement.
-- [ ] Add NET0 integration tests proving UDP/TCP localhost behavior and
+- [x] Add NET0 integration tests proving UDP/TCP localhost behavior and
       packet-interface route selection still pass with HOT-backed lookup.
-- [ ] Add route-table stress tests with many IPv4 and IPv6 prefixes to compare
+- [x] Add route-table stress tests with many IPv4 and IPv6 prefixes to compare
       lookup behavior against a simple reference longest-prefix implementation.
-- [ ] Document follow-up work for routing observability: `/proc/net/route`,
+- [x] Document follow-up work for routing observability: `/proc/net/route`,
       `/proc/net/ipv6_route`, route cache counters, miss counters, and admin
       tooling.
 
@@ -134,3 +134,39 @@ Tie-Break Policy:
   insertion order followed by static routes, matching the current RPC behavior.
   The lookup tie-break uses a separate descending dynamic order so lookup can
   prefer newer equal-prefix routes without making trie layout observable.
+
+Implementation Notes:
+
+- NET0 now stores IPv4 and IPv6 routes in separate nibble-trie route tables.
+  Prefixes that are not nibble-aligned live at the nearest full-nibble node and
+  are checked with the existing exact prefix mask matcher during lookup.
+- Static loopback routes are inserted lazily into the same route collection as
+  dynamic routes with `static_route` set, so route deletion still refuses them.
+- Global RPC enumeration is independent of trie layout and keeps current
+  compatibility behavior: dynamic routes are listed newest-first and built-in
+  static routes follow them.
+- The current NET0 route-delete RPC is enough for table maintenance.  No
+  replacement RPC was added in this slice; exact duplicate adds remain
+  successful no-ops.
+- `route_table_selftest()` runs inside NET0 startup before service
+  registration.  It covers IPv4 and IPv6 default routes, host routes,
+  overlapping prefixes, metric tie-breaks, duplicate exact adds, deletion,
+  non-nibble IPv4 prefixes, and stress insert/lookup/delete for many IPv4 and
+  IPv6 prefixes.
+- Added `make test-boot-net-route` for the focused bootstrap packet-interface
+  and route marker path.  `make BUNIX_SHELL_PART=network-loopback-ping
+  test-shell-part` covers Linux raw ICMP loopback through NET0.
+
+Validation:
+
+- `make build/modules/net.server`
+- `make test-boot-net-route`
+- `make BUNIX_SHELL_PART=network-loopback-ping test-shell-part`
+
+Routing Observability Follow-Up:
+
+- Add `/proc/net/ipv6_route` once the IPv6 route formatter policy is chosen.
+- Add route table counters for lookup hits, misses, default-route hits, and
+  per-family insert/delete failures.
+- Add admin-facing route dump tooling that can show both RPC enumeration order
+  and trie lookup policy order without making trie internals part of the ABI.

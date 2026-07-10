@@ -1,0 +1,4 @@
+net: online
+net: loopback lo ipv4=127.0.0.1 ipv6=::1
+bootstrap: net packet iface ok
+bootstrap: net route ok
