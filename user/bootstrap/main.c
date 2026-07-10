@@ -3636,6 +3636,7 @@ int main(void)
 						       BUNIX_RIGHT_SEND);
 
 		if (procfs == 0 ||
+		    vfs_grant_subject_task(procfs, vfs_task) != 0 ||
 		    send_path_command(procfs, BUNIX_PROTO_PROCFS,
 				      BUNIX_PROCFS_MOUNT_PATH, "/proc") != 0) {
 			return 1;
@@ -4034,7 +4035,8 @@ int main(void)
 	}
 
 	if (bunix_cmdline_has("tmpfs-subject-auth-test") > 0 ||
-	    bunix_cmdline_has("squashfs-subject-auth-test") > 0) {
+	    bunix_cmdline_has("squashfs-subject-auth-test") > 0 ||
+	    bunix_cmdline_has("procfs-subject-auth-test") > 0) {
 		const struct bunix_launch_cap translator_subject_auth_test_caps[] = {
 			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND,
 			  BUNIX_CAP_NAME },

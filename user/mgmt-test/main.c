@@ -310,6 +310,25 @@ static int run_squashfs_subject_authority_test(void)
 	return 0;
 }
 
+static int run_procfs_subject_authority_test(void)
+{
+	const u64 procfs = resolve_service(BUNIX_SERVICE_PROCFS,
+					   BUNIX_RIGHT_SEND);
+
+	if (procfs == 0) {
+		log_text("procfs-subject-auth-test: no procfs\n");
+		return 1;
+	}
+	if (vfs_path_call_status(procfs, BUNIX_VFS_OPEN_BUFFER,
+				 "/proc/kthreads", 0) == 0) {
+		log_text("procfs-subject-auth-test: direct open succeeded\n");
+		return 1;
+	}
+	log_text("procfs-subject-auth-test: direct open denied\n");
+	log_text("procfs-subject-auth-test: ok\n");
+	return 0;
+}
+
 int main(void)
 {
 	const char user_denied[] = "mgmt-test: user denied\n";
@@ -327,6 +346,9 @@ int main(void)
 	}
 	if (bunix_cmdline_has("squashfs-subject-auth-test") > 0) {
 		return run_squashfs_subject_authority_test();
+	}
+	if (bunix_cmdline_has("procfs-subject-auth-test") > 0) {
+		return run_procfs_subject_authority_test();
 	}
 
 	if (vfs != 0) {

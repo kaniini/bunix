@@ -1,0 +1,2 @@
+procfs-subject-auth-test: direct open denied
+procfs-subject-auth-test: ok

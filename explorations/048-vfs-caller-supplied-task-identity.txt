@@ -113,3 +113,16 @@ Notes:
   test-vfs-subject-authority`, `make test-vfs-authority`, `make
   test-vfs-mount-authority`, and `BUNIX_TEST_SET=tmpfs-basic-linux-tests make
   test-shell-parallel`.
+- Added `test-procfs-subject-authority`, which resolves the procfs translator
+  directly and verifies that a caller with only names/console authority cannot
+  open procfs content through direct VFS-protocol traffic.  This blocks forged
+  direct `/proc/self` request subjects from bypassing VFS subject rewriting.
+- Procfs now gates direct VFS-protocol callers with
+  `BUNIX_VFS_GRANT_SUBJECT_TASK`, while leaving procfs management notifications
+  and mount-path setup on `BUNIX_PROTO_PROCFS`.  Bootstrap delegates VFS as the
+  legitimate direct procfs VFS caller before mounting `/proc`.
+- Focused verification for the procfs slice passed: `make
+  test-procfs-subject-authority`, `make test-vfs-subject-authority`,
+  `BUNIX_TEST_SET=tmpfs-basic-linux-tests make test-shell-parallel`,
+  `BUNIX_TEST_SET=procfs make test-shell-parallel`, `make test-vfs-authority`,
+  and `make test-vfs-mount-authority`.
