@@ -58,6 +58,23 @@ if [ -n "${HOME:-}" ]; then
 fi
 expect_fail "non-generated relative path" safe_rm_rf modules "module removal"
 
+if [ -e tools/mkrootfs.c ]; then
+	fail "retired tools/mkrootfs.c source returned"
+fi
+if grep 'tools/mkrootfs\.c\|mkrootfs --tree' Makefile tools/build-*.sh \
+	tools/test-boot.sh tools/test-command.sh tools/test-shell.sh \
+	tools/test-prune-artifacts.sh tools/test-alpine-rootfs.sh \
+	tools/test-riscv64-alpine-rootfs.sh tools/audit-linux-syscalls.sh \
+	>/tmp/bunix-path-safety.out; then
+	cat /tmp/bunix-path-safety.out >&2
+	fail "retired mkrootfs importer is referenced by live build/tooling"
+fi
+if grep -R 'rm -rf "\$' tools/*.sh | grep -v 'tools/path-safety.sh:' \
+	>/tmp/bunix-path-safety.out; then
+	cat /tmp/bunix-path-safety.out >&2
+	fail "unguarded rm -rf remains in host shell tools"
+fi
+
 safe_rm_f /tmp/bunix-path-safety.out "path safety stdout"
 safe_rm_f /tmp/bunix-path-safety.err "path safety stderr"
 echo "test-path-safety: ok"

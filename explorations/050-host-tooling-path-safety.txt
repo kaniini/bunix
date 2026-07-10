@@ -5,10 +5,13 @@ Problem:
 - Host tooling accepts build/test paths from arguments and environment
   variables, then removes, overwrites, or imports those paths without a shared
   safety layer.
-- `mkrootfs --tree` walks a host directory with `lstat()`, but later opens
-  regular-file sources by path.  A changing or malicious tree can race the
-  lstat/open boundary and cause the generated rootfs image to include data from
-  a different host file than the one audited.
+- Historical `mkrootfs --tree` walked a host directory with `lstat()`, but
+  later opened regular-file sources by path.  A changing or malicious tree
+  could race the lstat/open boundary and cause the generated rootfs image to
+  include data from a different host file than the one audited.  Current
+  state: `tools/mkrootfs.c` was retired by `4bed5e3 Retire legacy rootfs
+  format`, so the remaining action is to keep that legacy importer out of the
+  build graph and harden the active SquashFS staging scripts.
 - Test harnesses and image builders perform `rm -rf` on caller-controlled
   runtime directories without the guard already present in
   `tools/test-prune-artifacts.sh`.
@@ -24,9 +27,11 @@ Threat model:
 
 Evidence:
 
-- `tools/mkrootfs.c` uses `lstat()` during `import_tree_path()`, records
-  regular-file source paths, and later copies file contents with `fopen()` in
-  `copy_file()`.  The source path can change between those operations.
+- Historical evidence: `tools/mkrootfs.c` used `lstat()` during
+  `import_tree_path()`, recorded regular-file source paths, and later copied
+  file contents with `fopen()` in `copy_file()`.  Current evidence:
+  `git log --diff-filter=D --summary -- tools/mkrootfs.c` shows the file was
+  deleted in `4bed5e3`, and `rg --files | rg mkrootfs` finds no source file.
 - `tools/build-alpine-rootfs.sh` removes `$stage` with `rm -rf "$stage"` where
   `stage` can be supplied through `ALPINE_ROOTFS_STAGE`.
 - `tools/test-boot.sh`, `tools/test-command.sh`, and `tools/test-shell.sh`
@@ -39,8 +44,9 @@ Root cause:
 
 - Host tools do not have a common path-safety policy for scratch directories,
   generated artifacts, symlink handling, tree import, and cleanup.
-- `mkrootfs` imports mutable host paths rather than stable file descriptors or
-  `openat()` traversal with no-follow checks.
+- The retired `mkrootfs` importer imported mutable host paths rather than
+  stable file descriptors or `openat()` traversal with no-follow checks.
+  Current SquashFS builders stage files with shell tools and `mksquashfs`.
 
 Fix plan:
 
@@ -49,22 +55,24 @@ Fix plan:
   build/tmp prefixes unless explicitly allowed.
 - Update test harness cleanup and rootfs/image builders to use the helper
   before every `rm -rf`, generated artifact overwrite, or recursive copy.
-- Refactor `mkrootfs --tree` to walk with descriptor-relative APIs where
-  possible, use no-follow semantics for symlinks, and verify that copied files
-  still match the metadata used for the rootfs entry.
-- Add tests for unsafe runtime-directory refusal and for a changing-tree
-  `mkrootfs --tree` import.
+- Add a regression that proves the retired `mkrootfs` source/build path is not
+  present, and focus active hardening on SquashFS staging scripts.
+- Add tests for unsafe runtime-directory refusal and active rootfs tooling
+  path safety.
 - Document which environment variables are allowed to point outside `build/`
   or `/tmp`, and require an explicit override for dangerous paths.
 
 Tasks:
 
-- [ ] Build local reproducers for unsafe cleanup path selection and the
-      `mkrootfs --tree` lstat/open race.
+- [x] Build local reproducers for unsafe cleanup path selection and confirm
+      the `mkrootfs --tree` lstat/open race is stale because the legacy tool is
+      retired.
 - [x] Add a shared shell path-safety helper and convert build/test scripts.
-- [ ] Harden `mkrootfs --tree` against symlink and replacement races.
+- [x] Prove the retired `mkrootfs --tree` importer is absent from the current
+      source tree and build graph.
 - [x] Add tests for refused unsafe cleanup/output paths.
-- [ ] Add a rootfs import race regression test.
+- [x] Add a regression test that the retired `mkrootfs` importer remains
+      absent and current rootfs tooling uses guarded generated paths.
 - [ ] Run focused tooling tests and full tests before completion.
 
 Notes:
@@ -79,10 +87,16 @@ Notes:
   syscall audit scripts to use `safe_rm_rf` or `safe_rm_f`.
 - Added `tools/test-path-safety.sh` and `make test-path-safety` for direct
   refusal coverage.  The test verifies safe generated paths under `/tmp` and
-  `build/`, and refusal of empty, root, current-directory, repository-root,
-  home-directory, and non-generated relative paths.
+  `build/`, refusal of empty, root, current-directory, repository-root,
+  home-directory, and non-generated relative paths, absence of the retired
+  `mkrootfs` importer from live build/tooling references, and absence of new
+  unguarded `rm -rf "$..."` sites in host shell tools.
 - Unsafe cleanup reproducers now fail before deletion: `BUNIX_TEST_RUN_ROOT=/
   sh tools/test-prune-artifacts.sh`, `SQUASHFS_ROOTFS_STAGE=/ sh
   tools/build-synthetic-squashfs-rootfs.sh /tmp/bunix-path-safety.sqfs`, and
   `TMPDIR=/ sh tools/build-ext2-test-image.sh /tmp/bunix-path-safety.ext2`.
 - Focused verification passed: `make test-path-safety`.
+- The `mkrootfs --tree` race is historical rather than current-state: `git log
+  --diff-filter=D --summary -- tools/mkrootfs.c` identifies `4bed5e3 Retire
+  legacy rootfs format` as deleting `tools/mkrootfs.c`, and source searches
+  find no live `mkrootfs` source path.
