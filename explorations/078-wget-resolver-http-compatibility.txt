@@ -1,0 +1,89 @@
+Make BusyBox wget work through the normal Alpine resolver and TCP path.
+
+Follow-up:
+
+- This is the focused follow-up split out from
+  `completed/054a-ip-stack-end-to-end-connectivity.txt`.
+- Exploration 054a fixed the earlier post-DHCP IP stack failures enough to
+  validate external ICMP and BusyBox `nslookup` through `/etc/resolv.conf`.
+- Do not restart broad IP-stack debugging here unless evidence from `wget`
+  points back to packet delivery.  The first assumption to test is that
+  BusyBox `wget` exercises a different musl resolver or Linux socket API path
+  than BusyBox `nslookup`.
+
+Problem:
+
+- BusyBox `nslookup example.com` works from Alpine userspace using the
+  generated `/etc/resolv.conf` path.
+- BusyBox `wget http://example.com` still fails with:
+  `wget: bad address 'example.com'`.
+- Because `nslookup` succeeds, this is probably not a generic DHCP, link,
+  ICMP, or `/etc/resolv.conf` failure.  It is likely in musl
+  `getaddrinfo()`, file lookup behavior, unsupported Linux networking
+  syscalls, socket option compatibility, nonblocking semantics, or subsequent
+  TCP connect/send/recv behavior.
+
+Required failure case:
+
+- `busybox wget -O /tmp/w http://example.com` must resolve `example.com`,
+  establish a TCP connection, retrieve content, and leave a non-empty
+  `/tmp/w`.
+
+Intended outcome:
+
+- A fresh `make run` Alpine environment boots, logs in, brings networking up,
+  and can run:
+  - `busybox nslookup example.com`
+  - `busybox wget -O /tmp/w http://example.com`
+  - `test -s /tmp/w`
+- The HTTP validation uses DNS and does not substitute a pre-resolved address.
+
+Constraints:
+
+- Do not special-case `example.com`, DNS, or HTTP in the test harness.
+- Keep DNS policy in userspace and packet mechanics in the network servers.
+- Preserve the working external ping and `nslookup` behavior from exploration
+  054a.
+- Account for missing or wrong Linux APIs by stracing `wget` under
+  `log=debug` instead of guessing from packet behavior alone.
+
+Investigation targets:
+
+- Trace `busybox wget http://example.com` under structured Linux strace and
+  identify all unsupported or suspicious syscalls before changing networking
+  internals.
+- Compare the syscall path used by BusyBox `nslookup` with the path used by
+  BusyBox `wget` and musl `getaddrinfo()`.
+- Verify resolver input file behavior for `/etc/resolv.conf`, `/etc/hosts`,
+  `/etc/nsswitch.conf`, and any musl-specific fallbacks.
+- Verify `socket()`, `connect()`, `sendto()`, `recvfrom()`, `poll()`,
+  `fcntl()`, `getsockopt()`, and `setsockopt()` behavior used by `wget`.
+- Verify TCP connect/send/recv/close behavior against an external HTTP server
+  after name resolution succeeds.
+
+Tasks:
+
+- [ ] Add or repair a focused guest validation for `busybox wget
+      http://example.com` that is not vulnerable to serial command-file
+      corruption.
+- [ ] Capture a structured Linux syscall trace for the failing `wget` path.
+- [ ] Identify the first incorrect syscall result or unsupported API on the
+      failing path.
+- [ ] Fix the resolver or socket compatibility issue that causes
+      `wget: bad address 'example.com'`.
+- [ ] If resolution succeeds but HTTP still fails, fix the next TCP
+      connect/send/recv compatibility issue exposed by `wget`.
+- [ ] Validate `busybox wget -O /tmp/w http://example.com` end to end with DNS
+      enabled and `test -s /tmp/w`.
+- [ ] Re-run the external ping and DNS validations from exploration 054a to
+      prove no regression.
+- [ ] Update notes with any remaining networking limits.
+
+Completion criteria:
+
+- `busybox wget -O /tmp/w http://example.com` succeeds from the guest using
+  DNS.
+- `/tmp/w` is non-empty and contains HTTP content from the remote server.
+- Existing external ping and BusyBox `nslookup` validations still pass.
+- The focused HTTP validation is automated enough to be run without relying on
+  fragile long serial command-file injection.
