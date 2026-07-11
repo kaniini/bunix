@@ -2,19 +2,17 @@ Fix IP stack correctness through DNS resolution.
 
 Follow-up:
 
-- This exploration runs after `054-stock-alpine-networking-service.txt` is
-  either completed or explicitly postponed.
+- This exploration originally ran after the broad stock-networking work was
+  explicitly postponed.  That stock-networking record now lives in
+  `080-stock-alpine-networking-service.txt`, while the extracted OpenRC
+  runtime-state blocker lives in `054-openrc-runtime-state.txt`.
 - This ran before VFS-backed mmap/SIGBUS and later unrelated runtime work,
   because a default Alpine boot is not useful until the configured network is
   usable enough from userspace to prove link, DHCP, ICMP, and DNS.
-- Exploration 054 is about getting Alpine networking initialized by the
-  normal OpenRC/ifupdown-ng service path.  This exploration is the next slice
-  for proving that the IP stack itself is correct once the interface is up.
-- Exploration 054 is currently postponed on an OpenRC `/run/openrc/deptree`
-  runtime-state failure.  Until that is resumed, run this exploration against
-  the default generated Bunix networking service path.  Do not treat that as
-  completion of the stock OpenRC service goal; it is only the current way to
-  obtain a configured interface while debugging IP-stack correctness.
+- Exploration 080 is about getting Alpine networking initialized by the
+  normal OpenRC/ifupdown-ng service path.  This exploration proved the IP
+  stack itself once an interface was available through the generated-service
+  path.  Do not treat that as completion of the stock OpenRC service goal.
 - The default generated-service Alpine image has been restored to a minimal
   generated OpenRC policy, so this exploration can proceed against the
   generated networking path while stock OpenRC networking remains postponed in

@@ -1,0 +1,105 @@
+Fix OpenRC runtime-state file handling.
+
+Status:
+
+- Active.
+- This slice exists to stop the previous stock-networking exploration from
+  absorbing every OpenRC, VFS, tmpfs, and Linux compatibility issue.
+- Do not debug this primarily through full stock OpenRC boot probes.  Build
+  and extend focused reproducers until the `/run/openrc` state failure is
+  understood.
+
+Problem:
+
+- Alpine OpenRC can fail while regenerating or loading dependency-cache state
+  under `/run/openrc`.
+- Observed failures include:
+  - `fopen '/run/openrc/deptree': Invalid argument`
+  - `fopen '/run/openrc/depconfig': No such file or directory`
+  - `failed to load deptree`
+  - later `Bad file descriptor` reports in the same boot path
+- The failure has appeared in the stock-networking path and once in the
+  generated-service path after OpenRC provider scripts were shared.
+- The current `/bin/openrctest` guard proves that the simple cases are not
+  enough to reproduce the bug:
+  - absolute `openat(O_CREAT|O_TRUNC)` plus `fdopen()`
+  - dirfd-relative OpenRC-style `do_fopenat()`
+  - repeated `fstatat()`, `fgets()`, and `unlinkat()` cycles for `deptree`
+    and `depconfig`
+
+Intended outcome:
+
+- OpenRC can reliably create, truncate, write, close, reopen, stat, unlink,
+  and timestamp `/run/openrc/deptree` and `/run/openrc/depconfig` through
+  Linux userspace APIs.
+- The generated Alpine image reaches login reliably.
+- The focused guard covers the previously failing OpenRC runtime-state pattern
+  closely enough that future regressions fail without a full boot probe.
+- Exploration 080 can resume stock Alpine networking work from a stable
+  OpenRC runtime-state base.
+
+Constraints:
+
+- Keep fixes general.  Do not add OpenRC-specific path hacks.
+- Do not remove the temporary generated networking service in this slice.
+- Do not inspect apk caches while debugging this issue; use Bunix artifacts,
+  source, and focused reproducers.
+- Prefer narrow tests such as `BUNIX_CMD=/bin/openrctest make test-command`
+  before running boot probes.
+- Only run a full stock-networking boot probe after a narrow guard reproduces
+  or covers the fixed behavior.
+
+Investigation targets:
+
+- Unsupported or incorrectly translated `fcntl()` commands around OpenRC
+  stdio and close-on-exec handling.
+- Long-lived directory FD state across fork, exec, dup, fdopen, and close.
+- Linux file-description lifetime bugs that can leave stdio or OpenRC helper
+  code with stale or wrong offsets, flags, or descriptor numbers.
+- Tmpfs and VFS error propagation for create, truncate, unlink, timestamp, and
+  path-open failures.
+- OpenRC dependency-cache behavior in `/tmp/openrc-src`, especially
+  `do_fopenat()`, `rc_deptree_update()`, and `_rc_deptree_load()`.
+
+Tasks:
+
+- [x] Preserve the previous stock-networking investigation as exploration 080
+      so this slice can stay narrow.
+- [x] Keep the existing `/bin/openrctest` guard as the starting reproducer.
+- [ ] Inspect recent failure artifacts for the exact syscall shape around
+      `deptree`, `depconfig`, `fcntl`, `Bad file descriptor`, and `EINVAL`.
+- [ ] Extend `/bin/openrctest` to cover the smallest missing OpenRC
+      dependency-cache behavior found in the artifacts or source.
+- [ ] Fix the underlying Linux/VFS/tmpfs/FD correctness bug without
+      OpenRC-specific path handling.
+- [ ] Verify the focused guard fails before the fix or explicitly covers the
+      fixed missing behavior.
+- [ ] Verify generated Alpine reaches login after the fix.
+- [ ] Run a bounded stock-networking probe only after the focused guard and
+      generated boot path are green.
+
+Completion criteria:
+
+- `BUNIX_CMD=/bin/openrctest make test-command` passes with coverage for the
+  corrected runtime-state behavior.
+- The default generated Alpine image reaches login without OpenRC
+  `deptree`/`depconfig` failures.
+- A bounded stock-networking probe no longer fails at the
+  `deptree`/`depconfig` runtime-state step, even if later stock networking
+  work remains for exploration 080.
+
+Follow-up:
+
+- Continue with `080-stock-alpine-networking-service.txt` after this slice.
+  That exploration should focus on restoring Alpine's stock networking
+  service, not rediscovering `/run/openrc` runtime-state correctness.
+
+Implementation Notes:
+
+- The original broad stock-networking file was renamed from
+  `054-stock-alpine-networking-service.txt` to
+  `080-stock-alpine-networking-service.txt`.
+- The latest useful starting point from that record is the focused
+  `/bin/openrctest` guard and the observed failure artifacts:
+  - `build/failures/20260711T085549Z-32532/20260711T090009Z-32532`
+  - `build/failures/20260711T091603Z-13124/20260711T091904Z-13124`
