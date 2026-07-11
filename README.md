@@ -462,6 +462,13 @@ OVMF, file descriptors, disk space, and obvious RAM pressure before scheduling;
 while keeping the newest ten and any run with failures; set
 `BUNIX_TEST_KEEP_RUNS=N` or `BUNIX_TEST_PRUNE_DRY_RUN=1` to adjust pruning.
 
+RISC-V boot gates use target-specific serial logs by default so they can run
+beside each other without marker checks reading another guest's output:
+`RISCV64_EARLY_SERIAL_LOG`, `RISCV64_ALPINE_SERIAL_LOG`, and
+`RISCV64_UART_SERIAL_LOG`. Override the target-specific variable for one gate
+without changing the others. `make test-riscv64-log-isolation` checks the
+default paths stay distinct.
+
 The static PIE BusyBox path remains available as a compatibility regression:
 
 ```sh

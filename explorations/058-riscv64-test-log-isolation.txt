@@ -19,22 +19,31 @@ Problem:
 
 Tasks:
 
-- [ ] Give each riscv64 boot target its own default serial log path.
-- [ ] Allow callers to override each log path without affecting other riscv64
+- [x] Give each riscv64 boot target its own default serial log path.
+- [x] Allow callers to override each log path without affecting other riscv64
       targets.
-- [ ] Add a narrow host-side or make-level check that proves two riscv64 boot
+- [x] Add a narrow host-side or make-level check that proves two riscv64 boot
       targets do not write the same log by default.
-- [ ] Update test-efficiency notes with the riscv64 log-isolation contract.
+- [x] Update test-efficiency notes with the riscv64 log-isolation contract.
 
 Deferred:
 
 - BPI-F3 helper-script log isolation belongs with the postponed BPI-F3 block.
   Do not do BPI-F3-specific script work in this exploration.
 
+Needs:
+
+- RISC-V boot verification is blocked by a pre-existing userspace syscall
+  parity issue: `test-boot-riscv64-early` now writes to its isolated log path,
+  but the guest times out because RISC-V userspace reports unknown native
+  syscall `-72` (`BUNIX_SYSCALL_IPC_TRY_RECV`) and core servers exit before
+  `bootstrap-riscv64: done`.
+
 Verification:
 
+- [x] `make test-riscv64-log-isolation`
 - [ ] `make test-boot-riscv64-early`
 - [ ] `make test-boot-riscv64-alpine`
 - [ ] `make test-boot-riscv64-uart-console`
 - [ ] A parallel run of at least two riscv64 boot targets using distinct logs.
-- [ ] `git diff --check`
+- [x] `git diff --check`

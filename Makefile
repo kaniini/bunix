@@ -28,6 +28,12 @@ GRUB_STANDALONE_CFG := $(BUILD_DIR)/grub-standalone.cfg
 KERNEL := $(ARCH_BUILD_DIR)/bunixos.kernel
 RISCV64_KERNEL := $(BUILD_DIR)/riscv64/bunixos.kernel
 RISCV64_SERIAL_LOG := $(BUILD_DIR)/riscv64-serial.log
+RISCV64_EARLY_SERIAL_LOG_DEFAULT := $(BUILD_DIR)/riscv64/test-boot-early.serial.log
+RISCV64_ALPINE_SERIAL_LOG_DEFAULT := $(BUILD_DIR)/riscv64/test-boot-alpine.serial.log
+RISCV64_UART_SERIAL_LOG_DEFAULT := $(BUILD_DIR)/riscv64/test-boot-uart-console.serial.log
+RISCV64_EARLY_SERIAL_LOG ?= $(RISCV64_EARLY_SERIAL_LOG_DEFAULT)
+RISCV64_ALPINE_SERIAL_LOG ?= $(RISCV64_ALPINE_SERIAL_LOG_DEFAULT)
+RISCV64_UART_SERIAL_LOG ?= $(RISCV64_UART_SERIAL_LOG_DEFAULT)
 RISCV64_QEMU ?= qemu-system-riscv64
 RISCV64_CC ?= clang
 RISCV64_CC_TARGET_FLAGS ?= --target=riscv64-alpine-linux-musl
@@ -496,7 +502,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-lowmem-isolation test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-lowmem-isolation test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-log-isolation test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -1454,7 +1460,7 @@ test-boot-riscv64-early: $(RISCV64_BOOTPKG) tools/test-riscv64-boot.sh tools/che
 	$(MAKE) ARCH=riscv64 all
 	RISCV64_QEMU=$(RISCV64_QEMU) RISCV64_KERNEL=$(RISCV64_KERNEL) \
 		RISCV64_INITRD=$(RISCV64_BOOTPKG) \
-		RISCV64_SERIAL_LOG=$(RISCV64_SERIAL_LOG) \
+		RISCV64_SERIAL_LOG=$(RISCV64_EARLY_SERIAL_LOG) \
 		RISCV64_QEMU_TIMEOUT=30s \
 		RISCV64_MARKERS=tools/test-riscv64-markers-early.txt \
 		sh tools/test-riscv64-boot.sh
@@ -1463,7 +1469,7 @@ test-boot-riscv64-alpine: $(RISCV64_ALPINE_BOOTPKG) tools/test-riscv64-boot.sh t
 	$(MAKE) ARCH=riscv64 all
 	RISCV64_QEMU=$(RISCV64_QEMU) RISCV64_KERNEL=$(RISCV64_KERNEL) \
 		RISCV64_INITRD=$(RISCV64_ALPINE_BOOTPKG) \
-		RISCV64_SERIAL_LOG=$(RISCV64_SERIAL_LOG) \
+		RISCV64_SERIAL_LOG=$(RISCV64_ALPINE_SERIAL_LOG) \
 		RISCV64_QEMU_TIMEOUT=45s \
 		RISCV64_MARKERS=tools/test-riscv64-markers-alpine.txt \
 		sh tools/test-riscv64-boot.sh
@@ -1472,10 +1478,16 @@ test-boot-riscv64-uart-console: $(RISCV64_UART_BOOTPKG) tools/test-riscv64-boot.
 	$(MAKE) ARCH=riscv64 all
 	RISCV64_QEMU=$(RISCV64_QEMU) RISCV64_KERNEL=$(RISCV64_KERNEL) \
 		RISCV64_INITRD=$(RISCV64_UART_BOOTPKG) \
-		RISCV64_SERIAL_LOG=$(RISCV64_SERIAL_LOG) \
+		RISCV64_SERIAL_LOG=$(RISCV64_UART_SERIAL_LOG) \
 		RISCV64_QEMU_TIMEOUT=30s \
 		RISCV64_MARKERS=tools/test-riscv64-markers-uart-console.txt \
 		sh tools/test-riscv64-boot.sh
+
+test-riscv64-log-isolation:
+	test "$(RISCV64_EARLY_SERIAL_LOG_DEFAULT)" != "$(RISCV64_ALPINE_SERIAL_LOG_DEFAULT)"
+	test "$(RISCV64_EARLY_SERIAL_LOG_DEFAULT)" != "$(RISCV64_UART_SERIAL_LOG_DEFAULT)"
+	test "$(RISCV64_ALPINE_SERIAL_LOG_DEFAULT)" != "$(RISCV64_UART_SERIAL_LOG_DEFAULT)"
+	printf '%s\n' "$(RISCV64_EARLY_SERIAL_LOG_DEFAULT)" "$(RISCV64_ALPINE_SERIAL_LOG_DEFAULT)" "$(RISCV64_UART_SERIAL_LOG_DEFAULT)"
 
 test-boot-ext2: $(EXT2_TEST_EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-ext2.txt
 	ESP_DIR=$(EXT2_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
