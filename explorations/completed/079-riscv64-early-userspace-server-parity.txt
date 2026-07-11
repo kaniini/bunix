@@ -3,7 +3,7 @@ isolated riscv64 boot tests can run useful guest markers again.
 
 Status:
 
-- Pending.
+- Completed.
 - This is follow-up work from exploration 058 verification.  Do not fold this
   work back into the serial-log isolation slice.
 
@@ -28,7 +28,7 @@ Tasks:
       it here.
 - [x] Audit riscv64 bootstrap service launch capabilities against the x86_64
       bootstrap path, especially names claims and management ports.
-- [ ] Prove proc can open and exec the riscv64 smoke binaries through VFS with
+- [x] Prove proc can open and exec the riscv64 smoke binaries through VFS with
       the intended subject authority model.
 - [x] Remove any temporary diagnostic serial logging before completing the
       slice, or gate it behind an explicit debug option.
@@ -48,13 +48,14 @@ Findings:
 - Proc now opens executable images and interpreters with the target task ID as
   the VFS subject.  Linux-personality tasks are registered with the Linux server
   before image load so user/VFS permission checks can resolve credentials.
-- `make test-boot-riscv64-early` now reaches `bootstrap-riscv64: linux ready`.
-  The remaining blocker is a timeout while waiting for the first proc-spawned
-  Linux smoke binary to complete.
+- `make test-boot-riscv64-early` now passes.  The final blockers were missing
+  Linux management capability wiring, missing VFS-to-squashfs subject authority,
+  and the RISC-V Linux syscall frontend treating proc-pre-registered tasks as a
+  fatal registration failure on their first syscall.
 
 Verification:
 
-- [ ] `make test-boot-riscv64-early`
-- [ ] `make test-boot-riscv64-alpine`
-- [ ] `make test-boot-riscv64-uart-console`
-- [ ] `git diff --check`
+- [x] `make test-boot-riscv64-early`
+- [x] `make test-boot-riscv64-alpine`
+- [x] `make test-boot-riscv64-uart-console`
+- [x] `git diff --check`

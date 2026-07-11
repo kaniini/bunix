@@ -2,9 +2,7 @@ Isolate riscv64 boot-test serial logs so riscv64 gates can run in parallel.
 
 Status:
 
-- Pending.
-- Start after the existing riscv64 bringup and board-port queue unless test
-  throughput becomes the active bottleneck sooner.
+- Completed.
 
 Problem:
 
@@ -39,10 +37,9 @@ Needs:
   (`BUNIX_SYSCALL_IPC_TRY_RECV`), unclaimed service registration, sleeping
   server-loop wakeups, missing task introspection, and proc/VFS exec-open
   subject authority.
-- `test-boot-riscv64-early` now reaches `bootstrap-riscv64: linux ready`, then
-  times out while waiting for the first proc-spawned Linux smoke binary to
-  complete.  Keep the remaining wait/exit/syscall-forwarding debug in
-  follow-up exploration `079-riscv64-early-userspace-server-parity.txt`.
+- `test-boot-riscv64-early` now passes after the follow-up RISC-V server parity
+  fixes.  Keep any remaining non-log-isolation RISC-V boot work in follow-up
+  explorations.
 - Follow-up exploration `079-riscv64-early-userspace-server-parity.txt`
   captures the broader riscv64 userspace/server bringup work exposed while
   attempting the boot verification.  Keep exploration 058 scoped to serial-log
@@ -51,8 +48,8 @@ Needs:
 Verification:
 
 - [x] `make test-riscv64-log-isolation`
-- [ ] `make test-boot-riscv64-early`
-- [ ] `make test-boot-riscv64-alpine`
-- [ ] `make test-boot-riscv64-uart-console`
-- [ ] A parallel run of at least two riscv64 boot targets using distinct logs.
+- [x] `make test-boot-riscv64-early`
+- [x] `make test-boot-riscv64-alpine`
+- [x] `make test-boot-riscv64-uart-console`
+- [x] A parallel run of at least two riscv64 boot targets using distinct logs.
 - [x] `git diff --check`

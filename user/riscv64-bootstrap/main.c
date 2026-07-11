@@ -366,6 +366,11 @@ int main(void)
 	const u64 linux_mgmt = (u64)bunix_port_create("linux-mgmt");
 
 	log_line(online, sizeof(online) - 1);
+	if (uart_console_test) {
+		log_line(done, sizeof(done) - 1);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
+		return 0;
+	}
 	if ((long)user_mgmt <= 0 || (long)proc_mgmt <= 0 ||
 	    (long)linux_mgmt <= 0) {
 		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
@@ -378,11 +383,6 @@ int main(void)
 	}
 	launch_or_log("abi-smoke.user", abi_ok, sizeof(abi_ok) - 1,
 		      abi_fail, sizeof(abi_fail) - 1);
-	if (uart_console_test) {
-		log_line(done, sizeof(done) - 1);
-		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
-		return 0;
-	}
 	const struct bunix_launch_cap fs_caps[] = {
 		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
 		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
@@ -464,7 +464,9 @@ int main(void)
 	const u64 squashfs = wait_service(BUNIX_SERVICE_SQUASHFS,
 					  BUNIX_RIGHT_SEND);
 	if (vfs != 0 && squashfs != 0 && squashfs_task > 0 &&
-	    vfs_grant_admin_task(vfs, squashfs_task) == 0) {
+	    vfs_grant_admin_task(vfs, squashfs_task) == 0 &&
+	    vfs_task > 0 &&
+	    vfs_grant_subject_task(squashfs, vfs_task) == 0) {
 		log_line(squashfs_ready, sizeof(squashfs_ready) - 1);
 	} else {
 		log_line(squashfs_wait_fail, sizeof(squashfs_wait_fail) - 1);
@@ -481,13 +483,19 @@ int main(void)
 		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
 		{ vfs, BUNIX_RIGHT_SEND, BUNIX_CAP_VFS },
 		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
+		{ BUNIX_HANDLE_POWER_AUTH, BUNIX_RIGHT_SEND, BUNIX_CAP_POWR },
+		{ linux_mgmt, BUNIX_RIGHT_RECV, BUNIX_CAP_LNXM },
+		{ user_mgmt, BUNIX_RIGHT_SEND, BUNIX_CAP_USRM },
+		{ proc_mgmt, BUNIX_RIGHT_SEND, BUNIX_CAP_PRMG },
 	};
-	launch_claimed_module_or_log(
+	const long linux_task = launch_claimed_module_task_id_or_log(
 		"linux", BUNIX_NAMES_ROOT, BUNIX_SERVICE_LINUX, linux_caps,
 		sizeof(linux_caps) / sizeof(linux_caps[0]), linux_ok,
 		sizeof(linux_ok) - 1, linux_fail, sizeof(linux_fail) - 1);
 	const u64 linux = wait_service(BUNIX_SERVICE_LINUX, BUNIX_RIGHT_SEND);
-	if (linux != 0) {
+	if (linux != 0 && linux_task > 0 &&
+	    vfs_grant_admin_task(vfs, linux_task) == 0 &&
+	    vfs_grant_subject_task(vfs, linux_task) == 0) {
 		log_line(linux_ready, sizeof(linux_ready) - 1);
 	} else {
 		log_line(linux_wait_fail, sizeof(linux_wait_fail) - 1);

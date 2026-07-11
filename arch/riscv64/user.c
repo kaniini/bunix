@@ -71,6 +71,7 @@ enum {
 	LINUX_RISCV64_MUNMAP = 215,
 	LINUX_RISCV64_MMAP = 222,
 	LINUX_RISCV64_MPROTECT = 226,
+	LINUX_EPERM = 1,
 	LINUX_ENOMEM = 12,
 	LINUX_EFAULT = 14,
 	LINUX_EINVAL = 22,
@@ -1086,7 +1087,8 @@ static u64 linux_register_current(struct ipc_port *linux,
 			       0 ?
 			0 : (u64)-LINUX_ENOMEM;
 	}
-	if ((i64)reply.words[0] == -LINUX_EINVAL) {
+	if ((i64)reply.words[0] == -LINUX_EINVAL ||
+	    (i64)reply.words[0] == -LINUX_EPERM) {
 		ipc_message_release(&reply);
 		return linux_frontend_record(current_task, 0) == 0 ?
 			0 : (u64)-LINUX_ENOMEM;
