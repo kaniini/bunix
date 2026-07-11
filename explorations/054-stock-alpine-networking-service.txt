@@ -538,6 +538,30 @@ Validation:
   input and pipe wakeups as the dominant read-side cost in the sampled OpenRC
   boot path.  The remaining read hot spot is byte-oriented regular-file
   consumption by shell/OpenRC helper logic.
+- Added a conservative per-open-file read-ahead buffer in `linux.server` for
+  small sequential regular-file reads on immutable-looking paths.  The buffer
+  is attached to the shared open-file description, so dup/fork share it with
+  the shared Linux file offset; it is mutation-epoch checked and cleared on
+  writes, truncates, and close.  This targets the measured fd0 one-byte
+  regular-file reads without changing pipe, socket, console, or directory
+  behavior.
+- Validation for the read-ahead slice:
+  - `make build/modules/linux.server`
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 88
+    seconds.
+  - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part` passed in 86
+    seconds.
+  - `QEMU_TIMEOUT=180s BUNIX_BOOT_LOGIN_WAIT=150 BUNIX_BOOT_LOGIN_CAPTURE=240
+    make test-boot-alpine-stock-networking` still timed out before `login:`,
+    with artifact
+    `build/failures/20260711T011443Z-29630/20260711T011713Z-29630`.
+  - A follow-up debug probe at
+    `build/failures/20260711T011749Z-30507/20260711T011929Z-30507` showed the
+    new read-ahead path is active: `hits=486`, `fills=26`,
+    `hit_bytes=486`, and `fill_bytes=47611` in the sampled window.  The
+    stock boot still did not reach login, so the remaining blocker is broader
+    OpenRC process/syscall churn, not just VFS reads for byte-oriented file
+    input.
 
 Notes:
 

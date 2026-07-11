@@ -142,6 +142,8 @@ enum {
 	LINUX_GLOBAL_PATH_CACHE_SIZE = 512,
 	LINUX_FILE_READ_CACHE_SIZE = 128,
 	LINUX_FILE_READ_CACHE_MAX = 4096,
+	LINUX_FILE_READAHEAD_SIZE = 4096,
+	LINUX_FILE_READAHEAD_TRIGGER_MAX = 256,
 	LINUX_CACHE_DOMAIN_OTHER = 0,
 	LINUX_CACHE_DOMAIN_ETC = 1,
 	LINUX_CACHE_DOMAIN_RUN = 2,
@@ -265,6 +267,11 @@ struct linux_open_file {
 	u64 offset;
 	u64 size;
 	u64 refs;
+	u64 read_cache_offset;
+	u64 read_cache_len;
+	u64 read_cache_domain;
+	u64 read_cache_epoch;
+	char *read_cache;
 };
 
 struct linux_fd {
@@ -418,6 +425,7 @@ static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
 static int linux_signal_process(struct linux_process *process, u64 signal);
+static u64 linux_fd_size(const struct linux_fd *fd);
 static int linux_tty_read_queue_push(struct linux_tty *tty, char c);
 static void linux_tty_wake_reader(struct linux_tty *tty);
 static void linux_tty_cancel_reader(struct linux_tty *tty,
@@ -2060,6 +2068,156 @@ static void linux_file_read_cache_put(const char *cache_path, u64 offset,
 	linux_file_read_cache_next++;
 }
 
+static void linux_open_file_readahead_clear(struct linux_open_file *open_file)
+{
+	if (open_file == 0) {
+		return;
+	}
+	open_file->read_cache_len = 0;
+	open_file->read_cache_offset = 0;
+	open_file->read_cache_epoch = 0;
+	open_file->read_cache_domain = 0;
+}
+
+static void linux_debug_readahead_log(u64 hit, u64 bytes)
+{
+	static int enabled = -1;
+	static u64 hits;
+	static u64 fills;
+	static u64 hit_bytes;
+	static u64 fill_bytes;
+	char line[220];
+	u64 cursor = 0;
+
+	if (enabled < 0) {
+		enabled = bunix_cmdline_has("debug-linux-syscall-counts") > 0;
+	}
+	if (!enabled) {
+		return;
+	}
+	if (hit) {
+		hits++;
+		hit_bytes += bytes;
+	} else {
+		fills++;
+		fill_bytes += bytes;
+	}
+	if (((hits + fills) & 255) != 0) {
+		return;
+	}
+	append_text(line, sizeof(line), &cursor,
+		    "linux-server: readahead hits=");
+	append_dec(line, sizeof(line), &cursor, hits);
+	append_text(line, sizeof(line), &cursor, " fills=");
+	append_dec(line, sizeof(line), &cursor, fills);
+	append_text(line, sizeof(line), &cursor, " hit_bytes=");
+	append_dec(line, sizeof(line), &cursor, hit_bytes);
+	append_text(line, sizeof(line), &cursor, " fill_bytes=");
+	append_dec(line, sizeof(line), &cursor, fill_bytes);
+	append_char(line, sizeof(line), &cursor, '\n');
+	bunix_console_log(line, cursor);
+}
+
+static int linux_open_file_readahead_get(struct linux_fd *fd, u64 offset,
+					 u64 len, u64 buffer)
+{
+	struct linux_open_file *open_file;
+	u64 available;
+	u64 cache_delta;
+
+	if (fd == 0 || fd->open_file == 0 || fd->path[0] != '/' ||
+	    buffer == 0 || len == 0 ||
+	    !linux_file_read_cache_allowed(fd->path)) {
+		return 0;
+	}
+	open_file = fd->open_file;
+	if (open_file->read_cache == 0 || open_file->read_cache_len == 0 ||
+	    open_file->read_cache_domain != linux_cache_domain_for_path(0, fd->path) ||
+	    open_file->read_cache_epoch !=
+		    linux_vfs_mutation_epochs[open_file->read_cache_domain] ||
+	    offset < open_file->read_cache_offset) {
+		return 0;
+	}
+	cache_delta = offset - open_file->read_cache_offset;
+	if (cache_delta >= open_file->read_cache_len) {
+		return 0;
+	}
+	available = open_file->read_cache_len - cache_delta;
+	if (len > available) {
+		return 0;
+	}
+	if (bunix_buffer_write(buffer, 0,
+			       open_file->read_cache + cache_delta,
+			       len) != 0) {
+		return 0;
+	}
+	linux_debug_readahead_log(1, len);
+	return 1;
+}
+
+static int linux_open_file_readahead_fill(struct linux_fd *fd, u64 offset,
+					  u64 len, u64 buffer)
+{
+	struct linux_open_file *open_file;
+	u64 read_len;
+	long tmp;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_READ_FILE_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, offset, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (fd == 0 || fd->open_file == 0 || fd->path[0] != '/' ||
+	    buffer == 0 || len == 0 ||
+	    len > LINUX_FILE_READAHEAD_TRIGGER_MAX ||
+	    offset >= linux_fd_size(fd) ||
+	    !linux_file_read_cache_allowed(fd->path)) {
+		return 0;
+	}
+	open_file = fd->open_file;
+	if (open_file->read_cache == 0) {
+		open_file->read_cache = (char *)bunix_alloc(LINUX_FILE_READAHEAD_SIZE);
+		if (open_file->read_cache == 0) {
+			return 0;
+		}
+	}
+	read_len = linux_fd_size(fd) - offset;
+	if (read_len > LINUX_FILE_READAHEAD_SIZE) {
+		read_len = LINUX_FILE_READAHEAD_SIZE;
+	}
+	if (read_len < len) {
+		return 0;
+	}
+	tmp = bunix_buffer_create(read_len);
+	if (tmp < 0) {
+		return 0;
+	}
+	request.cap = (u64)tmp;
+	request.words[0] = fd->handle;
+	request.words[2] = read_len;
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] < len ||
+	    bunix_buffer_read((u64)tmp, 0, open_file->read_cache,
+			      reply.words[1]) != 0) {
+		bunix_handle_close((u64)tmp);
+		linux_open_file_readahead_clear(open_file);
+		return 0;
+	}
+	bunix_handle_close((u64)tmp);
+	open_file->read_cache_offset = offset;
+	open_file->read_cache_len = reply.words[1];
+	open_file->read_cache_domain = linux_cache_domain_for_path(0, fd->path);
+	open_file->read_cache_epoch =
+		linux_vfs_mutation_epochs[open_file->read_cache_domain];
+	linux_debug_readahead_log(0, reply.words[1]);
+	return linux_open_file_readahead_get(fd, offset, len, buffer);
+}
+
 static int linux_global_access_cache_get(const char *cache_path, u64 mode,
 					 u64 flags, long *result)
 {
@@ -2906,8 +3064,14 @@ static long linux_open_file_ref_drop(struct linux_fd *fd)
 	request.words[0] = open_file->handle;
 	fd->open_file = 0;
 	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0) {
+		if (open_file->read_cache != 0) {
+			bunix_free(open_file->read_cache);
+		}
 		bunix_free(open_file);
 		return -LINUX_EIO;
+	}
+	if (open_file->read_cache != 0) {
+		bunix_free(open_file->read_cache);
 	}
 	bunix_free(open_file);
 	return reply.words[0] == 0 ? 0 : -LINUX_EIO;
@@ -6395,6 +6559,9 @@ static long linux_ftruncate(struct linux_process *process, u64 fd, u64 length)
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
+	if (process->fds[fd].open_file != 0) {
+		linux_open_file_readahead_clear(process->fds[fd].open_file);
+	}
 	linux_fd_set_size(process, fd, length);
 	linux_vfs_note_mutation(process->fds[fd].path[0] != '\0' ?
 				process->fds[fd].path : 0);
@@ -8252,6 +8419,19 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	request.words[1] = linux_fd_offset(&process->fds[fd]);
 	if (process->fds[fd].kind == LINUX_FD_FILE &&
 	    process->fds[fd].path[0] == '/' &&
+	    len <= LINUX_FILE_READAHEAD_TRIGGER_MAX &&
+	    request.words[1] <= linux_fd_size(&process->fds[fd]) &&
+	    len <= linux_fd_size(&process->fds[fd]) - request.words[1] &&
+	    (linux_open_file_readahead_get(&process->fds[fd],
+					   request.words[1], len, buffer) ||
+	     linux_open_file_readahead_fill(&process->fds[fd],
+					    request.words[1], len, buffer))) {
+		linux_fd_set_offset(process, fd,
+				    linux_fd_offset(&process->fds[fd]) + len);
+		return (long)len;
+	}
+	if (process->fds[fd].kind == LINUX_FD_FILE &&
+	    process->fds[fd].path[0] == '/' &&
 	    len <= LINUX_FILE_READ_CACHE_MAX &&
 	    request.words[1] <= linux_fd_size(&process->fds[fd]) &&
 	    len <= linux_fd_size(&process->fds[fd]) - request.words[1] &&
@@ -8439,6 +8619,10 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 					  linux_fd_offset(&process->fds[fd]));
 		}
 		if (done != 0) {
+			if (process->fds[fd].open_file != 0) {
+				linux_open_file_readahead_clear(
+					process->fds[fd].open_file);
+			}
 			linux_vfs_note_mutation(process->fds[fd].path[0] != '\0' ?
 						process->fds[fd].path : 0);
 		}
