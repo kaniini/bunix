@@ -758,6 +758,32 @@ Validation:
     `union-mkdir-p` command passes, so this needs a separate harness or
     long-shard state investigation before using the whole shard as a hard
     guard for the tmpfs index change.
+- A later task-25 path trace reproduced the stock OpenRC stall as a VFS
+  `getdents64()` forward into tmpfs for `/run/openrc/scheduled` that did not
+  return before timeout in artifact
+  `build/failures/20260711T052742Z-23738/20260711T053037Z-23738`.
+  Hardened tmpfs path-prefix testing so child-path classification stops at
+  the candidate path's NUL terminator instead of reading past short paths when
+  comparing them to long directory prefixes.
+- Validation for the tmpfs prefix hardening:
+  - `make build/modules/tmpfs.server`
+  - `BUNIX_CMD=/bin/fcntllocktest make test-command`
+  - `BUNIX_CMD="busybox mkdir -p /union-mkdir-p/a/b && echo
+    UNION_MKDIR_P_ROOT_OK" make test-command`
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 102
+    seconds.
+  - `QEMU_TIMEOUT=260s BUNIX_BOOT_LOGIN_WAIT=220
+    BUNIX_BOOT_LOGIN_CAPTURE=380 make test-boot-alpine-stock-networking`
+    still timed out before `login:`, with artifact
+    `build/failures/20260711T053403Z-26330/20260711T053743Z-26330`.
+  - A focused follow-up trace with `debug-linux-path-task25` and
+    `debug-vfs-readdir` shows `/run/openrc/scheduled` now returns promptly
+    through VFS/tmpfs, but OpenRC still spends the remaining boot window doing
+    repeated full scans of `/etc/init.d` and `/etc/conf.d`.  The artifact is
+    `build/failures/20260711T053753Z-27514/20260711T054048Z-27514`.
+    The next optimization should target Linux/VFS directory enumeration
+    caching or batching for immutable rootfs directories, not another
+    pseudo-filesystem provider workaround.
 
 Notes:
 

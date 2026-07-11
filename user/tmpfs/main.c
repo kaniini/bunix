@@ -108,7 +108,7 @@ static int path_has_prefix_child(const char *path, const char *prefix)
 	u64 i = 0;
 
 	while (prefix[i] != '\0') {
-		if (path[i] != prefix[i]) {
+		if (path[i] == '\0' || path[i] != prefix[i]) {
 			return 0;
 		}
 		i++;
