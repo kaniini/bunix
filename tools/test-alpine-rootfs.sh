@@ -66,40 +66,41 @@ done
 
 require_grep "boot/networking	/etc/init.d/networking" \
 	"$artifact_dir/openrc-bunix-runlevels.tsv"
-require_grep "add	boot	networking	/etc/init.d/networking" \
-	"$artifact_dir/openrc-policy.tsv"
-require_grep "suppress	boot	modules	/etc/init.d/modules" \
-	"$artifact_dir/openrc-policy.tsv"
-require_grep "suppress	boot	hwdrivers	/etc/init.d/hwdrivers" \
-	"$artifact_dir/openrc-policy.tsv"
 require_grep "replace	inittab	getty	/bin/login" \
-	"$artifact_dir/openrc-policy.tsv"
-require_grep "defer	sysinit	devfs	/etc/init.d/devfs" \
 	"$artifact_dir/openrc-policy.tsv"
 
 require_grep "networking" "$artifact_dir/openrc-initd.tsv"
 require_grep "ifupdown-ng" "$artifact_dir/manifest.txt"
 require_grep "alpine_networking_service=$networking_service" \
 	"$artifact_dir/manifest.txt"
-require_grep "openrc_policy=tools/alpine-openrc-runlevels.policy" \
-	"$artifact_dir/manifest.txt"
 
 case "$networking_service" in
 generated)
+	require_grep "add	boot	networking	/etc/init.d/networking" \
+		"$artifact_dir/openrc-policy.tsv"
+	require_grep "openrc_policy=tools/alpine-generated-openrc-runlevels.policy" \
+		"$artifact_dir/manifest.txt"
 	require_grep "#!/bin/sh" "$root/etc/init.d/networking"
 	require_grep "start_networking()" "$root/etc/init.d/networking"
 	require_grep 'ifup -i "$cfgfile" eth0' "$root/etc/init.d/networking"
-	require_grep "provide dev dev-mount" "$root/etc/init.d/devfs"
-	require_grep "Declare Bunix sysfs availability" "$root/etc/init.d/sysfs"
-	require_grep "Declare Bunix procfs availability" "$root/etc/init.d/procfs"
-	require_grep "sysinit/devfs	/etc/init.d/devfs" \
+	reject_grep "sysinit/devfs	/etc/init.d/devfs" \
 		"$artifact_dir/openrc-bunix-runlevels.tsv"
-	require_grep "sysinit/procfs	/etc/init.d/procfs" \
+	reject_grep "sysinit/procfs	/etc/init.d/procfs" \
 		"$artifact_dir/openrc-bunix-runlevels.tsv"
-	require_grep "sysinit/sysfs	/etc/init.d/sysfs" \
+	reject_grep "sysinit/sysfs	/etc/init.d/sysfs" \
 		"$artifact_dir/openrc-bunix-runlevels.tsv"
 	;;
 stock)
+	require_grep "add	boot	networking	/etc/init.d/networking" \
+		"$artifact_dir/openrc-policy.tsv"
+	require_grep "suppress	boot	modules	/etc/init.d/modules" \
+		"$artifact_dir/openrc-policy.tsv"
+	require_grep "suppress	boot	hwdrivers	/etc/init.d/hwdrivers" \
+		"$artifact_dir/openrc-policy.tsv"
+	require_grep "defer	sysinit	devfs	/etc/init.d/devfs" \
+		"$artifact_dir/openrc-policy.tsv"
+	require_grep "openrc_policy=tools/alpine-openrc-runlevels.policy" \
+		"$artifact_dir/manifest.txt"
 	require_grep "#!/sbin/openrc-run" "$root/etc/init.d/networking"
 	reject_grep "start_networking()" "$root/etc/init.d/networking"
 	reject_grep "boot/modules	/etc/init.d/modules" \

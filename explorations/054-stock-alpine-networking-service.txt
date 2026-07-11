@@ -2,19 +2,19 @@ Restore the stock Alpine OpenRC networking service.
 
 Status:
 
-- Active again.  A trial postponement to
-  `054a-ip-stack-end-to-end-connectivity.txt` showed that the generated Bunix
-  networking-service image also fails before login in the same OpenRC
-  `/run/openrc/deptree` dependency-cache path.  The default Alpine environment
-  is therefore not currently usable enough to run the 054a userspace network
-  checks.
+- Postponed again.  The default generated-service Alpine image has been
+  restored to a minimal generated OpenRC policy so normal `make run` and
+  generated-mode network tests are no longer forced through the stock
+  localmount/provider chain while this compatibility work remains pending.
+- The stock OpenRC networking path remains blocked on the `/run/openrc/deptree`
+  and `depconfig` runtime-state failure.  Resume from that focused state bug
+  later with a small `openat()`/`fdopen()`/truncate reproducer instead of
+  another broad boot probe.
 - Resume this exploration from the `/run/openrc/deptree` and `depconfig`
   runtime-state failure recorded below, not from the older fsck/localmount
   timeout.  The latest blocker is Linux/VFS/tmpfs file descriptor or
   runtime-state behavior around OpenRC's dependency cache, not DHCP, virtio-net
   link bringup, or the IP stack itself.
-- Reconsider postponement only after the default generated-service Alpine boot
-  reaches login reliably again.
 
 Problem:
 
@@ -966,6 +966,23 @@ Validation:
 - The shared OpenRC provider rootfs change keeps both packaging modes valid:
   - `make test-alpine-rootfs`
   - `make test-alpine-rootfs-stock-networking`
+- Generated-service rootfs generation now uses
+  `tools/alpine-generated-openrc-runlevels.policy`, which only enables the
+  temporary generated networking service and the Bunix login replacement.
+  Stock mode continues to use `tools/alpine-openrc-runlevels.policy` and the
+  Bunix pseudo-filesystem OpenRC provider stubs.  This restores generated mode
+  as the lightweight default path while preserving the stock OpenRC failure
+  record for later.
+- Validation for the generated/stock policy split:
+  - `make test-alpine-rootfs` passed when rerun serially.
+  - `make test-alpine-rootfs-stock-networking` passed.
+- A generated-mode strict external ping run now reaches login and executes the
+  guest network assertion script instead of failing before login in OpenRC.
+  It fails at the expected IP-stack layer: four replies arrive from
+  `4.2.2.1`, but TTL values are unstable, with observed values such as
+  `208`, `96`, `32`, and `224` in one run.  Artifact:
+  `build/failures/20260711T100011Z-32096/20260711T100620Z-32096`.
+  Continue with `054a-ip-stack-end-to-end-connectivity.txt`.
 
 Notes:
 

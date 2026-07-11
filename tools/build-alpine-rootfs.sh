@@ -16,7 +16,14 @@ apk_cache=${APK_CACHE_DIR:-$artifact_dir/apk-cache}
 repositories=${APK_REPOSITORIES_FILE:-/etc/apk/repositories}
 apk_packages=${ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc ifupdown-ng}
 apk_arch=${APK_ARCH:-}
-runlevel_policy=${ALPINE_OPENRC_POLICY:-tools/alpine-openrc-runlevels.policy}
+networking_service=${ALPINE_NETWORKING_SERVICE:-generated}
+if [ -n "${ALPINE_OPENRC_POLICY:-}" ]; then
+	runlevel_policy=$ALPINE_OPENRC_POLICY
+elif [ "$networking_service" = generated ]; then
+	runlevel_policy=tools/alpine-generated-openrc-runlevels.policy
+else
+	runlevel_policy=tools/alpine-openrc-runlevels.policy
+fi
 reference_runlevels=$artifact_dir/openrc-reference-runlevels.tsv
 bunix_runlevels=$artifact_dir/openrc-bunix-runlevels.tsv
 initd_manifest=$artifact_dir/openrc-initd.tsv
@@ -29,7 +36,6 @@ netdhcp=${NETDHCP_MODULE:-build/modules/bunix-udhcpc-script.user}
 bunix_overlay=${BUNIX_ALPINE_OVERLAY:-1}
 init_command=${BUNIX_ALPINE_INIT_COMMAND:-/bin/login}
 extra_dir=${BUNIX_ALPINE_EXTRA_DIR:-}
-networking_service=${ALPINE_NETWORKING_SERVICE:-generated}
 
 merge_account_file() {
 	base=$1
@@ -345,7 +351,9 @@ stock)
 esac
 
 materialize_openrc_policy
-install_bunix_openrc_providers
+if [ "$networking_service" = stock ]; then
+	install_bunix_openrc_providers
+fi
 write_runlevel_inventory "$root" "$bunix_runlevels"
 
 find "$root/var/cache/apk" -type f -delete 2>/dev/null || true

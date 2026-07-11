@@ -1563,8 +1563,10 @@ test-boot-virtio-net-external-ping-strict:
 
 test-boot-virtio-net-external-ping-strict-run: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/guest-network-external-ping.sh tools/test-lib.sh tools/test-command.sh
 	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
-		QEMU_TIMEOUT=180s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
+		QEMU_TIMEOUT=300s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
 		BUNIX_LOGIN_TIMEOUT=180 \
+		BUNIX_COMMAND_TIMEOUT=240 \
+		BUNIX_SEND_DELAY=0.2 \
 		BUNIX_FAILURE_GUEST_PROBES=0 \
 		BUNIX_MARKER=BUNIX_NET_EXT_PING_OK \
 		BUNIX_CMD_FILE=tools/guest-network-external-ping.sh \
@@ -1575,8 +1577,10 @@ test-boot-virtio-net-dns-wget:
 
 test-boot-virtio-net-dns-wget-run: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/guest-network-dns-wget.sh tools/test-lib.sh tools/test-command.sh
 	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
-		QEMU_TIMEOUT=240s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
+		QEMU_TIMEOUT=360s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
 		BUNIX_LOGIN_TIMEOUT=180 \
+		BUNIX_COMMAND_TIMEOUT=300 \
+		BUNIX_SEND_DELAY=0.2 \
 		BUNIX_FAILURE_GUEST_PROBES=0 \
 		BUNIX_MARKER=BUNIX_NET_DNS_WGET_OK \
 		BUNIX_CMD_FILE=tools/guest-network-dns-wget.sh \

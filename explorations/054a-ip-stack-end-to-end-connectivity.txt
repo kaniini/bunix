@@ -15,10 +15,10 @@ Follow-up:
   the default generated Bunix networking service path.  Do not treat that as
   completion of the stock OpenRC service goal; it is only the current way to
   obtain a configured interface while debugging IP-stack correctness.
-- A trial run showed this exploration cannot proceed yet: the default
-  generated-service Alpine image also fails before login in the same OpenRC
-  `/run/openrc/deptree` path.  Keep this exploration queued, but resume 054
-  until Alpine reaches login reliably enough to execute the network checks.
+- The default generated-service Alpine image has been restored to a minimal
+  generated OpenRC policy, so this exploration can proceed against the
+  generated networking path while stock OpenRC networking remains postponed in
+  exploration 054.
 
 Problem:
 
@@ -168,9 +168,25 @@ Implementation Notes:
 - Added `make test-boot-virtio-net-external-stack` as a convenience target for
   running the strict ping and DNS/wget checks sequentially.
 - These targets currently cannot reach their guest assertions because Alpine
-  fails before login in the OpenRC `/run/openrc/deptree` path.  The strict ping
-  target's latest failure artifact is
-  `build/failures/20260711T091603Z-13124/20260711T091904Z-13124`.
+  previously failed before login in the OpenRC `/run/openrc/deptree` path.
+  After restoring generated mode to a minimal OpenRC policy, the strict ping
+  target reaches login and runs the guest assertions.
+- Latest strict ping evidence:
+  `make test-boot-virtio-net-external-ping-strict` reaches the guest script
+  and receives four ICMP replies from `4.2.2.1`, but the TTL values are
+  unstable, with observed values such as `208`, `96`, `32`, and `224` in one
+  run.  Artifact:
+  `build/failures/20260711T100011Z-32096/20260711T100620Z-32096`.
+- `tools/guest-network-external-ping.sh` now accumulates failure state and
+  returns a failing final command when source, count, or TTL assertions fail,
+  which avoids masking failures when the harness types command files into an
+  interactive shell.
+- The serial command-file path is still fragile for long scripts.  The strict
+  ping target now has explicit command timeouts and slower send pacing, and
+  the guest script avoids long shell control-flow lines.  If it remains flaky,
+  the next test-efficiency slice should replace typed command files with a
+  real guest-side script transport or module-backed runner instead of further
+  tuning serial pacing.
 - Validation for the test scaffolding:
   - `git diff --check`
   - `make test-alpine-rootfs`

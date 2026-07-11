@@ -41,6 +41,7 @@ prompt=${BUNIX_PROMPT:-~ $ }
 guest_poweroff=${BUNIX_GUEST_POWEROFF:-1}
 login_timeout=${BUNIX_LOGIN_TIMEOUT:-80}
 send_delay=${BUNIX_SEND_DELAY:-0.05}
+command_timeout=${BUNIX_COMMAND_TIMEOUT:-90}
 
 qemu_pid=
 cat_pid=
@@ -303,7 +304,7 @@ exit
 EOF_COMMAND_DONE
 fi
 
-wait_for_fixed "$log" "__BUNIX_COMMAND_STATUS__=0" "command failed" 90 220
+wait_for_fixed "$log" "__BUNIX_COMMAND_STATUS__=0" "command failed" "$command_timeout" 220
 wait_for_fixed "$log" "$marker" "command marker missing" 15 220
 
 if [ "$guest_poweroff" = 1 ]; then
