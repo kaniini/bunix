@@ -667,6 +667,34 @@ Validation:
     `build/failures/20260711T032740Z-14947/20260711T033120Z-14947`.  The fix
     removes the observed tmpfs unlink hard hang, but it does not complete
     stock OpenRC boot by itself.
+- A follow-up diagnostic showed the direct tree-removal fix was still not
+  enough: `unlinkat()` of `/run/openrc/exclusive/procfs` reached tmpfs access
+  checks and then wedged inside missing-path lookup.  tmpfs path lookup now
+  uses an explicit live-file list rather than the mutable tree nodes.  Directory
+  emptiness checks, root pruning, subtree rename collection, and `readdir` use
+  the same live list, so stale tree node keys can no longer wedge normal tmpfs
+  path operations.
+- Validation for the tmpfs live-file index slice:
+  - `make build/modules/tmpfs.server`
+  - `BUNIX_CMD=/bin/fcntllocktest make test-command`
+  - `BUNIX_CMD="busybox mkdir -p /union-mkdir-p/a/b && echo
+    UNION_MKDIR_P_ROOT_OK" make test-command`
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 110
+    seconds.
+  - A focused diagnostic stock boot with temporary tmpfs unlink logging showed
+    task 140, `/etc/init.d/procfs`, no longer hangs in
+    `/run/openrc/exclusive/procfs`; it exits cleanly at roughly 181 seconds.
+    The artifact is
+    `build/failures/20260711T034658Z-20986/20260711T035008Z-20986`.
+  - A clean stock-networking boot still timed out before `login:` at
+    `build/failures/20260711T035322Z-23384/20260711T035722Z-23384`.
+  - `BUNIX_SHELL_PART=tmpfs-basic-linux-tests make test-shell-part` remains
+    unresolved in this worktree.  One run timed out after
+    `busybox mkdir -p /union-mkdir-p/a/b`, while a rerun timed out while the
+    next `/tmp/mkdir-p` command was still being echoed.  The direct
+    `union-mkdir-p` command passes, so this needs a separate harness or
+    long-shard state investigation before using the whole shard as a hard
+    guard for the tmpfs index change.
 
 Notes:
 
