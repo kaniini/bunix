@@ -2783,24 +2783,32 @@ int task_remove_vm_region(struct task *task, u64 base, u64 len)
 	const u64 flags = spin_lock_irqsave(&task->lock);
 	const u64 end = base + len;
 
-	for (u32 i = 0; i < task->vm_region_count; i++) {
+	for (u32 i = 0; i < task->vm_region_count;) {
 		struct task_vm_region *region = &task->vm_regions[i];
 		const u64 region_base = region->base;
 		const u64 region_end = region->base + region->len;
 
-		if (base < region_base || end > region_end) {
+		if (!regions_overlap(base, len, region_base, region->len)) {
+			i++;
 			continue;
 		}
 
-		if (base == region_base && end == region_end) {
+		const u64 remove_base = base > region_base ? base : region_base;
+		const u64 remove_end = end < region_end ? end : region_end;
+
+		if (remove_base == region_base && remove_end == region_end) {
 			task->vm_regions[i] =
 				task->vm_regions[task->vm_region_count - 1];
 			task->vm_region_count--;
-		} else if (base == region_base) {
-			region->base = end;
-			region->len = region_end - end;
-		} else if (end == region_end) {
-			region->len = base - region_base;
+			continue;
+		}
+		if (remove_base == region_base) {
+			region->base = remove_end;
+			region->len = region_end - remove_end;
+			i++;
+		} else if (remove_end == region_end) {
+			region->len = remove_base - region_base;
+			i++;
 		} else {
 			struct task_vm_region right = *region;
 
@@ -2811,17 +2819,16 @@ int task_remove_vm_region(struct task *task, u64 base, u64 len)
 					       task->pid);
 				return -1;
 			}
-			right.base = end;
-			right.len = region_end - end;
-			region->len = base - region_base;
+			right.base = remove_end;
+			right.len = region_end - remove_end;
+			region->len = remove_base - region_base;
 			task->vm_regions[task->vm_region_count++] = right;
+			i++;
 		}
-		spin_unlock_irqrestore(&task->lock, flags);
-		return 0;
 	}
 
 	spin_unlock_irqrestore(&task->lock, flags);
-	return -1;
+	return 0;
 }
 
 int task_vm_fault_is_file_backed(struct task *task, u64 addr)

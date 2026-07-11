@@ -41,14 +41,14 @@ Tasks:
       `/lib`, `/usr/local/lib`, then `/usr/lib`, using the same open flags.
 - [x] Verify the test reports the expected `ENOENT` misses and successful
       `/usr/lib` opens, with sane `fstat()` metadata and readable ELF headers.
-- [ ] If static path/open/stat/read succeeds, add a focused dynamic-loader
+- [x] If static path/open/stat/read succeeds, add a focused dynamic-loader
       reproducer using `/lib/ld-musl-x86_64.so.1 --list /sbin/openrc` or an
       equivalent bounded command.
-- [ ] Trace the first Bunix/Linux API returning `EINVAL` in that focused
+- [x] Trace the first Bunix/Linux API returning `EINVAL` in that focused
       reproducer.
-- [ ] Fix the underlying compatibility bug without OpenRC-specific handling.
-- [ ] Verify `/sbin/openrc --help` succeeds in generated Alpine.
-- [ ] Re-run the generated Alpine probe required by exploration 054.
+- [x] Fix the underlying compatibility bug without OpenRC-specific handling.
+- [x] Verify `/sbin/openrc --help` succeeds in generated Alpine.
+- [x] Re-run the generated Alpine probe required by exploration 054.
 
 Completion criteria:
 
@@ -97,7 +97,20 @@ Implementation Notes:
     `libeinfo.so.1`.
   - The original `/run/openrc/deptree` path reaches `Caching service
     dependencies ... [ ok ]`.
-  - `/sbin/openrc --help` and the current segment-map test still hang under
-    the command harness, so the loader issue is not complete.  The next pass
-    should handle multi-region `munmap()` / VMA metadata replacement rather
-    than returning to path-open debugging.
+  - `/sbin/openrc --help` and the segment-map test initially still hung
+    because `task_remove_vm_region()` only removed ranges contained by a
+    single VMA.
+- Fixed `task_remove_vm_region()` to remove every overlapping VMA fragment
+  across the requested range and tolerate holes, matching Linux `munmap()`
+  semantics needed by musl's segment loader.
+- Validation:
+  - `make build/x86_64/bunixos.kernel build/modules/ldsopathtest.user`
+  - `git diff --check`
+  - `KEEP_TMP=1 ROOTFS_FLAVOR=alpine-squashfs KERNEL_CMDLINE='log=info' BUNIX_LOGIN_TIMEOUT=180 BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' BUNIX_CMD='/bin/ldsopathtest' make test-command`
+  - `KEEP_TMP=1 ROOTFS_FLAVOR=alpine-squashfs KERNEL_CMDLINE='log=info' BUNIX_LOGIN_TIMEOUT=180 BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' BUNIX_CMD='/sbin/openrc --help >/dev/null' make test-command`
+  - `QEMU_TIMEOUT=300s ROOTFS_FLAVOR=alpine-squashfs KERNEL_CMDLINE='log=info debug-linux-openrc-state' BUNIX_BOOT_LOGIN_WAIT=180 BUNIX_BOOT_LOGIN_CAPTURE=260 make test-boot`
+- Kept-log evidence:
+  - `/tmp/bunix-command-test.20260711T231056Z-31449/serial.log`:
+    `linux ldso path ok openrc=9:300:42920 librc=9:475:55080 libeinfo=9:472:26312`
+  - `/tmp/bunix-command-test.20260711T231300Z-32320/serial.log`:
+    `/sbin/openrc --help` exited with `__BUNIX_COMMAND_STATUS__=0`.
