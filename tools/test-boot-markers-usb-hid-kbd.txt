@@ -1,0 +1,7 @@
+bootstrap: xhci test
+usb-bus: online
+usb-bus: ready
+xhci: usb0 registered index=0
+usb-hid-kbd: claimed device=0 interface=0 endpoint=129
+input: key source=0 usage=4 pressed=1
+machine: poweroff

@@ -28,11 +28,11 @@ Tasks:
 - [x] Add `usb-hid-kbd.server` that scans `USB0` devices, claims HID boot
       keyboard interfaces, opens interrupt IN endpoints, and parses boot
       keyboard reports.
-- [ ] Add an event path from `usb-hid-kbd.server` to the input/TTY layer without
+- [x] Add an event path from `usb-hid-kbd.server` to the input/TTY layer without
       direct console coupling.
-- [ ] Add a QEMU USB keyboard smoke test that proves HID report delivery with a
+- [x] Add a QEMU USB keyboard smoke test that proves HID report delivery with a
       deterministic injected key event and guest poweroff.
-- [ ] Keep `test-boot-usb-synth`, `test-boot-xhci-discovery`, and default boot
+- [x] Keep `test-boot-usb-synth`, `test-boot-xhci-discovery`, and default boot
       passing.
 
 Completion criteria:

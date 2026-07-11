@@ -3838,7 +3838,11 @@ int main(void)
 		bunix_launch_module_with_caps(
 			"usb-hid-kbd", usb_hid_caps,
 			sizeof(usb_hid_caps) / sizeof(usb_hid_caps[0]));
-		bunix_sleep_ns(1000000000ull);
+		if (bunix_cmdline_has("xhci-hid-test") > 0) {
+			bunix_sleep_ns(6000000000ull);
+		} else {
+			bunix_sleep_ns(1000000000ull);
+		}
 		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 		for (;;) {
 		}

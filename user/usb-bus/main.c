@@ -47,9 +47,26 @@ struct usb_device {
 	struct usb_endpoint endpoints[USB_BUS_MAX_ENDPOINTS];
 };
 
+struct usb_transfer {
+	u64 active;
+	u64 complete;
+	u64 id;
+	u64 controller_id;
+	u64 device_index;
+	u64 interface_number;
+	u64 endpoint_address;
+	u64 buffer;
+	u64 len;
+	u64 actual;
+	u64 status;
+	u64 waiter;
+};
+
 static struct usb_device *devices;
 static u64 device_count;
 static u64 device_capacity;
+static struct usb_transfer transfer;
+static u64 next_transfer_id = 1;
 
 static void append_char(char *out, u64 out_size, u64 *offset, char c)
 {
@@ -107,6 +124,23 @@ static void log_device(const struct usb_device *device, u64 index)
 	append_u64(line, sizeof(line), &offset, device->interface_count);
 	append_text(line, sizeof(line), &offset, " endpoints=");
 	append_u64(line, sizeof(line), &offset, device->endpoint_count);
+	append_char(line, sizeof(line), &offset, '\n');
+	bunix_console_log(line, offset);
+}
+
+static void log_transfer(const char *prefix, u64 id, u64 endpoint, u64 len)
+{
+	char line[128];
+	u64 offset = 0;
+
+	line[0] = '\0';
+	append_text(line, sizeof(line), &offset, prefix);
+	append_text(line, sizeof(line), &offset, " id=");
+	append_u64(line, sizeof(line), &offset, id);
+	append_text(line, sizeof(line), &offset, " endpoint=");
+	append_u64(line, sizeof(line), &offset, endpoint);
+	append_text(line, sizeof(line), &offset, " len=");
+	append_u64(line, sizeof(line), &offset, len);
 	append_char(line, sizeof(line), &offset, '\n');
 	bunix_console_log(line, offset);
 }
@@ -481,18 +515,106 @@ static void reply_open_endpoint(struct bunix_msg *reply,
 	reply->cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP;
 }
 
-static void reply_endpoint_unsupported(struct bunix_msg *reply,
-				       const struct bunix_msg *message)
+static void reply_endpoint_submit(struct bunix_msg *reply,
+				  const struct bunix_msg *message,
+				  const struct usb_device *device,
+				  const struct usb_endpoint *endpoint,
+				  u64 device_index)
+{
+	if (transfer.active != 0 || message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0 ||
+	    message->words[0] == 0 || message->words[0] > endpoint->max_packet) {
+		reply->words[0] = transfer.active != 0 ? BUNIX_USB_ERR_BUSY :
+						       BUNIX_USB_ERR_INVAL;
+		return;
+	}
+	transfer.active = 1;
+	transfer.complete = 0;
+	transfer.id = next_transfer_id++;
+	transfer.controller_id = device->controller_id;
+	transfer.device_index = device_index;
+	transfer.interface_number = endpoint->interface_number;
+	transfer.endpoint_address = endpoint->address;
+	transfer.buffer = message->cap;
+	transfer.len = message->words[0];
+	transfer.actual = 0;
+	transfer.status = BUNIX_USB_ERR_UNSUPPORTED;
+	transfer.waiter = 0;
+	log_transfer("usb-bus: transfer queued", transfer.id,
+		     transfer.endpoint_address, transfer.len);
+	reply->words[0] = BUNIX_USB_OK;
+	reply->words[1] = transfer.id;
+}
+
+static void send_transfer_waiter(void)
+{
+	struct bunix_msg reply = {
+		.protocol = BUNIX_PROTO_USB,
+		.type = BUNIX_USB_WAIT_COMPLETION,
+		.words = { transfer.status, transfer.actual, transfer.id, 0 },
+	};
+
+	if (transfer.waiter != 0 && transfer.complete != 0) {
+		(void)bunix_ipc_send(transfer.waiter, &reply);
+		bunix_handle_close(transfer.waiter);
+		transfer.waiter = 0;
+		if (transfer.buffer != 0) {
+			bunix_handle_close(transfer.buffer);
+		}
+		transfer = (struct usb_transfer){ 0 };
+	}
+}
+
+static int reply_endpoint_wait(struct bunix_msg *reply,
+			       const struct bunix_msg *message)
+{
+	if (transfer.active == 0) {
+		reply->words[0] = BUNIX_USB_ERR_NOENT;
+		return 0;
+	}
+	if (transfer.complete != 0) {
+		reply->words[0] = transfer.status;
+		reply->words[1] = transfer.actual;
+		reply->words[2] = transfer.id;
+		if (transfer.buffer != 0) {
+			bunix_handle_close(transfer.buffer);
+		}
+		transfer = (struct usb_transfer){ 0 };
+		return 0;
+	}
+	if (message->reply == 0) {
+		reply->words[0] = BUNIX_USB_ERR_INVAL;
+		return 0;
+	}
+	transfer.waiter = message->reply;
+	return 1;
+}
+
+static int reply_endpoint_message(struct bunix_msg *reply,
+				  const struct bunix_msg *message,
+				  const struct usb_device *device,
+				  const struct usb_endpoint *endpoint,
+				  u64 device_index)
 {
 	reply->protocol = BUNIX_PROTO_USB;
 	reply->type = message->type;
-	reply->words[0] = BUNIX_USB_ERR_UNSUPPORTED;
-	reply->words[1] = 0;
-	reply->words[2] = 0;
-	reply->words[3] = 0;
+	switch (message->type) {
+	case BUNIX_USB_SUBMIT_TRANSFER:
+		reply_endpoint_submit(reply, message, device, endpoint,
+				      device_index);
+		return 0;
+	case BUNIX_USB_WAIT_COMPLETION:
+		return reply_endpoint_wait(reply, message);
+	default:
+		reply->words[0] = BUNIX_USB_ERR_UNSUPPORTED;
+		return 0;
+	}
 }
 
-static int handle_endpoint_message(struct bunix_msg *message)
+static int handle_endpoint_message(struct bunix_msg *message,
+				   struct usb_device **out_device,
+				   struct usb_endpoint **out_endpoint,
+				   u64 *out_device_index)
 {
 	for (u64 d = 0; d < device_count; d++) {
 		struct usb_device *device = &devices[d];
@@ -506,10 +628,49 @@ static int handle_endpoint_message(struct bunix_msg *message)
 			if (bunix_ipc_try_recv(endpoint->port, message) != 0) {
 				continue;
 			}
+			*out_device = device;
+			*out_endpoint = endpoint;
+			*out_device_index = d;
 			return 1;
 		}
 	}
 	return 0;
+}
+
+static void reply_controller_transfer_poll(struct bunix_msg *reply,
+					   const struct bunix_msg *message)
+{
+	if (transfer.active == 0 || transfer.complete != 0 ||
+	    transfer.controller_id != message->sender) {
+		reply->words[0] = BUNIX_USB_ERR_NOENT;
+		return;
+	}
+	reply->words[0] = BUNIX_USB_OK;
+	reply->words[1] = transfer.id;
+	reply->words[2] = transfer.device_index |
+			  (transfer.endpoint_address << 32);
+	reply->words[3] = transfer.len;
+	reply->cap = transfer.buffer;
+	reply->cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP;
+	log_transfer("usb-bus: transfer polled", transfer.id,
+		     transfer.endpoint_address, transfer.len);
+}
+
+static void reply_controller_transfer_complete(struct bunix_msg *reply,
+					       const struct bunix_msg *message)
+{
+	if (transfer.active == 0 || transfer.id != message->words[0] ||
+	    transfer.controller_id != message->sender) {
+		reply->words[0] = BUNIX_USB_ERR_NOENT;
+		return;
+	}
+	transfer.status = message->words[1];
+	transfer.actual = message->words[2];
+	transfer.complete = 1;
+	log_transfer("usb-bus: transfer complete", transfer.id,
+		     transfer.endpoint_address, transfer.actual);
+	reply->words[0] = BUNIX_USB_OK;
+	send_transfer_waiter();
 }
 
 int main(void)
@@ -534,8 +695,14 @@ int main(void)
 			.cap = 0,
 			.words = { BUNIX_USB_ERR_UNSUPPORTED, 0, 0, 0 },
 		};
+		struct usb_device *endpoint_device = 0;
+		struct usb_endpoint *endpoint = 0;
+		u64 endpoint_device_index = 0;
+		int defer_reply = 0;
 
-		int endpoint_message = handle_endpoint_message(&message);
+		int endpoint_message = handle_endpoint_message(
+			&message, &endpoint_device, &endpoint,
+			&endpoint_device_index);
 
 		if (!endpoint_message) {
 			const long recv =
@@ -555,7 +722,9 @@ int main(void)
 
 		reply.type = message.type;
 		if (endpoint_message) {
-			reply_endpoint_unsupported(&reply, &message);
+			defer_reply = reply_endpoint_message(
+				&reply, &message, endpoint_device, endpoint,
+				endpoint_device_index);
 			goto send_reply;
 		}
 		switch (message.type) {
@@ -581,15 +750,24 @@ int main(void)
 		case BUNIX_USB_OPEN_ENDPOINT:
 			reply_open_endpoint(&reply, &message);
 			break;
+		case BUNIX_USB_CONTROLLER_TRANSFER_POLL:
+			reply_controller_transfer_poll(&reply, &message);
+			break;
+		case BUNIX_USB_CONTROLLER_TRANSFER_COMPLETE:
+			reply_controller_transfer_complete(&reply, &message);
+			break;
 		default:
 			break;
 		}
 
 send_reply:
-		if (message.cap != 0) {
+		if (message.cap != 0 && !(endpoint_message &&
+					  message.type ==
+						  BUNIX_USB_SUBMIT_TRANSFER &&
+					  reply.words[0] == BUNIX_USB_OK)) {
 			bunix_handle_close(message.cap);
 		}
-		if (message.reply != 0) {
+		if (!defer_reply && message.reply != 0) {
 			(void)bunix_ipc_send(message.reply, &reply);
 		}
 	}

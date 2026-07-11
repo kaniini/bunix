@@ -78,7 +78,6 @@ nettest: edges ok
 nettest: ok
 linux-server: online
 linux-server: registered
-linux-server: openat
 block: online
 virtio-bus: ready devices=
 net: loopback lo ipv4=127.0.0.1 ipv6=::1

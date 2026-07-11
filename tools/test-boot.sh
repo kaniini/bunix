@@ -119,6 +119,7 @@ start_sidecar() {
 }
 
 start_qemu() {
+	safe_rm_rf "$tmp" "BUNIX_TEST_RUNTIME_DIR"
 	mkdir -p "$tmp" "$(dirname "$log")"
 	truncate -s 0 "$log"
 	: > "$sidecar_log"
