@@ -1401,6 +1401,32 @@ static void usb_complete_transfer(u64 transfer_id, u64 status, u64 actual)
 	(void)bunix_ipc_call(XHCI_HANDLE_USB, &request, &reply);
 }
 
+static int usb_poll_control(struct bunix_msg *reply)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USB,
+		.type = BUNIX_USB_CONTROLLER_CONTROL_POLL,
+	};
+
+	return bunix_ipc_call(XHCI_HANDLE_USB, &request, reply) == 0 &&
+		       reply->protocol == BUNIX_PROTO_USB &&
+		       reply->words[0] == BUNIX_USB_OK ?
+		       0 :
+		       -1;
+}
+
+static void usb_complete_control(u64 control_id, u64 status)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USB,
+		.type = BUNIX_USB_CONTROLLER_CONTROL_COMPLETE,
+		.words = { control_id, status, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	(void)bunix_ipc_call(XHCI_HANDLE_USB, &request, &reply);
+}
+
 static void log_endpoint(const char *prefix, u64 endpoint, u64 code)
 {
 	char line[128];
@@ -1485,6 +1511,40 @@ static void xhci_handle_usb_transfer(const struct xhci_controller *controller,
 		usb_complete_transfer(transfer_id, BUNIX_USB_ERR_UNSUPPORTED, 0);
 	}
 	bunix_handle_close(transfer_msg.cap);
+}
+
+static void xhci_handle_usb_control(const struct xhci_controller *controller,
+				    struct xhci_rings *rings,
+				    struct xhci_device *device)
+{
+	struct bunix_msg control_msg;
+	u64 control_id;
+	u64 device_index;
+	u64 request_type;
+	u64 request;
+	u64 value;
+	u64 index;
+	u64 code = 0;
+
+	if (device == 0 || usb_poll_control(&control_msg) != 0) {
+		return;
+	}
+	control_id = control_msg.words[1];
+	device_index = control_msg.words[2] & 0xffffffffull;
+	request_type = (control_msg.words[2] >> 32) & 0xffu;
+	request = (control_msg.words[2] >> 40) & 0xffu;
+	value = control_msg.words[3] & 0xffffu;
+	index = (control_msg.words[3] >> 16) & 0xffffu;
+	if (device_index != device->usb_index ||
+	    xhci_control_no_data(controller, rings, device, request_type,
+				 request, value, index, &code) != 0) {
+		usb_complete_control(control_id, BUNIX_USB_ERR_UNSUPPORTED);
+		return;
+	}
+	usb_complete_control(control_id,
+			     code == XHCI_COMPLETION_SUCCESS ?
+				     BUNIX_USB_OK :
+				     BUNIX_USB_ERR_UNSUPPORTED);
 }
 
 static void log_rings(const struct xhci_rings *rings)
@@ -1928,6 +1988,8 @@ int main(void)
 		struct bunix_msg message;
 
 		if (active != 0) {
+			xhci_handle_usb_control(&active_controller,
+						&active_rings, &active_device);
 			xhci_handle_usb_transfer(&active_controller,
 						 &active_rings, &active_device);
 		}

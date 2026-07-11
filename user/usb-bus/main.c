@@ -63,6 +63,21 @@ struct usb_transfer {
 	u64 waiter;
 };
 
+struct usb_control_request {
+	u64 active;
+	u64 in_flight;
+	u64 complete;
+	u64 id;
+	u64 controller_id;
+	u64 device_index;
+	u64 request_type;
+	u64 request;
+	u64 value;
+	u64 index;
+	u64 status;
+	u64 waiter;
+};
+
 static struct usb_device *devices;
 static u64 device_count;
 static u64 device_capacity;
@@ -70,6 +85,8 @@ static struct usb_transfer *transfers;
 static u64 transfer_count;
 static u64 transfer_capacity;
 static u64 next_transfer_id = 1;
+static struct usb_control_request control_request;
+static u64 next_control_id = 1;
 
 static void append_char(char *out, u64 out_size, u64 *offset, char c)
 {
@@ -594,6 +611,78 @@ static void reply_open_endpoint(struct bunix_msg *reply,
 	reply->cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP;
 }
 
+static int control_allowed(const struct bunix_msg *message,
+			   const struct usb_device *device)
+{
+	const u64 request_type = message->words[2] & 0xffu;
+	const u64 request = (message->words[2] >> 8) & 0xffu;
+	const u64 value = (message->words[2] >> 16) & 0xffffu;
+	const u64 index = message->words[3] & 0xffffu;
+	const u64 recipient = request_type & 0x1fu;
+
+	if (device == 0) {
+		return 0;
+	}
+	if (request_type == 0x21u && request == 0xffu && value == 0 &&
+	    index == message->words[1]) {
+		struct usb_interface *interface =
+			find_interface((struct usb_device *)device, index);
+
+		return interface != 0 &&
+		       interface->claim_owner == message->sender;
+	}
+	if (request_type == 0x02u && request == 1 && value == 0 &&
+	    recipient == 2) {
+		for (u64 i = 0; i < device->endpoint_count; i++) {
+			const struct usb_endpoint *endpoint =
+				&device->endpoints[i];
+
+			if (endpoint->address == index &&
+			    endpoint->owner == message->sender) {
+				return 1;
+			}
+		}
+	}
+	return 0;
+}
+
+static int reply_control_no_data(struct bunix_msg *reply,
+				 const struct bunix_msg *message)
+{
+	struct usb_device *device;
+
+	if (message->words[0] >= device_count || message->reply == 0) {
+		reply_noent(reply);
+		return 0;
+	}
+	if (control_request.active != 0) {
+		reply->words[0] = BUNIX_USB_ERR_BUSY;
+		return 0;
+	}
+	device = &devices[message->words[0]];
+	if (!control_allowed(message, device)) {
+		reply->words[0] = BUNIX_USB_ERR_INVAL;
+		return 0;
+	}
+	control_request = (struct usb_control_request){
+		.active = 1,
+		.in_flight = 0,
+		.complete = 0,
+		.id = next_control_id++,
+		.controller_id = device->controller_id,
+		.device_index = message->words[0],
+		.request_type = message->words[2] & 0xffu,
+		.request = (message->words[2] >> 8) & 0xffu,
+		.value = (message->words[2] >> 16) & 0xffffu,
+		.index = message->words[3] & 0xffffu,
+		.status = BUNIX_USB_ERR_UNSUPPORTED,
+		.waiter = message->reply,
+	};
+	reply->words[0] = BUNIX_USB_OK;
+	reply->words[1] = control_request.id;
+	return 1;
+}
+
 static void reply_endpoint_submit(struct bunix_msg *reply,
 				  const struct bunix_msg *message,
 				  const struct usb_device *device,
@@ -784,6 +873,50 @@ static void reply_controller_transfer_complete(struct bunix_msg *reply,
 	send_transfer_waiter(index);
 }
 
+static void reply_controller_control_poll(struct bunix_msg *reply,
+					  const struct bunix_msg *message)
+{
+	if (control_request.active == 0 || control_request.complete != 0 ||
+	    control_request.in_flight != 0 ||
+	    control_request.controller_id != message->sender) {
+		reply->words[0] = BUNIX_USB_ERR_NOENT;
+		return;
+	}
+	control_request.in_flight = 1;
+	reply->words[0] = BUNIX_USB_OK;
+	reply->words[1] = control_request.id;
+	reply->words[2] = control_request.device_index |
+			  (control_request.request_type << 32) |
+			  (control_request.request << 40);
+	reply->words[3] = control_request.value |
+			  (control_request.index << 16);
+}
+
+static void reply_controller_control_complete(struct bunix_msg *reply,
+					      const struct bunix_msg *message)
+{
+	struct bunix_msg waiter_reply = {
+		.protocol = BUNIX_PROTO_USB,
+		.type = BUNIX_USB_CONTROL_NO_DATA,
+		.words = { message->words[1], 0, control_request.id, 0 },
+	};
+
+	if (control_request.active == 0 ||
+	    control_request.id != message->words[0] ||
+	    control_request.controller_id != message->sender) {
+		reply->words[0] = BUNIX_USB_ERR_NOENT;
+		return;
+	}
+	control_request.status = message->words[1];
+	control_request.complete = 1;
+	reply->words[0] = BUNIX_USB_OK;
+	if (control_request.waiter != 0) {
+		(void)bunix_ipc_send(control_request.waiter, &waiter_reply);
+		bunix_handle_close(control_request.waiter);
+	}
+	control_request = (struct usb_control_request){ 0 };
+}
+
 int main(void)
 {
 	const char online[] = "usb-bus: online\n";
@@ -861,11 +994,20 @@ int main(void)
 		case BUNIX_USB_OPEN_ENDPOINT:
 			reply_open_endpoint(&reply, &message);
 			break;
+		case BUNIX_USB_CONTROL_NO_DATA:
+			defer_reply = reply_control_no_data(&reply, &message);
+			break;
 		case BUNIX_USB_CONTROLLER_TRANSFER_POLL:
 			reply_controller_transfer_poll(&reply, &message);
 			break;
 		case BUNIX_USB_CONTROLLER_TRANSFER_COMPLETE:
 			reply_controller_transfer_complete(&reply, &message);
+			break;
+		case BUNIX_USB_CONTROLLER_CONTROL_POLL:
+			reply_controller_control_poll(&reply, &message);
+			break;
+		case BUNIX_USB_CONTROLLER_CONTROL_COMPLETE:
+			reply_controller_control_complete(&reply, &message);
 			break;
 		default:
 			break;

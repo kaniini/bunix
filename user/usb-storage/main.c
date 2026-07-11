@@ -14,6 +14,12 @@ enum {
 	STORAGE_CSW_SIZE = 13,
 	STORAGE_CBW_SIGNATURE = 0x43425355,
 	STORAGE_CSW_SIGNATURE = 0x53425355,
+	USB_REQ_CLEAR_FEATURE = 1,
+	USB_RECIP_ENDPOINT = 2,
+	USB_TYPE_CLASS = 0x20,
+	USB_RECIP_INTERFACE = 1,
+	USB_ENDPOINT_HALT = 0,
+	BOT_REQUEST_RESET = 0xff,
 	SCSI_TEST_UNIT_READY = 0x00,
 	SCSI_REQUEST_SENSE = 0x03,
 	SCSI_INQUIRY = 0x12,
@@ -253,6 +259,47 @@ static long usb_open_bulk_endpoint(u64 device_index, u64 interface_number,
 	return (long)reply.cap;
 }
 
+static int usb_control_no_data(u64 device_index, u64 interface_number,
+			       u64 request_type, u64 request, u64 value,
+			       u64 index)
+{
+	struct bunix_msg message = {
+		.protocol = BUNIX_PROTO_USB,
+		.type = BUNIX_USB_CONTROL_NO_DATA,
+		.words = { device_index, interface_number,
+			   request_type | (request << 8) | (value << 16),
+			   index },
+	};
+	struct bunix_msg reply;
+
+	return bunix_ipc_call(STORAGE_HANDLE_USB, &message, &reply) == 0 &&
+		       reply.protocol == BUNIX_PROTO_USB &&
+		       reply.words[0] == BUNIX_USB_OK ?
+		       0 :
+		       -1;
+}
+
+static int bot_recover(struct usb_storage_disk *disk)
+{
+	if (disk == 0) {
+		return -1;
+	}
+	if (usb_control_no_data(disk->device_index, disk->interface_number,
+				USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+				BOT_REQUEST_RESET, 0,
+				disk->interface_number) != 0 ||
+	    usb_control_no_data(disk->device_index, disk->interface_number,
+				USB_RECIP_ENDPOINT, USB_REQ_CLEAR_FEATURE,
+				USB_ENDPOINT_HALT, disk->bulk_in_address) != 0 ||
+	    usb_control_no_data(disk->device_index, disk->interface_number,
+				USB_RECIP_ENDPOINT, USB_REQ_CLEAR_FEATURE,
+				USB_ENDPOINT_HALT, disk->bulk_out_address) != 0) {
+		return -1;
+	}
+	bunix_console_log("usb-storage: recovery ok\n", 25);
+	return 0;
+}
+
 static int endpoint_transfer(u64 endpoint, unsigned char *data, u64 len,
 			     u64 direction_in, u64 *actual)
 {
@@ -303,9 +350,10 @@ static int endpoint_transfer(u64 endpoint, unsigned char *data, u64 len,
 	return 0;
 }
 
-static int bot_command(struct usb_storage_disk *disk, const unsigned char *cdb,
-		       u64 cdb_len, unsigned char *data, u64 data_len,
-		       u64 direction_in)
+static int bot_command_once(struct usb_storage_disk *disk,
+			    const unsigned char *cdb, u64 cdb_len,
+			    unsigned char *data, u64 data_len,
+			    u64 direction_in)
 {
 	unsigned char cbw[STORAGE_CBW_SIZE];
 	unsigned char csw[STORAGE_CSW_SIZE];
@@ -349,7 +397,29 @@ static int bot_command(struct usb_storage_disk *disk, const unsigned char *cdb,
 		return -1;
 	}
 	residue = get_le32(&csw[8]);
-	return residue <= data_len ? 0 : -1;
+	if (residue > data_len) {
+		return -1;
+	}
+	return 0;
+}
+
+static int bot_command(struct usb_storage_disk *disk, const unsigned char *cdb,
+		       u64 cdb_len, unsigned char *data, u64 data_len,
+		       u64 direction_in)
+{
+	if (bot_command_once(disk, cdb, cdb_len, data, data_len,
+			     direction_in) == 0) {
+		return 0;
+	}
+	if (bot_recover(disk) != 0) {
+		return -1;
+	}
+	if (bot_command_once(disk, cdb, cdb_len, data, data_len,
+			     direction_in) == 0) {
+		return 0;
+	}
+	(void)bot_recover(disk);
+	return -1;
 }
 
 static int scsi_inquiry(struct usb_storage_disk *disk)
@@ -445,6 +515,9 @@ static int storage_smoke(struct usb_storage_disk *disk)
 	    scsi_read_blocks(disk, 0, 1, storage_buffer) != 0 ||
 	    storage_buffer[0] != (unsigned char)(scratch_buffer[0] ^ 0xa5u) ||
 	    scsi_write_blocks(disk, 0, 1, scratch_buffer) != 0) {
+		return -1;
+	}
+	if (bot_recover(disk) != 0 || scsi_inquiry(disk) != 0) {
 		return -1;
 	}
 	bunix_console_log("usb-storage: smoke ok\n", 22);
