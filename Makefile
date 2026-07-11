@@ -144,6 +144,8 @@ INPUT_MODULE := $(BUILD_DIR)/modules/input.server
 INPUT_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/input/main.c.o
 USB_HID_KBD_MODULE := $(BUILD_DIR)/modules/usb-hid-kbd.server
 USB_HID_KBD_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/usb-hid-kbd/main.c.o
+USB_STORAGE_MODULE := $(BUILD_DIR)/modules/usb-storage.server
+USB_STORAGE_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/usb-storage/main.c.o
 VIRTIO_BUS_MODULE := $(BUILD_DIR)/modules/virtio-bus.server
 VIRTIO_BUS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/virtio-bus/main.c.o
 NET_MODULE := $(BUILD_DIR)/modules/net.server
@@ -242,6 +244,7 @@ X86_USER_LD_MODULES := \
 	XHCI_MODULE \
 	INPUT_MODULE \
 	USB_HID_KBD_MODULE \
+	USB_STORAGE_MODULE \
 	VIRTIO_BUS_MODULE \
 	NET_MODULE \
 	NETCFG_MODULE \
@@ -271,6 +274,7 @@ VIRTIO_BLOCK_IMAGE ?= $(BLOCK_IMAGE)
 VIRTIO_BLK_TEST_IMAGE := $(BUILD_DIR)/virtio-blk-test.img
 EXT2_TEST_IMAGE := $(BUILD_DIR)/modules/ext2-test.img
 EXT2_FSCK_TEST_IMAGE := $(BUILD_DIR)/ext2-fsck-test.img
+USB_STORAGE_TEST_IMAGE := $(BUILD_DIR)/usb-storage-test.img
 QEMU_VIRTIO_BLK_ARGS := -drive if=none,id=bunix-virtio0,format=raw,readonly=on,file=$(VIRTIO_BLOCK_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
 QEMU_VIRTIO_BLK_TEST_ARGS := -drive if=none,id=bunix-virtio0,format=raw,file=$(VIRTIO_BLK_TEST_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
 QEMU_EXT2_FSCK_TEST_ARGS := -drive if=none,id=bunix-virtio0,format=raw,file=$(EXT2_FSCK_TEST_IMAGE) -device virtio-blk-pci,disable-legacy=on,drive=bunix-virtio0,bus=pcie.0,addr=0x6
@@ -279,6 +283,7 @@ QEMU_VIRTIO_NET_EXTERNAL_ARGS := -netdev user,id=bunix-net0 -device virtio-net-p
 QEMU_VIRTIO_NET_SOCKET_MCAST ?= 230.18.0.1:18100
 QEMU_VIRTIO_NET_SOCKET_ARGS := -netdev socket,id=bunix-net0,mcast=$(QEMU_VIRTIO_NET_SOCKET_MCAST) -device virtio-net-pci,disable-legacy=on,netdev=bunix-net0,mac=52:54:00:18:00:01,bus=pcie.0,addr=0x7
 QEMU_XHCI_ARGS := -device qemu-xhci,id=bunix-xhci,bus=pcie.0,addr=0x8 -device usb-kbd,bus=bunix-xhci.0
+QEMU_XHCI_STORAGE_ARGS := -drive if=none,id=bunix-usb-storage0,format=raw,file=$(USB_STORAGE_TEST_IMAGE) -device qemu-xhci,id=bunix-xhci,bus=pcie.0,addr=0x8 -device usb-storage,drive=bunix-usb-storage0,bus=bunix-xhci.0
 QEMU_TIMEOUT ?= $(if $(filter alpine-squashfs,$(ROOTFS_FLAVOR)),120s,60s)
 TEST_BOOT_MARKERS := $(if $(filter alpine-squashfs,$(ROOTFS_FLAVOR)),tools/test-boot-markers-alpine-squashfs.txt,tools/test-boot-markers-squashfs.txt)
 ROOTFS_FLAVOR_STAMP := $(BUILD_DIR)/rootfs-flavor.stamp
@@ -470,6 +475,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/xhci/main.c.o \
 	$(BUILD_DIR)/user/input/main.c.o \
 	$(BUILD_DIR)/user/usb-hid-kbd/main.c.o \
+	$(BUILD_DIR)/user/usb-storage/main.c.o \
 	$(BUILD_DIR)/user/virtio-bus/main.c.o \
 	$(BUILD_DIR)/user/net/main.c.o \
 	$(BUILD_DIR)/user/netcfg/main.c.o \
@@ -490,7 +496,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-lowmem-isolation test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-lowmem-isolation test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -1016,6 +1022,10 @@ $(VIRTIO_BLK_TEST_IMAGE): $(BLOCK_IMAGE)
 	cp $(BLOCK_IMAGE) $@
 	chmod u+w $@
 
+$(USB_STORAGE_TEST_IMAGE):
+	mkdir -p $(dir $@)
+	truncate -s 1M $@
+
 $(EXT2_TEST_IMAGE): tools/build-ext2-test-image.sh
 	sh tools/build-ext2-test-image.sh $@
 
@@ -1064,7 +1074,7 @@ $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG): boot/grub-standalone.cfg FORCE
 		$< > $@.tmp
 	if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; else rm $@.tmp; fi
 
-$(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(NAMES_TEST_MODULE) $(MGMT_TEST_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(USB_BUS_MODULE) $(USB_SYNTH_MODULE) $(XHCI_MODULE) $(INPUT_MODULE) $(USB_HID_KBD_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(NAMES_TEST_MODULE) $(MGMT_TEST_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(USB_BUS_MODULE) $(USB_SYNTH_MODULE) $(XHCI_MODULE) $(INPUT_MODULE) $(USB_HID_KBD_MODULE) $(USB_STORAGE_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKSTANDALONE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKSTANDALONE)"; exit 1; \
 	fi
@@ -1096,6 +1106,7 @@ $(EFI_BOOT_APP): $(KERNEL) $(GRUB_STANDALONE_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTS
 		"modules/xhci.server=$(XHCI_MODULE)" \
 		"modules/input.server=$(INPUT_MODULE)" \
 		"modules/usb-hid-kbd.server=$(USB_HID_KBD_MODULE)" \
+		"modules/usb-storage.server=$(USB_STORAGE_MODULE)" \
 		"modules/virtio-bus.server=$(VIRTIO_BUS_MODULE)" \
 		"modules/net.server=$(NET_MODULE)" \
 		"modules/netcfg.server=$(NETCFG_MODULE)" \
@@ -1255,7 +1266,7 @@ $(EXT2_FSCK_TEST_EFI_BOOT_APP): $(KERNEL) $(EXT2_FSCK_TEST_GRUB_STANDALONE_CFG) 
 		"modules/disk0.img=$(BLOCK_IMAGE)" \
 		"modules/vm.server=modules/vm.server"
 
-$(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(USB_BUS_MODULE) $(USB_SYNTH_MODULE) $(XHCI_MODULE) $(INPUT_MODULE) $(USB_HID_KBD_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
+$(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE) $(CONSOLE_MODULE) $(NAMES_MODULE) $(TIME_MODULE) $(USER_MODULE) $(LINUX_SERVER_MODULE) $(PROC_MODULE) $(PROCFS_MODULE) $(TMPFS_MODULE) $(DEVFS_MODULE) $(SYSFS_MODULE) $(UTMPFS_MODULE) $(SQUASHFS_MODULE) $(UNIONFS_MODULE) $(BLOCK_MODULE) $(PCI_MODULE) $(USB_BUS_MODULE) $(USB_SYNTH_MODULE) $(XHCI_MODULE) $(INPUT_MODULE) $(USB_HID_KBD_MODULE) $(USB_STORAGE_MODULE) $(VIRTIO_BUS_MODULE) $(NET_MODULE) $(NETCFG_MODULE) $(VFS_MODULE) $(PING_MODULE) modules/vm.server $(BLOCK_IMAGE)
 	@if ! command -v $(GRUB_MKRESCUE) >/dev/null 2>&1; then \
 		echo "missing $(GRUB_MKRESCUE)"; exit 1; \
 	fi
@@ -1287,6 +1298,7 @@ $(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE
 	cp $(XHCI_MODULE) $(ISO_ROOT)/modules/xhci.server
 	cp $(INPUT_MODULE) $(ISO_ROOT)/modules/input.server
 	cp $(USB_HID_KBD_MODULE) $(ISO_ROOT)/modules/usb-hid-kbd.server
+	cp $(USB_STORAGE_MODULE) $(ISO_ROOT)/modules/usb-storage.server
 	cp $(VIRTIO_BUS_MODULE) $(ISO_ROOT)/modules/virtio-bus.server
 	cp $(NET_MODULE) $(ISO_ROOT)/modules/net.server
 	cp $(NETCFG_MODULE) $(ISO_ROOT)/modules/netcfg.server
@@ -1500,6 +1512,14 @@ test-boot-usb-hid-kbd: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh 
 		QEMU_EXTRA_ARGS="$(QEMU_XHCI_ARGS) -qmp unix:/tmp/bunix-usb-hid-kbd-test/qmp.sock,server=on,wait=off" \
 		sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log tools/test-boot-markers-usb-hid-kbd.txt
+
+test-boot-usb-storage: KERNEL_CMDLINE=log=info xhci-test xhci-storage-test
+test-boot-usb-storage: $(EFI_BOOT_APP) $(USB_STORAGE_TEST_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-usb-storage.txt
+	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log \
+		BUNIX_BOOT_PHASE=marker-poweroff BUNIX_BOOT_MARKER="machine: poweroff" \
+		QEMU_EXTRA_ARGS="$(QEMU_XHCI_STORAGE_ARGS)" sh tools/test-boot.sh
+	sh tools/check-markers.sh $(BUILD_DIR)/serial.log tools/test-boot-markers-usb-storage.txt
 
 test-boot-usb:
 	$(MAKE) test-boot-usb-synth

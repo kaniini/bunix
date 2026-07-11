@@ -1,0 +1,8 @@
+bootstrap: xhci test
+usb-bus: online
+usb-bus: ready
+xhci: usb0 registered index=0
+xhci: endpoints configured
+usb-storage: online
+usb-storage: claimed device=0 interface=0
+machine: poweroff

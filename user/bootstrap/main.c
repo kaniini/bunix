@@ -3806,6 +3806,13 @@ int main(void)
 			{ 0, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 			  BUNIX_CAP_INP0 },
 		};
+		struct bunix_launch_cap usb_storage_caps[] = {
+			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND,
+			  BUNIX_CAP_NAME },
+			{ 0, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+			  BUNIX_CAP_USB },
+		};
 		u64 input = 0;
 
 		bunix_console_log(xhci_test, sizeof(xhci_test) - 1);
@@ -3838,8 +3845,17 @@ int main(void)
 		bunix_launch_module_with_caps(
 			"usb-hid-kbd", usb_hid_caps,
 			sizeof(usb_hid_caps) / sizeof(usb_hid_caps[0]));
+		if (bunix_cmdline_has("xhci-storage-test") > 0) {
+			usb_storage_caps[2].handle = usb;
+			bunix_launch_module_with_caps(
+				"usb-storage", usb_storage_caps,
+				sizeof(usb_storage_caps) /
+					sizeof(usb_storage_caps[0]));
+		}
 		if (bunix_cmdline_has("xhci-hid-test") > 0) {
 			bunix_sleep_ns(6000000000ull);
+		} else if (bunix_cmdline_has("xhci-storage-test") > 0) {
+			bunix_sleep_ns(3000000000ull);
 		} else {
 			bunix_sleep_ns(1000000000ull);
 		}

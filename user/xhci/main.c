@@ -61,10 +61,11 @@ enum {
 	XHCI_SLOT_CONTEXT_ENTRIES_SHIFT = 27,
 	XHCI_SLOT_CONTEXT_ROOT_PORT_SHIFT = 16,
 	XHCI_SLOT_CONTEXT_SPEED_SHIFT = 20,
+	XHCI_EP_TYPE_BULK_OUT = 2,
 	XHCI_EP_TYPE_CONTROL = 4,
+	XHCI_EP_TYPE_BULK_IN = 6,
 	XHCI_EP_TYPE_INTERRUPT_IN = 7,
 	XHCI_EP0_MAX_PACKET_SIZE = 8,
-	XHCI_INTERRUPT_IN_DCI = 3,
 	XHCI_EP_CONTEXT_CERR_SHIFT = 1,
 	XHCI_EP_CONTEXT_TYPE_SHIFT = 3,
 	XHCI_EP_CONTEXT_INTERVAL_SHIFT = 16,
@@ -89,6 +90,7 @@ enum {
 	XHCI_ERST_ENTRIES = 1,
 	XHCI_ERST_ENTRY_SIZE = 16,
 	XHCI_MAX_SCRATCHPADS = 16,
+	XHCI_MAX_ENDPOINTS = 16,
 };
 
 struct xhci_controller {
@@ -125,24 +127,34 @@ struct xhci_rings {
 	u64 event_cycle;
 };
 
+struct xhci_endpoint {
+	u64 configured;
+	u64 address;
+	u64 attributes;
+	u64 max_packet;
+	u64 interval;
+	u64 dci;
+	u64 type;
+	struct xhci_dma_buffer ring;
+	u64 producer;
+	u64 cycle;
+};
+
 struct xhci_device {
 	struct xhci_dma_buffer device_context;
 	struct xhci_dma_buffer input_context;
 	struct xhci_dma_buffer ep0_ring;
-	struct xhci_dma_buffer interrupt_ring;
 	struct xhci_dma_buffer control_buffer;
+	struct xhci_endpoint endpoints[XHCI_MAX_ENDPOINTS];
 	u64 slot_id;
 	u64 port;
 	u64 speed;
 	u64 ep0_producer;
 	u64 ep0_cycle;
-	u64 interrupt_producer;
-	u64 interrupt_cycle;
-	u64 interrupt_endpoint_address;
-	u64 interrupt_max_packet;
-	u64 interrupt_interval;
+	u64 endpoint_count;
+	u64 max_dci;
 	u64 usb_index;
-	u64 configured_interrupt;
+	u64 configured_endpoints;
 };
 
 static const unsigned char zeroes[64];
@@ -715,27 +727,24 @@ static int xhci_write_ep0_trb(struct xhci_device *device, u64 parameter,
 	return 0;
 }
 
-static int xhci_write_interrupt_trb(struct xhci_device *device, u64 parameter,
-				    u64 status, u64 control)
+static int xhci_write_endpoint_trb(struct xhci_endpoint *endpoint,
+				   u64 parameter, u64 status, u64 control)
 {
 	u64 index;
 	u64 offset;
 
-	if (device == 0 ||
-	    device->interrupt_producer >= XHCI_RING_TRBS - 1) {
+	if (endpoint == 0 || endpoint->producer >= XHCI_RING_TRBS - 1) {
 		return -1;
 	}
-	index = device->interrupt_producer;
-	offset = device->interrupt_ring.offset + index * XHCI_TRB_SIZE;
-	if (buffer_write64(device->interrupt_ring.handle, offset, parameter) !=
-		    0 ||
-	    buffer_write32(device->interrupt_ring.handle, offset + 8, status) !=
-		    0 ||
-	    buffer_write32(device->interrupt_ring.handle, offset + 12,
-			   control | device->interrupt_cycle) != 0) {
+	index = endpoint->producer;
+	offset = endpoint->ring.offset + index * XHCI_TRB_SIZE;
+	if (buffer_write64(endpoint->ring.handle, offset, parameter) != 0 ||
+	    buffer_write32(endpoint->ring.handle, offset + 8, status) != 0 ||
+	    buffer_write32(endpoint->ring.handle, offset + 12,
+			   control | endpoint->cycle) != 0) {
 		return -1;
 	}
-	device->interrupt_producer++;
+	endpoint->producer++;
 	return 0;
 }
 
@@ -753,13 +762,14 @@ static int xhci_ring_ep0_doorbell(const struct xhci_controller *controller,
 			    1);
 }
 
-static int xhci_ring_interrupt_doorbell(
-	const struct xhci_controller *controller, const struct xhci_device *device)
+static int xhci_ring_endpoint_doorbell(
+	const struct xhci_controller *controller, const struct xhci_device *device,
+	u64 dci)
 {
 	return mmio_write32(controller->mmio,
 			    controller->doorbell_offset +
 				    device->slot_id * XHCI_DOORBELL_STRIDE,
-			    XHCI_INTERRUPT_IN_DCI);
+			    dci);
 }
 
 static int xhci_wait_command_completion(const struct xhci_controller *controller,
@@ -922,18 +932,18 @@ static int xhci_setup_ep0_transfer_ring(struct xhci_device *device)
 		       -1;
 }
 
-static int xhci_setup_interrupt_transfer_ring(struct xhci_device *device)
+static int xhci_setup_endpoint_transfer_ring(struct xhci_endpoint *endpoint)
 {
-	const u64 link_offset = device->interrupt_ring.offset +
+	const u64 link_offset = endpoint->ring.offset +
 				(XHCI_RING_TRBS - 1) * XHCI_TRB_SIZE;
 	const u64 link_control = ((u64)XHCI_TRB_TYPE_LINK << 10) |
 				 XHCI_TRB_CYCLE | XHCI_TRB_TOGGLE_CYCLE;
 
-	return buffer_write64(device->interrupt_ring.handle, link_offset,
-			      device->interrupt_ring.phys) == 0 &&
-		       buffer_write32(device->interrupt_ring.handle,
+	return buffer_write64(endpoint->ring.handle, link_offset,
+			      endpoint->ring.phys) == 0 &&
+		       buffer_write32(endpoint->ring.handle,
 				      link_offset + 8, 0) == 0 &&
-		       buffer_write32(device->interrupt_ring.handle,
+		       buffer_write32(endpoint->ring.handle,
 				      link_offset + 12, link_control) == 0 ?
 		       0 :
 		       -1;
@@ -1141,16 +1151,54 @@ static int xhci_set_configuration(const struct xhci_controller *controller,
 				    configuration_value, 0, completion_code);
 }
 
-static int xhci_find_interrupt_in_endpoint(const unsigned char *config,
-					   u64 config_len,
-					   struct xhci_device *device)
+static u64 xhci_endpoint_dci(u64 address)
+{
+	const u64 ep = address & 0xfu;
+	const u64 in = (address & 0x80u) != 0;
+
+	return ep * 2 + in;
+}
+
+static u64 xhci_endpoint_context_type(u64 address, u64 attributes)
+{
+	const u64 transfer_type = attributes & 0x3u;
+	const u64 in = (address & 0x80u) != 0;
+
+	if (transfer_type == 2) {
+		return in ? XHCI_EP_TYPE_BULK_IN : XHCI_EP_TYPE_BULK_OUT;
+	}
+	if (transfer_type == 3 && in) {
+		return XHCI_EP_TYPE_INTERRUPT_IN;
+	}
+	return 0;
+}
+
+static struct xhci_endpoint *xhci_find_endpoint(struct xhci_device *device,
+						u64 address)
+{
+	if (device == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < device->endpoint_count; i++) {
+		if (device->endpoints[i].address == address &&
+		    device->endpoints[i].configured != 0) {
+			return &device->endpoints[i];
+		}
+	}
+	return 0;
+}
+
+static int xhci_collect_supported_endpoints(const unsigned char *config,
+					    u64 config_len,
+					    struct xhci_device *device)
 {
 	u64 offset = 0;
-	int hid_keyboard = 0;
 
 	if (config == 0 || device == 0) {
 		return -1;
 	}
+	device->endpoint_count = 0;
+	device->max_dci = 1;
 	while (offset + 2 <= config_len) {
 		const u64 len = config[offset];
 		const u64 type = config[offset + 1];
@@ -1158,87 +1206,112 @@ static int xhci_find_interrupt_in_endpoint(const unsigned char *config,
 		if (len < 2 || offset + len > config_len) {
 			return -1;
 		}
-		if (type == BUNIX_USB_DESCRIPTOR_INTERFACE && len >= 9) {
-			hid_keyboard = config[offset + 5] == 3 &&
-				       config[offset + 6] == 1 &&
-				       config[offset + 7] == 1;
-		} else if (type == BUNIX_USB_DESCRIPTOR_ENDPOINT && len >= 7 &&
-			   hid_keyboard) {
+		if (type == BUNIX_USB_DESCRIPTOR_ENDPOINT && len >= 7) {
 			const u64 address = config[offset + 2];
 			const u64 attributes = config[offset + 3];
+			const u64 endpoint_type =
+				xhci_endpoint_context_type(address, attributes);
+			struct xhci_endpoint *endpoint;
 
-			if ((address & 0x80u) != 0 && (attributes & 0x3u) == 3) {
-				device->interrupt_endpoint_address = address;
-				device->interrupt_max_packet =
-					(u64)config[offset + 4] |
-					((u64)config[offset + 5] << 8);
-				device->interrupt_interval = config[offset + 6];
-				return 0;
+			if (endpoint_type == 0) {
+				offset += len;
+				continue;
+			}
+			if (device->endpoint_count >= XHCI_MAX_ENDPOINTS) {
+				return -1;
+			}
+			endpoint = &device->endpoints[device->endpoint_count++];
+			endpoint->configured = 0;
+			endpoint->address = address;
+			endpoint->attributes = attributes;
+			endpoint->max_packet =
+				(u64)config[offset + 4] |
+				((u64)config[offset + 5] << 8);
+			endpoint->interval = config[offset + 6];
+			endpoint->dci = xhci_endpoint_dci(address);
+			endpoint->type = endpoint_type;
+			endpoint->producer = 0;
+			endpoint->cycle = 1;
+			if (endpoint->dci > device->max_dci) {
+				device->max_dci = endpoint->dci;
 			}
 		}
 		offset += len;
 	}
-	return -1;
+	return device->endpoint_count != 0 ? 0 : -1;
 }
 
-static int xhci_configure_interrupt_endpoint(
+static int xhci_configure_supported_endpoints(
 	const struct xhci_controller *controller, struct xhci_rings *rings,
 	struct xhci_device *device, u64 *completion_code)
 {
 	const u64 context_size = xhci_context_size(controller);
 	const u64 input_slot = xhci_context_offset(controller, 1);
-	const u64 input_ep = xhci_context_offset(controller,
-						XHCI_INTERRUPT_IN_DCI + 1);
 	const u64 slot0 = 0 * XHCI_CONTEXT_DWORD_SIZE;
 	const u64 ep0 = 0 * XHCI_CONTEXT_DWORD_SIZE;
 	const u64 ep1 = 1 * XHCI_CONTEXT_DWORD_SIZE;
 	const u64 ep2 = 2 * XHCI_CONTEXT_DWORD_SIZE;
 	const u64 ep4 = 4 * XHCI_CONTEXT_DWORD_SIZE;
-	const u64 interval = device->interrupt_interval == 0 ?
-				     10 :
-				     device->interrupt_interval;
-	const u64 max_packet = device->interrupt_max_packet == 0 ?
-				       8 :
-				       device->interrupt_max_packet;
+	u64 add_flags = 1u << 0;
 	const u64 slot_dword0 =
 		((device->speed & XHCI_PORTSC_SPEED_MASK)
 		 << XHCI_SLOT_CONTEXT_SPEED_SHIFT) |
-		(XHCI_INTERRUPT_IN_DCI << XHCI_SLOT_CONTEXT_ENTRIES_SHIFT);
-	const u64 ep_dword0 = interval << XHCI_EP_CONTEXT_INTERVAL_SHIFT;
-	const u64 ep_dword1 =
-		(3ull << XHCI_EP_CONTEXT_CERR_SHIFT) |
-		((u64)XHCI_EP_TYPE_INTERRUPT_IN << XHCI_EP_CONTEXT_TYPE_SHIFT) |
-		(max_packet << XHCI_EP_CONTEXT_MAX_PACKET_SHIFT);
+		(device->max_dci << XHCI_SLOT_CONTEXT_ENTRIES_SHIFT);
 	u64 completion_slot = 0;
 	const u64 control = ((u64)XHCI_TRB_TYPE_CONFIGURE_ENDPOINT << 10) |
 			    (device->slot_id << 24);
 
-	if (device->configured_interrupt != 0) {
+	if (device->configured_endpoints != 0) {
 		return 0;
 	}
-	if (dma_alloc(&device->interrupt_ring, XHCI_RING_TRBS * XHCI_TRB_SIZE,
-		      64) != 0 ||
-	    xhci_setup_interrupt_transfer_ring(device) != 0 ||
-	    buffer_zero(device->input_context.handle, device->input_context.offset,
-			(XHCI_CONTEXT_COUNT + 1) * context_size) != 0 ||
-	    buffer_write32(device->input_context.handle,
-			   device->input_context.offset + 4,
-			   (1u << 0) | (1u << XHCI_INTERRUPT_IN_DCI)) != 0 ||
+	if (buffer_zero(device->input_context.handle, device->input_context.offset,
+			(XHCI_CONTEXT_COUNT + 1) * context_size) != 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < device->endpoint_count; i++) {
+		struct xhci_endpoint *endpoint = &device->endpoints[i];
+		const u64 input_ep = xhci_context_offset(controller,
+							 endpoint->dci + 1);
+		const u64 interval = endpoint->interval == 0 ?
+					     10 :
+					     endpoint->interval;
+		const u64 max_packet = endpoint->max_packet == 0 ?
+					       8 :
+					       endpoint->max_packet;
+		const u64 ep_dword0 =
+			(endpoint->type == XHCI_EP_TYPE_INTERRUPT_IN ?
+				 interval << XHCI_EP_CONTEXT_INTERVAL_SHIFT :
+				 0);
+		const u64 ep_dword1 =
+			(3ull << XHCI_EP_CONTEXT_CERR_SHIFT) |
+			(endpoint->type << XHCI_EP_CONTEXT_TYPE_SHIFT) |
+			(max_packet << XHCI_EP_CONTEXT_MAX_PACKET_SHIFT);
+
+		if (endpoint->dci >= 32 ||
+		    dma_alloc(&endpoint->ring, XHCI_RING_TRBS * XHCI_TRB_SIZE,
+			      64) != 0 ||
+		    xhci_setup_endpoint_transfer_ring(endpoint) != 0 ||
+		    buffer_write32(device->input_context.handle,
+				   device->input_context.offset + input_ep + ep0,
+				   ep_dword0) != 0 ||
+		    buffer_write32(device->input_context.handle,
+				   device->input_context.offset + input_ep + ep1,
+				   ep_dword1) != 0 ||
+		    buffer_write64(device->input_context.handle,
+				   device->input_context.offset + input_ep + ep2,
+				   endpoint->ring.phys | XHCI_TRB_CYCLE) != 0 ||
+		    buffer_write32(device->input_context.handle,
+				   device->input_context.offset + input_ep + ep4,
+				   max_packet) != 0) {
+			return -1;
+		}
+		add_flags |= 1u << endpoint->dci;
+	}
+	if (buffer_write32(device->input_context.handle,
+			   device->input_context.offset + 4, add_flags) != 0 ||
 	    buffer_write32(device->input_context.handle,
 			   device->input_context.offset + input_slot + slot0,
 			   slot_dword0) != 0 ||
-	    buffer_write32(device->input_context.handle,
-			   device->input_context.offset + input_ep + ep0,
-			   ep_dword0) != 0 ||
-	    buffer_write32(device->input_context.handle,
-			   device->input_context.offset + input_ep + ep1,
-			   ep_dword1) != 0 ||
-	    buffer_write64(device->input_context.handle,
-			   device->input_context.offset + input_ep + ep2,
-			   device->interrupt_ring.phys | XHCI_TRB_CYCLE) != 0 ||
-	    buffer_write32(device->input_context.handle,
-			   device->input_context.offset + input_ep + ep4,
-			   max_packet) != 0 ||
 	    xhci_write_command_trb(rings, device->input_context.phys, 0,
 				   control) != 0 ||
 	    xhci_ring_command_doorbell(controller) != 0 ||
@@ -1248,9 +1321,10 @@ static int xhci_configure_interrupt_endpoint(
 	    completion_slot != device->slot_id) {
 		return -1;
 	}
-	device->interrupt_producer = 0;
-	device->interrupt_cycle = 1;
-	device->configured_interrupt = 1;
+	for (u64 i = 0; i < device->endpoint_count; i++) {
+		device->endpoints[i].configured = 1;
+	}
+	device->configured_endpoints = 1;
 	return 0;
 }
 
@@ -1327,7 +1401,7 @@ static void usb_complete_transfer(u64 transfer_id, u64 status, u64 actual)
 	(void)bunix_ipc_call(XHCI_HANDLE_USB, &request, &reply);
 }
 
-static void log_interrupt_endpoint(const char *prefix, u64 endpoint, u64 code)
+static void log_endpoint(const char *prefix, u64 endpoint, u64 code)
 {
 	char line[128];
 	u64 offset = 0;
@@ -1342,28 +1416,28 @@ static void log_interrupt_endpoint(const char *prefix, u64 endpoint, u64 code)
 	bunix_console_log(line, offset);
 }
 
-static int xhci_interrupt_in_transfer(
+static int xhci_endpoint_transfer(
 	const struct xhci_controller *controller, struct xhci_rings *rings,
-	struct xhci_device *device, u64 buffer, u64 len, u64 *actual)
+	struct xhci_device *device, struct xhci_endpoint *endpoint, u64 buffer,
+	u64 len, u64 *actual)
 {
 	u64 phys;
 	u64 code = 0;
 
-	if (buffer == 0 || len == 0 || actual == 0 ||
-	    device->configured_interrupt == 0) {
+	if (buffer == 0 || len == 0 || actual == 0 || endpoint == 0 ||
+	    endpoint->configured == 0) {
 		return -1;
 	}
 	phys = (u64)bunix_buffer_phys(buffer);
 	if (phys == 0) {
 		return -1;
 	}
-	if (xhci_write_interrupt_trb(
-		    device, phys, len,
+	if (xhci_write_endpoint_trb(
+		    endpoint, phys, len,
 		    ((u64)XHCI_TRB_TYPE_NORMAL << 10) | XHCI_TRB_IOC) != 0 ||
-	    xhci_ring_interrupt_doorbell(controller, device) != 0 ||
+	    xhci_ring_endpoint_doorbell(controller, device, endpoint->dci) != 0 ||
 	    xhci_wait_transfer_completion(controller, rings, device, &code,
-					  XHCI_INTERRUPT_IN_DCI, len,
-					  actual) != 0) {
+					  endpoint->dci, len, actual) != 0) {
 		return -1;
 	}
 	return code == XHCI_COMPLETION_SUCCESS ||
@@ -1382,6 +1456,7 @@ static void xhci_handle_usb_transfer(const struct xhci_controller *controller,
 	u64 device_index;
 	u64 endpoint_address;
 	u64 len;
+	struct xhci_endpoint *endpoint;
 
 	if (device == 0 || usb_poll_transfer(&transfer_msg) != 0) {
 		return;
@@ -1390,23 +1465,23 @@ static void xhci_handle_usb_transfer(const struct xhci_controller *controller,
 	device_index = transfer_msg.words[2] & 0xffffffffull;
 	endpoint_address = (transfer_msg.words[2] >> 32) & 0xffu;
 	len = transfer_msg.words[3];
-	if (device_index != device->usb_index ||
-	    endpoint_address != device->interrupt_endpoint_address ||
-	    transfer_msg.cap == 0) {
+	endpoint = xhci_find_endpoint(device, endpoint_address);
+	if (device_index != device->usb_index || endpoint == 0 ||
+	    transfer_msg.cap == 0 || len > BUNIX_USB_TRANSFER_MAX) {
 		if (transfer_msg.cap != 0) {
 			bunix_handle_close(transfer_msg.cap);
 		}
 		usb_complete_transfer(transfer_id, BUNIX_USB_ERR_INVAL, 0);
 		return;
 	}
-	if (xhci_interrupt_in_transfer(controller, rings, device,
-				       transfer_msg.cap, len, &actual) == 0) {
-		log_interrupt_endpoint("xhci: interrupt transfer ok",
-				       endpoint_address, actual);
+	if (xhci_endpoint_transfer(controller, rings, device, endpoint,
+				   transfer_msg.cap, len, &actual) == 0) {
+		log_endpoint("xhci: endpoint transfer ok", endpoint_address,
+			     actual);
 		usb_complete_transfer(transfer_id, BUNIX_USB_OK, actual);
 	} else {
-		log_interrupt_endpoint("xhci: interrupt transfer failed",
-				       endpoint_address, 0);
+		log_endpoint("xhci: endpoint transfer failed", endpoint_address,
+			     0);
 		usb_complete_transfer(transfer_id, BUNIX_USB_ERR_UNSUPPORTED, 0);
 	}
 	bunix_handle_close(transfer_msg.cap);
@@ -1786,24 +1861,24 @@ int main(void)
 															usb_index);
 														active_device.usb_index =
 															usb_index;
-														if (xhci_find_interrupt_in_endpoint(
+														if (xhci_collect_supported_endpoints(
 															    config,
 															    config_actual,
 															    &active_device) == 0 &&
-														    xhci_configure_interrupt_endpoint(
+														    xhci_configure_supported_endpoints(
 															    &active_controller,
 															    &active_rings,
 															    &active_device,
 															    &code) == 0) {
-															log_interrupt_endpoint(
-																"xhci: interrupt endpoint configured",
-																active_device.interrupt_endpoint_address,
+															log_endpoint(
+																"xhci: endpoints configured",
+																active_device.endpoint_count,
 																code);
 															active = 1;
 														} else {
-															log_interrupt_endpoint(
-																"xhci: interrupt endpoint config failed",
-																active_device.interrupt_endpoint_address,
+															log_endpoint(
+																"xhci: endpoint config failed",
+																active_device.endpoint_count,
 																code);
 														}
 													} else {
