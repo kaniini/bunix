@@ -25,7 +25,7 @@ Tasks:
 - [x] Define an input-event protocol for key events that is independent of USB.
 - [x] Extend `USB0` interface-claim/open-endpoint plumbing enough for a HID
       driver to obtain an interrupt IN endpoint capability.
-- [ ] Add `usb-hid-kbd.server` that scans `USB0` devices, claims HID boot
+- [x] Add `usb-hid-kbd.server` that scans `USB0` devices, claims HID boot
       keyboard interfaces, opens interrupt IN endpoints, and parses boot
       keyboard reports.
 - [ ] Add an event path from `usb-hid-kbd.server` to the input/TTY layer without

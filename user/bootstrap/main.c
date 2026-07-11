@@ -3797,6 +3797,16 @@ int main(void)
 			{ 0, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 			  BUNIX_CAP_USB },
 		};
+		struct bunix_launch_cap usb_hid_caps[] = {
+			{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+			{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND,
+			  BUNIX_CAP_NAME },
+			{ 0, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+			  BUNIX_CAP_USB },
+			{ 0, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+			  BUNIX_CAP_INP0 },
+		};
+		u64 input = 0;
 
 		bunix_console_log(xhci_test, sizeof(xhci_test) - 1);
 		launch_claimed_module("usb-bus", BUNIX_NAMES_ROOT,
@@ -3813,6 +3823,21 @@ int main(void)
 		bunix_launch_module_with_caps(
 			"xhci", xhci_caps,
 			sizeof(xhci_caps) / sizeof(xhci_caps[0]));
+		launch_claimed_module("input", BUNIX_NAMES_ROOT,
+				      BUNIX_SERVICE_INPUT, fs_caps,
+				      sizeof(fs_caps) / sizeof(fs_caps[0]));
+		input = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+						  BUNIX_SERVICE_INPUT,
+						  BUNIX_RIGHT_SEND |
+							  BUNIX_RIGHT_DUP);
+		if (input == 0) {
+			return 1;
+		}
+		usb_hid_caps[2].handle = usb;
+		usb_hid_caps[3].handle = input;
+		bunix_launch_module_with_caps(
+			"usb-hid-kbd", usb_hid_caps,
+			sizeof(usb_hid_caps) / sizeof(usb_hid_caps[0]));
 		bunix_sleep_ns(1000000000ull);
 		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 		for (;;) {

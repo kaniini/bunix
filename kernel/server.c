@@ -36,6 +36,7 @@ static const struct server boot_servers[] = {
 	{ "usb-synth", 0 },
 	{ "xhci", 0 },
 	{ "input", 0 },
+	{ "usb-hid-kbd", 0 },
 	{ "virtio-bus", 0 },
 	{ "virtio-blk", 0 },
 	{ "virtio-net", 0 },
