@@ -607,6 +607,26 @@ Validation:
   - `QEMU_TIMEOUT=180s BUNIX_BOOT_LOGIN_WAIT=150 BUNIX_BOOT_LOGIN_CAPTURE=260
     make test-boot-alpine-stock-networking` still timed out before `login:`,
     but no longer corrupts OpenRC shell scripts.
+- A targeted trace for a later `/sbin/openrc` process showed repeated
+  `read(2)` calls against `/etc/rc.conf` returning a full 1024 bytes forever.
+  The Linux server now clamps regular-file reads to the known file size and
+  returns EOF when the open-file offset reaches that size.  This fixes a
+  general Linux/VFS compatibility bug: ordinary regular-file readers can no
+  longer loop forever past EOF just because the lower VFS layer returned a full
+  transfer.
+- With the EOF clamp in place, the targeted stock trace reaches the end of the
+  OpenRC boot process and starts the login-side task around 149 seconds, so the
+  infinite `/etc/rc.conf` read loop is no longer the current blocker.
+- Narrow guards for the EOF-clamp slice passed:
+  - `make build/modules/linux.server`
+  - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part`
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part`
+- A normal stock-networking boot probe still timed out before `login:` with
+  artifacts at
+  `build/failures/20260711T020607Z-16513/20260711T020948Z-16513`.  The next
+  debugging step should focus on why the stock boot still does not produce the
+  visible login prompt reliably after OpenRC progress improves, rather than on
+  the fixed regular-file EOF loop.
 
 Notes:
 

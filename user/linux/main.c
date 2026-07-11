@@ -8452,6 +8452,9 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	    buffer == 0) {
 		return -LINUX_EBADF;
 	}
+	if (len == 0) {
+		return 0;
+	}
 	linux_debug_read_kind_log(process, fd, len);
 
 	if (process->fds[fd].kind == LINUX_FD_CONSOLE) {
@@ -8496,6 +8499,17 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	}
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
 		return -LINUX_EISDIR;
+	}
+	if (process->fds[fd].kind == LINUX_FD_FILE) {
+		const u64 offset = linux_fd_offset(&process->fds[fd]);
+		const u64 size = linux_fd_size(&process->fds[fd]);
+
+		if (offset >= size) {
+			return 0;
+		}
+		if (len > size - offset) {
+			len = size - offset;
+		}
 	}
 
 	request.words[0] = process->fds[fd].handle;
