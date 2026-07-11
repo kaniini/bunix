@@ -1134,6 +1134,165 @@ static void linux_debug_wait_log(const struct linux_process *parent,
 	bunix_console_log(line, cursor);
 }
 
+#define LINUX_DEBUG_COUNT_MAX 1024
+#define LINUX_DEBUG_COUNT_PERIOD 100
+#define LINUX_DEBUG_COUNT_TOP 12
+
+static u64 linux_debug_message_counts[LINUX_DEBUG_COUNT_MAX];
+static u64 linux_debug_message_total;
+static u64 linux_debug_message_next = LINUX_DEBUG_COUNT_PERIOD;
+
+static const char *linux_debug_message_name(u64 type)
+{
+	switch (type) {
+	case BUNIX_LINUX_READ: return "read";
+	case BUNIX_LINUX_WRITE: return "write";
+	case BUNIX_LINUX_OPEN: return "open";
+	case BUNIX_LINUX_CLOSE: return "close";
+	case BUNIX_LINUX_FSTAT: return "fstat";
+	case BUNIX_LINUX_POLL: return "poll";
+	case BUNIX_LINUX_LSEEK: return "lseek";
+	case BUNIX_LINUX_MMAP: return "mmap";
+	case BUNIX_LINUX_RT_SIGACTION: return "rt_sigaction";
+	case BUNIX_LINUX_RT_SIGPROCMASK: return "rt_sigprocmask";
+	case BUNIX_LINUX_IOCTL: return "ioctl";
+	case BUNIX_LINUX_PIPE: return "pipe";
+	case BUNIX_LINUX_DUP: return "dup";
+	case BUNIX_LINUX_DUP2: return "dup2";
+	case BUNIX_LINUX_ALARM: return "alarm";
+	case BUNIX_LINUX_SETITIMER: return "setitimer";
+	case BUNIX_LINUX_SENDFILE: return "sendfile";
+	case BUNIX_LINUX_SOCKET: return "socket";
+	case BUNIX_LINUX_CONNECT: return "connect";
+	case BUNIX_LINUX_SENDTO: return "sendto";
+	case BUNIX_LINUX_RECVFROM: return "recvfrom";
+	case BUNIX_LINUX_RECVMSG: return "recvmsg";
+	case BUNIX_LINUX_BIND: return "bind";
+	case BUNIX_LINUX_GETSOCKNAME: return "getsockname";
+	case BUNIX_LINUX_GETPEERNAME: return "getpeername";
+	case BUNIX_LINUX_SETSOCKOPT: return "setsockopt";
+	case BUNIX_LINUX_GETSOCKOPT: return "getsockopt";
+	case BUNIX_LINUX_WAIT4: return "wait4";
+	case BUNIX_LINUX_UNAME: return "uname";
+	case BUNIX_LINUX_GETCWD: return "getcwd";
+	case BUNIX_LINUX_CHDIR: return "chdir";
+	case BUNIX_LINUX_MKDIR: return "mkdir";
+	case BUNIX_LINUX_RMDIR: return "rmdir";
+	case BUNIX_LINUX_RENAME: return "rename";
+	case BUNIX_LINUX_UNLINK: return "unlink";
+	case BUNIX_LINUX_ACCESS: return "access";
+	case BUNIX_LINUX_READLINK: return "readlink";
+	case BUNIX_LINUX_GETPID: return "getpid";
+	case BUNIX_LINUX_GETPPID: return "getppid";
+	case BUNIX_LINUX_GETGROUPS: return "getgroups";
+	case BUNIX_LINUX_STATFS: return "statfs";
+	case BUNIX_LINUX_FSTATFS: return "fstatfs";
+	case BUNIX_LINUX_FCNTL: return "fcntl";
+	case BUNIX_LINUX_GETDENTS64: return "getdents64";
+	case BUNIX_LINUX_CLOCK_GETTIME: return "clock_gettime";
+	case BUNIX_LINUX_OPENAT: return "openat";
+	case BUNIX_LINUX_NEWFSTATAT: return "newfstatat";
+	case BUNIX_LINUX_FACCESSAT: return "faccessat";
+	case BUNIX_LINUX_FACCESSAT2: return "faccessat2";
+	case BUNIX_LINUX_READLINKAT: return "readlinkat";
+	case BUNIX_LINUX_UTIMENSAT: return "utimensat";
+	case BUNIX_LINUX_PPOLL: return "ppoll";
+	case BUNIX_LINUX_DUP3: return "dup3";
+	case BUNIX_LINUX_PIPE2: return "pipe2";
+	case BUNIX_LINUX_STATX: return "statx";
+	case BUNIX_LINUX_GETRANDOM: return "getrandom";
+	case BUNIX_LINUX_CLOSE_RANGE: return "close_range";
+	case BUNIX_LINUX_EXIT_GROUP: return "exit_group";
+	case BUNIX_LINUX_REGISTER_PROCESS: return "register_process";
+	case BUNIX_LINUX_FORK_PROCESS: return "fork_process";
+	case BUNIX_LINUX_EXEC_PROCESS: return "exec_process";
+	case BUNIX_LINUX_EXEC_INIT: return "exec_init";
+	case BUNIX_LINUX_EXEC_PREPARE: return "exec_prepare";
+	case BUNIX_LINUX_ATTACH_SESSION: return "attach_session";
+	case BUNIX_LINUX_SIGNAL_PENDING: return "signal_pending";
+	case BUNIX_LINUX_SIGNAL_DEQUEUE: return "signal_dequeue";
+	case BUNIX_LINUX_TASK_FAULT: return "task_fault";
+	case BUNIX_LINUX_TTY_INPUT_BUFFER: return "tty_input_buffer";
+	case BUNIX_LINUX_GRANT_TTY_INPUT_TASK: return "grant_tty_input_task";
+	default: return 0;
+	}
+}
+
+static void linux_debug_append_message_name(char *line, u64 line_size,
+					    u64 *cursor, u64 type)
+{
+	const char *name = linux_debug_message_name(type);
+
+	if (name != 0) {
+		append_text(line, line_size, cursor, name);
+		return;
+	}
+	append_text(line, line_size, cursor, "type");
+	append_dec(line, line_size, cursor, type);
+}
+
+static void linux_debug_count_message(u64 type)
+{
+	static int enabled = -1;
+	u64 used[LINUX_DEBUG_COUNT_TOP];
+	char line[480];
+	u64 cursor = 0;
+
+	if (enabled < 0) {
+		enabled = bunix_cmdline_has("debug-linux-counts") > 0;
+	}
+	if (!enabled) {
+		return;
+	}
+
+	linux_debug_message_total++;
+	if (type < LINUX_DEBUG_COUNT_MAX) {
+		linux_debug_message_counts[type]++;
+	}
+	if (linux_debug_message_total < linux_debug_message_next) {
+		return;
+	}
+	linux_debug_message_next += LINUX_DEBUG_COUNT_PERIOD;
+
+	for (u64 i = 0; i < LINUX_DEBUG_COUNT_TOP; i++) {
+		used[i] = (u64)-1;
+	}
+
+	append_text(line, sizeof(line), &cursor, "linux-counts: total=");
+	append_dec(line, sizeof(line), &cursor, linux_debug_message_total);
+	for (u64 rank = 0; rank < LINUX_DEBUG_COUNT_TOP; rank++) {
+		u64 best_type = (u64)-1;
+		u64 best_count = 0;
+
+		for (u64 i = 0; i < LINUX_DEBUG_COUNT_MAX; i++) {
+			int already_used = 0;
+
+			for (u64 j = 0; j < rank; j++) {
+				if (used[j] == i) {
+					already_used = 1;
+					break;
+				}
+			}
+			if (!already_used &&
+			    linux_debug_message_counts[i] > best_count) {
+				best_type = i;
+				best_count = linux_debug_message_counts[i];
+			}
+		}
+		if (best_count == 0) {
+			break;
+		}
+		used[rank] = best_type;
+		append_char(line, sizeof(line), &cursor, ' ');
+		linux_debug_append_message_name(line, sizeof(line), &cursor,
+						best_type);
+		append_char(line, sizeof(line), &cursor, '=');
+		append_dec(line, sizeof(line), &cursor, best_count);
+	}
+	append_char(line, sizeof(line), &cursor, '\n');
+	bunix_console_log(line, cursor);
+}
+
 static void string_copy(char *dst, const char *src)
 {
 	u64 i = 0;
@@ -8693,6 +8852,7 @@ int main(void)
 			continue;
 		}
 
+		linux_debug_count_message(message.type);
 		reply.type = message.type;
 		if (message.type == BUNIX_LINUX_GRANT_TTY_INPUT_TASK) {
 			if (!management) {

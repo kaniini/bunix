@@ -456,6 +456,34 @@ Validation:
   test-boot-alpine-stock-networking` is honored.  The target still defaults to
   the previous 180 second timeout, but longer OpenRC probes can now set both
   `QEMU_TIMEOUT` and `BUNIX_BOOT_LOGIN_WAIT` consistently.
+- Added low-noise aggregate Linux instrumentation for the stock OpenRC path:
+  - `debug-linux-counts` counts Linux-server message types and can report the
+    server-side RPC/message mix without enabling per-call logs.
+  - `debug-linux-syscall-counts` counts all x86_64 Linux syscalls in the
+    kernel trampoline, including scalar syscalls that never become
+    `linux.server` RPCs.
+- A bounded stock-networking probe with `debug-linux-syscall-counts` still
+  timed out before `login:` at
+  `build/failures/20260711T002727Z-12183/20260711T002848Z-12183`, but it
+  produced useful aggregate data without full strace noise.  By 5,000 Linux
+  syscalls, the top calls were `rt_sigprocmask=921`, `read=766`,
+  `mmap=446`, `close=380`, `fcntl=332`, `ppoll=323`, `munmap=289`,
+  `dup2=203`, `open=199`, and `stat=153`.  By 6,000 syscalls the shape was
+  the same: `rt_sigprocmask=1165`, `read=942`, `mmap=495`, `close=460`,
+  `ppoll=418`, `fcntl=414`, `munmap=324`, `dup2=264`, `open=215`, and
+  `stat=185`.
+- This shifts the next performance target away from only VFS metadata lookup:
+  OpenRC is spending heavily on signal-mask churn, byte-oriented reads,
+  `ppoll`, descriptor manipulation, and mmap/munmap activity around shell
+  helper execution.  Future fixes should measure those paths directly before
+  adding more path caches.
+- Validation for the syscall-count instrumentation:
+  - `make`
+  - `make build/modules/linux.server`
+  - `BUNIX_SHELL_PART=linux-signaltest make test-shell-part` passed in 64
+    seconds.
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 108
+    seconds.
 
 Notes:
 

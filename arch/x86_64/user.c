@@ -3826,6 +3826,68 @@ static const char *linux_syscall_name(u64 number)
 	}
 }
 
+#define LINUX_SYSCALL_COUNT_MAX 512
+#define LINUX_SYSCALL_COUNT_PERIOD 1000
+#define LINUX_SYSCALL_COUNT_TOP 10
+
+static u64 linux_syscall_counts[LINUX_SYSCALL_COUNT_MAX];
+static u64 linux_syscall_count_total;
+static u64 linux_syscall_count_next = LINUX_SYSCALL_COUNT_PERIOD;
+
+static void linux_syscall_count_log(const struct arch_syscall_frame *frame)
+{
+	static int enabled = -1;
+	u64 used[LINUX_SYSCALL_COUNT_TOP];
+
+	if (enabled < 0) {
+		enabled = kernel_cmdline_has("debug-linux-syscall-counts") != 0;
+	}
+	if (!enabled) {
+		return;
+	}
+
+	linux_syscall_count_total++;
+	if (frame->number < LINUX_SYSCALL_COUNT_MAX) {
+		linux_syscall_counts[frame->number]++;
+	}
+	if (linux_syscall_count_total < linux_syscall_count_next) {
+		return;
+	}
+	linux_syscall_count_next += LINUX_SYSCALL_COUNT_PERIOD;
+
+	for (u64 i = 0; i < LINUX_SYSCALL_COUNT_TOP; i++) {
+		used[i] = (u64)-1;
+	}
+
+	for (u64 rank = 0; rank < LINUX_SYSCALL_COUNT_TOP; rank++) {
+		u64 best_nr = (u64)-1;
+		u64 best_count = 0;
+
+		for (u64 nr = 0; nr < LINUX_SYSCALL_COUNT_MAX; nr++) {
+			int already_used = 0;
+
+			for (u64 j = 0; j < rank; j++) {
+				if (used[j] == nr) {
+					already_used = 1;
+					break;
+				}
+			}
+			if (!already_used && linux_syscall_counts[nr] > best_count) {
+				best_nr = nr;
+				best_count = linux_syscall_counts[nr];
+			}
+		}
+		if (best_count == 0) {
+			break;
+		}
+		used[rank] = best_nr;
+		console_printf("linux-syscall-counts: total=%u rank=%u nr=%u syscall=%s count=%u\n",
+			       (u32)linux_syscall_count_total, (u32)(rank + 1),
+			       (u32)best_nr, linux_syscall_name(best_nr),
+			       (u32)best_count);
+	}
+}
+
 enum linux_strace_mode {
 	LINUX_STRACE_LEGACY = 0,
 	LINUX_STRACE_STRUCTURED,
@@ -5528,6 +5590,7 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			       (const void *)frame->arg2,
 			       (const void *)frame->arg3);
 	}
+	linux_syscall_count_log(frame);
 	linux_strace_enter(frame);
 	result = linux_syscall_handle(frame);
 	linux_strace_log(frame, result);
