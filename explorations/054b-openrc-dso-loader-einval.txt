@@ -1,0 +1,58 @@
+Fix OpenRC DSO loading under generated Alpine.
+
+Status:
+
+- Planned as a prerequisite for completing `054-openrc-runtime-state.txt`.
+- This is not a `/run/openrc` runtime-state slice.  Keep it focused on why
+  musl's dynamic loader rejects OpenRC's shared libraries.
+
+Problem:
+
+- The generated Alpine image reaches login, but `/sbin/openrc --help` fails.
+- Musl reports:
+  - `Error loading shared library librc.so.1: Invalid argument (needed by /sbin/openrc)`
+  - `Error loading shared library libeinfo.so.1: Invalid argument (needed by /sbin/openrc)`
+- The resulting unresolved OpenRC symbols make the boot probe fail before it
+  can be used as strong evidence for the runtime-state behavior in
+  exploration 054.
+
+Known evidence:
+
+- Failure artifact:
+  `build/failures/20260711T223248Z-14416/20260711T223435Z-14416`
+- The same generated Alpine boot reached login and passed `id`, proc pipe,
+  dmesg, and statid smoke checks before failing at `/sbin/openrc --help`.
+- Earlier manual checks showed `/usr/lib/librc.so.1` and
+  `/usr/lib/libeinfo.so.1` exist in the generated image and are readable.
+- Do not inspect apk caches for this.  Use the generated image, Bunix
+  artifacts, musl loader source, and focused reproducers.
+
+Intended outcome:
+
+- `/sbin/openrc --help` succeeds in the generated Alpine image.
+- The fix is general Linux/VFS/exec/mmap/stat/open-path correctness, not an
+  OpenRC-specific path hack.
+- Exploration 054 can resume generated OpenRC verification after this passes.
+
+Tasks:
+
+- [ ] Build a focused static test that mimics musl's DSO path search for
+      `librc.so.1` and `libeinfo.so.1` inside the generated Alpine rootfs:
+      `/lib`, `/usr/local/lib`, then `/usr/lib`, using the same open flags.
+- [ ] Verify the test reports the expected `ENOENT` misses and successful
+      `/usr/lib` opens, with sane `fstat()` metadata and readable ELF headers.
+- [ ] If static path/open/stat/read succeeds, add a focused dynamic-loader
+      reproducer using `/lib/ld-musl-x86_64.so.1 --list /sbin/openrc` or an
+      equivalent bounded command.
+- [ ] Trace the first Bunix/Linux API returning `EINVAL` in that focused
+      reproducer.
+- [ ] Fix the underlying compatibility bug without OpenRC-specific handling.
+- [ ] Verify `/sbin/openrc --help` succeeds in generated Alpine.
+- [ ] Re-run the generated Alpine probe required by exploration 054.
+
+Completion criteria:
+
+- A focused regression test covers the failing loader behavior.
+- `/sbin/openrc --help` succeeds under `ROOTFS_FLAVOR=alpine-squashfs`.
+- The generated Alpine boot probe no longer fails at the OpenRC DSO loader
+  step.

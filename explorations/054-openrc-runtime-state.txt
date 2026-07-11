@@ -92,6 +92,10 @@ Completion criteria:
 
 Follow-up:
 
+- Resolve `054b-openrc-dso-loader-einval.txt` before treating generated
+  Alpine OpenRC boot probes as evidence for or against this runtime-state
+  slice.  Current generated Alpine reaches login, but `/sbin/openrc --help`
+  fails because the dynamic loader rejects OpenRC DSOs with `EINVAL`.
 - Continue with `080-stock-alpine-networking-service.txt` after this slice.
   That exploration should focus on restoring Alpine's stock networking
   service, not rediscovering `/run/openrc` runtime-state correctness.
@@ -125,6 +129,17 @@ Implementation Notes:
   - `make build/modules/openrctest.user`
   - `git diff --check`
   - `BUNIX_CMD=/bin/openrctest make test-command`
+- Bounded generated Alpine probe:
+  - `ROOTFS_FLAVOR=alpine-squashfs KERNEL_CMDLINE='log=info debug-linux-openrc-state' BUNIX_BOOT_LOGIN_WAIT=180 BUNIX_BOOT_LOGIN_CAPTURE=260 make test-boot`
+  - Artifact:
+    `build/failures/20260711T223248Z-14416/20260711T223435Z-14416`
+  - Result: login was reached and the `id`, proc pipe, dmesg, and statid
+    smoke checks passed.
+  - No `/run/openrc`, `fopen '/run/openrc`, `failed to load deptree`, or
+    `openrc-state` diagnostics appeared in the artifact.
+  - The probe failed at `/sbin/openrc --help` because musl reported
+    `Error loading shared library librc.so.1: Invalid argument` and
+    `Error loading shared library libeinfo.so.1: Invalid argument`.
 - The expanded guard still passes, so the remaining bug is not reproduced by
   OpenRC-style cached service-dir FD churn plus the clock-skew runtime-state
   path.  The next step should add focused runtime diagnostics for failed
