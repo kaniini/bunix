@@ -376,7 +376,7 @@ int main(void)
 				break;
 			}
 			reply.words[0] = 0;
-			reply.words[1] = entries[message.words[1]].device |
+			reply.words[1] = (message.words[1] + 1) |
 					 ((u64)BUNIX_VFS_TYPE_CHARACTER << 32);
 			reply.words[2] = str_len(entries[message.words[1]].name);
 			reply.words[3] = reply.words[2];

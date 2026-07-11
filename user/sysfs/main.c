@@ -346,7 +346,7 @@ int main(void)
 				break;
 			}
 			reply.words[0] = 0;
-			reply.words[1] = handle_for_node(node) |
+			reply.words[1] = (message.words[1] + 1) |
 					 ((u64)node->type << 32);
 			reply.words[2] = str_len(node->name);
 			reply.words[3] = reply.words[2];

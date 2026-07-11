@@ -952,12 +952,17 @@ static int file_move_subtree_to_path(struct tmpfs_file *file,
 	    str_len(new_path) >= TMPFS_MAX_PATH) {
 		return -1;
 	}
-	for (struct tmpfs_file *candidate = files_head; candidate != 0;
+	u64 steps = 0;
+	for (struct tmpfs_file *candidate = files_head;
+	     candidate != 0 && steps++ < TMPFS_TREE_WALK_LIMIT;
 	     candidate = candidate->next) {
 
 		if (file_in_renamed_subtree(candidate, file->path)) {
 			count++;
 		}
+	}
+	if (steps >= TMPFS_TREE_WALK_LIMIT) {
+		return -1;
 	}
 	if (count == 0) {
 		return -1;
@@ -969,12 +974,17 @@ static int file_move_subtree_to_path(struct tmpfs_file *file,
 		bunix_free(new_paths);
 		return -1;
 	}
-	for (struct tmpfs_file *candidate = files_head; candidate != 0;
+	steps = 0;
+	for (struct tmpfs_file *candidate = files_head;
+	     candidate != 0 && steps++ < TMPFS_TREE_WALK_LIMIT;
 	     candidate = candidate->next) {
 
 		if (file_in_renamed_subtree(candidate, file->path)) {
 			moved[index++] = candidate;
 		}
+	}
+	if (steps >= TMPFS_TREE_WALK_LIMIT) {
+		goto out;
 	}
 	for (u64 i = 0; i < count; i++) {
 		char path[TMPFS_MAX_PATH];
@@ -1871,7 +1881,10 @@ int main(void)
 			}
 			reply.words[0] = BUNIX_VFS_ERR_NOENT;
 			u64 current = 0;
-			for (file = files_head; file != 0; file = file->next) {
+			u64 steps = 0;
+			for (file = files_head;
+			     file != 0 && steps++ < TMPFS_TREE_WALK_LIMIT;
+			     file = file->next) {
 				if (!file_is_child_of(file, open->path)) {
 					continue;
 				}
@@ -1901,6 +1914,9 @@ int main(void)
 					break;
 				}
 				current++;
+			}
+			if (file != 0 && steps >= TMPFS_TREE_WALK_LIMIT) {
+				reply.words[0] = (u64)-1;
 			}
 			break;
 		case BUNIX_VFS_CLOSE:

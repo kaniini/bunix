@@ -259,6 +259,43 @@ Validation:
   trace is still one OpenRC process repeatedly issuing `faccessat()` and
   `openat()` against service/provider names such as `devfs`, `bunix-dev`,
   `hwclock`, `osclock`, `swclock`, `dmesg`, and `modloop`.
+- Added defensive directory-iteration hardening while narrowing the OpenRC
+  stall:
+  - tmpfs live-list directory scans and subtree rename collection are bounded
+    by `TMPFS_TREE_WALK_LIMIT` so a corrupt live list fails closed instead of
+    wedging a server.
+  - unionfs merged-directory scans now have an explicit readdir iteration
+    limit and propagate limit errors instead of treating them as successful
+    entries.
+  - Linux `getdents64` now rejects VFS replies that do not advance the
+    directory offset.
+  - devfs and sysfs now return `index + 1` in the low VFS readdir result word,
+    matching the VFS cookie contract used by tmpfs/procfs/squashfs instead of
+    returning device/node handles as directory offsets.
+- Narrow validation for the readdir hardening passed:
+  - `make build/modules/tmpfs.server build/modules/unionfs.server build/modules/linux.server`
+  - `make build/modules/devfs.server build/modules/sysfs.server`
+  - `BUNIX_CMD=/bin/getdentstest make test-command`
+  - `BUNIX_CMD=/bin/fcntllocktest make test-command`
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part`
+- A focused stock OpenRC probe with task 25 syscall/path tracing still did not
+  reach `login:`, but it proved movement past the previous procfs-stage
+  directory read.  In artifact
+  `build/failures/20260711T042240Z-866/20260711T042651Z-866`, the
+  `/run/openrc/scheduled` scan for `procfs` returns from `getdents64` with
+  zero bytes at 215.79s, then OpenRC starts the next `/etc/init.d/procfs`
+  wrapper.
+- The same class of stall was later observed while scanning for `sysfs`.
+  Added task-gated Linux-server `getdents64` fd diagnostics under the existing
+  `debug-linux-path-taskNNN` controls and a VFS `debug-vfs-readdir` forwarding
+  trace.  The focused diagnostic artifact
+  `build/failures/20260711T043425Z-5279/20260711T043836Z-5279` shows fd 17 is
+  `/run/openrc/scheduled`, local VFS handle 433, offset 2.  A follow-up VFS
+  trace at `build/failures/20260711T044116Z-8369/20260711T044516Z-8369`
+  shows `/run/openrc/scheduled` forwarding to service 10 with remote handle 52
+  and returning `BUNIX_VFS_ERR_NOENT` for index 0 in the observed sample.
+  This narrows the next blocker to the remaining OpenRC provider-state scan or
+  a later repeated readdir path, not the earlier procfs `getdents64` call.
 - Added a conservative Linux-server `faccessat()` result cache keyed by process,
   VFS base handle, path, mode, and flags.  The cache is invalidated by a global
   VFS mutation epoch bumped on create, remove, link, rename, chmod, chown,

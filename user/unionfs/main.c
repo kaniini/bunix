@@ -6,6 +6,7 @@
 
 enum {
 	UNIONFS_MAX_PATH = 4096,
+	UNIONFS_READDIR_LIMIT = 8192,
 	UNIONFS_OPEN_LOWER = 1,
 	UNIONFS_OPEN_UPPER = 2,
 	UNIONFS_OPEN_DIR = 3,
@@ -1731,7 +1732,7 @@ static int read_upper_dir(struct unionfs_open *open,
 	if (open->remote_handle == 0) {
 		return 0;
 	}
-	for (;;) {
+	for (u64 steps = 0; steps < UNIONFS_READDIR_LIMIT; steps++) {
 		char name[UNIONFS_MAX_PATH];
 		u64 type = 0;
 		const int result = remote_readdir_name(open->service,
@@ -1757,6 +1758,8 @@ static int read_upper_dir(struct unionfs_open *open,
 		remote_index++;
 		visible_index++;
 	}
+	reply->words[0] = (u64)-1;
+	return -1;
 }
 
 static int read_lower_dir(struct unionfs_open *open,
@@ -1770,7 +1773,7 @@ static int read_lower_dir(struct unionfs_open *open,
 	if (open->lower_handle == 0) {
 		return 0;
 	}
-	for (;;) {
+	for (u64 steps = 0; steps < UNIONFS_READDIR_LIMIT; steps++) {
 		char name[UNIONFS_MAX_PATH];
 		u64 type = 0;
 		const int result = remote_readdir_name(open->lower_layer_service,
@@ -1798,6 +1801,8 @@ static int read_lower_dir(struct unionfs_open *open,
 		remote_index++;
 		visible_index++;
 	}
+	reply->words[0] = (u64)-1;
+	return -1;
 }
 
 static void readdir_merged(struct unionfs_open *open, struct bunix_msg *message,
@@ -1821,18 +1826,32 @@ static void readdir_merged(struct unionfs_open *open, struct bunix_msg *message,
 		reply->words[0] = (u64)-1;
 		return;
 	}
-	if (read_upper_dir(open, message, (u64)scratch_buffer, index, reply,
-			   &upper_count)) {
+	const int upper_result =
+		read_upper_dir(open, message, (u64)scratch_buffer, index, reply,
+			       &upper_count);
+	if (upper_result < 0) {
 		bunix_handle_close((u64)scratch_buffer);
 		return;
 	}
-	if (index >= upper_count &&
-	    read_lower_dir(open, message, (u64)scratch_buffer,
-			   index - upper_count, reply)) {
-		reply->words[1] = (index + 1) |
-				  (reply->words[1] & 0xffffffff00000000UL);
+	if (upper_result > 0) {
 		bunix_handle_close((u64)scratch_buffer);
 		return;
+	}
+	if (index >= upper_count) {
+		const int lower_result =
+			read_lower_dir(open, message, (u64)scratch_buffer,
+				       index - upper_count, reply);
+		if (lower_result < 0) {
+			bunix_handle_close((u64)scratch_buffer);
+			return;
+		}
+		if (lower_result > 0) {
+			reply->words[1] =
+				(index + 1) |
+				(reply->words[1] & 0xffffffff00000000UL);
+			bunix_handle_close((u64)scratch_buffer);
+			return;
+		}
 	}
 	bunix_handle_close((u64)scratch_buffer);
 	reply->words[0] = BUNIX_VFS_ERR_NOENT;

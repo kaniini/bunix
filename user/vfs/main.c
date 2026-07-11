@@ -473,6 +473,56 @@ static int append_decimal(char *out, u64 *pos, u64 value)
 	return 0;
 }
 
+static int append_text(char *out, u64 *pos, const char *text)
+{
+	if (out == 0 || pos == 0 || text == 0) {
+		return -1;
+	}
+	for (u64 i = 0; text[i] != '\0'; i++) {
+		if (*pos + 1 >= VFS_MAX_PATH) {
+			return -1;
+		}
+		out[(*pos)++] = text[i];
+	}
+	return 0;
+}
+
+static void debug_readdir_forward(const struct vfs_open *open,
+				  const struct bunix_msg *message,
+				  const char *phase, u64 result)
+{
+	char line[VFS_MAX_PATH];
+	u64 pos = 0;
+
+	if (bunix_cmdline_has("debug-vfs-readdir") <= 0) {
+		return;
+	}
+	if (append_text(line, &pos, "vfs-readdir: ") != 0 ||
+	    append_text(line, &pos, phase) != 0 ||
+	    append_text(line, &pos, " owner=") != 0 ||
+	    append_decimal(line, &pos, open != 0 ? open->owner : 0) != 0 ||
+	    append_text(line, &pos, " service=") != 0 ||
+	    append_decimal(line, &pos, open != 0 ? open->service : 0) != 0 ||
+	    append_text(line, &pos, " local=") != 0 ||
+	    append_decimal(line, &pos, open != 0 ? open->id : 0) != 0 ||
+	    append_text(line, &pos, " remote=") != 0 ||
+	    append_decimal(line, &pos, open != 0 ? open->remote_handle : 0) != 0 ||
+	    append_text(line, &pos, " index=") != 0 ||
+	    append_decimal(line, &pos, message != 0 ? message->words[1] : 0) != 0 ||
+	    append_text(line, &pos, " result=") != 0 ||
+	    append_decimal(line, &pos, result) != 0 ||
+	    append_text(line, &pos, " path=") != 0 ||
+	    append_text(line, &pos,
+			open != 0 && open->path != 0 ? open->path : "") != 0) {
+		return;
+	}
+	if (pos + 1 >= sizeof(line)) {
+		return;
+	}
+	line[pos++] = '\n';
+	bunix_console_log(line, pos);
+}
+
 static int resolved_cache_key(char *key, u64 task, const char *path)
 {
 	u64 pos = 0;
@@ -1117,10 +1167,12 @@ static int forward_remote_handle(struct vfs_open *open,
 		forwarded.words[3] = scratch_cap;
 		forwarded.cap = (u64)buffer;
 		forwarded.cap_rights = BUNIX_RIGHT_SEND;
+		debug_readdir_forward(open, message, "enter", 0);
 		if (bunix_ipc_call(open->service, &forwarded, reply) != 0) {
 			reply->words[0] = (u64)-1;
 			result = -1;
 		}
+		debug_readdir_forward(open, message, "exit", reply->words[0]);
 		if (result == 0 && reply->words[0] == 0) {
 			const u64 written = reply->words[3];
 

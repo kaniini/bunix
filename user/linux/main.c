@@ -425,6 +425,7 @@ static void linux_close_process_fds(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
 static int linux_signal_process(struct linux_process *process, u64 signal);
+static u64 linux_fd_offset(const struct linux_fd *fd);
 static u64 linux_fd_size(const struct linux_fd *fd);
 static int linux_tty_read_queue_push(struct linux_tty *tty, char c);
 static void linux_tty_wake_reader(struct linux_tty *tty);
@@ -1098,6 +1099,72 @@ static void linux_debug_path_log(const struct linux_process *process,
 	append_text(line, sizeof(line), &cursor, " path=");
 	if (path != 0) {
 		append_text(line, sizeof(line), &cursor, path);
+	}
+	append_char(line, sizeof(line), &cursor, '\n');
+	bunix_console_log(line, cursor);
+}
+
+static int linux_debug_paths_enabled_for_task(const struct linux_process *process)
+{
+	char task_token[40];
+	u64 token_cursor = 0;
+
+	if (bunix_cmdline_has("debug-linux-paths") > 0) {
+		return 1;
+	}
+	if (bunix_cmdline_has("debug-linux-paths-late") > 0 &&
+	    process != 0 && process->bunix_task >= 140) {
+		return 1;
+	}
+	append_text(task_token, sizeof(task_token), &token_cursor,
+		    "debug-linux-path-task");
+	append_dec(task_token, sizeof(task_token), &token_cursor,
+		   process != 0 ? process->bunix_task : 0);
+	if (token_cursor >= sizeof(task_token)) {
+		return 0;
+	}
+	task_token[token_cursor] = '\0';
+	return bunix_cmdline_has(task_token) > 0;
+}
+
+static void linux_debug_getdents_log(const struct linux_process *process,
+				     u64 fd, const char *phase, u64 index,
+				     long result)
+{
+	char line[384];
+	u64 cursor = 0;
+	const struct linux_fd *linux_fd = 0;
+
+	if (!linux_debug_paths_enabled_for_task(process)) {
+		return;
+	}
+	if (process != 0 && fd < process->fd_capacity) {
+		linux_fd = &process->fds[fd];
+	}
+	append_text(line, sizeof(line), &cursor, "linux-server: getdents ");
+	append_text(line, sizeof(line), &cursor, phase);
+	append_text(line, sizeof(line), &cursor, " pid=");
+	append_dec(line, sizeof(line), &cursor, process != 0 ? process->pid : 0);
+	append_text(line, sizeof(line), &cursor, " task=");
+	append_dec(line, sizeof(line), &cursor,
+		   process != 0 ? process->bunix_task : 0);
+	append_text(line, sizeof(line), &cursor, " fd=");
+	append_dec(line, sizeof(line), &cursor, fd);
+	append_text(line, sizeof(line), &cursor, " kind=");
+	append_dec(line, sizeof(line), &cursor, linux_fd != 0 ? linux_fd->kind : 0);
+	append_text(line, sizeof(line), &cursor, " handle=");
+	append_dec(line, sizeof(line), &cursor,
+		   linux_fd != 0 ? linux_fd->handle : 0);
+	append_text(line, sizeof(line), &cursor, " offset=");
+	append_dec(line, sizeof(line), &cursor,
+		   linux_fd != 0 ? linux_fd_offset(linux_fd) : 0);
+	append_text(line, sizeof(line), &cursor, " index=");
+	append_dec(line, sizeof(line), &cursor, index);
+	append_text(line, sizeof(line), &cursor, " result=");
+	append_long(line, sizeof(line), &cursor, result);
+	append_text(line, sizeof(line), &cursor, " path=");
+	if (linux_fd != 0 && linux_fd->path[0] != '\0') {
+		append_text(line, sizeof(line), &cursor, linux_fd->path);
 	}
 	append_char(line, sizeof(line), &cursor, '\n');
 	bunix_console_log(line, cursor);
@@ -6903,6 +6970,7 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 		bunix_handle_close((u64)name_buffer);
 		return -LINUX_ENOMEM;
 	}
+	linux_debug_getdents_log(process, fd, "start", 0, 0);
 
 	while (written < out_len) {
 		char name[LINUX_MAX_PATH];
@@ -6927,12 +6995,18 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 			type = BUNIX_VFS_TYPE_DIRECTORY;
 			next_offset = 2;
 		} else {
+			const u64 read_index = current_offset - 2;
+
+			linux_debug_getdents_log(process, fd, "vfs-enter",
+						 read_index, 0);
 			const long result =
 				linux_readdir_name(process->fds[fd].handle,
-						   current_offset - 2,
+						   read_index,
 						   (u64)name_buffer,
 						   name, sizeof(name),
 						   &type, &next_offset);
+			linux_debug_getdents_log(process, fd, "vfs-exit",
+						 read_index, result);
 
 			if (result == -(long)LINUX_ENOENT) {
 				break;
@@ -6941,6 +7015,11 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 				bunix_handle_close((u64)name_buffer);
 				bunix_free(out);
 				return result;
+			}
+			if (next_offset <= current_offset) {
+				bunix_handle_close((u64)name_buffer);
+				bunix_free(out);
+				return -LINUX_EIO;
 			}
 		}
 
