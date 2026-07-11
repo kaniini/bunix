@@ -146,3 +146,11 @@ Implementation Notes:
   useful evidence.  Do not let that detour expand this slice unless it is
   reduced to a focused reproducer that directly overlaps the runtime-state
   bug; otherwise split it into a follow-up exploration.
+- `/bin/openrctest` now also covers the OpenRC generator phase by running a
+  `popen()`/`pclose()` command immediately before each `deptree` rewrite.
+  This exercises fork/exec/pipe cleanup and `O_CLOEXEC` cached directory FDs
+  before the `do_fopenat()` cache write path.
+- Validation:
+  - `make build/modules/openrctest.user`
+  - `git diff --check`
+  - `BUNIX_CMD=/bin/openrctest make test-command`

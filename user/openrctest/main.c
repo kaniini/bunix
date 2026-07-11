@@ -128,6 +128,35 @@ static int write_with_fdopen_at(int dirfd, const char *path, const char *text)
 	return 0;
 }
 
+static int run_generator_probe(void)
+{
+	char line[128];
+	FILE *file = popen("printf \"depinfo_2_service='postpopen'\\n\"", "r");
+	int status;
+
+	if (file == NULL) {
+		fprintf(stderr, "popen generator: %s\n", strerror(errno));
+		return -1;
+	}
+	if (fgets(line, sizeof(line), file) == NULL) {
+		fprintf(stderr, "popen generator read: %s\n", strerror(errno));
+		pclose(file);
+		return -1;
+	}
+	if (strcmp(line, "depinfo_2_service='postpopen'\n") != 0) {
+		fprintf(stderr, "popen generator mismatch: %s\n", line);
+		pclose(file);
+		return -1;
+	}
+	status = pclose(file);
+	if (status != 0) {
+		fprintf(stderr, "pclose generator status=%d errno=%s\n",
+			status, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
 static int read_lines_with_fdopen_at(int dirfd, const char *path)
 {
 	char line[128];
@@ -213,6 +242,7 @@ int main(void)
 
 	for (unsigned int i = 0; i < 8; i++) {
 		if (probe_write_permission_at(dirfd, deptree) != 0 ||
+		    run_generator_probe() != 0 ||
 		    write_with_fdopen_at(
 			    dirfd, deptree,
 			    "depinfo_0_service='networking'\n"
