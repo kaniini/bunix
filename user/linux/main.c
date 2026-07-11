@@ -211,6 +211,7 @@ enum {
 	LINUX_SOCKET_NET_RAW = 6,
 	LINUX_SOCKET_NET_PACKET = 7,
 	LINUX_SOCKET_NETLINK_ROUTE = 8,
+	LINUX_SOCKET_UNIX_DGRAM = 9,
 	LINUX_FD_NETLINK_ACK_PENDING = 2,
 	LINUX_FD_NETLINK_DONE_PENDING = 4,
 	LINUX_NETLINK_ROUTE = 0,
@@ -8022,6 +8023,7 @@ static long linux_setsockopt(struct linux_process *process, u64 fd, u64 level,
 	    process->fds[fd].handle != LINUX_SOCKET_NET_PACKET &&
 	    process->fds[fd].handle != LINUX_SOCKET_NETLINK_ROUTE &&
 	    process->fds[fd].handle != LINUX_SOCKET_UNIX_STREAM &&
+	    process->fds[fd].handle != LINUX_SOCKET_UNIX_DGRAM &&
 	    process->fds[fd].handle != LINUX_SOCKET_UTMPD) {
 		return -LINUX_EINVAL;
 	}
@@ -8043,7 +8045,8 @@ static long linux_getsockopt(struct linux_process *process, u64 fd, u64 level,
 		return -LINUX_ENOTSOCK;
 	}
 	if (level == LINUX_SOL_SOCKET && optname == LINUX_SO_TYPE) {
-		if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP) {
+		if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
+		    process->fds[fd].handle == LINUX_SOCKET_UNIX_DGRAM) {
 			value = LINUX_SOCK_DGRAM;
 		} else if (process->fds[fd].handle == LINUX_SOCKET_NET_PACKET) {
 			value = LINUX_SOCK_DGRAM;
@@ -8090,11 +8093,15 @@ static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 		return -LINUX_EAFNOSUPPORT;
 	}
 	if (domain == LINUX_AF_UNIX &&
-	    (base_type != LINUX_SOCK_STREAM || protocol != 0)) {
+	    ((base_type != LINUX_SOCK_STREAM &&
+	      base_type != LINUX_SOCK_DGRAM) ||
+	     protocol != 0)) {
 		return -LINUX_EPROTONOSUPPORT;
 	}
 	if (domain == LINUX_AF_UNIX) {
 		fd = alloc_fd(process, LINUX_FD_SOCKET,
+			      base_type == LINUX_SOCK_DGRAM ?
+			      LINUX_SOCKET_UNIX_DGRAM :
 			      LINUX_SOCKET_UNIX_STREAM, 0);
 		if (fd >= 0 && (type & LINUX_SOCK_CLOEXEC) != 0) {
 			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
@@ -8352,6 +8359,7 @@ static long linux_connect(struct linux_process *process, u64 fd, u64 addr_len,
 				      &reply) == 0 ? 0 : -LINUX_ECONNREFUSED;
 	}
 	if (process->fds[fd].handle != LINUX_SOCKET_UNIX_STREAM &&
+	    process->fds[fd].handle != LINUX_SOCKET_UNIX_DGRAM &&
 	    process->fds[fd].handle != LINUX_SOCKET_UTMPD) {
 		return -LINUX_EAFNOSUPPORT;
 	}
@@ -8368,6 +8376,9 @@ static long linux_connect(struct linux_process *process, u64 fd, u64 addr_len,
 	if (!is_utmps_socket_path(path)) {
 		return -LINUX_ENOENT;
 	}
+	if (process->fds[fd].handle == LINUX_SOCKET_UNIX_DGRAM) {
+		return -LINUX_EPROTONOSUPPORT;
+	}
 	process->fds[fd].handle = LINUX_SOCKET_UTMPD;
 	process->fds[fd].offset = 0;
 	process->fds[fd].size = LINUX_UTMPS_NONE;
@@ -8377,13 +8388,48 @@ static long linux_connect(struct linux_process *process, u64 fd, u64 addr_len,
 static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 			 u64 flags, u64 addr_len, u64 buffer)
 {
+	char addr[128];
 	char command;
+	char path[LINUX_MAX_PATH];
 	struct bunix_msg reply;
+	u64 path_len = 0;
 	u64 op;
+	unsigned int family;
 
 	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
 		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle == LINUX_SOCKET_UNIX_DGRAM) {
+		(void)flags;
+		(void)len;
+		if (addr_len == 0) {
+			return -LINUX_ENOTCONN;
+		}
+		if (addr_len < 3 || addr_len > sizeof(addr)) {
+			return -LINUX_EINVAL;
+		}
+		if (buffer == 0 ||
+		    bunix_buffer_read(buffer, 0, addr, addr_len) != 0) {
+			return -LINUX_EFAULT;
+		}
+		family = ((unsigned int)(unsigned char)addr[0]) |
+			 ((unsigned int)(unsigned char)addr[1] << 8);
+		if (family != LINUX_AF_UNIX) {
+			return -LINUX_EAFNOSUPPORT;
+		}
+		for (u64 i = 2; i < addr_len && path_len + 1 < sizeof(path);
+		     i++) {
+			path[path_len++] = addr[i];
+			if (addr[i] == '\0') {
+				break;
+			}
+		}
+		if (path_len == 0 || path[path_len - 1] != '\0') {
+			return -LINUX_EINVAL;
+		}
+		return is_utmps_socket_path(path) ? -LINUX_EPROTONOSUPPORT :
+		       -LINUX_ENOENT;
 	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NETLINK_ROUTE) {
 		(void)flags;
