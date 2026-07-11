@@ -16,7 +16,7 @@ struct usb_interface {
 	u64 subclass;
 	u64 protocol;
 	u64 endpoint_count;
-	u64 claimed;
+	u64 claim_owner;
 };
 
 struct usb_endpoint {
@@ -25,6 +25,8 @@ struct usb_endpoint {
 	u64 attributes;
 	u64 max_packet;
 	u64 interval;
+	u64 port;
+	u64 owner;
 };
 
 struct usb_device {
@@ -195,7 +197,7 @@ static int parse_usb_descriptors(const unsigned char *data, u64 len,
 			interface->class_code = data[offset + 5];
 			interface->subclass = data[offset + 6];
 			interface->protocol = data[offset + 7];
-			interface->claimed = 0;
+			interface->claim_owner = 0;
 		} else if (desc_type == BUNIX_USB_DESCRIPTOR_ENDPOINT &&
 			   desc_len >= 7) {
 			struct usb_endpoint *endpoint;
@@ -211,6 +213,8 @@ static int parse_usb_descriptors(const unsigned char *data, u64 len,
 			endpoint->attributes = data[offset + 3];
 			endpoint->max_packet = le16(&data[offset + 4]);
 			endpoint->interval = data[offset + 6];
+			endpoint->port = 0;
+			endpoint->owner = 0;
 		}
 		offset += desc_len;
 	}
@@ -319,36 +323,193 @@ static void reply_descriptor_read(struct bunix_msg *reply,
 	reply->words[3] = 0;
 }
 
-static void reply_claim_interface(struct bunix_msg *reply, u64 device_index,
-				  u64 interface_number, u64 claim)
+static struct usb_interface *find_interface(struct usb_device *device,
+					    u64 interface_number)
+{
+	if (device == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < device->interface_count; i++) {
+		if (device->interfaces[i].number == interface_number) {
+			return &device->interfaces[i];
+		}
+	}
+	return 0;
+}
+
+static struct usb_endpoint *find_endpoint(struct usb_device *device,
+					  u64 interface_number,
+					  u64 endpoint_address)
+{
+	if (device == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < device->endpoint_count; i++) {
+		struct usb_endpoint *endpoint = &device->endpoints[i];
+
+		if (endpoint->interface_number == interface_number &&
+		    endpoint->address == endpoint_address) {
+			return endpoint;
+		}
+	}
+	return 0;
+}
+
+static void close_interface_endpoints(struct usb_device *device,
+				      u64 interface_number, u64 owner)
+{
+	if (device == 0) {
+		return;
+	}
+	for (u64 i = 0; i < device->endpoint_count; i++) {
+		struct usb_endpoint *endpoint = &device->endpoints[i];
+
+		if (endpoint->interface_number == interface_number &&
+		    endpoint->owner == owner) {
+			if (endpoint->port != 0) {
+				bunix_handle_close(endpoint->port);
+			}
+			endpoint->port = 0;
+			endpoint->owner = 0;
+		}
+	}
+}
+
+static void reply_claim_interface(struct bunix_msg *reply,
+				  const struct bunix_msg *message, u64 claim)
 {
 	struct usb_device *device;
+	struct usb_interface *interface;
+	const u64 device_index = message->words[0];
+	const u64 interface_number = message->words[1];
 
 	if (device_index >= device_count) {
 		reply_noent(reply);
 		return;
 	}
 	device = &devices[device_index];
-	for (u64 i = 0; i < device->interface_count; i++) {
-		struct usb_interface *interface = &device->interfaces[i];
-
-		if (interface->number != interface_number) {
-			continue;
-		}
-		if (claim != 0 && interface->claimed != 0) {
-			reply->words[0] = BUNIX_USB_ERR_BUSY;
-			return;
-		}
-		interface->claimed = claim != 0 ? 1 : 0;
-		reply->words[0] = BUNIX_USB_OK;
-		reply->words[1] = interface->class_code |
-				  (interface->subclass << 8) |
-				  (interface->protocol << 16);
-		reply->words[2] = interface->endpoint_count;
-		reply->words[3] = 0;
+	interface = find_interface(device, interface_number);
+	if (interface == 0) {
+		reply_noent(reply);
 		return;
 	}
-	reply_noent(reply);
+	if (claim != 0 && interface->claim_owner != 0 &&
+	    interface->claim_owner != message->sender) {
+		reply->words[0] = BUNIX_USB_ERR_BUSY;
+		return;
+	}
+	if (claim == 0 && interface->claim_owner != 0 &&
+	    interface->claim_owner != message->sender) {
+		reply->words[0] = BUNIX_USB_ERR_BUSY;
+		return;
+	}
+	if (claim != 0) {
+		interface->claim_owner = message->sender;
+	} else {
+		close_interface_endpoints(device, interface_number,
+					  interface->claim_owner);
+		interface->claim_owner = 0;
+	}
+	reply->words[0] = BUNIX_USB_OK;
+	reply->words[1] = interface->class_code |
+			  (interface->subclass << 8) |
+			  (interface->protocol << 16);
+	reply->words[2] = interface->endpoint_count;
+	reply->words[3] = 0;
+}
+
+static void reply_open_endpoint(struct bunix_msg *reply,
+				const struct bunix_msg *message)
+{
+	struct usb_device *device;
+	struct usb_interface *interface;
+	struct usb_endpoint *endpoint;
+	const u64 device_index = message->words[0];
+	const u64 interface_number = message->words[1];
+	const u64 endpoint_address = message->words[2] & 0xffu;
+	const u64 requested_type = message->words[3] & 0xffu;
+	const u64 requested_dir = (message->words[3] >> 8) & 0xffu;
+	const u64 endpoint_dir = (endpoint_address & 0x80u) != 0 ?
+					 BUNIX_USB_DIR_IN :
+					 BUNIX_USB_DIR_OUT;
+	long port;
+
+	if (device_index >= device_count) {
+		reply_noent(reply);
+		return;
+	}
+	device = &devices[device_index];
+	interface = find_interface(device, interface_number);
+	endpoint = find_endpoint(device, interface_number, endpoint_address);
+	if (interface == 0 || endpoint == 0) {
+		reply_noent(reply);
+		return;
+	}
+	if (interface->claim_owner != message->sender) {
+		reply->words[0] = BUNIX_USB_ERR_BUSY;
+		return;
+	}
+	if (requested_type != 0 &&
+	    requested_type != (endpoint->attributes & 0x3u) + 1) {
+		reply->words[0] = BUNIX_USB_ERR_INVAL;
+		return;
+	}
+	if (requested_dir != 0 && requested_dir != endpoint_dir) {
+		reply->words[0] = BUNIX_USB_ERR_INVAL;
+		return;
+	}
+	if (endpoint->owner != 0 && endpoint->owner != message->sender) {
+		reply->words[0] = BUNIX_USB_ERR_BUSY;
+		return;
+	}
+	if (endpoint->port == 0) {
+		port = bunix_port_create("usb-endpoint");
+		if (port <= 0) {
+			reply->words[0] = BUNIX_USB_ERR_INVAL;
+			return;
+		}
+		endpoint->port = (u64)port;
+		endpoint->owner = message->sender;
+	}
+	reply->words[0] = BUNIX_USB_OK;
+	reply->words[1] = endpoint->address |
+			  (((endpoint->attributes & 0x3u) + 1) << 8) |
+			  (endpoint_dir << 16);
+	reply->words[2] = endpoint->max_packet;
+	reply->words[3] = endpoint->interval;
+	reply->cap = endpoint->port;
+	reply->cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP;
+}
+
+static void reply_endpoint_unsupported(struct bunix_msg *reply,
+				       const struct bunix_msg *message)
+{
+	reply->protocol = BUNIX_PROTO_USB;
+	reply->type = message->type;
+	reply->words[0] = BUNIX_USB_ERR_UNSUPPORTED;
+	reply->words[1] = 0;
+	reply->words[2] = 0;
+	reply->words[3] = 0;
+}
+
+static int handle_endpoint_message(struct bunix_msg *message)
+{
+	for (u64 d = 0; d < device_count; d++) {
+		struct usb_device *device = &devices[d];
+
+		for (u64 e = 0; e < device->endpoint_count; e++) {
+			struct usb_endpoint *endpoint = &device->endpoints[e];
+
+			if (endpoint->port == 0) {
+				continue;
+			}
+			if (bunix_ipc_try_recv(endpoint->port, message) != 0) {
+				continue;
+			}
+			return 1;
+		}
+	}
+	return 0;
 }
 
 int main(void)
@@ -374,12 +535,29 @@ int main(void)
 			.words = { BUNIX_USB_ERR_UNSUPPORTED, 0, 0, 0 },
 		};
 
-		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
-		    message.protocol != BUNIX_PROTO_USB) {
+		int endpoint_message = handle_endpoint_message(&message);
+
+		if (!endpoint_message) {
+			const long recv =
+				bunix_ipc_try_recv(BUNIX_HANDLE_SELF, &message);
+
+			if (recv == 1) {
+				bunix_sleep_ns(1000000ull);
+				continue;
+			}
+			if (recv != 0) {
+				continue;
+			}
+		}
+		if (message.protocol != BUNIX_PROTO_USB) {
 			continue;
 		}
 
 		reply.type = message.type;
+		if (endpoint_message) {
+			reply_endpoint_unsupported(&reply, &message);
+			goto send_reply;
+		}
 		switch (message.type) {
 		case BUNIX_USB_CONTROLLER_REGISTER:
 			reply_register_controller(&reply, &message);
@@ -395,17 +573,19 @@ int main(void)
 			reply_descriptor_read(&reply, &message);
 			break;
 		case BUNIX_USB_CLAIM_INTERFACE:
-			reply_claim_interface(&reply, message.words[0],
-					      message.words[1], 1);
+			reply_claim_interface(&reply, &message, 1);
 			break;
 		case BUNIX_USB_RELEASE_INTERFACE:
-			reply_claim_interface(&reply, message.words[0],
-					      message.words[1], 0);
+			reply_claim_interface(&reply, &message, 0);
+			break;
+		case BUNIX_USB_OPEN_ENDPOINT:
+			reply_open_endpoint(&reply, &message);
 			break;
 		default:
 			break;
 		}
 
+send_reply:
 		if (message.cap != 0) {
 			bunix_handle_close(message.cap);
 		}
