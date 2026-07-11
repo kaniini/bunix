@@ -1060,6 +1060,18 @@ static int linux_forward_message(struct ipc_port *linux,
 	       ipc_recv(reply_port, reply) == 0 ? 0 : -1;
 }
 
+static int linux_send_message(struct ipc_port *linux,
+			      struct ipc_message *request)
+{
+	if (linux == 0 || request == 0) {
+		return -1;
+	}
+
+	request->protocol = USER_FOURCC_LINX;
+	request->reply_port = 0;
+	return ipc_send(linux, request);
+}
+
 static u64 linux_forward_words(struct ipc_port *linux,
 			       struct ipc_port *reply_port, u64 number,
 			       u64 word0, u64 word1, u64 word2)
@@ -3888,6 +3900,55 @@ static void linux_syscall_count_log(const struct arch_syscall_frame *frame)
 	}
 }
 
+static void linux_sigprocmask_shape_log(u64 how, u64 set, int has_set,
+					int has_old)
+{
+	enum {
+		SHAPE_GET_ONLY,
+		SHAPE_BLOCK,
+		SHAPE_UNBLOCK,
+		SHAPE_SETMASK,
+		SHAPE_OTHER,
+		SHAPE_COUNT,
+	};
+	static int enabled = -1;
+	static u64 total;
+	static u64 counts[SHAPE_COUNT];
+	u64 shape;
+
+	if (enabled < 0) {
+		enabled = kernel_cmdline_has("debug-linux-syscall-counts") != 0;
+	}
+	if (!enabled) {
+		return;
+	}
+
+	if (!has_set) {
+		shape = SHAPE_GET_ONLY;
+	} else if (how == 0) {
+		shape = SHAPE_BLOCK;
+	} else if (how == 1) {
+		shape = SHAPE_UNBLOCK;
+	} else if (how == 2) {
+		shape = SHAPE_SETMASK;
+	} else {
+		shape = SHAPE_OTHER;
+	}
+
+	total++;
+	counts[shape]++;
+	if ((total & 255) != 0) {
+		return;
+	}
+
+	console_printf("linux-sigprocmask-counts: total=%u get=%u block=%u unblock=%u setmask=%u other=%u last_how=%u last_has_set=%u last_has_old=%u last_set=%p\n",
+		       (u32)total, (u32)counts[SHAPE_GET_ONLY],
+		       (u32)counts[SHAPE_BLOCK], (u32)counts[SHAPE_UNBLOCK],
+		       (u32)counts[SHAPE_SETMASK], (u32)counts[SHAPE_OTHER],
+		       (u32)how, (u32)has_set, (u32)has_old,
+		       (const void *)set);
+}
+
 enum linux_strace_mode {
 	LINUX_STRACE_LEGACY = 0,
 	LINUX_STRACE_STRUCTURED,
@@ -4495,10 +4556,18 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		    read_current_user(arg1, &set, sizeof(set)) != 0) {
 			return (u64)-LINUX_EFAULT;
 		}
+		if (how != ~0ull && how != 0 && how != 1 && how != 2) {
+			return linux_einval_u64(__func__, __LINE__);
+		}
+		linux_sigprocmask_shape_log(how, set, arg1 != 0, arg2 != 0);
 		request.type = LINUX_SYSCALL_RT_SIGPROCMASK;
 		request.words[0] = how;
 		request.words[1] = set;
 		request.words[2] = 0;
+		if (arg2 == 0) {
+			return linux_send_message(linux, &request) == 0 ?
+			       0 : (u64)-LINUX_ENOSYS;
+		}
 		request.reply_port = reply_port;
 		if (linux_forward_message(linux, reply_port, &request,
 					  &reply) != 0) {

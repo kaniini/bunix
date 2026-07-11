@@ -484,6 +484,38 @@ Validation:
     seconds.
   - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 108
     seconds.
+- Added a focused `rt_sigprocmask` shape counter under
+  `debug-linux-syscall-counts`.  A stock debug probe at
+  `build/failures/20260711T003516Z-14793/20260711T003636Z-14793` showed no
+  get-only mask calls in the sampled window.  At 1,280 `rt_sigprocmask`
+  calls the shape was `block=568`, `unblock=23`, `setmask=689`, with no
+  unsupported `how` values.  This confirmed the hot path is mask mutation,
+  not simple mask queries.
+- Added a narrow no-`oldset` `rt_sigprocmask` fast path in the x86_64 Linux
+  syscall layer.  Mask mutations that do not request the old mask are now sent
+  one-way to `linux.server`; calls that need `oldset` still wait for the
+  authoritative server reply.  The mandatory post-syscall signal-pending RPC
+  still serializes behind the queued mask update before signal delivery, so
+  this does not repeat the rejected signal-polling shortcut.
+- Validation for the async no-`oldset` sigmask slice:
+  - `make`
+  - `BUNIX_SHELL_PART=linux-signaltest make test-shell-part` passed in 63
+    seconds.
+  - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part` passed in 94
+    seconds.
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 89
+    seconds.
+- A quiet stock-networking probe after the sigmask fast path still timed out
+  before `login:` at
+  `build/failures/20260711T004308Z-17823/20260711T004528Z-17823`.  A debug
+  follow-up at
+  `build/failures/20260711T004558Z-18802/20260711T004738Z-18802` showed
+  OpenRC helper churn continues after the clock-skew phase, reaching 9,000
+  Linux syscalls and process grants past id 115 by the 100 second login wait.
+  The remaining `rt_sigprocmask` cost now includes many calls that need
+  `oldset`; further reduction likely needs a kernel-side mirror of the Linux
+  signal mask, copied on fork and synchronized with server-side signal
+  dequeue/fault handling, instead of more one-way shortcuts.
 
 Notes:
 
