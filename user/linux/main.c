@@ -2118,6 +2118,89 @@ static void linux_debug_readahead_log(u64 hit, u64 bytes)
 	bunix_console_log(line, cursor);
 }
 
+static void linux_debug_fcntl_log(u64 cmd)
+{
+	enum {
+		FCNTL_DUPFD,
+		FCNTL_GETFD,
+		FCNTL_SETFD,
+		FCNTL_GETFL,
+		FCNTL_SETFL,
+		FCNTL_LOCK,
+		FCNTL_DUPFD_CLOEXEC,
+		FCNTL_OTHER,
+		FCNTL_COUNT,
+	};
+	static int enabled = -1;
+	static u64 total;
+	static u64 counts[FCNTL_COUNT];
+	u64 bucket = FCNTL_OTHER;
+	char line[360];
+	u64 cursor = 0;
+
+	if (enabled < 0) {
+		enabled = bunix_cmdline_has("debug-linux-syscall-counts") > 0;
+	}
+	if (!enabled) {
+		return;
+	}
+	switch (cmd) {
+	case LINUX_F_DUPFD:
+		bucket = FCNTL_DUPFD;
+		break;
+	case LINUX_F_GETFD:
+		bucket = FCNTL_GETFD;
+		break;
+	case LINUX_F_SETFD:
+		bucket = FCNTL_SETFD;
+		break;
+	case LINUX_F_GETFL:
+		bucket = FCNTL_GETFL;
+		break;
+	case LINUX_F_SETFL:
+		bucket = FCNTL_SETFL;
+		break;
+	case LINUX_F_SETLK:
+	case LINUX_F_SETLKW:
+	case LINUX_F_GETLK:
+		bucket = FCNTL_LOCK;
+		break;
+	case LINUX_F_DUPFD_CLOEXEC:
+		bucket = FCNTL_DUPFD_CLOEXEC;
+		break;
+	default:
+		break;
+	}
+	total++;
+	counts[bucket]++;
+	if ((total & 255) != 0) {
+		return;
+	}
+	append_text(line, sizeof(line), &cursor,
+		    "linux-server: fcntl-counts total=");
+	append_dec(line, sizeof(line), &cursor, total);
+	append_text(line, sizeof(line), &cursor, " dupfd=");
+	append_dec(line, sizeof(line), &cursor, counts[FCNTL_DUPFD]);
+	append_text(line, sizeof(line), &cursor, " getfd=");
+	append_dec(line, sizeof(line), &cursor, counts[FCNTL_GETFD]);
+	append_text(line, sizeof(line), &cursor, " setfd=");
+	append_dec(line, sizeof(line), &cursor, counts[FCNTL_SETFD]);
+	append_text(line, sizeof(line), &cursor, " getfl=");
+	append_dec(line, sizeof(line), &cursor, counts[FCNTL_GETFL]);
+	append_text(line, sizeof(line), &cursor, " setfl=");
+	append_dec(line, sizeof(line), &cursor, counts[FCNTL_SETFL]);
+	append_text(line, sizeof(line), &cursor, " lock=");
+	append_dec(line, sizeof(line), &cursor, counts[FCNTL_LOCK]);
+	append_text(line, sizeof(line), &cursor, " dupfd_cloexec=");
+	append_dec(line, sizeof(line), &cursor, counts[FCNTL_DUPFD_CLOEXEC]);
+	append_text(line, sizeof(line), &cursor, " other=");
+	append_dec(line, sizeof(line), &cursor, counts[FCNTL_OTHER]);
+	append_text(line, sizeof(line), &cursor, " last_cmd=");
+	append_dec(line, sizeof(line), &cursor, cmd);
+	append_char(line, sizeof(line), &cursor, '\n');
+	bunix_console_log(line, cursor);
+}
+
 static int linux_open_file_readahead_get(struct linux_fd *fd, u64 offset,
 					 u64 len, u64 buffer)
 {
@@ -8834,6 +8917,8 @@ static long linux_dup_to(struct linux_process *process, u64 old_fd,
 
 static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 {
+	linux_debug_fcntl_log(cmd);
+
 	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
 		return -LINUX_EBADF;
 	}

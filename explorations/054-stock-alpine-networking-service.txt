@@ -562,6 +562,43 @@ Validation:
     stock boot still did not reach login, so the remaining blocker is broader
     OpenRC process/syscall churn, not just VFS reads for byte-oriented file
     input.
+- Added additional low-noise shape counters under
+  `debug-linux-syscall-counts` for `fcntl`, `ppoll`, `mmap`, and `munmap`.
+  A bounded stock-networking probe at
+  `build/failures/20260711T012327Z-32361/20260711T012507Z-32361`
+  showed the next hot paths are not ambiguous: `ppoll` calls are all
+  single-fd, infinite-timeout, immediately-ready polls; by 512 sampled poll
+  calls the shape was `nfds1=512`, `timeoutinf=512`, `immediate=512`,
+  `slept=0`, and `empty=0`.  `fcntl` is mostly descriptor shuffling, with
+  `F_SETFD=258` and `F_DUPFD_CLOEXEC=252` out of 512 sampled calls.  `mmap`
+  is mostly small anonymous writable mappings, with 512 sampled calls showing
+  `anon=444`, `file=68`, `writable=423`, `len4k=396`, and `len16k=89`.
+- Added an initial kernel COW path for Linux `fork()`.  Full forks now share
+  private anonymous writable VMAs read-only between parent and child, while
+  write faults on those VMAs copy the single faulting page.  Kernel-mediated
+  writes into current user buffers now retry through the same COW path, so
+  syscall output buffers and signal frames do not see false `EFAULT` on COW
+  pages.  File-backed read-only sharing and `vfork()` behavior are unchanged.
+- A first COW probe exposed the missing kernel-write retry: stock OpenRC
+  started reporting shell syntax errors such as
+  `/usr/libexec/rc/sh/init.sh: line 70: syntax error` and unterminated quotes
+  in `openrc-run.sh`, with artifact
+  `build/failures/20260711T013424Z-4465/20260711T013654Z-4465`.  After
+  adding COW retries for `write_current_user()` and signal-frame writes, the
+  syntax corruption disappeared and the stock boot returned to the prior
+  timeout shape at
+  `build/failures/20260711T013825Z-6437/20260711T014055Z-6437`.
+- Validation for the COW slice:
+  - `make`
+  - `BUNIX_SHELL_PART=linux-signaltest make test-shell-part` passed in 64
+    seconds before the write-retry fix.
+  - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part` passed in 89
+    seconds after the write-retry fix.
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 73
+    seconds after the write-retry fix.
+  - `QEMU_TIMEOUT=180s BUNIX_BOOT_LOGIN_WAIT=150 BUNIX_BOOT_LOGIN_CAPTURE=260
+    make test-boot-alpine-stock-networking` still timed out before `login:`,
+    but no longer corrupts OpenRC shell scripts.
 
 Notes:
 

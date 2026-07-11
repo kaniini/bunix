@@ -2824,6 +2824,35 @@ int task_remove_vm_region(struct task *task, u64 base, u64 len)
 	return -1;
 }
 
+int task_handle_cow_fault(struct task *task, u64 addr, int write_fault)
+{
+	const u64 page = addr & ~(VM_PAGE_SIZE - 1);
+
+	if (task == 0 || !write_fault) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	for (u32 i = 0; i < task->vm_region_count; i++) {
+		const struct task_vm_region *region = &task->vm_regions[i];
+		const int in_region =
+			page >= region->base && page < region_end(region);
+		const int cow_candidate =
+			in_region &&
+			(region->prot & TASK_VM_PROT_WRITE) != 0 &&
+			(region->flags & TASK_VM_MAP_PRIVATE) != 0 &&
+			(region->flags & TASK_VM_MAP_ANONYMOUS) != 0 &&
+			region->object_type == TASK_VM_OBJECT_ANON;
+
+		if (cow_candidate) {
+			spin_unlock_irqrestore(&task->lock, flags);
+			return vm_cow_user_page(task->vm_space, page);
+		}
+	}
+	spin_unlock_irqrestore(&task->lock, flags);
+	return -1;
+}
+
 void task_clear_vm_regions(struct task *task)
 {
 	if (task == 0) {

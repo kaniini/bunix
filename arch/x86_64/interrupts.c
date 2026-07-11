@@ -538,6 +538,34 @@ static u64 user_fault_class(const struct arch_interrupt_frame *frame)
 	return TASK_FAULT_CLASS_UNKNOWN;
 }
 
+static u64 align_down(u64 value, u64 align)
+{
+	return value & ~(align - 1);
+}
+
+static u64 align_up(u64 value, u64 align)
+{
+	return align_down(value + align - 1, align);
+}
+
+static int write_current_user(u64 vaddr, const void *src, u64 len)
+{
+	struct task *task = task_current();
+	const u64 start = align_down(vaddr, VM_PAGE_SIZE);
+	const u64 end = align_up(vaddr + len, VM_PAGE_SIZE);
+
+	if (vm_write_user(task_vm_space(task), vaddr, src, len) == 0) {
+		return 0;
+	}
+	if (len == 0 || vaddr + len < vaddr || end <= start) {
+		return -1;
+	}
+	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
+		(void)task_handle_cow_fault(task, page, 1);
+	}
+	return vm_write_user(task_vm_space(task), vaddr, src, len);
+}
+
 static int write_signal_frame(struct arch_interrupt_frame *frame,
 			      struct interrupt_saved_regs *regs,
 			      u64 signal, u64 handler, u64 restorer,
@@ -591,12 +619,10 @@ static int write_signal_frame(struct arch_interrupt_frame *frame,
 		siginfo.addr = event->fault_addr;
 	}
 
-	if (vm_write_user(task_vm_space(task_current()), frame_addr,
-			  &restorer, sizeof(restorer)) != 0 ||
-	    vm_write_user(task_vm_space(task_current()), signal_frame_addr,
-			  &signal_frame, sizeof(signal_frame)) != 0 ||
-	    vm_write_user(task_vm_space(task_current()), siginfo_addr,
-			  &siginfo, sizeof(siginfo)) != 0) {
+	if (write_current_user(frame_addr, &restorer, sizeof(restorer)) != 0 ||
+	    write_current_user(signal_frame_addr, &signal_frame,
+			       sizeof(signal_frame)) != 0 ||
+	    write_current_user(siginfo_addr, &siginfo, sizeof(siginfo)) != 0) {
 		return -1;
 	}
 
@@ -715,6 +741,12 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 
 	if (user_fault_from_user_context(frame) &&
 	    user_fault_signal_vector(frame->vector)) {
+		if (frame->vector == 14 &&
+		    user_fault_access(frame) == TASK_FAULT_ACCESS_WRITE &&
+		    user_fault_class(frame) == TASK_FAULT_CLASS_PROTECTION &&
+		    task_handle_cow_fault(task_current(), cr2, 1) == 0) {
+			return;
+		}
 		if (notify_linux_task_fault(frame, cr2) != 0) {
 			return;
 		}

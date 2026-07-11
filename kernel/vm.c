@@ -369,6 +369,60 @@ int vm_share_user_range(struct vm_space *dst, struct vm_space *src,
 	return 0;
 }
 
+int vm_share_cow_user_range(struct vm_space *dst, struct vm_space *src,
+			    u64 vaddr, u64 len)
+{
+	if (dst == 0 || src == 0 || len == 0 || vaddr + len < vaddr) {
+		return -1;
+	}
+
+	const u64 start = align_down(vaddr, VM_PAGE_SIZE);
+	const u64 end = align_up(vaddr + len, VM_PAGE_SIZE);
+	if (end <= start) {
+		return -1;
+	}
+
+	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
+		const u64 src_phys =
+			arch_vm_translate_user(&src->arch, page, 0);
+
+		if (src_phys == 0 || pmm_page_retain_addr(src_phys) != 0) {
+			(void)vm_unmap_user_range(dst, start, page - start);
+			return -1;
+		}
+		if (arch_vm_protect_user_page(&src->arch, page, 0) != 0 ||
+		    arch_vm_map_page(&dst->arch, page, src_phys, 0, 1) != 0) {
+			vm_rpc_free_frame((struct vm_frame){ .addr = src_phys });
+			(void)vm_unmap_user_range(dst, start, page - start);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+int vm_cow_user_page(struct vm_space *space, u64 vaddr)
+{
+	const u64 page = align_down(vaddr, VM_PAGE_SIZE);
+	const u64 old_phys = arch_vm_translate_user(&space->arch, page, 0);
+	struct vm_frame frame;
+
+	if (space == 0 || old_phys == 0) {
+		return -1;
+	}
+	frame = vm_rpc_alloc_frame();
+	if (frame.addr == 0) {
+		return -1;
+	}
+	mem_copy((u8 *)frame.addr, (const u8 *)old_phys, VM_PAGE_SIZE);
+	if (arch_vm_map_page(&space->arch, page, frame.addr, 1, 1) != 0) {
+		vm_rpc_free_frame(frame);
+		return -1;
+	}
+	vm_rpc_free_frame((struct vm_frame){ .addr = old_phys });
+	return 0;
+}
+
 u64 vm_rpc_total_frames(void)
 {
 	return pmm_total_page_count();

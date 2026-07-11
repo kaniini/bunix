@@ -915,18 +915,28 @@ struct task *server_task_fork_current_stopped(
 	for (u64 i = 0; i < region_count; i++) {
 		const struct task_vm_region *region =
 			task_vm_region_at(parent, i);
-		const int share_region =
+		const int share_file_region =
 			region != 0 &&
 			region->object_type == TASK_VM_OBJECT_FILE &&
 			(region->prot & TASK_VM_PROT_WRITE) == 0 &&
 			region->writable == 0;
+		const int share_cow_region =
+			region != 0 &&
+			region->object_type == TASK_VM_OBJECT_ANON &&
+			(region->prot & TASK_VM_PROT_WRITE) != 0 &&
+			(region->flags & TASK_VM_MAP_PRIVATE) != 0 &&
+			(region->flags & TASK_VM_MAP_ANONYMOUS) != 0;
 
 		if (region == 0 ||
-		    (share_region ?
+		    (share_file_region ?
 		     vm_share_user_range(task_vm_space(child),
 					 task_vm_space(parent),
 					 region->base, region->len,
 					 region->writable) :
+		     share_cow_region ?
+		     vm_share_cow_user_range(task_vm_space(child),
+					     task_vm_space(parent),
+					     region->base, region->len) :
 		     vm_clone_user_range(task_vm_space(child),
 					 task_vm_space(parent),
 					 region->base, region->len,

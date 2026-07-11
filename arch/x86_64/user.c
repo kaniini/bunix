@@ -580,7 +580,20 @@ static int read_current_user(u64 vaddr, void *dst, u64 len)
 
 static int write_current_user(u64 vaddr, const void *src, u64 len)
 {
-	return vm_write_user(task_vm_space(task_current()), vaddr, src, len);
+	struct task *task = task_current();
+	const u64 start = align_down(vaddr, VM_PAGE_SIZE);
+	const u64 end = align_up(vaddr + len, VM_PAGE_SIZE);
+
+	if (vm_write_user(task_vm_space(task), vaddr, src, len) == 0) {
+		return 0;
+	}
+	if (len == 0 || vaddr + len < vaddr || end <= start) {
+		return -1;
+	}
+	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
+		(void)task_handle_cow_fault(task, page, 1);
+	}
+	return vm_write_user(task_vm_space(task), vaddr, src, len);
 }
 
 static int linux_timespec_to_ns(u64 vaddr, u64 *ns)
@@ -4009,6 +4022,164 @@ static void linux_read_shape_log(u64 fd, u64 len)
 		       (u32)fd, (u32)len);
 }
 
+static void linux_mmap_shape_log(u64 len, u64 prot, u64 flags, u32 task_prot)
+{
+	enum {
+		MMAP_LEN_4K,
+		MMAP_LEN_16K,
+		MMAP_LEN_64K,
+		MMAP_LEN_1M,
+		MMAP_LEN_LARGE,
+		MMAP_LEN_COUNT,
+	};
+	static int enabled = -1;
+	static u64 total;
+	static u64 len_counts[MMAP_LEN_COUNT];
+	static u64 anonymous;
+	static u64 file;
+	static u64 writable;
+	static u64 fixed;
+	u64 bucket;
+
+	if (enabled < 0) {
+		enabled = kernel_cmdline_has("debug-linux-syscall-counts") != 0;
+	}
+	if (!enabled) {
+		return;
+	}
+
+	if (len <= 4096) {
+		bucket = MMAP_LEN_4K;
+	} else if (len <= 16384) {
+		bucket = MMAP_LEN_16K;
+	} else if (len <= 65536) {
+		bucket = MMAP_LEN_64K;
+	} else if (len <= 1024 * 1024) {
+		bucket = MMAP_LEN_1M;
+	} else {
+		bucket = MMAP_LEN_LARGE;
+	}
+
+	total++;
+	len_counts[bucket]++;
+	if ((flags & LINUX_MAP_ANONYMOUS) != 0) {
+		anonymous++;
+	} else {
+		file++;
+	}
+	if ((task_prot & TASK_VM_PROT_WRITE) != 0) {
+		writable++;
+	}
+	if ((flags & LINUX_MAP_FIXED) != 0) {
+		fixed++;
+	}
+	if ((total & 255) != 0) {
+		return;
+	}
+
+	console_printf("linux-mmap-counts: total=%u anon=%u file=%u writable=%u fixed=%u len4k=%u len16k=%u len64k=%u len1m=%u lenlarge=%u last_len=%u last_prot=0x%x last_flags=0x%x\n",
+		       (u32)total, (u32)anonymous, (u32)file,
+		       (u32)writable, (u32)fixed,
+		       (u32)len_counts[MMAP_LEN_4K],
+		       (u32)len_counts[MMAP_LEN_16K],
+		       (u32)len_counts[MMAP_LEN_64K],
+		       (u32)len_counts[MMAP_LEN_1M],
+		       (u32)len_counts[MMAP_LEN_LARGE],
+		       (u32)len, (u32)prot, (u32)flags);
+}
+
+static void linux_munmap_shape_log(u64 len)
+{
+	static int enabled = -1;
+	static u64 total;
+	static u64 len4k;
+	static u64 len16k;
+	static u64 len64k;
+	static u64 len1m;
+	static u64 lenlarge;
+
+	if (enabled < 0) {
+		enabled = kernel_cmdline_has("debug-linux-syscall-counts") != 0;
+	}
+	if (!enabled) {
+		return;
+	}
+	total++;
+	if (len <= 4096) {
+		len4k++;
+	} else if (len <= 16384) {
+		len16k++;
+	} else if (len <= 65536) {
+		len64k++;
+	} else if (len <= 1024 * 1024) {
+		len1m++;
+	} else {
+		lenlarge++;
+	}
+	if ((total & 255) != 0) {
+		return;
+	}
+	console_printf("linux-munmap-counts: total=%u len4k=%u len16k=%u len64k=%u len1m=%u lenlarge=%u last_len=%u\n",
+		       (u32)total, (u32)len4k, (u32)len16k, (u32)len64k,
+		       (u32)len1m, (u32)lenlarge, (u32)len);
+}
+
+static void linux_poll_shape_log(u64 nfds, u64 timeout_ns,
+				 int infinite_timeout, u64 ready, int slept)
+{
+	static int enabled = -1;
+	static u64 total;
+	static u64 nfds0;
+	static u64 nfds1;
+	static u64 nfds_many;
+	static u64 timeout_zero;
+	static u64 timeout_finite;
+	static u64 timeout_infinite;
+	static u64 immediate_ready;
+	static u64 slept_count;
+	static u64 empty;
+
+	if (enabled < 0) {
+		enabled = kernel_cmdline_has("debug-linux-syscall-counts") != 0;
+	}
+	if (!enabled) {
+		return;
+	}
+	total++;
+	if (nfds == 0) {
+		nfds0++;
+	} else if (nfds == 1) {
+		nfds1++;
+	} else {
+		nfds_many++;
+	}
+	if (timeout_ns == 0) {
+		timeout_zero++;
+	} else if (infinite_timeout) {
+		timeout_infinite++;
+	} else {
+		timeout_finite++;
+	}
+	if (ready != 0 && !slept) {
+		immediate_ready++;
+	}
+	if (slept) {
+		slept_count++;
+	}
+	if (ready == 0) {
+		empty++;
+	}
+	if ((total & 255) != 0) {
+		return;
+	}
+	console_printf("linux-poll-counts: total=%u nfds0=%u nfds1=%u nfdsmany=%u timeout0=%u timeoutfinite=%u timeoutinf=%u immediate=%u slept=%u empty=%u last_nfds=%u last_ready=%u last_slept=%u\n",
+		       (u32)total, (u32)nfds0, (u32)nfds1, (u32)nfds_many,
+		       (u32)timeout_zero, (u32)timeout_finite,
+		       (u32)timeout_infinite, (u32)immediate_ready,
+		       (u32)slept_count, (u32)empty, (u32)nfds,
+		       (u32)ready, (u32)slept);
+}
+
 enum linux_strace_mode {
 	LINUX_STRACE_LEGACY = 0,
 	LINUX_STRACE_STRUCTURED,
@@ -4343,6 +4514,8 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		u64 base = arg0;
 		u64 len = arg1;
 
+		linux_mmap_shape_log(len, prot, flags, task_prot);
+
 		if (len == 0 || (flags & LINUX_MAP_PRIVATE) == 0 ||
 		    len + VM_PAGE_SIZE - 1 < len ||
 		    (!anonymous && (offset & (VM_PAGE_SIZE - 1)) != 0)) {
@@ -4416,6 +4589,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 
 		len = align_up(len, VM_PAGE_SIZE);
+		linux_munmap_shape_log(len);
 		if (linux_unmap_task_range(task, base, len) != 0) {
 			return linux_einval_u64(__func__, __LINE__);
 		}
@@ -4838,6 +5012,8 @@ poll_again:
 			}
 			goto poll_again;
 		}
+		linux_poll_shape_log(arg1, timeout_ns, infinite_timeout, ready,
+				     slept);
 		return ready;
 	}
 	case LINUX_SYSCALL_WRITEV: {

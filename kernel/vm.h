@@ -44,6 +44,9 @@ int vm_clone_user_range(struct vm_space *dst, struct vm_space *src,
 			u64 vaddr, u64 len, u32 writable);
 int vm_share_user_range(struct vm_space *dst, struct vm_space *src,
 			u64 vaddr, u64 len, u32 writable);
+int vm_share_cow_user_range(struct vm_space *dst, struct vm_space *src,
+			    u64 vaddr, u64 len);
+int vm_cow_user_page(struct vm_space *space, u64 vaddr);
 u64 vm_rpc_free_frames(void);
 u64 vm_rpc_total_frames(void);
 void vm_self_test(void);
