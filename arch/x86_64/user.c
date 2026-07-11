@@ -3949,6 +3949,66 @@ static void linux_sigprocmask_shape_log(u64 how, u64 set, int has_set,
 		       (const void *)set);
 }
 
+static void linux_read_shape_log(u64 fd, u64 len)
+{
+	enum {
+		READ_LEN_ZERO,
+		READ_LEN_ONE,
+		READ_LEN_TINY,
+		READ_LEN_SMALL,
+		READ_LEN_MEDIUM,
+		READ_LEN_LARGE,
+		READ_FD_BUCKETS = 8,
+	};
+	static int enabled = -1;
+	static u64 total;
+	static u64 len_counts[6];
+	static u64 fd_counts[READ_FD_BUCKETS];
+	u64 len_bucket;
+	u64 fd_bucket = fd < READ_FD_BUCKETS - 1 ? fd : READ_FD_BUCKETS - 1;
+
+	if (enabled < 0) {
+		enabled = kernel_cmdline_has("debug-linux-syscall-counts") != 0;
+	}
+	if (!enabled) {
+		return;
+	}
+
+	if (len == 0) {
+		len_bucket = READ_LEN_ZERO;
+	} else if (len == 1) {
+		len_bucket = READ_LEN_ONE;
+	} else if (len <= 16) {
+		len_bucket = READ_LEN_TINY;
+	} else if (len <= 256) {
+		len_bucket = READ_LEN_SMALL;
+	} else if (len <= 4096) {
+		len_bucket = READ_LEN_MEDIUM;
+	} else {
+		len_bucket = READ_LEN_LARGE;
+	}
+
+	total++;
+	len_counts[len_bucket]++;
+	fd_counts[fd_bucket]++;
+	if ((total & 255) != 0) {
+		return;
+	}
+
+	console_printf("linux-read-counts: total=%u len0=%u len1=%u len2_16=%u len17_256=%u len257_4096=%u len4097p=%u fd0=%u fd1=%u fd2=%u fd3=%u fd4=%u fd5=%u fd6=%u fd7p=%u last_fd=%u last_len=%u\n",
+		       (u32)total, (u32)len_counts[READ_LEN_ZERO],
+		       (u32)len_counts[READ_LEN_ONE],
+		       (u32)len_counts[READ_LEN_TINY],
+		       (u32)len_counts[READ_LEN_SMALL],
+		       (u32)len_counts[READ_LEN_MEDIUM],
+		       (u32)len_counts[READ_LEN_LARGE],
+		       (u32)fd_counts[0], (u32)fd_counts[1],
+		       (u32)fd_counts[2], (u32)fd_counts[3],
+		       (u32)fd_counts[4], (u32)fd_counts[5],
+		       (u32)fd_counts[6], (u32)fd_counts[7],
+		       (u32)fd, (u32)len);
+}
+
 enum linux_strace_mode {
 	LINUX_STRACE_LEGACY = 0,
 	LINUX_STRACE_STRUCTURED,
@@ -5660,6 +5720,9 @@ static u64 linux_syscall_dispatch(struct arch_syscall_frame *frame)
 			       (const void *)frame->arg3);
 	}
 	linux_syscall_count_log(frame);
+	if (frame->number == LINUX_SYSCALL_READ) {
+		linux_read_shape_log(frame->arg0, frame->arg2);
+	}
 	linux_strace_enter(frame);
 	result = linux_syscall_handle(frame);
 	linux_strace_log(frame, result);

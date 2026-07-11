@@ -1293,6 +1293,97 @@ static void linux_debug_count_message(u64 type)
 	bunix_console_log(line, cursor);
 }
 
+static void linux_debug_read_kind_log(const struct linux_process *process,
+				      u64 fd, u64 len)
+{
+	enum {
+		READ_KIND_CONSOLE,
+		READ_KIND_FILE,
+		READ_KIND_DIR,
+		READ_KIND_SOCKET,
+		READ_KIND_PIPE,
+		READ_KIND_OTHER,
+		READ_KIND_COUNT,
+	};
+	static int enabled = -1;
+	static u64 total;
+	static u64 kind_counts[READ_KIND_COUNT];
+	static u64 len1_counts[READ_KIND_COUNT];
+	u64 kind;
+	char line[520];
+	u64 cursor = 0;
+
+	if (enabled < 0) {
+		enabled = bunix_cmdline_has("debug-linux-syscall-counts") > 0;
+	}
+	if (!enabled || process == 0 || fd >= process->fd_capacity ||
+	    process->fds[fd].kind == 0) {
+		return;
+	}
+
+	switch (process->fds[fd].kind) {
+	case LINUX_FD_CONSOLE:
+		kind = READ_KIND_CONSOLE;
+		break;
+	case LINUX_FD_FILE:
+		kind = READ_KIND_FILE;
+		break;
+	case LINUX_FD_DIR:
+		kind = READ_KIND_DIR;
+		break;
+	case LINUX_FD_SOCKET:
+		kind = READ_KIND_SOCKET;
+		break;
+	case LINUX_FD_PIPE_READ:
+	case LINUX_FD_PIPE_WRITE:
+		kind = READ_KIND_PIPE;
+		break;
+	default:
+		kind = READ_KIND_OTHER;
+		break;
+	}
+
+	total++;
+	kind_counts[kind]++;
+	if (len == 1) {
+		len1_counts[kind]++;
+	}
+	if ((total & 255) != 0) {
+		return;
+	}
+
+	append_text(line, sizeof(line), &cursor, "linux-server: read-kinds total=");
+	append_dec(line, sizeof(line), &cursor, total);
+	append_text(line, sizeof(line), &cursor, " console=");
+	append_dec(line, sizeof(line), &cursor, kind_counts[READ_KIND_CONSOLE]);
+	append_text(line, sizeof(line), &cursor, " file=");
+	append_dec(line, sizeof(line), &cursor, kind_counts[READ_KIND_FILE]);
+	append_text(line, sizeof(line), &cursor, " dir=");
+	append_dec(line, sizeof(line), &cursor, kind_counts[READ_KIND_DIR]);
+	append_text(line, sizeof(line), &cursor, " socket=");
+	append_dec(line, sizeof(line), &cursor, kind_counts[READ_KIND_SOCKET]);
+	append_text(line, sizeof(line), &cursor, " pipe=");
+	append_dec(line, sizeof(line), &cursor, kind_counts[READ_KIND_PIPE]);
+	append_text(line, sizeof(line), &cursor, " other=");
+	append_dec(line, sizeof(line), &cursor, kind_counts[READ_KIND_OTHER]);
+	append_text(line, sizeof(line), &cursor, " len1_console=");
+	append_dec(line, sizeof(line), &cursor, len1_counts[READ_KIND_CONSOLE]);
+	append_text(line, sizeof(line), &cursor, " len1_file=");
+	append_dec(line, sizeof(line), &cursor, len1_counts[READ_KIND_FILE]);
+	append_text(line, sizeof(line), &cursor, " len1_socket=");
+	append_dec(line, sizeof(line), &cursor, len1_counts[READ_KIND_SOCKET]);
+	append_text(line, sizeof(line), &cursor, " len1_pipe=");
+	append_dec(line, sizeof(line), &cursor, len1_counts[READ_KIND_PIPE]);
+	append_text(line, sizeof(line), &cursor, " last_fd=");
+	append_dec(line, sizeof(line), &cursor, fd);
+	append_text(line, sizeof(line), &cursor, " last_kind=");
+	append_dec(line, sizeof(line), &cursor, process->fds[fd].kind);
+	append_text(line, sizeof(line), &cursor, " last_len=");
+	append_dec(line, sizeof(line), &cursor, len);
+	append_char(line, sizeof(line), &cursor, '\n');
+	bunix_console_log(line, cursor);
+}
+
 static void string_copy(char *dst, const char *src)
 {
 	u64 i = 0;
@@ -8111,6 +8202,7 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	    buffer == 0) {
 		return -LINUX_EBADF;
 	}
+	linux_debug_read_kind_log(process, fd, len);
 
 	if (process->fds[fd].kind == LINUX_FD_CONSOLE) {
 		return linux_tty_read(&console_tty, process, len, buffer,

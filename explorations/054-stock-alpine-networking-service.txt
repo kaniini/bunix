@@ -526,6 +526,18 @@ Validation:
   was reverted and the same shard passed again in 102 seconds.  Do not
   reintroduce a mirrored mask without a dedicated regression test that covers
   exec/fork handoff through the post-`phdrstress` login path.
+- Added focused read-shape instrumentation under `debug-linux-syscall-counts`
+  in both the x86 Linux syscall path and `linux.server`.  A bounded
+  stock-networking probe at
+  `build/failures/20260711T010653Z-26284/20260711T010833Z-26284`
+  confirmed that the hot one-byte reads are regular-file reads, not console,
+  pipe, or socket reads.  At 1,536 sampled `read(2)` calls, the shape was:
+  `len1=722`, `len17_256=121`, `len257_4096=692`, `fd0=722`, `fd4=200`, and
+  `fd7p=582`; the server-side FD split was `file=1279`, `pipe=257`,
+  `console=0`, `socket=0`, with `len1_file=722`.  This rules out terminal
+  input and pipe wakeups as the dominant read-side cost in the sampled OpenRC
+  boot path.  The remaining read hot spot is byte-oriented regular-file
+  consumption by shell/OpenRC helper logic.
 
 Notes:
 
