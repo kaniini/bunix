@@ -1891,7 +1891,8 @@ static void forward_open_handle(struct bunix_msg *message,
 			forget_open(open);
 			reply->words[0] = 0;
 		} else if (message->type == BUNIX_VFS_STAT_META ||
-			   message->type == BUNIX_VFS_READ_FILE_BUFFER) {
+			   message->type == BUNIX_VFS_READ_FILE_BUFFER ||
+			   message->type == BUNIX_VFS_MMAP_PAGE_BUFFER) {
 			message->words[0] = open->lower_handle;
 			if (bunix_ipc_call(open->lower_layer_service, message, reply) != 0) {
 				reply->words[0] = (u64)-1;
@@ -2099,6 +2100,7 @@ int main(void)
 			break;
 		case BUNIX_VFS_STAT_META:
 		case BUNIX_VFS_READ_FILE_BUFFER:
+		case BUNIX_VFS_MMAP_PAGE_BUFFER:
 		case BUNIX_VFS_WRITE_FILE_BUFFER:
 		case BUNIX_VFS_READDIR_BUFFER:
 		case BUNIX_VFS_CHMOD:

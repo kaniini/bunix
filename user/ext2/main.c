@@ -3231,6 +3231,23 @@ static void reply_read_file(struct ext2_open *open,
 	reply->words[1] = done;
 }
 
+static void reply_mmap_page(struct ext2_open *open,
+			    const struct bunix_msg *message,
+			    struct bunix_msg *reply)
+{
+	reply_read_file(open, message, reply);
+	if (reply->words[0] != 0) {
+		return;
+	}
+	if (reply->words[1] == 0) {
+		reply->words[1] = BUNIX_VFS_MMAP_PAGE_BUS;
+		reply->words[2] = 0;
+		return;
+	}
+	reply->words[2] = reply->words[1];
+	reply->words[1] = BUNIX_VFS_MMAP_PAGE_DATA;
+}
+
 static void reply_write_file(struct ext2_open *open,
 			     const struct bunix_msg *message,
 			     struct bunix_msg *reply)
@@ -3593,6 +3610,10 @@ int main(void)
 				break;
 			case BUNIX_VFS_READ_FILE_BUFFER:
 				reply_read_file(open_from_message(&message),
+						&message, &reply);
+				break;
+			case BUNIX_VFS_MMAP_PAGE_BUFFER:
+				reply_mmap_page(open_from_message(&message),
 						&message, &reply);
 				break;
 			case BUNIX_VFS_WRITE_FILE_BUFFER:

@@ -1598,6 +1598,34 @@ int main(void)
 				reply.words[1] = nread;
 			}
 			break;
+		case BUNIX_VFS_MMAP_PAGE_BUFFER:
+			open = open_from_message(message.words[0], &message);
+			if (open == 0 || open->kind != TMPFS_OPEN_FILE ||
+			    message.cap == 0 ||
+			    (message.cap_rights & BUNIX_RIGHT_SEND) == 0) {
+				reply.words[0] = (u64)-1;
+				break;
+			}
+			if (message.words[1] >= open->file->inode->size) {
+				reply.words[0] = 0;
+				reply.words[1] = BUNIX_VFS_MMAP_PAGE_BUS;
+				reply.words[2] = 0;
+				break;
+			}
+			u64 mmap_nread = open->file->inode->size - message.words[1];
+			if (mmap_nread > message.words[2]) {
+				mmap_nread = message.words[2];
+			}
+			if (bunix_buffer_write(message.cap, 0,
+					       open->file->inode->data + message.words[1],
+					       mmap_nread) != 0) {
+				reply.words[0] = (u64)-1;
+			} else {
+				reply.words[0] = 0;
+				reply.words[1] = BUNIX_VFS_MMAP_PAGE_DATA;
+				reply.words[2] = mmap_nread;
+			}
+			break;
 		case BUNIX_VFS_WRITE_FILE_BUFFER:
 			open = open_from_message(message.words[0], &message);
 			if (open == 0 || open->kind != TMPFS_OPEN_FILE ||

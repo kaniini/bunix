@@ -114,6 +114,36 @@ static int test_caught_faults(void)
 
 	child = fork();
 	if (child < 0) {
+		perror("signaltest mmap zero fork");
+		return 1;
+	}
+	if (child == 0) {
+		int fd = open("/tmp/signaltest-mmap-zero", O_CREAT | O_TRUNC | O_RDWR,
+			      0644);
+		char *map;
+
+		if (fd < 0) {
+			_exit(5);
+		}
+		if (ftruncate(fd, 8192) != 0) {
+			_exit(6);
+		}
+		map = mmap(0, 8192, PROT_READ, MAP_PRIVATE, fd, 0);
+		if (map == MAP_FAILED) {
+			_exit(7);
+		}
+		if (map[0] != '\0' || map[4096] != '\0' ||
+		    map[8191] != '\0') {
+			_exit(8);
+		}
+		_exit(44);
+	}
+	if (wait_exit(child, 44, "signaltest mmap zero") != 0) {
+		return 1;
+	}
+
+	child = fork();
+	if (child < 0) {
 		perror("signaltest mmap sigbus fork");
 		return 1;
 	}

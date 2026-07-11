@@ -1933,6 +1933,17 @@ int main(void)
 			}
 			break;
 		}
+		case BUNIX_VFS_MMAP_PAGE_BUFFER: {
+			struct vfs_open *open =
+				open_from_message(message.words[0], &message);
+
+			if (open != 0 && open->kind == VFS_OPEN_REMOTE) {
+				(void)forward_remote_handle(open, &message, &reply);
+			} else {
+				reply.words[0] = (u64)-1;
+			}
+			break;
+		}
 		case BUNIX_VFS_WRITE_FILE_BUFFER: {
 			struct vfs_open *open =
 				open_from_message(message.words[0], &message);

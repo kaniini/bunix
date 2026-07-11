@@ -109,6 +109,10 @@ enum {
 	LINUX_ECHOK = 0000040,
 	LINUX_MAX_WRITE = 65536,
 	LINUX_MAX_MMAP_BUFFER = 1024 * 1024,
+	LINUX_MMAP_PAGE_SIZE = 4096,
+	LINUX_MMAP_PAGE_DATA = BUNIX_VFS_MMAP_PAGE_DATA,
+	LINUX_MMAP_PAGE_ZERO = BUNIX_VFS_MMAP_PAGE_ZERO,
+	LINUX_MMAP_PAGE_BUS = BUNIX_VFS_MMAP_PAGE_BUS,
 	LINUX_MAX_DIRENT_BUFFER = 512 * 1024,
 	LINUX_MAX_PATH = 4096,
 	LINUX_EXEC_MAX_STRING = 128 * 1024,
@@ -379,6 +383,7 @@ struct linux_process {
 	u64 fd_capacity;
 	u64 access_cache_epoch;
 	u64 access_cache_next;
+	u64 last_mmap_page_class;
 	struct linux_access_cache_entry access_cache[LINUX_ACCESS_CACHE_SIZE];
 };
 
@@ -9091,7 +9096,7 @@ static long linux_mmap_read(struct linux_process *process, u64 fd, u64 offset,
 {
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_VFS,
-		.type = BUNIX_VFS_READ_FILE_BUFFER,
+		.type = BUNIX_VFS_MMAP_PAGE_BUFFER,
 		.sender = 0,
 		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 		.reply = 0,
@@ -9106,20 +9111,26 @@ static long linux_mmap_read(struct linux_process *process, u64 fd, u64 offset,
 		}
 		return -LINUX_EINVAL;
 	}
+	if (len > LINUX_MMAP_PAGE_SIZE) {
+		len = LINUX_MMAP_PAGE_SIZE;
+	}
 	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_FILE) {
 		return -LINUX_EBADF;
 	}
 	if (offset >= linux_fd_size(&process->fds[fd])) {
+		process->last_mmap_page_class = LINUX_MMAP_PAGE_BUS;
 		return 0;
 	}
 	if (len > linux_fd_size(&process->fds[fd]) - offset) {
 		len = linux_fd_size(&process->fds[fd]) - offset;
 	}
+	process->last_mmap_page_class = LINUX_MMAP_PAGE_DATA;
 	if (process->fds[fd].path[0] == '/' &&
 	    len <= LINUX_FILE_READ_CACHE_MAX &&
 	    linux_file_read_cache_get(process->fds[fd].path, offset, len,
 				      buffer)) {
+		process->last_mmap_page_class = LINUX_MMAP_PAGE_DATA;
 		return (long)len;
 	}
 
@@ -9131,11 +9142,21 @@ static long linux_mmap_read(struct linux_process *process, u64 fd, u64 offset,
 	if (reply.words[0] != 0) {
 		return linux_vfs_error(reply.words[0]);
 	}
-	if (process->fds[fd].path[0] == '/' && reply.words[1] == len) {
+	process->last_mmap_page_class = reply.words[1];
+	if (reply.words[1] == BUNIX_VFS_MMAP_PAGE_BUS) {
+		return 0;
+	}
+	if (reply.words[1] == BUNIX_VFS_MMAP_PAGE_ZERO) {
+		return (long)reply.words[2];
+	}
+	if (reply.words[1] != BUNIX_VFS_MMAP_PAGE_DATA) {
+		return -LINUX_EIO;
+	}
+	if (process->fds[fd].path[0] == '/' && reply.words[2] == len) {
 		linux_file_read_cache_put(process->fds[fd].path, offset, len,
 					  buffer);
 	}
-	return (long)reply.words[1];
+	return (long)reply.words[2];
 }
 
 static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
@@ -10684,6 +10705,7 @@ int main(void)
 							      message.words[1],
 							      message.words[2],
 							      message.cap);
+			reply.words[1] = process->last_mmap_page_class;
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

@@ -85,6 +85,9 @@ enum {
 	LINUX_STAT_SIZE = 144,
 	LINUX_MAX_SHARED_BUFFER = 1024 * 1024,
 	LINUX_MAX_SYSCALL_BUFFER = 4096,
+	USER_VFS_MMAP_PAGE_DATA = 1,
+	USER_VFS_MMAP_PAGE_ZERO = 2,
+	USER_VFS_MMAP_PAGE_BUS = 3,
 	USER_FOURCC_LINX = ('L') | ('I' << 8) | ('N' << 16) | ('X' << 24),
 	USER_IPC_WORDS = 4,
 	RISCV64_SSTATUS_SUM = 1ULL << 18,
@@ -1359,14 +1362,23 @@ static int linux_mmap_file_into_task(struct task *task, struct ipc_port *linux,
 
 		if (linux_forward_message(linux, reply_port, &request, &reply) != 0 ||
 		    (i64)reply.words[0] < 0 ||
-		    reply.words[0] > chunk) {
+		    reply.words[0] > chunk ||
+		    (reply.words[1] != USER_VFS_MMAP_PAGE_DATA &&
+		     reply.words[1] != USER_VFS_MMAP_PAGE_ZERO &&
+		     reply.words[1] != USER_VFS_MMAP_PAGE_BUS)) {
 			buffer_release(buffer);
 			return -1;
 		}
 		const u64 got = reply.words[0];
+		const u64 page_class = reply.words[1];
 		ipc_message_release(&reply);
-		if (got == 0) {
+		if (page_class == USER_VFS_MMAP_PAGE_BUS || got == 0) {
 			break;
+		}
+		if (page_class == USER_VFS_MMAP_PAGE_ZERO) {
+			done += got;
+			populated = done;
+			continue;
 		}
 		for (u64 copied = 0; copied < got;) {
 			const u64 part = min_u64(got - copied, sizeof(copy));

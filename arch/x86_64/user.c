@@ -341,6 +341,9 @@ enum {
 	USER_VFS_ERR_ACCESS = 2,
 	USER_VFS_ERR_NOTDIR = 3,
 	USER_VFS_ERR_ISDIR = 4,
+	USER_VFS_MMAP_PAGE_DATA = 1,
+	USER_VFS_MMAP_PAGE_ZERO = 2,
+	USER_VFS_MMAP_PAGE_BUS = 3,
 	LINUX_RPC_REGISTER_PROCESS = 1000,
 	LINUX_RPC_FORK_PROCESS = 1001,
 	LINUX_RPC_EXEC_PROCESS = 1002,
@@ -1023,12 +1026,21 @@ static int linux_mmap_file_into_task(struct task *task, struct ipc_port *linux,
 		if (ipc_send(linux, &request) != 0 ||
 		    ipc_recv(reply_port, &reply) != 0 ||
 		    (i64)reply.words[0] < 0 ||
-		    reply.words[0] > chunk) {
+		    reply.words[0] > chunk ||
+		    (reply.words[1] != USER_VFS_MMAP_PAGE_DATA &&
+		     reply.words[1] != USER_VFS_MMAP_PAGE_ZERO &&
+		     reply.words[1] != USER_VFS_MMAP_PAGE_BUS)) {
 			buffer_release(buffer);
 			return -1;
 		}
-		if (reply.words[0] == 0) {
+		if (reply.words[1] == USER_VFS_MMAP_PAGE_BUS ||
+		    reply.words[0] == 0) {
 			break;
+		}
+		if (reply.words[1] == USER_VFS_MMAP_PAGE_ZERO) {
+			done += reply.words[0];
+			populated = done;
+			continue;
 		}
 		for (u64 copied = 0; copied < reply.words[0];) {
 			const u64 copy = min_u64(reply.words[0] - copied,

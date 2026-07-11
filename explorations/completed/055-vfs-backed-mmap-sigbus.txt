@@ -29,17 +29,17 @@ Tasks:
 - [x] Extend task VM region metadata to represent file-backed mappings with
       file identity, file offset, mapping length, protections, and private/COW
       policy.
-- [ ] Replace eager file mmap copying with either fault-time population or
+- [x] Replace eager file mmap copying with either fault-time population or
       explicit VFS-backed mapping metadata that can distinguish EOF zero-fill
       from file-hole SIGBUS cases.
-- [ ] Add a Linux-server/VFS RPC contract for classifying file-backed mmap page
+- [x] Add a Linux-server/VFS RPC contract for classifying file-backed mmap page
       faults and reading the relevant page contents.
-- [ ] Route file-backed mapping holes through the task-fault event path as
+- [x] Route file-backed mapping holes through the task-fault event path as
       SIGBUS with a useful `si_addr` and Linux-compatible `si_code`.
 - [x] Add regressions for file mappings that stay inside file size, partial
       final-page zero-fill where Linux permits it, and invalid file-backed
       access that must deliver SIGBUS.
-- [ ] Re-run focused dynamic-linker, mmap, signal, and boot tests.
+- [x] Re-run focused dynamic-linker, mmap, signal, and boot tests.
 
 Completion criteria:
 
@@ -63,8 +63,8 @@ Implementation Notes:
   pages beyond EOF mapped as anonymous zero pages.  The mmap helper tracks the
   number of bytes actually read, preserves Linux's permitted zero-filled
   partial final page, and unmaps subsequent full pages so later access faults.
-- This is not yet full file-hole support: sparse holes and filesystem-specific
-  invalid extents still need the explicit Linux-server/VFS fault classifier.
+- This is not yet a lazy pager: classification is performed during mmap
+  population instead of by calling VFS on the actual hardware page fault.
 - x86 user page-fault classification now asks generic task VMA metadata whether
   a non-present fault is inside a file-backed mapping.  Those faults are sent
   to the Linux server as `BUNIX_TASK_FAULT_CLASS_BUS`, while ordinary missing
@@ -76,9 +76,21 @@ Implementation Notes:
   pages, verifies the first byte is readable, verifies the partial final page
   zero-fill at byte 4095, and requires `SIGBUS`/`BUS_ADRERR` with `si_addr`
   equal to the first address in the second page.
-- Remaining work: add an explicit Linux-server/VFS fault-classification RPC so
-  sparse-file holes and filesystem-specific invalid extents are classified by
-  the owning filesystem service instead of only by eager EOF population.
+- Added `BUNIX_VFS_MMAP_PAGE_BUFFER`, returning explicit page classes:
+  `DATA`, `ZERO`, and `BUS`.  The central VFS server and unionfs route the op
+  through existing open handles, and tmpfs, squashfs, and ext2 implement it.
+  Tmpfs returns dense data or BUS past EOF, squashfs can report explicit stored
+  zero blocks as ZERO, and ext2 currently materializes readable extents through
+  its existing zero-aware read path.
+- The Linux server now uses the mmap-page VFS op for file mmap population and
+  returns the page class to the arch mmap helper.  Arch mmap code keeps valid
+  ZERO pages mapped as zero-filled pages and leaves BUS pages unmapped so the
+  task-fault path delivers SIGBUS on access.
+- The VFS-backed page classification keeps eager page population for now, but
+  the classification policy is no longer hardcoded in the arch mmap path.
+- The remaining future improvement is a true lazy pager path that asks VFS at
+  page-fault time instead of during mmap population; that is not required for
+  this exploration's SIGBUS correctness criteria.
 - Validation:
   - `git diff --check`
   - `make build/x86_64/bunixos.kernel`
@@ -87,6 +99,7 @@ Implementation Notes:
   - `BUNIX_SHELL_PART=linux-signaltest make test-shell-part`
   - `BUNIX_SHELL_PART=large-io-mount make test-shell-part`
   - focused command harness `/bin/sysracetest` run passed in isolation.
+  - focused command harness `/bin/dyn-hello && /bin/sysracetest` passed.
 - Additional validation note: `BUNIX_SHELL_PART=tmpfs-basic-linux-tests make
   test-shell-part` reached login and proved `/bin/dyn-hello` before one run
   failed at `/bin/sysracetest` with `exec status=139`; a focused rerun of

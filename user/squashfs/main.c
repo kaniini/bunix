@@ -1598,6 +1598,79 @@ static void reply_read_file_buffer(struct squashfs_open *open,
 	reply->words[1] = done;
 }
 
+static void reply_mmap_page_buffer(struct squashfs_open *open,
+				   const struct bunix_msg *message,
+				   struct bunix_msg *reply)
+{
+	const struct squashfs_inode *inode;
+	const u64 file_offset = message->words[1];
+	u64 len = message->words[2];
+	u64 block_index;
+	u64 block_offset;
+	u64 logical_block_size;
+	u64 stored;
+
+	if (open == 0 || open->kind != SQUASHFS_OPEN_NODE ||
+	    open->fs_node == 0 || message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_SEND) == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	inode = &open->fs_node->inode;
+	if (!squashfs_is_regular_type(inode->type)) {
+		reply->words[0] = squashfs_is_directory_type(inode->type) ?
+				  BUNIX_VFS_ERR_ISDIR : BUNIX_VFS_ERR_INVAL;
+		return;
+	}
+	if (file_offset >= inode->size) {
+		reply->words[0] = 0;
+		reply->words[1] = BUNIX_VFS_MMAP_PAGE_BUS;
+		reply->words[2] = 0;
+		return;
+	}
+	if (len > inode->size - file_offset) {
+		len = inode->size - file_offset;
+	}
+	block_index = file_offset / root_super.block_size;
+	block_offset = file_offset % root_super.block_size;
+	logical_block_size = root_super.block_size;
+	if (block_index >= inode->blocks_count || inode->block_sizes == 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (block_index + 1 == inode->blocks_count) {
+		const u64 tail = inode->size - block_index * root_super.block_size;
+
+		if (tail < logical_block_size) {
+			logical_block_size = tail;
+		}
+	}
+	if (len > logical_block_size - block_offset) {
+		len = logical_block_size - block_offset;
+	}
+	stored = inode->block_sizes[block_index];
+	if (stored == 0) {
+		reply->words[0] = 0;
+		reply->words[1] = BUNIX_VFS_MMAP_PAGE_ZERO;
+		reply->words[2] = len;
+		return;
+	}
+	const u64 stored_size = stored & SQUASHFS_BLOCK_SIZE_MASK;
+	if ((stored & SQUASHFS_BLOCK_UNCOMPRESSED) == 0 ||
+	    stored_size < logical_block_size) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (block_read_to_buffer(file_data_disk_offset(inode, block_index) +
+				 block_offset, message->cap, 0, len) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = BUNIX_VFS_MMAP_PAGE_DATA;
+	reply->words[2] = len;
+}
+
 static void forward_open_handle(struct bunix_msg *message,
 				struct bunix_msg *reply)
 {
@@ -1616,6 +1689,8 @@ static void forward_open_handle(struct bunix_msg *message,
 		reply_readdir_buffer(open, message, reply);
 	} else if (message->type == BUNIX_VFS_READ_FILE_BUFFER) {
 		reply_read_file_buffer(open, message, reply);
+	} else if (message->type == BUNIX_VFS_MMAP_PAGE_BUFFER) {
+		reply_mmap_page_buffer(open, message, reply);
 	} else {
 		reply->words[0] = BUNIX_VFS_ERR_INVAL;
 	}
@@ -1852,6 +1927,7 @@ int main(void)
 			case BUNIX_VFS_STAT_META:
 			case BUNIX_VFS_READDIR_BUFFER:
 			case BUNIX_VFS_READ_FILE_BUFFER:
+			case BUNIX_VFS_MMAP_PAGE_BUFFER:
 			case BUNIX_VFS_CLOSE:
 				forward_open_handle(&message, &reply);
 				break;
