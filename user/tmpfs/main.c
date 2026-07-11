@@ -1437,7 +1437,9 @@ int main(void)
 				reply.words[0] = status;
 				break;
 			}
-			reply.words[0] = 0;
+			reply.words[0] =
+				file->inode->type == BUNIX_VFS_TYPE_DIRECTORY ?
+				BUNIX_VFS_ERR_ISDIR : 0;
 			break;
 		case BUNIX_VFS_MKDIR_BUFFER:
 			if (read_resolved_path(&message, path) != 0) {

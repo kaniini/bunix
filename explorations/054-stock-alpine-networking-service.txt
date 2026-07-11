@@ -901,6 +901,42 @@ Validation:
   return `EINVAL`, and another quiet stock probe after the directory-cache
   handle leak fix to see whether the dmesg redirection failure still appears
   after login.
+- Tightened directory creation/open behavior as a general Linux/VFS
+  compatibility fix.  `tmpfs` no longer reports success for
+  `BUNIX_VFS_CREATE_BUFFER` when the target already exists as a directory, and
+  the Linux server rejects `openat()` of an existing directory when the caller
+  requested write or truncate access.  This makes shell redirection to a
+  directory fail with `EISDIR` instead of allowing the path to be treated like
+  a regular file.
+- Validation for the directory-open slice:
+  - `make build/modules/linux.server build/modules/tmpfs.server`
+  - `git diff --check`
+  - `BUNIX_CMD="busybox sh -c ': >/tmp/bunix-redir && echo REDIR_OK'" make
+    test-command`
+  - `BUNIX_CMD='busybox sh -c "busybox mkdir -p /tmp/open-dir-test; if
+    busybox sh -c '\'' : >/tmp/open-dir-test '\''; then exit 1; fi; echo
+    DIR_REDIR_REJECTED"' make test-command`
+  - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part` passed in 82
+    seconds.
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 94
+    seconds.
+- The directory-open fix did not complete the stock OpenRC path.  A
+  stock-networking boot probe with `QEMU_TIMEOUT=320s
+  BUNIX_BOOT_LOGIN_WAIT=260 BUNIX_BOOT_LOGIN_CAPTURE=420 make
+  test-boot-alpine-stock-networking` still failed before login at
+  `build/failures/20260711T085549Z-32532/20260711T090009Z-32532`.  It reached
+  OpenRC dependency caching and then printed `fopen
+  '/run/openrc/deptree': Invalid argument`, followed by `depconfig` failures
+  and a later `Bad file descriptor` report.  This confirms that the remaining
+  blocker is deeper in Linux/VFS/tmpfs file descriptor or runtime-state
+  behavior, not only directory write-open semantics.
+- This exploration can be postponed without losing the working default Alpine
+  boot path, because the generated Bunix networking service remains the
+  default while `ALPINE_NETWORKING_SERVICE=stock` isolates the failing stock
+  OpenRC path.  If postponed, keep this file open as the authoritative stock
+  OpenRC failure record and resume from the latest `deptree`/`depconfig`
+  runtime-state failure rather than restarting the investigation from the
+  older fsck/localmount timeout.
 
 Notes:
 

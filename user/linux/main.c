@@ -5424,6 +5424,28 @@ static long linux_close_vfs_handle(u64 handle)
 	return reply.words[0] == 0 ? 0 : -LINUX_EIO;
 }
 
+static long linux_close_raw_vfs_handle(u64 handle)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_CLOSE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { handle, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (handle == 0) {
+		return 0;
+	}
+	if (bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply) != 0) {
+		return -LINUX_EIO;
+	}
+	return reply.words[0] == 0 ? 0 : -LINUX_EIO;
+}
+
 static long linux_ensure_cwd_handle(struct linux_process *process)
 {
 	struct bunix_msg reply;
@@ -5524,18 +5546,7 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	if (reply.words[0] == 0 &&
 	    (flags & (LINUX_O_CREAT | LINUX_O_EXCL)) ==
 		    (LINUX_O_CREAT | LINUX_O_EXCL)) {
-		struct bunix_msg close = {
-			.protocol = BUNIX_PROTO_VFS,
-			.type = BUNIX_VFS_CLOSE,
-			.sender = 0,
-			.cap_rights = 0,
-			.reply = 0,
-			.cap = 0,
-			.words = { reply.words[1], 0, 0, 0 },
-		};
-		struct bunix_msg ignored;
-
-		(void)bunix_ipc_call(LINUX_HANDLE_VFS, &close, &ignored);
+		(void)linux_close_raw_vfs_handle(reply.words[1]);
 		return -LINUX_EEXIST;
 	}
 	if (reply.words[0] == BUNIX_VFS_ERR_NOENT &&
@@ -5561,18 +5572,14 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	}
 	if ((flags & LINUX_O_DIRECTORY) != 0 &&
 	    reply.words[3] != BUNIX_VFS_TYPE_DIRECTORY) {
-		struct bunix_msg request = {
-			.protocol = BUNIX_PROTO_VFS,
-			.type = BUNIX_VFS_CLOSE,
-			.sender = 0,
-			.cap_rights = 0,
-			.reply = 0,
-			.cap = 0,
-			.words = { reply.words[1], 0, 0, 0 },
-		};
-
-		(void)bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply);
+		(void)linux_close_raw_vfs_handle(reply.words[1]);
 		return -LINUX_ENOTDIR;
+	}
+	if (reply.words[3] == BUNIX_VFS_TYPE_DIRECTORY &&
+	    ((flags & LINUX_O_ACCMODE) != 0 ||
+	     (flags & LINUX_O_TRUNC) != 0)) {
+		(void)linux_close_raw_vfs_handle(reply.words[1]);
+		return -LINUX_EISDIR;
 	}
 	if (opened_key != 0 && linux_console_path(opened_key)) {
 		const u64 remote_handle = reply.words[1];
@@ -5588,35 +5595,13 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 				 LINUX_FD_DIR : LINUX_FD_FILE,
 				 reply.words[1], reply.words[2]);
 	if (fd < 0) {
-		struct bunix_msg request = {
-			.protocol = BUNIX_PROTO_VFS,
-			.type = BUNIX_VFS_CLOSE,
-			.sender = 0,
-			.cap_rights = 0,
-			.reply = 0,
-			.cap = 0,
-			.words = { reply.words[1], 0, 0, 0 },
-		};
-
-		(void)bunix_ipc_call(LINUX_HANDLE_VFS, &request, &reply);
+		(void)linux_close_raw_vfs_handle(reply.words[1]);
 		return fd;
 	}
 	if (linux_fd_open_file_create(&process->fds[fd], reply.words[1],
 				      reply.words[2]) != 0) {
 		const u64 remote_handle = reply.words[1];
-		struct bunix_msg close_reply;
-		struct bunix_msg close_request = {
-			.protocol = BUNIX_PROTO_VFS,
-			.type = BUNIX_VFS_CLOSE,
-			.sender = 0,
-			.cap_rights = 0,
-			.reply = 0,
-			.cap = 0,
-			.words = { remote_handle, 0, 0, 0 },
-		};
-
-		(void)bunix_ipc_call(LINUX_HANDLE_VFS, &close_request,
-				     &close_reply);
+		(void)linux_close_raw_vfs_handle(remote_handle);
 		(void)linux_close(process, (u64)fd);
 		return -LINUX_EMFILE;
 	}
