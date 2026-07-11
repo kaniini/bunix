@@ -70,6 +70,8 @@ Tasks:
       `deptree`, `depconfig`, `fcntl`, `Bad file descriptor`, and `EINVAL`.
 - [x] Extend `/bin/openrctest` to cover the smallest missing OpenRC
       dependency-cache behavior found in the artifacts or source.
+- [x] Add focused runtime diagnostics for the real OpenRC dependency-cache
+      path without enabling broad syscall tracing.
 - [ ] Fix the underlying Linux/VFS/tmpfs/FD correctness bug without
       OpenRC-specific path handling.
 - [ ] Verify the focused guard fails before the fix or explicitly covers the
@@ -128,3 +130,12 @@ Implementation Notes:
   path.  The next step should add focused runtime diagnostics for failed
   `fdopen()` inputs, unsupported `fcntl()` commands, and Linux FD table state
   around the real OpenRC dependency-cache writer.
+- Added `debug-linux-openrc-state` as a focused Linux-server diagnostic for
+  this bug class.  When enabled, it logs only Linux `openat()` failure exits
+  where the path or dirfd is under `/run/openrc`, plus failed or unsupported
+  `fcntl()` calls with FD kind, handle, flags, status flags, shared-open-file
+  offset, size, refcount, and normalized path.  Normal boots are unchanged.
+- Validation for the diagnostic hook:
+  - `make build/modules/linux.server`
+  - `git diff --check`
+  - `BUNIX_CMD=/bin/openrctest make test-command`

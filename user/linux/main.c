@@ -468,6 +468,7 @@ static u64 string_len(const char *text);
 static u64 linux_realtime_seconds(void);
 static int linux_debug_paths_enabled_for_task(const struct linux_process *process);
 static long linux_check_name_max(const char *path);
+static int linux_path_prefix(const char *path, const char *prefix);
 static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
 				u64 path_cap);
 static long alloc_fd(struct linux_process *process, u64 kind, u64 handle,
@@ -2103,6 +2104,134 @@ static int linux_path_prefix(const char *path, const char *prefix)
 		i++;
 	}
 	return path[i] == '\0' || path[i] == '/';
+}
+
+static int linux_debug_openrc_state_enabled(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0) {
+		enabled = bunix_cmdline_has("debug-linux-openrc-state") > 0;
+	}
+	return enabled;
+}
+
+static int linux_debug_openrc_state_applies(const struct linux_process *process,
+					    u64 dirfd, const char *path,
+					    const char *opened_path)
+{
+	if (!linux_debug_openrc_state_enabled()) {
+		return 0;
+	}
+	if (linux_path_prefix(path, "/run/openrc") ||
+	    linux_path_prefix(opened_path, "/run/openrc")) {
+		return 1;
+	}
+	if (process != 0 && dirfd < process->fd_capacity &&
+	    linux_path_prefix(process->fds[dirfd].path, "/run/openrc")) {
+		return 1;
+	}
+	return 0;
+}
+
+static void linux_debug_openrc_state_log_fd(const struct linux_process *process,
+					    const struct linux_fd *fd,
+					    u64 fd_number,
+					    const char *reason,
+					    long result, u64 arg0, u64 arg1)
+{
+	char line[640];
+	u64 cursor = 0;
+
+	if (!linux_debug_openrc_state_enabled()) {
+		return;
+	}
+	append_text(line, sizeof(line), &cursor, "linux-server: openrc-state ");
+	append_text(line, sizeof(line), &cursor, reason);
+	append_text(line, sizeof(line), &cursor, " pid=");
+	append_dec(line, sizeof(line), &cursor, process != 0 ? process->pid : 0);
+	append_text(line, sizeof(line), &cursor, " task=");
+	append_dec(line, sizeof(line), &cursor,
+		   process != 0 ? process->bunix_task : 0);
+	append_text(line, sizeof(line), &cursor, " fd=");
+	append_dec(line, sizeof(line), &cursor, fd_number);
+	append_text(line, sizeof(line), &cursor, " result=");
+	append_long(line, sizeof(line), &cursor, result);
+	append_text(line, sizeof(line), &cursor, " arg0=");
+	append_dec(line, sizeof(line), &cursor, arg0);
+	append_text(line, sizeof(line), &cursor, " arg1=");
+	append_dec(line, sizeof(line), &cursor, arg1);
+	append_text(line, sizeof(line), &cursor, " kind=");
+	append_dec(line, sizeof(line), &cursor, fd != 0 ? fd->kind : 0);
+	append_text(line, sizeof(line), &cursor, " handle=");
+	append_dec(line, sizeof(line), &cursor, fd != 0 ? fd->handle : 0);
+	append_text(line, sizeof(line), &cursor, " flags=");
+	append_dec(line, sizeof(line), &cursor, fd != 0 ? fd->flags : 0);
+	append_text(line, sizeof(line), &cursor, " status=");
+	append_dec(line, sizeof(line), &cursor, fd != 0 ? fd->status_flags : 0);
+	append_text(line, sizeof(line), &cursor, " offset=");
+	append_dec(line, sizeof(line), &cursor, fd != 0 ? linux_fd_offset(fd) : 0);
+	append_text(line, sizeof(line), &cursor, " size=");
+	append_dec(line, sizeof(line), &cursor, fd != 0 ? linux_fd_size(fd) : 0);
+	append_text(line, sizeof(line), &cursor, " refs=");
+	append_dec(line, sizeof(line), &cursor,
+		   fd != 0 && fd->open_file != 0 ? fd->open_file->refs : 0);
+	append_text(line, sizeof(line), &cursor, " path=");
+	if (fd != 0 && fd->path[0] != '\0') {
+		append_text(line, sizeof(line), &cursor, fd->path);
+	}
+	append_char(line, sizeof(line), &cursor, '\n');
+	bunix_console_log(line, cursor);
+}
+
+static void linux_debug_openrc_state_log_path(const struct linux_process *process,
+					      u64 dirfd, const char *phase,
+					      const char *path,
+					      const char *opened_path,
+					      long result, u64 flags)
+{
+	const struct linux_fd *base_fd = 0;
+	char line[720];
+	u64 cursor = 0;
+
+	if (!linux_debug_openrc_state_applies(process, dirfd, path, opened_path)) {
+		return;
+	}
+	if (process != 0 && dirfd < process->fd_capacity) {
+		base_fd = &process->fds[dirfd];
+	}
+	append_text(line, sizeof(line), &cursor, "linux-server: openrc-state ");
+	append_text(line, sizeof(line), &cursor, phase);
+	append_text(line, sizeof(line), &cursor, " pid=");
+	append_dec(line, sizeof(line), &cursor, process != 0 ? process->pid : 0);
+	append_text(line, sizeof(line), &cursor, " task=");
+	append_dec(line, sizeof(line), &cursor,
+		   process != 0 ? process->bunix_task : 0);
+	append_text(line, sizeof(line), &cursor, " dirfd=");
+	append_dec(line, sizeof(line), &cursor, dirfd);
+	append_text(line, sizeof(line), &cursor, " result=");
+	append_long(line, sizeof(line), &cursor, result);
+	append_text(line, sizeof(line), &cursor, " flags=");
+	append_dec(line, sizeof(line), &cursor, flags);
+	append_text(line, sizeof(line), &cursor, " base_kind=");
+	append_dec(line, sizeof(line), &cursor, base_fd != 0 ? base_fd->kind : 0);
+	append_text(line, sizeof(line), &cursor, " base_handle=");
+	append_dec(line, sizeof(line), &cursor,
+		   base_fd != 0 ? base_fd->handle : 0);
+	append_text(line, sizeof(line), &cursor, " base_path=");
+	if (base_fd != 0 && base_fd->path[0] != '\0') {
+		append_text(line, sizeof(line), &cursor, base_fd->path);
+	}
+	append_text(line, sizeof(line), &cursor, " path=");
+	if (path != 0) {
+		append_text(line, sizeof(line), &cursor, path);
+	}
+	append_text(line, sizeof(line), &cursor, " opened=");
+	if (opened_path != 0) {
+		append_text(line, sizeof(line), &cursor, opened_path);
+	}
+	append_char(line, sizeof(line), &cursor, '\n');
+	bunix_console_log(line, cursor);
 }
 
 static u64 linux_cache_domain_for_path(const struct linux_process *process,
@@ -5525,11 +5654,17 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	linux_debug_path_log(process, "openat", path);
 	normalize_result = path_normalize(process->cwd, path, full_path);
 	if (normalize_result != 0) {
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "openat-normalize", path,
+						  0, normalize_result, flags);
 		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
 	if (base_result != 0) {
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "openat-dirfd", path,
+						  0, base_result, flags);
 		return base_result;
 	}
 	if (linux_cache_path_for_dirfd(process, dirfd, path, opened_path) == 0) {
@@ -5545,18 +5680,31 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 			    base_handle, path, 1, &meta) == 0 &&
 		    meta.words[0] == 0 &&
 		    (meta.words[2] >> 32) == BUNIX_VFS_TYPE_SYMLINK) {
+			linux_debug_openrc_state_log_path(process, dirfd,
+							  "openat-nofollow",
+							  path, opened_key,
+							  -LINUX_ELOOP,
+							  flags);
 			return -LINUX_ELOOP;
 		}
 	}
 
 	if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER, base_handle,
 				path, &reply) != 0) {
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "openat-vfs-call", path,
+						  opened_key, -LINUX_ENOENT,
+						  flags);
 		return -LINUX_ENOENT;
 	}
 	if (reply.words[0] == 0 &&
 	    (flags & (LINUX_O_CREAT | LINUX_O_EXCL)) ==
 		    (LINUX_O_CREAT | LINUX_O_EXCL)) {
 		(void)linux_close_raw_vfs_handle(reply.words[1]);
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "openat-exist", path,
+						  opened_key, -LINUX_EEXIST,
+						  flags);
 		return -LINUX_EEXIST;
 	}
 	if (reply.words[0] == BUNIX_VFS_ERR_NOENT &&
@@ -5566,29 +5714,56 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 					      process->bunix_task |
 					      (((mode & ~process->umask) & 0777) << 32),
 					      &reply) != 0) {
+			linux_debug_openrc_state_log_path(process, dirfd,
+							  "openat-create-call",
+							  path, opened_key,
+							  -LINUX_EIO, flags);
 			return -LINUX_EIO;
 		}
 		if (reply.words[0] != 0) {
-			return linux_vfs_error(reply.words[0]);
+			const long result = linux_vfs_error(reply.words[0]);
+
+			linux_debug_openrc_state_log_path(process, dirfd,
+							  "openat-create",
+							  path, opened_key,
+							  result, flags);
+			return result;
 		}
 		linux_vfs_note_mutation(opened_key);
 		if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER,
 					base_handle, path, &reply) != 0) {
+			linux_debug_openrc_state_log_path(process, dirfd,
+							  "openat-reopen",
+							  path, opened_key,
+							  -LINUX_EIO, flags);
 			return -LINUX_EIO;
 		}
 	}
 	if (reply.words[0] != 0) {
-		return linux_vfs_error(reply.words[0]);
+		const long result = linux_vfs_error(reply.words[0]);
+
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "openat-open", path,
+						  opened_key, result, flags);
+		return result;
 	}
 	if ((flags & LINUX_O_DIRECTORY) != 0 &&
 	    reply.words[3] != BUNIX_VFS_TYPE_DIRECTORY) {
 		(void)linux_close_raw_vfs_handle(reply.words[1]);
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "openat-notdir", path,
+						  opened_key, -LINUX_ENOTDIR,
+						  flags);
 		return -LINUX_ENOTDIR;
 	}
 	if (reply.words[3] == BUNIX_VFS_TYPE_DIRECTORY &&
 	    ((flags & LINUX_O_ACCMODE) != 0 ||
 	     (flags & LINUX_O_TRUNC) != 0)) {
 		(void)linux_close_raw_vfs_handle(reply.words[1]);
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "openat-isdir", path,
+						  opened_key, -LINUX_EISDIR,
+						  flags);
 		return -LINUX_EISDIR;
 	}
 	if (opened_key != 0 && linux_console_path(opened_key)) {
@@ -5606,6 +5781,9 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 				 reply.words[1], reply.words[2]);
 	if (fd < 0) {
 		(void)linux_close_raw_vfs_handle(reply.words[1]);
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "openat-alloc-fd", path,
+						  opened_key, fd, flags);
 		return fd;
 	}
 	if (linux_fd_open_file_create(&process->fds[fd], reply.words[1],
@@ -5613,6 +5791,10 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		const u64 remote_handle = reply.words[1];
 		(void)linux_close_raw_vfs_handle(remote_handle);
 		(void)linux_close(process, (u64)fd);
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "openat-open-file",
+						  path, opened_key,
+						  -LINUX_EMFILE, flags);
 		return -LINUX_EMFILE;
 	}
 	if (opened_key != 0) {
@@ -5630,6 +5812,9 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		linux_debug_path_result_log(process, "openat-truncate",
 					    opened_key != 0 ? opened_key : path,
 					    base_result);
+		linux_debug_openrc_state_log_fd(process, &process->fds[fd],
+						(u64)fd, "openat-truncate",
+						base_result, flags, 0);
 		(void)linux_close(process, (u64)fd);
 		return base_result;
 	}
@@ -9486,6 +9671,8 @@ static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 	linux_debug_fcntl_log(cmd);
 
 	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
+		linux_debug_openrc_state_log_fd(process, 0, fd, "fcntl-badfd",
+						-LINUX_EBADF, cmd, arg);
 		return -LINUX_EBADF;
 	}
 
@@ -9535,11 +9722,19 @@ static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 	if (cmd == LINUX_F_SETLK || cmd == LINUX_F_SETLKW ||
 	    cmd == LINUX_F_GETLK) {
 		if (arg == 0) {
+			linux_debug_openrc_state_log_fd(process,
+							&process->fds[fd], fd,
+							"fcntl-lock-efault",
+							-LINUX_EFAULT,
+							cmd, arg);
 			return -LINUX_EFAULT;
 		}
 		return 0;
 	}
 
+	linux_debug_openrc_state_log_fd(process, &process->fds[fd], fd,
+					"fcntl-unsupported",
+					-LINUX_EINVAL, cmd, arg);
 	return -LINUX_EINVAL;
 }
 
