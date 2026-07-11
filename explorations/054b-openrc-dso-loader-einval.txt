@@ -84,3 +84,20 @@ Implementation Notes:
   - Result: same segfault; `linux-strace.log` remained empty, so the next
     trace step should use a focused reproducer or targeted mmap/loader
     diagnostics instead of relying on the archived strace extraction.
+- Extended `/bin/ldsopathtest` to mimic musl `map_library()` segment mapping.
+  Before the kernel-side fix, the test reproduced the first bad API result:
+  `MAP_FIXED` for `/sbin/openrc` at `vaddr=0xa000 len=8192 off=0x9000`
+  returned `EINVAL`.
+- Fixed `vm_unmap_user_range()` to tolerate already-unmapped holes.  This is
+  required for Linux-compatible `MAP_FIXED` replacement because the range
+  being replaced may include pages beyond EOF or pages previously unmapped as
+  part of sparse segment layout.
+- Post-fix evidence:
+  - OpenRC now starts instead of failing to load `librc.so.1` and
+    `libeinfo.so.1`.
+  - The original `/run/openrc/deptree` path reaches `Caching service
+    dependencies ... [ ok ]`.
+  - `/sbin/openrc --help` and the current segment-map test still hang under
+    the command harness, so the loader issue is not complete.  The next pass
+    should handle multi-region `munmap()` / VMA metadata replacement rather
+    than returning to path-open debugging.

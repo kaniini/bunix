@@ -297,7 +297,7 @@ int vm_unmap_user_range(struct vm_space *space, u64 vaddr, u64 len)
 		const u64 phys = arch_vm_unmap_user_page(&space->arch, page);
 
 		if (phys == 0) {
-			return -1;
+			continue;
 		}
 		vm_rpc_free_frame((struct vm_frame){ .addr = phys });
 	}
