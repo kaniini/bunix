@@ -345,9 +345,7 @@ stock)
 esac
 
 materialize_openrc_policy
-if [ "$networking_service" = stock ]; then
-	install_bunix_openrc_providers
-fi
+install_bunix_openrc_providers
 write_runlevel_inventory "$root" "$bunix_runlevels"
 
 find "$root/var/cache/apk" -type f -delete 2>/dev/null || true

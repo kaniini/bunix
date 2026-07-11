@@ -2,17 +2,19 @@ Restore the stock Alpine OpenRC networking service.
 
 Status:
 
-- Postponed.  The stock OpenRC service path remains the intended long-term
-  direction, but it is not required to keep the default Alpine environment
-  usable because the generated Bunix networking service remains the default.
+- Active again.  A trial postponement to
+  `054a-ip-stack-end-to-end-connectivity.txt` showed that the generated Bunix
+  networking-service image also fails before login in the same OpenRC
+  `/run/openrc/deptree` dependency-cache path.  The default Alpine environment
+  is therefore not currently usable enough to run the 054a userspace network
+  checks.
 - Resume this exploration from the `/run/openrc/deptree` and `depconfig`
   runtime-state failure recorded below, not from the older fsck/localmount
   timeout.  The latest blocker is Linux/VFS/tmpfs file descriptor or
   runtime-state behavior around OpenRC's dependency cache, not DHCP, virtio-net
   link bringup, or the IP stack itself.
-- While postponed, continue IP-stack correctness work in
-  `054a-ip-stack-end-to-end-connectivity.txt` using the current default Alpine
-  generated-service path as the interface initialization mechanism.
+- Reconsider postponement only after the default generated-service Alpine boot
+  reaches login reliably again.
 
 Problem:
 
@@ -951,6 +953,19 @@ Validation:
   OpenRC failure record and resume from the latest `deptree`/`depconfig`
   runtime-state failure rather than restarting the investigation from the
   older fsck/localmount timeout.
+- A follow-up attempt to run 054a against the generated-service image proved
+  that the postponement assumption is currently invalid.  The generated image
+  did not reach login before the network test command; with Bunix OpenRC
+  provider scripts installed for both generated and stock networking modes, it
+  still failed in dependency-cache regeneration with `fopen
+  '/run/openrc/deptree': Invalid argument` and `fopen
+  '/run/openrc/depconfig': No such file or directory`.  Artifact:
+  `build/failures/20260711T091603Z-13124/20260711T091904Z-13124`.
+  The 054a test targets are useful once Alpine reaches login again, but 054
+  must remain active until this OpenRC runtime-state blocker is fixed.
+- The shared OpenRC provider rootfs change keeps both packaging modes valid:
+  - `make test-alpine-rootfs`
+  - `make test-alpine-rootfs-stock-networking`
 
 Notes:
 

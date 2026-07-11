@@ -82,7 +82,10 @@ collect_guest_failure_probes() {
 	if ! kill -0 "$qemu_pid" 2>/dev/null; then
 		return
 	fi
-	{
+	if [ ! -e /proc/$$/fd/3 ]; then
+		return
+	fi
+	(
 		printf 'echo __BUNIX_FAILURE_PROBES_BEGIN__\n'
 		printf 'echo "--- /proc/net/config ---"\n'
 		printf 'cat /proc/net/config 2>&1\n'
@@ -95,7 +98,7 @@ collect_guest_failure_probes() {
 		printf 'echo "--- dmesg tail ---"\n'
 		printf 'dmesg 2>&1 | tail -n 80\n'
 		printf 'echo __BUNIX_FAILURE_PROBES_END__\n'
-	} >&3 2>/dev/null || return
+	) >&3 2>/dev/null || return
 	sleep "${BUNIX_FAILURE_GUEST_PROBE_DELAY:-3}"
 }
 

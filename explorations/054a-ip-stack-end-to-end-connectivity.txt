@@ -15,6 +15,10 @@ Follow-up:
   the default generated Bunix networking service path.  Do not treat that as
   completion of the stock OpenRC service goal; it is only the current way to
   obtain a configured interface while debugging IP-stack correctness.
+- A trial run showed this exploration cannot proceed yet: the default
+  generated-service Alpine image also fails before login in the same OpenRC
+  `/run/openrc/deptree` path.  Keep this exploration queued, but resume 054
+  until Alpine reaches login reliably enough to execute the network checks.
 
 Problem:
 
@@ -115,7 +119,7 @@ Investigation targets:
 
 Tasks:
 
-- [ ] Add a deterministic guest test for external IPv4 ping that verifies the
+- [x] Add a deterministic guest test for external IPv4 ping that verifies the
       remote source address and sane TTL values for multiple replies.
 - [ ] Reproduce and fix the reported ping behavior where replies from
       `4.2.2.1` are displayed as coming from `0.0.0.0` or have inconsistent
@@ -123,9 +127,9 @@ Tasks:
 - [ ] Reproduce and fix the reported follow-on ping failures where later echo
       replies produce `recvfrom: Resource temporarily unavailable` instead of
       four successful replies.
-- [ ] Add a deterministic DNS guest test using Alpine's normal resolver path.
+- [x] Add a deterministic DNS guest test using Alpine's normal resolver path.
 - [ ] Make DNS resolution work from BusyBox/Alpine userspace.
-- [ ] Add a deterministic HTTP guest test using BusyBox `wget
+- [x] Add a deterministic HTTP guest test using BusyBox `wget
       http://example.com`.
 - [ ] Make `wget http://example.com` complete successfully over TCP.
 - [ ] Validate `wget http://example.com` end to end with DNS enabled, not by
@@ -149,3 +153,28 @@ Completion criteria:
 - DNS and `wget http://example.com` are validated end to end in the guest after
   OpenRC networking has initialized the interface.
 - Automated tests cover ping correctness, DNS, and HTTP fetch behavior.
+
+Implementation Notes:
+
+- Added `tools/guest-network-external-ping.sh` and
+  `make test-boot-virtio-net-external-ping-strict`.  The guest script checks
+  that default Alpine networking is up, runs `ping -c 4 -W 4 4.2.2.1`, rejects
+  replies attributed to `0.0.0.0`, requires four replies from `4.2.2.1`, and
+  requires all four TTL values to be in range and stable across replies.
+- Added `tools/guest-network-dns-wget.sh` and
+  `make test-boot-virtio-net-dns-wget`.  The guest script checks default
+  Alpine networking, verifies `/etc/resolv.conf`, resolves `example.com` with
+  BusyBox `nslookup`, then fetches `http://example.com` with BusyBox `wget`.
+- Added `make test-boot-virtio-net-external-stack` as a convenience target for
+  running the strict ping and DNS/wget checks sequentially.
+- These targets currently cannot reach their guest assertions because Alpine
+  fails before login in the OpenRC `/run/openrc/deptree` path.  The strict ping
+  target's latest failure artifact is
+  `build/failures/20260711T091603Z-13124/20260711T091904Z-13124`.
+- Validation for the test scaffolding:
+  - `git diff --check`
+  - `make test-alpine-rootfs`
+  - `make test-alpine-rootfs-stock-networking`
+  - `make test-boot-virtio-net-external-ping-strict` currently reaches the
+    OpenRC dependency-cache blocker before login, so it is a useful future
+    regression target but not yet an executable IP-stack assertion.

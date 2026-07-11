@@ -89,18 +89,15 @@ generated)
 	require_grep "#!/bin/sh" "$root/etc/init.d/networking"
 	require_grep "start_networking()" "$root/etc/init.d/networking"
 	require_grep 'ifup -i "$cfgfile" eth0' "$root/etc/init.d/networking"
-	if [ -e "$root/etc/init.d/bunix-dev" ]; then
-		fail "generated mode unexpectedly installed bunix-dev provider"
-	fi
-	if grep -q "Declare Bunix devfs availability" "$root/etc/init.d/devfs"; then
-		fail "generated mode unexpectedly replaced stock devfs provider"
-	fi
-	if grep -q "Declare Bunix sysfs availability" "$root/etc/init.d/sysfs"; then
-		fail "generated mode unexpectedly replaced stock sysfs provider"
-	fi
-	if grep -q "Declare Bunix procfs availability" "$root/etc/init.d/procfs"; then
-		fail "generated mode unexpectedly replaced stock procfs provider"
-	fi
+	require_grep "provide dev dev-mount" "$root/etc/init.d/devfs"
+	require_grep "Declare Bunix sysfs availability" "$root/etc/init.d/sysfs"
+	require_grep "Declare Bunix procfs availability" "$root/etc/init.d/procfs"
+	require_grep "sysinit/devfs	/etc/init.d/devfs" \
+		"$artifact_dir/openrc-bunix-runlevels.tsv"
+	require_grep "sysinit/procfs	/etc/init.d/procfs" \
+		"$artifact_dir/openrc-bunix-runlevels.tsv"
+	require_grep "sysinit/sysfs	/etc/init.d/sysfs" \
+		"$artifact_dir/openrc-bunix-runlevels.tsv"
 	;;
 stock)
 	require_grep "#!/sbin/openrc-run" "$root/etc/init.d/networking"
