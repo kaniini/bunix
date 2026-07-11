@@ -121,10 +121,10 @@ Tasks:
 
 - [x] Add a deterministic guest test for external IPv4 ping that verifies the
       remote source address and sane TTL values for multiple replies.
-- [ ] Reproduce and fix the reported ping behavior where replies from
+- [x] Reproduce and fix the reported ping behavior where replies from
       `4.2.2.1` are displayed as coming from `0.0.0.0` or have inconsistent
       TTLs.
-- [ ] Reproduce and fix the reported follow-on ping failures where later echo
+- [x] Reproduce and fix the reported follow-on ping failures where later echo
       replies produce `recvfrom: Resource temporarily unavailable` instead of
       four successful replies.
 - [x] Add a deterministic DNS guest test using Alpine's normal resolver path.
@@ -171,26 +171,37 @@ Implementation Notes:
   previously failed before login in the OpenRC `/run/openrc/deptree` path.
   After restoring generated mode to a minimal OpenRC policy, the strict ping
   target reaches login and runs the guest assertions.
-- Latest strict ping evidence:
-  `make test-boot-virtio-net-external-ping-strict` reaches the guest script
-  and receives four ICMP replies from `4.2.2.1`, but the TTL values are
-  unstable, with observed values such as `208`, `96`, `32`, and `224` in one
-  run.  Artifact:
-  `build/failures/20260711T100011Z-32096/20260711T100620Z-32096`.
+- Fixed the external IPv4 ping source/TTL path.  The net server now carries
+  the IPv4 TTL from received ICMP packets, and the Linux server preserves
+  socket type so raw IPv4 ICMP sockets receive a synthetic IPv4 header plus
+  ICMP payload instead of interpreting the ICMP payload as an IP header.  This
+  fixes the observed drifting TTL values.
+- `make test-boot-virtio-net-external-ping-strict` now passes.  The target
+  validates four replies from `4.2.2.1` and requires all four reply lines to
+  report `ttl=255` under QEMU user networking.
 - `tools/guest-network-external-ping.sh` now accumulates failure state and
   returns a failing final command when source, count, or TTL assertions fail,
   which avoids masking failures when the harness types command files into an
   interactive shell.
 - The serial command-file path is still fragile for long scripts.  The strict
-  ping target now has explicit command timeouts and slower send pacing, and
-  the guest script avoids long shell control-flow lines.  If it remains flaky,
-  the next test-efficiency slice should replace typed command files with a
-  real guest-side script transport or module-backed runner instead of further
+  ping target now uses a compact one-line command instead of
+  `BUNIX_CMD_FILE`, because command-file injection can overrun the shell input
+  path while long-running commands such as `ping` are still executing.  The
+  next test-efficiency slice should replace typed command files with a real
+  guest-side script transport or module-backed runner instead of further
   tuning serial pacing.
+- A DNS/wget probe now reaches the guest and fails at the expected resolver
+  layer.  `/etc/resolv.conf` is missing, BusyBox `nslookup example.com` falls
+  back to `127.0.0.1` and reports `write to '127.0.0.1': Bad file descriptor`,
+  and `wget http://example.com` fails with `bad address 'example.com'`.
+  Artifact: `build/failures/20260711T105731Z-20972/20260711T110331Z-20972`.
+  The DNS/wget guest script also masks failures today and needs the same
+  final-status hardening as the strict ping test.
 - Validation for the test scaffolding:
   - `git diff --check`
   - `make test-alpine-rootfs`
   - `make test-alpine-rootfs-stock-networking`
-  - `make test-boot-virtio-net-external-ping-strict` currently reaches the
-    OpenRC dependency-cache blocker before login, so it is a useful future
-    regression target but not yet an executable IP-stack assertion.
+  - `make build/modules/net.server`
+  - `make build/modules/linux.server`
+  - `BUNIX_SHELL_PART=network-loopback-ping make test-shell-part`
+  - `make test-boot-virtio-net-external-ping-strict`

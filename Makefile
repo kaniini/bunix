@@ -1561,15 +1561,14 @@ test-boot-virtio-net-external-stack:
 test-boot-virtio-net-external-ping-strict:
 	$(MAKE) ROOTFS_FLAVOR=alpine-squashfs test-boot-virtio-net-external-ping-strict-run
 
-test-boot-virtio-net-external-ping-strict-run: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/guest-network-external-ping.sh tools/test-lib.sh tools/test-command.sh
+test-boot-virtio-net-external-ping-strict-run: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/test-lib.sh tools/test-command.sh
 	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		QEMU_TIMEOUT=300s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
 		BUNIX_LOGIN_TIMEOUT=180 \
 		BUNIX_COMMAND_TIMEOUT=240 \
-		BUNIX_SEND_DELAY=0.2 \
 		BUNIX_FAILURE_GUEST_PROBES=0 \
 		BUNIX_MARKER=BUNIX_NET_EXT_PING_OK \
-		BUNIX_CMD_FILE=tools/guest-network-external-ping.sh \
+		BUNIX_CMD='busybox ping -c 4 -W 4 4.2.2.1 | busybox tee /tmp/p; busybox grep -F "4 packets transmitted, 4 packets received" /tmp/p; test "$$(busybox grep -c "64 bytes from 4.2.2.1:.*ttl=255" /tmp/p)" = 4' \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" sh tools/test-command.sh
 
 test-boot-virtio-net-dns-wget:

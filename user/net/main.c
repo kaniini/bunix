@@ -198,6 +198,7 @@ struct icmp_datagram {
 	u64 family;
 	u64 source_hi;
 	u64 source_lo;
+	u64 ttl;
 	u64 len;
 	unsigned char data[];
 };
@@ -305,7 +306,7 @@ static const struct net_route *net_route_lookup(u64 family, u64 hi, u64 lo);
 static int net_route_matches(const struct net_route *route, u64 family,
 			     u64 hi, u64 lo);
 static int net_addr_is_local(u64 family, u64 hi, u64 lo);
-static int icmp_enqueue(struct icmp_socket *socket, u64 family,
+static int icmp_enqueue(struct icmp_socket *socket, u64 family, u64 ttl,
 			u64 source_hi, u64 source_lo,
 			const unsigned char *data, u64 len);
 
@@ -2260,7 +2261,8 @@ static void packet_ingress_icmp_ipv6(const unsigned char *packet, u64 len)
 	     socket = socket->next) {
 		if (icmp_socket_accepts_ipv6(socket)) {
 			(void)icmp_enqueue(socket, BUNIX_NET_ADDR_FAMILY_IPV6,
-					   src_hi, src_lo, icmp, payload_len);
+					   ip[7], src_hi, src_lo, icmp,
+					   payload_len);
 		}
 	}
 }
@@ -2705,7 +2707,7 @@ static void packet_ingress_icmp_ipv4(const unsigned char *packet, u64 len)
 	     socket = socket->next) {
 		if (icmp_socket_accepts_ipv4(socket)) {
 			(void)icmp_enqueue(socket, BUNIX_NET_ADDR_FAMILY_IPV4,
-					   0, src_ip, ip + ihl,
+					   ip[8], 0, src_ip, ip + ihl,
 					   total_len - ihl);
 		}
 	}
@@ -4863,7 +4865,7 @@ static void icmp_datagrams_free_all(struct icmp_socket *socket)
 	socket->rx_len = 0;
 }
 
-static int icmp_enqueue(struct icmp_socket *socket, u64 family,
+static int icmp_enqueue(struct icmp_socket *socket, u64 family, u64 ttl,
 			u64 source_hi, u64 source_lo,
 			const unsigned char *data, u64 len)
 {
@@ -4880,6 +4882,7 @@ static int icmp_enqueue(struct icmp_socket *socket, u64 family,
 	datagram->family = family;
 	datagram->source_hi = source_hi;
 	datagram->source_lo = source_lo;
+	datagram->ttl = ttl;
 	datagram->len = len;
 	for (u64 i = 0; i < len; i++) {
 		datagram->data[i] = data[i];
@@ -5008,7 +5011,9 @@ static void reply_icmp_sendto(struct bunix_msg *reply,
 	data[1] = 0;
 	icmp_set_checksum(data, len, socket->family, dest.hi, dest.lo,
 			  source_hi, source_lo);
-	if (icmp_enqueue(socket, socket->family, dest.hi, dest.lo,
+	if (icmp_enqueue(socket, socket->family,
+			 socket->family == BUNIX_NET_ADDR_FAMILY_IPV4 ? 64 : 255,
+			 dest.hi, dest.lo,
 			 data, len) != 0) {
 		bunix_free(data);
 		reply->words[0] = (u64)-1;
@@ -5026,10 +5031,12 @@ static void reply_icmp_recv(struct bunix_msg *reply,
 {
 	struct icmp_socket *socket = icmp_find(message->words[0]);
 	const u64 max_len = message->words[1];
+	const u64 offset = message->words[2];
 	struct icmp_datagram *datagram;
 	u64 len;
 
-	if (socket == 0 || max_len == 0 || message->cap == 0) {
+	if (socket == 0 || max_len == 0 || message->cap == 0 ||
+	    offset > NET_PACKET_MAX) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -5040,7 +5047,7 @@ static void reply_icmp_recv(struct bunix_msg *reply,
 		return;
 	}
 	len = datagram->len < max_len ? datagram->len : max_len;
-	if (bunix_buffer_write(message->cap, 0, datagram->data, len) != 0) {
+	if (bunix_buffer_write(message->cap, offset, datagram->data, len) != 0) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -5051,7 +5058,8 @@ static void reply_icmp_recv(struct bunix_msg *reply,
 	socket->rx_len--;
 	reply->words[0] = 0;
 	reply->words[1] = len;
-	reply->words[2] = datagram->source_hi;
+	reply->words[2] = datagram->family == BUNIX_NET_ADDR_FAMILY_IPV4 ?
+			  datagram->ttl : datagram->source_hi;
 	reply->words[3] = datagram->source_lo;
 	bunix_free(datagram);
 }

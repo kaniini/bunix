@@ -288,6 +288,7 @@ struct linux_fd {
 	u64 size;
 	u64 flags;
 	u64 status_flags;
+	u64 socket_type;
 	struct linux_open_file *open_file;
 	char path[LINUX_MAX_PATH];
 };
@@ -2844,6 +2845,7 @@ static int linux_process_init_fds(struct linux_process *process)
 		process->fds[fd].size = 0;
 		process->fds[fd].flags = 0;
 		process->fds[fd].status_flags = 0;
+		process->fds[fd].socket_type = 0;
 		process->fds[fd].open_file = 0;
 		process->fds[fd].path[0] = '\0';
 	}
@@ -2890,6 +2892,7 @@ static int linux_process_ensure_fds(struct linux_process *process, u64 count)
 		fds[fd].size = 0;
 		fds[fd].flags = 0;
 		fds[fd].status_flags = 0;
+		fds[fd].socket_type = 0;
 		fds[fd].open_file = 0;
 		fds[fd].path[0] = '\0';
 	}
@@ -2910,6 +2913,7 @@ static long alloc_fd(struct linux_process *process, u64 kind, u64 handle,
 				process->fds[fd].size = size;
 				process->fds[fd].flags = 0;
 				process->fds[fd].status_flags = 0;
+				process->fds[fd].socket_type = 0;
 				process->fds[fd].open_file = 0;
 				process->fds[fd].path[0] = '\0';
 				return (long)fd;
@@ -3018,6 +3022,7 @@ static long linux_pipe_create(struct linux_process *process, u64 flags,
 	right = alloc_fd(process, LINUX_FD_PIPE_WRITE, pipe->id, 0);
 	if (right < 0) {
 		process->fds[left].kind = 0;
+		process->fds[left].socket_type = 0;
 		(void)bunix_id_remove(&pipe_ids, pipe->id);
 		bunix_free(pipe);
 		return right;
@@ -7867,6 +7872,143 @@ static long linux_write_sockaddr_at(u64 buffer, u64 offset, u64 max_len,
 	return (long)actual;
 }
 
+static void linux_net_write_be16(unsigned char *data, u64 value)
+{
+	data[0] = (unsigned char)((value >> 8) & 0xff);
+	data[1] = (unsigned char)(value & 0xff);
+}
+
+static void linux_net_write_be32(unsigned char *data, u64 value)
+{
+	data[0] = (unsigned char)((value >> 24) & 0xff);
+	data[1] = (unsigned char)((value >> 16) & 0xff);
+	data[2] = (unsigned char)((value >> 8) & 0xff);
+	data[3] = (unsigned char)(value & 0xff);
+}
+
+static u64 linux_net_checksum_sum(const unsigned char *data, u64 len, u64 sum)
+{
+	for (u64 i = 0; i < len; i++) {
+		sum += (i & 1) == 0 ? ((u64)data[i] << 8) : data[i];
+		while (sum >> 16) {
+			sum = (sum & 0xffff) + (sum >> 16);
+		}
+	}
+	return sum;
+}
+
+static unsigned short linux_net_checksum_finish(u64 sum)
+{
+	while (sum >> 16) {
+		sum = (sum & 0xffff) + (sum >> 16);
+	}
+	return (unsigned short)(~sum & 0xffff);
+}
+
+static u64 linux_net_default_ipv4_addr(void)
+{
+	const long default_iface = linux_net_default_packet_interface();
+	struct bunix_msg reply;
+	u64 count;
+
+	if (linux_net_request(BUNIX_NET_ADDR_COUNT, 0, 0, 0, 0, 0, 0,
+			      &reply) != 0) {
+		return 0;
+	}
+	count = reply.words[1];
+	for (u64 i = 0; i < count; i++) {
+		struct bunix_net_addr_info addr;
+		long buffer = bunix_buffer_create(sizeof(addr));
+		int ok;
+
+		if (buffer <= 0) {
+			return 0;
+		}
+		ok = linux_net_request(BUNIX_NET_ADDR_AT, (u64)buffer,
+				       BUNIX_RIGHT_SEND, i, 0, 0, 0,
+				       &reply) == 0 &&
+		     bunix_buffer_read((u64)buffer, 0, &addr, sizeof(addr)) == 0;
+		bunix_handle_close((u64)buffer);
+		if (!ok || addr.family != BUNIX_NET_ADDR_FAMILY_IPV4) {
+			continue;
+		}
+		if (default_iface >= 0 && addr.iface == (u64)default_iface) {
+			return addr.addr_lo;
+		}
+		if (default_iface < 0 && addr.addr_lo != 0x7f000001) {
+			return addr.addr_lo;
+		}
+	}
+	return 0;
+}
+
+static long linux_icmp_raw_ipv4_recv(struct linux_process *process, u64 fd,
+				     u64 len, u64 buffer, u64 addr_len,
+				     u64 *actual_addr_len)
+{
+	struct bunix_msg reply;
+	unsigned char header[20];
+	u64 icmp_len;
+	u64 packet_len;
+	u64 source_ip;
+	u64 dest_ip;
+	u64 ttl;
+	unsigned short checksum;
+
+	if (process == 0 || fd >= process->fd_capacity || len <= 20 ||
+	    buffer == 0) {
+		return -LINUX_EAGAIN;
+	}
+	if (linux_net_call(BUNIX_NET_ICMP_RECV, buffer, BUNIX_RIGHT_SEND,
+			   process->fds[fd].offset, len - 20, 20, 0,
+			   &reply) != 0) {
+		return -LINUX_EAGAIN;
+	}
+	icmp_len = reply.words[1];
+	packet_len = 20 + icmp_len;
+	if (packet_len > len) {
+		return -LINUX_EFAULT;
+	}
+	source_ip = reply.words[3];
+	ttl = reply.words[2] & 0xff;
+	if (ttl == 0) {
+		ttl = 64;
+	}
+	dest_ip = linux_net_default_ipv4_addr();
+	zero_bytes((char *)header, sizeof(header));
+	header[0] = 0x45;
+	linux_net_write_be16(header + 2, packet_len);
+	header[8] = (unsigned char)ttl;
+	header[9] = LINUX_IPPROTO_ICMP;
+	linux_net_write_be32(header + 12, source_ip);
+	linux_net_write_be32(header + 16, dest_ip);
+	checksum = linux_net_checksum_finish(
+		linux_net_checksum_sum(header, sizeof(header), 0));
+	header[10] = (unsigned char)((checksum >> 8) & 0xff);
+	header[11] = (unsigned char)(checksum & 0xff);
+	if (bunix_buffer_write(buffer, 0, header, sizeof(header)) != 0) {
+		return -LINUX_EFAULT;
+	}
+	if (addr_len != 0) {
+		const struct linux_sockaddr addr = {
+			.family = LINUX_AF_INET,
+			.hi = 0,
+			.lo = source_ip,
+			.port = 0,
+		};
+		const long actual = linux_write_sockaddr_at(buffer, packet_len,
+							    addr_len, &addr);
+
+		if (actual < 0) {
+			return actual;
+		}
+		if (actual_addr_len != 0) {
+			*actual_addr_len = (u64)actual;
+		}
+	}
+	return (long)packet_len;
+}
+
 static long linux_socket_addr(struct linux_process *process, u64 fd, u64 max_len,
 			      u64 buffer, int peer, u64 *actual_len)
 {
@@ -8030,7 +8172,9 @@ static long linux_getsockopt(struct linux_process *process, u64 fd, u64 level,
 		return -LINUX_ENOTSOCK;
 	}
 	if (level == LINUX_SOL_SOCKET && optname == LINUX_SO_TYPE) {
-		if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
+		if (process->fds[fd].socket_type != 0) {
+			value = (int)process->fds[fd].socket_type;
+		} else if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
 		    process->fds[fd].handle == LINUX_SOCKET_UNIX_DGRAM) {
 			value = LINUX_SOCK_DGRAM;
 		} else if (process->fds[fd].handle == LINUX_SOCKET_NET_PACKET) {
@@ -8088,6 +8232,9 @@ static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 			      base_type == LINUX_SOCK_DGRAM ?
 			      LINUX_SOCKET_UNIX_DGRAM :
 			      LINUX_SOCKET_UNIX_STREAM, 0);
+		if (fd >= 0) {
+			process->fds[fd].socket_type = base_type;
+		}
 		if (fd >= 0 && (type & LINUX_SOCK_CLOEXEC) != 0) {
 			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
 		}
@@ -8100,6 +8247,9 @@ static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 		}
 		fd = alloc_fd(process, LINUX_FD_SOCKET,
 			      LINUX_SOCKET_NETLINK_ROUTE, protocol);
+		if (fd >= 0) {
+			process->fds[fd].socket_type = base_type;
+		}
 		if (fd >= 0 && (type & LINUX_SOCK_CLOEXEC) != 0) {
 			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
 		}
@@ -8112,6 +8262,9 @@ static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 		}
 		fd = alloc_fd(process, LINUX_FD_SOCKET,
 			      LINUX_SOCKET_NET_PACKET, protocol);
+		if (fd >= 0) {
+			process->fds[fd].socket_type = base_type;
+		}
 		if (fd >= 0 && (type & LINUX_SOCK_CLOEXEC) != 0) {
 			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
 		}
@@ -8141,6 +8294,7 @@ static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 			      domain);
 		if (fd >= 0) {
 			process->fds[fd].offset = protocol;
+			process->fds[fd].socket_type = base_type;
 		}
 		if (fd >= 0 && (type & LINUX_SOCK_CLOEXEC) != 0) {
 			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
@@ -8160,6 +8314,7 @@ static long linux_socket(struct linux_process *process, u64 domain, u64 type,
 		      domain);
 	if (fd >= 0) {
 		process->fds[fd].offset = reply.words[1];
+		process->fds[fd].socket_type = base_type;
 		linux_net_socket_ref_add(&process->fds[fd]);
 	}
 	if (fd >= 0 && (type & LINUX_SOCK_CLOEXEC) != 0) {
@@ -8530,6 +8685,27 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 	if (fd >= process->fd_capacity ||
 	    process->fds[fd].kind != LINUX_FD_SOCKET) {
 		return -LINUX_ENOTSOCK;
+	}
+	if (process->fds[fd].handle == LINUX_SOCKET_NET_ICMP &&
+	    process->fds[fd].socket_type == LINUX_SOCK_RAW &&
+	    process->fds[fd].size == LINUX_AF_INET) {
+		for (u64 retry = 0;; retry++) {
+			const long result = linux_icmp_raw_ipv4_recv(process, fd,
+								    len, buffer,
+								    addr_len,
+								    actual_addr_len);
+
+			if (result != -((long)LINUX_EAGAIN)) {
+				return result;
+			}
+			if (!nonblock && linux_alarm_expire_if_ready(process)) {
+				return -LINUX_EINTR;
+			}
+			if (nonblock || retry >= LINUX_RECV_BLOCK_RETRIES) {
+				return -LINUX_EAGAIN;
+			}
+			(void)bunix_sleep_ns(LINUX_RECV_BLOCK_SLEEP_NS);
+		}
 	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
 	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP ||
@@ -9183,6 +9359,7 @@ static long linux_close(struct linux_process *process, u64 fd)
 	process->fds[fd].size = 0;
 	process->fds[fd].flags = 0;
 	process->fds[fd].status_flags = 0;
+	process->fds[fd].socket_type = 0;
 	process->fds[fd].open_file = 0;
 	process->fds[fd].path[0] = '\0';
 	return 0;
