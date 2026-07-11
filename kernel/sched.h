@@ -267,6 +267,7 @@ int task_add_or_extend_vm_mapping(struct task *task, u64 base, u64 len,
 int task_vm_range_is_free(struct task *task, u64 base, u64 len);
 int task_protect_vm_region(struct task *task, u64 base, u64 len, u32 prot);
 int task_remove_vm_region(struct task *task, u64 base, u64 len);
+int task_vm_fault_is_file_backed(struct task *task, u64 addr);
 int task_handle_cow_fault(struct task *task, u64 addr, int write_fault);
 void task_clear_vm_regions(struct task *task);
 u64 task_vm_region_count(const struct task *task);

@@ -24,9 +24,9 @@ Constraints:
 
 Tasks:
 
-- [ ] Inventory current Linux mmap, VFS read, VM region metadata, task clone,
+- [x] Inventory current Linux mmap, VFS read, VM region metadata, task clone,
       munmap, mprotect, and fault classification paths.
-- [ ] Extend task VM region metadata to represent file-backed mappings with
+- [x] Extend task VM region metadata to represent file-backed mappings with
       file identity, file offset, mapping length, protections, and private/COW
       policy.
 - [ ] Replace eager file mmap copying with either fault-time population or
@@ -36,7 +36,7 @@ Tasks:
       faults and reading the relevant page contents.
 - [ ] Route file-backed mapping holes through the task-fault event path as
       SIGBUS with a useful `si_addr` and Linux-compatible `si_code`.
-- [ ] Add regressions for file mappings that stay inside file size, partial
+- [x] Add regressions for file mappings that stay inside file size, partial
       final-page zero-fill where Linux permits it, and invalid file-backed
       access that must deliver SIGBUS.
 - [ ] Re-run focused dynamic-linker, mmap, signal, and boot tests.
@@ -47,3 +47,48 @@ Completion criteria:
 - A focused test can catch SIGBUS from a file-backed mmap hole and verify
   `siginfo_t.si_addr`.
 - Existing SIGSEGV/SIGBUS default and caught-signal tests still pass.
+
+Implementation Notes:
+
+- Inventory result: x86 and riscv64 Linux `mmap` paths were allocating full
+  anonymous ranges and eagerly copying file bytes through the existing Linux
+  server `BUNIX_LINUX_MMAP` read RPC.  `task_vm_region` already carried object
+  type, object id, offset, length, flags, and protections, and fork/munmap/
+  mprotect already preserved that metadata.  The missing piece was that file
+  mappings were registered as anonymous after the eager copy.
+- File-backed Linux `mmap` now registers VMAs as `TASK_VM_OBJECT_FILE` with
+  the fd as the current object id and the mmap offset as the object offset.
+  Anonymous mappings remain `TASK_VM_OBJECT_ANON`.
+- File mmap still uses eager population for now, but it no longer leaves full
+  pages beyond EOF mapped as anonymous zero pages.  The mmap helper tracks the
+  number of bytes actually read, preserves Linux's permitted zero-filled
+  partial final page, and unmaps subsequent full pages so later access faults.
+- This is not yet full file-hole support: sparse holes and filesystem-specific
+  invalid extents still need the explicit Linux-server/VFS fault classifier.
+- x86 user page-fault classification now asks generic task VMA metadata whether
+  a non-present fault is inside a file-backed mapping.  Those faults are sent
+  to the Linux server as `BUNIX_TASK_FAULT_CLASS_BUS`, while ordinary missing
+  mappings remain SIGSEGV/MAPERR.
+- x86 signal-frame construction now distinguishes alignment-check SIGBUS
+  (`BUS_ADRALN`) from file-backed mapping SIGBUS (`BUS_ADRERR`) and preserves
+  the faulting `si_addr`.
+- The existing `signaltest` regression now also maps `/hello.txt` for two
+  pages, verifies the first byte is readable, verifies the partial final page
+  zero-fill at byte 4095, and requires `SIGBUS`/`BUS_ADRERR` with `si_addr`
+  equal to the first address in the second page.
+- Remaining work: add an explicit Linux-server/VFS fault-classification RPC so
+  sparse-file holes and filesystem-specific invalid extents are classified by
+  the owning filesystem service instead of only by eager EOF population.
+- Validation:
+  - `git diff --check`
+  - `make build/x86_64/bunixos.kernel`
+  - `make build/modules/signaltest.user`
+  - `ARCH=riscv64 make build/riscv64/bunixos.kernel`
+  - `BUNIX_SHELL_PART=linux-signaltest make test-shell-part`
+  - `BUNIX_SHELL_PART=large-io-mount make test-shell-part`
+  - focused command harness `/bin/sysracetest` run passed in isolation.
+- Additional validation note: `BUNIX_SHELL_PART=tmpfs-basic-linux-tests make
+  test-shell-part` reached login and proved `/bin/dyn-hello` before one run
+  failed at `/bin/sysracetest` with `exec status=139`; a focused rerun of
+  `/bin/sysracetest` passed.  Treat that as residual stress-test flakiness to
+  watch, not as completion evidence for this exploration.

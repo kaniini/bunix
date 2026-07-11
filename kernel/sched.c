@@ -2824,6 +2824,28 @@ int task_remove_vm_region(struct task *task, u64 base, u64 len)
 	return -1;
 }
 
+int task_vm_fault_is_file_backed(struct task *task, u64 addr)
+{
+	const u64 page = addr & ~(VM_PAGE_SIZE - 1);
+
+	if (task == 0) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	for (u32 i = 0; i < task->vm_region_count; i++) {
+		const struct task_vm_region *region = &task->vm_regions[i];
+
+		if (page >= region->base && page < region_end(region) &&
+		    region->object_type == TASK_VM_OBJECT_FILE) {
+			spin_unlock_irqrestore(&task->lock, flags);
+			return 1;
+		}
+	}
+	spin_unlock_irqrestore(&task->lock, flags);
+	return 0;
+}
+
 int task_handle_cow_fault(struct task *task, u64 addr, int write_fault)
 {
 	const u64 page = addr & ~(VM_PAGE_SIZE - 1);

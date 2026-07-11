@@ -1,12 +1,18 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#ifndef BUS_ADRERR
+#define BUS_ADRERR 2
+#endif
 
 static int signal_pipe[2] = { -1, -1 };
 static int expected_fault_signal;
@@ -103,6 +109,43 @@ static int test_caught_faults(void)
 		_exit(3);
 	}
 	if (wait_exit(child, 43, "signaltest sigbus") != 0) {
+		return 1;
+	}
+
+	child = fork();
+	if (child < 0) {
+		perror("signaltest mmap sigbus fork");
+		return 1;
+	}
+	if (child == 0) {
+		int fd = open("/hello.txt", O_RDONLY);
+		char *map;
+		volatile char value;
+
+		if (fd < 0) {
+			_exit(5);
+		}
+		map = mmap(0, 8192, PROT_READ, MAP_PRIVATE, fd, 0);
+		if (map == MAP_FAILED) {
+			_exit(6);
+		}
+		if (map[0] == '\0') {
+			_exit(7);
+		}
+		if (map[4095] != '\0') {
+			_exit(8);
+		}
+		expected_fault_signal = SIGBUS;
+		expected_fault_code = BUS_ADRERR;
+		expected_fault_addr = map + 4096;
+		if (sigaction(SIGBUS, &action, 0) != 0) {
+			_exit(2);
+		}
+		value = *(volatile char *)(map + 4096);
+		(void)value;
+		_exit(3);
+	}
+	if (wait_exit(child, 43, "signaltest mmap sigbus") != 0) {
 		return 1;
 	}
 

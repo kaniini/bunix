@@ -57,6 +57,7 @@ enum {
 	LINUX_SEGV_MAPERR = 1,
 	LINUX_SEGV_ACCERR = 2,
 	LINUX_BUS_ADRALN = 1,
+	LINUX_BUS_ADRERR = 2,
 	RFLAGS_AC = 1u << 18,
 };
 
@@ -522,15 +523,18 @@ static u64 user_fault_access(const struct arch_interrupt_frame *frame)
 	return TASK_FAULT_ACCESS_READ;
 }
 
-static u64 user_fault_class(const struct arch_interrupt_frame *frame)
+static u64 user_fault_class(const struct arch_interrupt_frame *frame,
+			    u64 fault_addr)
 {
 	if (frame->vector == 17) {
 		return TASK_FAULT_CLASS_BUS;
 	}
 	if (frame->vector == 14) {
-		return (frame->error_code & 1) != 0 ?
-			TASK_FAULT_CLASS_PROTECTION :
-			TASK_FAULT_CLASS_MAPPING;
+		if ((frame->error_code & 1) != 0) {
+			return TASK_FAULT_CLASS_PROTECTION;
+		}
+		return task_vm_fault_is_file_backed(task_current(), fault_addr) ?
+		       TASK_FAULT_CLASS_BUS : TASK_FAULT_CLASS_MAPPING;
 	}
 	if (frame->vector == 13) {
 		return TASK_FAULT_CLASS_PROTECTION;
@@ -615,7 +619,11 @@ static int write_signal_frame(struct arch_interrupt_frame *frame,
 			       LINUX_SEGV_ACCERR : LINUX_SEGV_MAPERR;
 		siginfo.addr = event->fault_addr;
 	} else if (event != 0 && signal == LINUX_SIGBUS) {
-		siginfo.code = LINUX_BUS_ADRALN;
+		const u64 fault_class = event->flags >> 32;
+
+		siginfo.code = fault_class == TASK_FAULT_CLASS_BUS &&
+			       event->trap != 17 ? LINUX_BUS_ADRERR :
+			       LINUX_BUS_ADRALN;
 		siginfo.addr = event->fault_addr;
 	}
 
@@ -654,7 +662,7 @@ static int notify_linux_task_fault(struct arch_interrupt_frame *frame, u64 cr2)
 		.ip = frame->rip,
 		.sp = frame->rsp,
 		.flags = user_fault_access(frame) |
-			(user_fault_class(frame) << 32),
+			(user_fault_class(frame, cr2) << 32),
 		.arch0 = frame->cs,
 		.arch1 = frame->rflags,
 	};
@@ -743,7 +751,7 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 	    user_fault_signal_vector(frame->vector)) {
 		if (frame->vector == 14 &&
 		    user_fault_access(frame) == TASK_FAULT_ACCESS_WRITE &&
-		    user_fault_class(frame) == TASK_FAULT_CLASS_PROTECTION &&
+		    user_fault_class(frame, cr2) == TASK_FAULT_CLASS_PROTECTION &&
 		    task_handle_cow_fault(task_current(), cr2, 1) == 0) {
 			return;
 		}
