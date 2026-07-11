@@ -983,6 +983,15 @@ Validation:
   `208`, `96`, `32`, and `224` in one run.  Artifact:
   `build/failures/20260711T100011Z-32096/20260711T100620Z-32096`.
   Continue with `054a-ip-stack-end-to-end-connectivity.txt`.
+- Added `/bin/openrctest` as a focused Linux userspace guard for the latest
+  OpenRC runtime-state failure.  It creates `/run/openrc`, repeatedly opens
+  `/run/openrc/deptree` with `O_CREAT|O_TRUNC`, wraps the FD with `fdopen()`,
+  writes through stdio, closes, reopens, and verifies content; it also covers
+  `/run/openrc/depconfig`.  `BUNIX_CMD=/bin/openrctest make test-command`
+  passes, proving the simple `openat()` plus `fdopen()` plus truncate path is
+  not enough to reproduce the visible stock OpenRC failure.  The remaining
+  blocker is still a broader runtime-state/file-descriptor interaction in the
+  real OpenRC dependency-cache path.
 
 Notes:
 
