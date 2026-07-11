@@ -144,6 +144,12 @@ enum {
 	LINUX_FILE_READ_CACHE_MAX = 4096,
 	LINUX_FILE_READAHEAD_SIZE = 4096,
 	LINUX_FILE_READAHEAD_TRIGGER_MAX = 256,
+	LINUX_DIR_CACHE_SIZE = 16,
+	LINUX_DIR_CACHE_MAX_ENTRIES = 128,
+	LINUX_CLOCK_REALTIME = 0,
+	LINUX_CLOCK_MONOTONIC = 1,
+	/* 2026-01-01 UTC until the time service grows an RTC-backed wall clock. */
+	LINUX_REALTIME_BOOT_SECONDS = 1767225600ull,
 	LINUX_CACHE_DOMAIN_OTHER = 0,
 	LINUX_CACHE_DOMAIN_ETC = 1,
 	LINUX_CACHE_DOMAIN_RUN = 2,
@@ -325,6 +331,18 @@ struct linux_file_read_cache_entry {
 	char data[LINUX_FILE_READ_CACHE_MAX];
 };
 
+struct linux_dir_cache_entry {
+	u64 valid;
+	u64 cache_domain;
+	u64 cache_epoch;
+	u64 count;
+	char path[LINUX_MAX_PATH];
+	struct {
+		u64 type;
+		char name[LINUX_NAME_MAX + 1];
+	} entries[LINUX_DIR_CACHE_MAX_ENTRIES];
+};
+
 struct linux_process {
 	u64 pid;
 	u64 tid;
@@ -406,6 +424,8 @@ static u64 linux_global_path_cache_next;
 static struct linux_file_read_cache_entry
 	linux_file_read_cache[LINUX_FILE_READ_CACHE_SIZE];
 static u64 linux_file_read_cache_next;
+static struct linux_dir_cache_entry linux_dir_cache[LINUX_DIR_CACHE_SIZE];
+static u64 linux_dir_cache_next;
 static struct bunix_map file_refs;
 static struct bunix_map net_socket_refs;
 static struct bunix_map tty_input_tasks;
@@ -438,6 +458,8 @@ static void linux_tty_bind_session(struct linux_tty *tty,
 static void linux_tty_note_process(struct linux_tty *tty,
 				   const struct linux_process *process);
 static u64 string_len(const char *text);
+static u64 linux_realtime_seconds(void);
+static int linux_debug_paths_enabled_for_task(const struct linux_process *process);
 static long linux_check_name_max(const char *path);
 static long linux_read_path_arg(u64 path_buffer, u64 path_len, char *path,
 				u64 path_cap);
@@ -1104,6 +1126,50 @@ static void linux_debug_path_log(const struct linux_process *process,
 	bunix_console_log(line, cursor);
 }
 
+static void linux_debug_path_result_log(const struct linux_process *process,
+					const char *syscall, const char *path,
+					long result)
+{
+	char line[352];
+	u64 cursor = 0;
+
+	if (!linux_debug_paths_enabled_for_task(process)) {
+		return;
+	}
+	append_text(line, sizeof(line), &cursor, "linux-server: ");
+	append_text(line, sizeof(line), &cursor, syscall);
+	append_text(line, sizeof(line), &cursor, " result pid=");
+	append_dec(line, sizeof(line), &cursor,
+		   process != 0 ? process->pid : 0);
+	append_text(line, sizeof(line), &cursor, " task=");
+	append_dec(line, sizeof(line), &cursor,
+		   process != 0 ? process->bunix_task : 0);
+	append_text(line, sizeof(line), &cursor, " result=");
+	append_long(line, sizeof(line), &cursor, result);
+	append_text(line, sizeof(line), &cursor, " path=");
+	if (path != 0) {
+		append_text(line, sizeof(line), &cursor, path);
+	}
+	append_char(line, sizeof(line), &cursor, '\n');
+	bunix_console_log(line, cursor);
+}
+
+static void linux_debug_path_arg_result_log(const struct linux_process *process,
+					    const char *syscall,
+					    u64 path_len, u64 path_buffer,
+					    long result)
+{
+	char path[LINUX_MAX_PATH];
+
+	if (!linux_debug_paths_enabled_for_task(process)) {
+		return;
+	}
+	if (linux_read_path_arg(path_buffer, path_len, path, sizeof(path)) != 0) {
+		path[0] = '\0';
+	}
+	linux_debug_path_result_log(process, syscall, path, result);
+}
+
 static int linux_debug_paths_enabled_for_task(const struct linux_process *process)
 {
 	char task_token[40];
@@ -1464,6 +1530,20 @@ static void string_copy(char *dst, const char *src)
 	u64 i = 0;
 
 	while (i + 1 < LINUX_MAX_PATH && src[i] != '\0') {
+		dst[i] = src[i];
+		i++;
+	}
+	dst[i] = '\0';
+}
+
+static void string_copy_n(char *dst, u64 dst_size, const char *src)
+{
+	u64 i = 0;
+
+	if (dst == 0 || dst_size == 0) {
+		return;
+	}
+	while (i + 1 < dst_size && src != 0 && src[i] != '\0') {
 		dst[i] = src[i];
 		i++;
 	}
@@ -5551,6 +5631,9 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 	    (flags & LINUX_O_ACCMODE) != 0 &&
 	    process->fds[fd].kind == LINUX_FD_FILE &&
 	    (base_result = linux_ftruncate(process, (u64)fd, 0)) != 0) {
+		linux_debug_path_result_log(process, "openat-truncate",
+					    opened_key != 0 ? opened_key : path,
+					    base_result);
 		(void)linux_close(process, (u64)fd);
 		return base_result;
 	}
@@ -6828,13 +6911,19 @@ static long linux_utimensat(struct linux_process *process, u64 dirfd,
 	}
 	atime = bunix_load_u64_le(payload, 0);
 	mtime = bunix_load_u64_le(payload, 8);
+	if ((time_flags & 4) != 0) {
+		atime = linux_realtime_seconds();
+	}
+	if ((time_flags & 8) != 0) {
+		mtime = linux_realtime_seconds();
+	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
 	if (base_result != 0) {
 		return base_result;
 	}
 	return linux_vfs_utimens_call(process, base_handle, path, atime,
-				      mtime, time_flags);
+				      mtime, time_flags & ~12UL);
 }
 
 static long linux_readlinkat(struct linux_process *process, u64 dirfd,
@@ -6935,6 +7024,144 @@ static long linux_readdir_name(u64 handle, u64 index, u64 name_buffer,
 	return 0;
 }
 
+static int linux_dir_cache_allowed(const char *path)
+{
+	return path != 0 &&
+	       path[0] == '/' &&
+	       linux_cache_domain_for_path(0, path) == LINUX_CACHE_DOMAIN_ETC;
+}
+
+static struct linux_dir_cache_entry *linux_dir_cache_lookup(const char *path)
+{
+	const u64 domain = linux_cache_domain_for_path(0, path);
+
+	if (!linux_dir_cache_allowed(path)) {
+		return 0;
+	}
+	for (u64 i = 0; i < LINUX_DIR_CACHE_SIZE; i++) {
+		struct linux_dir_cache_entry *entry = &linux_dir_cache[i];
+
+		if (entry->valid != 0 &&
+		    entry->cache_domain == domain &&
+		    entry->cache_epoch == linux_vfs_mutation_epochs[domain] &&
+		    string_equal(entry->path, path)) {
+			return entry;
+		}
+	}
+	return 0;
+}
+
+static struct linux_dir_cache_entry *linux_dir_cache_claim(const char *path)
+{
+	struct linux_dir_cache_entry *entry = 0;
+
+	for (u64 i = 0; i < LINUX_DIR_CACHE_SIZE; i++) {
+		if (linux_dir_cache[i].valid == 0) {
+			entry = &linux_dir_cache[i];
+			break;
+		}
+	}
+	if (entry == 0) {
+		entry = &linux_dir_cache[linux_dir_cache_next %
+					 LINUX_DIR_CACHE_SIZE];
+		linux_dir_cache_next++;
+	}
+	entry->valid = 0;
+	entry->count = 0;
+	string_copy(entry->path, path);
+	entry->cache_domain = linux_cache_domain_for_path(0, path);
+	entry->cache_epoch = linux_vfs_mutation_epochs[entry->cache_domain];
+	return entry;
+}
+
+static long linux_dir_cache_fill(u64 handle, const char *path,
+				 struct linux_dir_cache_entry **out)
+{
+	struct linux_dir_cache_entry *entry;
+	long name_buffer;
+
+	if (out == 0) {
+		return -LINUX_EINVAL;
+	}
+	*out = 0;
+	entry = linux_dir_cache_lookup(path);
+	if (entry != 0) {
+		*out = entry;
+		return 1;
+	}
+	if (!linux_dir_cache_allowed(path)) {
+		return 0;
+	}
+	name_buffer = bunix_buffer_create(LINUX_MAX_PATH);
+	if (name_buffer <= 0) {
+		return -LINUX_ENOMEM;
+	}
+	entry = linux_dir_cache_claim(path);
+	for (u64 index = 0;; index++) {
+		char name[LINUX_MAX_PATH];
+		u64 type = BUNIX_VFS_TYPE_REGULAR;
+		u64 next_offset = 0;
+		const long result = linux_readdir_name(handle, index,
+						       (u64)name_buffer,
+						       name, sizeof(name),
+						       &type, &next_offset);
+
+		(void)next_offset;
+		if (result == -(long)LINUX_ENOENT) {
+			entry->valid = 1;
+			*out = entry;
+			bunix_handle_close((u64)name_buffer);
+			return 1;
+		}
+		if (result != 0) {
+			bunix_handle_close((u64)name_buffer);
+			return result;
+		}
+		if (entry->count >= LINUX_DIR_CACHE_MAX_ENTRIES ||
+		    string_len(name) > LINUX_NAME_MAX) {
+			entry->valid = 0;
+			entry->count = 0;
+			bunix_handle_close((u64)name_buffer);
+			return 0;
+		}
+		entry->entries[entry->count].type = type;
+		string_copy_n(entry->entries[entry->count].name,
+			      sizeof(entry->entries[entry->count].name),
+			      name);
+		entry->count++;
+	}
+}
+
+static long linux_dir_cache_read(u64 handle, const char *path, u64 index,
+				 char *name, u64 name_cap, u64 *type,
+				 u64 *next_offset)
+{
+	struct linux_dir_cache_entry *entry = 0;
+	const long cached = linux_dir_cache_fill(handle, path, &entry);
+
+	if (cached <= 0) {
+		return cached;
+	}
+	if (entry == 0) {
+		return 0;
+	}
+	if (index >= entry->count) {
+		return -LINUX_ENOENT;
+	}
+	if (name == 0 || name_cap == 0 ||
+	    string_len(entry->entries[index].name) >= name_cap) {
+		return -LINUX_EIO;
+	}
+	if (type != 0) {
+		*type = entry->entries[index].type;
+	}
+	if (next_offset != 0) {
+		*next_offset = index + 3;
+	}
+	string_copy_n(name, name_cap, entry->entries[index].name);
+	return 1;
+}
+
 static long linux_getdents64(struct linux_process *process, u64 fd,
 			     u64 buffer, u64 len)
 {
@@ -6996,25 +7223,41 @@ static long linux_getdents64(struct linux_process *process, u64 fd,
 			next_offset = 2;
 		} else {
 			const u64 read_index = current_offset - 2;
+			const long cached_result =
+				linux_dir_cache_read(process->fds[fd].handle,
+						     process->fds[fd].path,
+						     read_index, name,
+						     sizeof(name), &type,
+						     &next_offset);
 
-			linux_debug_getdents_log(process, fd, "vfs-enter",
-						 read_index, 0);
-			const long result =
-				linux_readdir_name(process->fds[fd].handle,
-						   read_index,
-						   (u64)name_buffer,
-						   name, sizeof(name),
-						   &type, &next_offset);
-			linux_debug_getdents_log(process, fd, "vfs-exit",
-						 read_index, result);
+			if (cached_result == 0) {
+				linux_debug_getdents_log(process, fd,
+							 "vfs-enter",
+							 read_index, 0);
+				const long result =
+					linux_readdir_name(process->fds[fd].handle,
+							   read_index,
+							   (u64)name_buffer,
+							   name, sizeof(name),
+							   &type, &next_offset);
+				linux_debug_getdents_log(process, fd,
+							 "vfs-exit",
+							 read_index, result);
 
-			if (result == -(long)LINUX_ENOENT) {
+				if (result == -(long)LINUX_ENOENT) {
+					break;
+				}
+				if (result != 0) {
+					bunix_handle_close((u64)name_buffer);
+					bunix_free(out);
+					return result;
+				}
+			} else if (cached_result == -(long)LINUX_ENOENT) {
 				break;
-			}
-			if (result != 0) {
+			} else if (cached_result < 0) {
 				bunix_handle_close((u64)name_buffer);
 				bunix_free(out);
-				return result;
+				return cached_result;
 			}
 			if (next_offset <= current_offset) {
 				bunix_handle_close((u64)name_buffer);
@@ -9116,6 +9359,22 @@ static long linux_uname(u64 buffer)
 	       -LINUX_EFAULT;
 }
 
+static u64 linux_monotonic_ns(void)
+{
+	return bunix_clock_monotonic_ns();
+}
+
+static u64 linux_realtime_ns(void)
+{
+	return (LINUX_REALTIME_BOOT_SECONDS * 1000000000ull) +
+	       linux_monotonic_ns();
+}
+
+static u64 linux_realtime_seconds(void)
+{
+	return linux_realtime_ns() / 1000000000ull;
+}
+
 static long linux_sysinfo(u64 buffer)
 {
 	char info[LINUX_SYSINFO_SIZE];
@@ -9156,13 +9415,20 @@ static long linux_getrandom(u64 len, u64 buffer)
 	return (long)len;
 }
 
-static long linux_clock_gettime(u64 buffer)
+static long linux_clock_gettime(u64 clock_id, u64 buffer)
 {
 	char timespec[LINUX_TIMESPEC_SIZE];
-	const u64 ns = bunix_clock_monotonic_ns();
+	u64 ns;
 
 	if (buffer == 0) {
 		return -LINUX_EFAULT;
+	}
+	if (clock_id == LINUX_CLOCK_REALTIME) {
+		ns = linux_realtime_ns();
+	} else if (clock_id == LINUX_CLOCK_MONOTONIC) {
+		ns = linux_monotonic_ns();
+	} else {
+		return -LINUX_EINVAL;
 	}
 	zero_bytes(timespec, sizeof(timespec));
 	store_u64(timespec, 0, ns / 1000000000ull);
@@ -9174,7 +9440,7 @@ static long linux_clock_gettime(u64 buffer)
 static long linux_gettimeofday(u64 buffer)
 {
 	char timeval[LINUX_TIMEVAL_SIZE];
-	const u64 ns = bunix_clock_monotonic_ns();
+	const u64 ns = linux_realtime_ns();
 
 	if (buffer == 0) {
 		return 0;
@@ -9189,7 +9455,7 @@ static long linux_gettimeofday(u64 buffer)
 static long linux_time(u64 buffer, u64 *seconds_out)
 {
 	char time_value[LINUX_TIME_T_SIZE];
-	const u64 seconds = bunix_clock_monotonic_ns() / 1000000000ull;
+	const u64 seconds = linux_realtime_seconds();
 
 	if (seconds_out != 0) {
 		*seconds_out = seconds;
@@ -9711,6 +9977,10 @@ int main(void)
 							   message.words[2],
 							   message.words[3],
 							   message.cap);
+			linux_debug_path_arg_result_log(process, "openat",
+							message.words[1],
+							message.cap,
+							(long)reply.words[0]);
 			if ((long)reply.words[0] >= 0) {
 				linux_debug_rpc_log(open_ok, sizeof(open_ok) - 1);
 			}
@@ -9981,7 +10251,8 @@ int main(void)
 			}
 			break;
 		case BUNIX_LINUX_CLOCK_GETTIME:
-			reply.words[0] = (u64)linux_clock_gettime(message.cap);
+			reply.words[0] = (u64)linux_clock_gettime(message.words[0],
+								  message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

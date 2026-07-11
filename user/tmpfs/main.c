@@ -162,7 +162,8 @@ static int file_is_child_of(const struct tmpfs_file *file, const char *dir)
 	const u64 len = str_len(dir);
 	u64 pos;
 
-	if (file == 0 || file->deleted || !path_has_prefix_child(file->path, dir)) {
+	if (file == 0 || file->deleted || file->path == 0 ||
+	    !path_has_prefix_child(file->path, dir)) {
 		return 0;
 	}
 	pos = len + 1;
@@ -488,6 +489,7 @@ static int file_in_renamed_subtree(const struct tmpfs_file *file,
 				   const char *old_path)
 {
 	return file != 0 && !file->deleted &&
+	       file->path != 0 &&
 	       (str_eq(file->path, old_path) ||
 		path_has_prefix_child(file->path, old_path));
 }
@@ -1621,11 +1623,13 @@ int main(void)
 				if (file == 0 ||
 				    file->inode->type != BUNIX_VFS_TYPE_REGULAR) {
 					reply.words[0] = BUNIX_VFS_ERR_NOENT;
-				} else if (!task_can_access(0, file, 02)) {
+				} else if (!task_can_access(message.words[3] &
+							    0xffffffff,
+							    file, 02)) {
 					reply.words[0] = BUNIX_VFS_ERR_ACCESS;
 				} else {
 					reply.words[0] = file_set_size(file,
-								       message.words[3]) == 0 ?
+								       message.words[3] >> 32) == 0 ?
 							 0 : (u64)-1;
 				}
 				break;

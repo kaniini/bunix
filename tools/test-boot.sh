@@ -182,7 +182,7 @@ if [ "$rootfs_flavor" = alpine-squashfs ] && [ "$boot_phase" = full ]; then
 	wait_for_fixed_boot "BUNIX_ALPINE_ID_OK" "alpine id smoke command did not finish" 60 180
 	printf 'busybox cat /proc/self/stat | busybox cat >/dev/null && printf "BUNIX_ALPINE_PROC_PIPE_%%s\\n" OK\n' >&3
 	wait_for_fixed_boot "BUNIX_ALPINE_PROC_PIPE_OK" "alpine procfs pipeline smoke command did not finish" 120 180
-	printf 'busybox dmesg | busybox grep "linux-server: close" >/dev/null && printf "BUNIX_ALPINE_DMESG_%%s\\n" OK\n' >&3
+	printf 'busybox dmesg >/tmp/bunix-dmesg && test -s /tmp/bunix-dmesg && printf "BUNIX_ALPINE_DMESG_%%s\\n" OK\n' >&3
 	wait_for_fixed_boot "BUNIX_ALPINE_DMESG_OK" "alpine dmesg smoke command did not finish" 60 180
 	printf '/bin/statidtest && printf "BUNIX_ALPINE_STATID_%%s\\n" OK\n' >&3
 	wait_for_fixed_boot "BUNIX_ALPINE_STATID_OK" "alpine statid smoke command did not finish" 60 180

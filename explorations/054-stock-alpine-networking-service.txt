@@ -780,10 +780,75 @@ Validation:
     `debug-vfs-readdir` shows `/run/openrc/scheduled` now returns promptly
     through VFS/tmpfs, but OpenRC still spends the remaining boot window doing
     repeated full scans of `/etc/init.d` and `/etc/conf.d`.  The artifact is
-    `build/failures/20260711T053753Z-27514/20260711T054048Z-27514`.
+  `build/failures/20260711T053753Z-27514/20260711T054048Z-27514`.
     The next optimization should target Linux/VFS directory enumeration
     caching or batching for immutable rootfs directories, not another
     pseudo-filesystem provider workaround.
+- Added a small Linux-server directory cache for normalized `/etc` directory
+  listings.  OpenRC repeatedly scans immutable service directories such as
+  `/etc/init.d`, `/etc/conf.d`, and `/etc/runlevels/*`; caching those complete
+  listings avoids repeated VFS `readdir` walks while preserving correctness
+  through the existing `/etc` mutation epoch.  A follow-up review found and
+  fixed a handle leak in the cache-fill path: cache hits no longer allocate a
+  temporary name buffer that is never closed.
+- Added provisional Linux wall-clock behavior for OpenRC compatibility.
+  `CLOCK_REALTIME`, `gettimeofday()`, and `time()` now return a fixed
+  2026-01-01 UTC boot epoch plus monotonic uptime, while
+  `CLOCK_MONOTONIC` remains monotonic.  `utimensat(UTIME_NOW)` is resolved in
+  the Linux server before the VFS call so OpenRC's `/run/openrc/deptree`
+  clock-skew recovery writes wall-clock timestamps rather than boot-relative
+  seconds.
+- Tightened tmpfs path-based truncate handling so VFS path truncate messages
+  use the caller task encoded in the low half of `word3` and the truncate
+  length encoded in the high half.  This fixes a real subject/length decoding
+  bug in the path-truncate arm, although the current OpenRC deptree failure is
+  not yet proven to go through that path.
+- Hardened tmpfs subtree helpers against null paths discovered while auditing
+  the stock OpenRC state path.  `file_is_child_of()` and
+  `file_in_renamed_subtree()` now reject null `file->path` values before
+  calling path-prefix helpers.
+- Added task-gated path-result logging for `openat()` and failed
+  `openat(O_TRUNC)` paths.  This remains behind the existing
+  `debug-linux-paths` and `debug-linux-path-taskNNN` controls and was used to
+  distinguish successful deptree opens from the remaining timing-sensitive
+  stock OpenRC failure.
+- The Alpine dmesg smoke in `tools/test-boot.sh` now verifies that
+  `busybox dmesg` can write nonempty output to a temporary file instead of
+  grepping for a specific kernel/server log line.  This keeps the smoke test
+  tied to functional dmesg behavior after log routing changes.
+- Narrow validation for this slice:
+  - `make build/modules/linux.server build/modules/tmpfs.server`
+  - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part` passed in 89
+    seconds.
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 98
+    seconds when rerun serially.  A concurrent run failed before Bunix booted
+    and dropped into the UEFI shell, matching the known shared ESP/package
+    race rather than a guest regression.
+  - `BUNIX_CMD="busybox sh -c ': >/tmp/bunix-redir && echo REDIR_OK'" make
+    test-command` passed, so basic tmpfs create/truncate shell redirection
+    still works in the normal generated-service image.
+- The stock-networking boot still does not meet the exploration goal.  A quiet
+  probe with `QEMU_TIMEOUT=320s BUNIX_BOOT_LOGIN_WAIT=260
+  BUNIX_BOOT_LOGIN_CAPTURE=420 make test-boot-alpine-stock-networking` failed
+  before login at
+  `build/failures/20260711T065616Z-24943/20260711T070036Z-24943`, printing:
+  `fopen '/run/openrc/deptree': Invalid argument`,
+  `fopen '/run/openrc/depconfig': No such file or directory`, and
+  `failed to load deptree`.
+- A task-gated path trace did not reproduce the early deptree `fopen` failure
+  and showed the relevant task opening `deptree` and `depconfig`
+  successfully before continuing through sysinit service processing.  The
+  artifact is
+  `build/failures/20260711T070503Z-27783/20260711T070729Z-27783`.
+  This makes the remaining failure look timing-sensitive or state-exhaustion
+  related rather than a simple missing `openat()` implementation.
+- The next fix should make the remaining OpenRC runtime-state failures more
+  diagnostic and then correct the underlying state bug.  Good candidates are:
+  structured tmpfs/VFS errors for truncate/write/open failures instead of raw
+  `(u64)-1`, focused logging for unsupported `fcntl()` commands that currently
+  return `EINVAL`, and another quiet stock probe after the directory-cache
+  handle leak fix to see whether the dmesg redirection failure still appears
+  after login.
 
 Notes:
 
