@@ -758,6 +758,58 @@ Validation:
     `union-mkdir-p` command passes, so this needs a separate harness or
     long-shard state investigation before using the whole shard as a hard
     guard for the tmpfs index change.
+- Upstream OpenRC source confirms the visible
+  `fopen '/run/openrc/deptree': ...` message is emitted by
+  `rc_deptree_update()` only when its `do_fopenat(..., "deptree",
+  O_WRONLY|O_CREAT|O_TRUNC)` wrapper returns `NULL`; `do_fopenat()` itself
+  first calls `openat()` and then `fdopen()`.  This means the message does not
+  prove that VFS `openat()` directly returned the displayed errno.
+- Added minimal AF_UNIX datagram socket compatibility for Linux userspace
+  probes.  `socket(AF_UNIX, SOCK_DGRAM|SOCK_CLOEXEC, 0)` now succeeds,
+  `getsockopt(SO_TYPE)` reports `SOCK_DGRAM`, and datagram `connect()` or
+  `sendto()` to missing Unix socket paths returns Linux-style path errors.
+  This removes one OpenRC/syslog compatibility wart, but it is not sufficient
+  to complete the stock OpenRC boot.
+- Validation for the AF_UNIX datagram slice:
+  - `make build/modules/linux.server`
+  - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part` passed in 103
+    seconds.
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 90
+    seconds.
+  - A quiet stock-networking boot still failed before login with the same
+    visible `deptree`/`depconfig` dependency-cache errors, at
+    `build/failures/20260711T071815Z-32601/20260711T072236Z-32601`.
+- A later path-traced stock OpenRC run showed `openat()` for `deptree` and
+  `depconfig` succeeding around the dependency-cache phase, even when the
+  quiet run reports `fopen ... Invalid argument`.  The trace also showed
+  OpenRC could continue past the initial dependency-cache phase and begin
+  service wrapper execution, which points at timing/state interactions around
+  stdio/open-file handling rather than a simple VFS create failure.
+- Tmpfs root mounting now preserves an already-mounted tmpfs root instead of
+  recycling it and pruning every child below that root.  This matches the
+  OpenRC/localmount expectation that a redundant tmpfs mount attempt must not
+  silently destroy runtime state such as `/run/openrc`.
+- Validation for the tmpfs root-preservation slice:
+  - `make build/modules/tmpfs.server`
+  - `BUNIX_SHELL_PART=exec-argv-pipe make test-shell-part` passed in 78
+    seconds.
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 72
+    seconds.
+  - `BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # '
+    BUNIX_CMD="busybox sh -c 'echo RUN_REMOUNT_OK >/run/remount-keep &&
+    mount -t tmpfs tmpfs /run && cat /run/remount-keep'" make test-command`
+    passed, proving a repeated root-level tmpfs mount on `/run` preserves
+    existing runtime files.
+- The stock OpenRC boot still is not complete.  After tmpfs root preservation,
+  one quiet probe reached root login and passed the `id` and proc pipe smoke
+  checks, but OpenRC still reported `deptree` regeneration failures and the
+  login-side `busybox dmesg >/tmp/bunix-dmesg` redirection failed with
+  `Invalid argument`; artifact:
+  `build/failures/20260711T081239Z-14794/20260711T081759Z-14794`.
+  A follow-up `debug-tmpfs-errors` probe did not emit tmpfs create-failure
+  diagnostics before the visible `deptree` failure, so the next fix should
+  instrument or repair the Linux stdio/open-file path rather than assuming
+  tmpfs `CREATE_BUFFER` is returning `EINVAL`.
 - A later task-25 path trace reproduced the stock OpenRC stall as a VFS
   `getdents64()` forward into tmpfs for `/run/openrc/scheduled` that did not
   return before timeout in artifact

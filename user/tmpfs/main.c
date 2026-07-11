@@ -1264,6 +1264,9 @@ static long mount_root(u64 vfs, const char *path)
 	if (path == 0 || path[0] != '/') {
 		return -1;
 	}
+	if (bunix_tree_get(&roots, path) != 0) {
+		return 0;
+	}
 	if (recycle_stale_root(path) != 0) {
 		return -1;
 	}
