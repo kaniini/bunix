@@ -516,6 +516,16 @@ Validation:
   `oldset`; further reduction likely needs a kernel-side mirror of the Linux
   signal mask, copied on fork and synchronized with server-side signal
   dequeue/fault handling, instead of more one-way shortcuts.
+- A trial kernel-side Linux signal-mask mirror was rejected.  The mirror
+  stored the mask in `struct task`, copied it across fork/vfork, returned
+  `oldset` locally, and updated it on signal delivery and sigreturn.  It built
+  and `BUNIX_SHELL_PART=linux-signaltest make test-shell-part` passed, but
+  `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` regressed and
+  stopped after `phdrstress: ok`, with artifact
+  `build/failures/20260711T005431Z-22147/20260711T005551Z-22147`.  The trial
+  was reverted and the same shard passed again in 102 seconds.  Do not
+  reintroduce a mirrored mask without a dedicated regression test that covers
+  exec/fork handoff through the post-`phdrstress` login path.
 
 Notes:
 
