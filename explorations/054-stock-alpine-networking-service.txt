@@ -992,6 +992,16 @@ Validation:
   not enough to reproduce the visible stock OpenRC failure.  The remaining
   blocker is still a broader runtime-state/file-descriptor interaction in the
   real OpenRC dependency-cache path.
+- Extended `/bin/openrctest` to mirror OpenRC's local `do_fopenat()` helper
+  more closely: it opens `/run/openrc` as a directory FD, uses relative
+  `openat()`, `fdopen()`, `fstatat()`, `fgets()`, and `unlinkat()` on
+  `deptree` and `depconfig`, and repeats the update/load cycle.  The updated
+  guard still passes with `BUNIX_CMD=/bin/openrctest make test-command`, so
+  the current stock OpenRC failure is not reproduced by dirfd-relative
+  `O_WRONLY|O_CREAT|O_TRUNC` plus stdio either.  Continue narrowing around
+  longer-lived OpenRC descriptor state, unsupported `fcntl()` paths, or
+  interactions with the full dependency-cache writer rather than treating
+  basic tmpfs create/truncate as the culprit.
 
 Notes:
 
