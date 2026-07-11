@@ -114,7 +114,7 @@ materialize_openrc_policy() {
 	done < "$runlevel_policy"
 }
 
-install_bunix_dev_provider() {
+install_bunix_openrc_providers() {
 	cat > "$root/etc/init.d/devfs" <<'EOF_BUNIX_DEV'
 #!/sbin/openrc-run
 
@@ -132,8 +132,45 @@ start()
 }
 EOF_BUNIX_DEV
 	chmod 0755 "$root/etc/init.d/devfs"
+
+	cat > "$root/etc/init.d/sysfs" <<'EOF_BUNIX_SYS'
+#!/sbin/openrc-run
+
+description="Declare Bunix sysfs availability to OpenRC"
+
+depend()
+{
+	before hwdrivers
+}
+
+start()
+{
+	return 0
+}
+EOF_BUNIX_SYS
+	chmod 0755 "$root/etc/init.d/sysfs"
+
+	cat > "$root/etc/init.d/procfs" <<'EOF_BUNIX_PROC'
+#!/sbin/openrc-run
+
+description="Declare Bunix procfs availability to OpenRC"
+
+depend()
+{
+	before sysfs
+}
+
+start()
+{
+	return 0
+}
+EOF_BUNIX_PROC
+	chmod 0755 "$root/etc/init.d/procfs"
+
 	mkdir -p "$root/etc/runlevels/sysinit"
 	ln -sf /etc/init.d/devfs "$root/etc/runlevels/sysinit/devfs"
+	ln -sf /etc/init.d/procfs "$root/etc/runlevels/sysinit/procfs"
+	ln -sf /etc/init.d/sysfs "$root/etc/runlevels/sysinit/sysfs"
 }
 
 apk_add_rootfs() {
@@ -309,7 +346,7 @@ esac
 
 materialize_openrc_policy
 if [ "$networking_service" = stock ]; then
-	install_bunix_dev_provider
+	install_bunix_openrc_providers
 fi
 write_runlevel_inventory "$root" "$bunix_runlevels"
 

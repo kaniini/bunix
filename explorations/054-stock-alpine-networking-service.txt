@@ -280,6 +280,15 @@ Validation:
   `build/failures/20260710T212521Z-3051/20260710T212821Z-3051`, and a debug
   probe still shows repeated provider probing at
   `build/failures/20260710T212844Z-4237/20260710T213144Z-4237`.
+- Stock-networking rootfs generation now installs Bunix OpenRC provider stubs
+  for `devfs`, `procfs`, and `sysfs` in the `sysinit` runlevel.  These stubs
+  represent filesystems Bunix already provides through VFS and avoid running
+  Alpine's stock mount scripts for pseudo-filesystems that are not policy
+  decisions.  This also gives dependencies such as `hwdrivers need sysfs dev`
+  concrete providers instead of forcing repeated missing-provider searches.
+- The provider-stub packaging was validated serially:
+  - `make test-alpine-rootfs-stock-networking`
+  - `make test-alpine-rootfs`
 - Narrow guards after the access-cache change:
   `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 78
   seconds, and `BUNIX_SHELL_PART=linux-signaltest make test-shell-part` passed
