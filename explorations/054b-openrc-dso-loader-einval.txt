@@ -36,10 +36,10 @@ Intended outcome:
 
 Tasks:
 
-- [ ] Build a focused static test that mimics musl's DSO path search for
+- [x] Build a focused static test that mimics musl's DSO path search for
       `librc.so.1` and `libeinfo.so.1` inside the generated Alpine rootfs:
       `/lib`, `/usr/local/lib`, then `/usr/lib`, using the same open flags.
-- [ ] Verify the test reports the expected `ENOENT` misses and successful
+- [x] Verify the test reports the expected `ENOENT` misses and successful
       `/usr/lib` opens, with sane `fstat()` metadata and readable ELF headers.
 - [ ] If static path/open/stat/read succeeds, add a focused dynamic-loader
       reproducer using `/lib/ld-musl-x86_64.so.1 --list /sbin/openrc` or an
@@ -56,3 +56,18 @@ Completion criteria:
 - `/sbin/openrc --help` succeeds under `ROOTFS_FLAVOR=alpine-squashfs`.
 - The generated Alpine boot probe no longer fails at the OpenRC DSO loader
   step.
+
+Implementation Notes:
+
+- Added `/bin/ldsopathtest` to the generated Alpine overlay.  It is a static
+  Linux userspace test that opens `/sbin/openrc`, probes `/lib` and
+  `/usr/local/lib` misses for OpenRC DSOs, opens `/usr/lib/librc.so.1` and
+  `/usr/lib/libeinfo.so.1`, validates `fstat()` metadata, and checks ELF
+  headers.
+- Validation:
+  - `make build/modules/ldsopathtest.user`
+  - `git diff --check`
+  - `ROOTFS_FLAVOR=alpine-squashfs KERNEL_CMDLINE='log=info' BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' BUNIX_CMD='/bin/ldsopathtest' make test-command`
+- Kept-log evidence from
+  `/tmp/bunix-command-test.20260711T223856Z-18890/serial.log`:
+  `linux ldso path ok openrc=9:300:42920 librc=9:475:55080 libeinfo=9:472:26312`

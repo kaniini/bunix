@@ -32,6 +32,7 @@ policy_manifest=$artifact_dir/openrc-policy.tsv
 rootfs_format=${ROOTFS_IMAGE_FORMAT:-squashfs}
 login=${LOGIN_MODULE:-build/modules/login.user}
 statidtest=${STATIDTEST_MODULE:-build/modules/statidtest.user}
+ldsopathtest=${LDSOPATHTEST_MODULE:-build/modules/ldsopathtest.user}
 netdhcp=${NETDHCP_MODULE:-build/modules/bunix-udhcpc-script.user}
 bunix_overlay=${BUNIX_ALPINE_OVERLAY:-1}
 init_command=${BUNIX_ALPINE_INIT_COMMAND:-/bin/login}
@@ -227,6 +228,8 @@ if [ "$bunix_overlay" = 1 ]; then
 	chmod 0555 "$root/bin/login"
 	cp "$statidtest" "$root/bin/statidtest"
 	chmod 0555 "$root/bin/statidtest"
+	cp "$ldsopathtest" "$root/bin/ldsopathtest"
+	chmod 0555 "$root/bin/ldsopathtest"
 	mkdir -p "$root/usr/share/udhcpc" "$root/sbin"
 	cp "$netdhcp" "$root/sbin/bunix-udhcpc-script"
 	chmod 0555 "$root/sbin/bunix-udhcpc-script"
