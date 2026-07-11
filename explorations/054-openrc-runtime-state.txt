@@ -139,3 +139,10 @@ Implementation Notes:
   - `make build/modules/linux.server`
   - `git diff --check`
   - `BUNIX_CMD=/bin/openrctest make test-command`
+- A generated Alpine `/sbin/openrc --help` probe exposed a separate dynamic
+  loader failure loading `librc.so.1` and `libeinfo.so.1` with `EINVAL`.
+  The libraries are present and readable in the generated image, but no
+  `/run/openrc` diagnostics fired and temporary mmap diagnostics did not emit
+  useful evidence.  Do not let that detour expand this slice unless it is
+  reduced to a focused reproducer that directly overlaps the runtime-state
+  bug; otherwise split it into a follow-up exploration.
