@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 static int ensure_dir(const char *path)
@@ -37,6 +38,50 @@ static FILE *openrc_fopenat(int dirfd, const char *path, int flags)
 		close(fd);
 	}
 	return file;
+}
+
+static int open_svcdir(void)
+{
+	int dirfd = open("/run/openrc", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	int flags;
+
+	if (dirfd < 0) {
+		fprintf(stderr, "open /run/openrc: %s\n", strerror(errno));
+		return -1;
+	}
+	flags = fcntl(dirfd, F_GETFD, 0);
+	if (flags < 0) {
+		fprintf(stderr, "fcntl F_GETFD /run/openrc: %s\n",
+			strerror(errno));
+		close(dirfd);
+		return -1;
+	}
+	if ((flags & FD_CLOEXEC) == 0) {
+		fprintf(stderr, "missing FD_CLOEXEC on /run/openrc\n");
+		close(dirfd);
+		return -1;
+	}
+	return dirfd;
+}
+
+static int probe_write_permission_at(int dirfd, const char *path)
+{
+	int fd = openat(dirfd, path, O_WRONLY);
+
+	if (fd < 0) {
+		if (errno == ENOENT) {
+			return 0;
+		}
+		fprintf(stderr, "open write probe %s: %s\n", path,
+			strerror(errno));
+		return -1;
+	}
+	if (close(fd) != 0) {
+		fprintf(stderr, "close write probe %s: %s\n", path,
+			strerror(errno));
+		return -1;
+	}
+	return 0;
 }
 
 static int read_exact_file_at(int dirfd, const char *path, const char *expected)
@@ -127,29 +172,59 @@ static int check_stat_at(int dirfd, const char *path)
 	return 0;
 }
 
+static int adjust_mtime_at(int dirfd, const char *path)
+{
+	struct timespec ts[2] = {
+		{ .tv_sec = 1767225621, .tv_nsec = 0 },
+		{ .tv_sec = 1767225621, .tv_nsec = 0 },
+	};
+
+	if (utimensat(dirfd, path, ts, 0) != 0) {
+		fprintf(stderr, "utimensat %s: %s\n", path, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+static int unlink_if_present_at(int dirfd, const char *path)
+{
+	if (unlinkat(dirfd, path, 0) == 0 || errno == ENOENT) {
+		return 0;
+	}
+	fprintf(stderr, "unlinkat %s: %s\n", path, strerror(errno));
+	return -1;
+}
+
 int main(void)
 {
 	const char *deptree = "deptree";
 	const char *depconfig = "depconfig";
+	const char *clock_skewed = "clock-skewed";
 	int dirfd;
 
 	if (ensure_dir("/run") != 0 ||
 	    ensure_dir("/run/openrc") != 0) {
 		return 1;
 	}
-	dirfd = open("/run/openrc", O_RDONLY | O_DIRECTORY);
+	dirfd = open_svcdir();
 	if (dirfd < 0) {
-		fprintf(stderr, "open /run/openrc: %s\n", strerror(errno));
 		return 1;
 	}
 
 	for (unsigned int i = 0; i < 8; i++) {
-		if (write_with_fdopen_at(
+		if (probe_write_permission_at(dirfd, deptree) != 0 ||
+		    write_with_fdopen_at(
 			    dirfd, deptree,
 			    "depinfo_0_service='networking'\n"
 			    "depinfo_0_need_0='localmount'\n"
 			    "depinfo_1_service='localmount'\n") != 0 ||
 		    check_stat_at(dirfd, deptree) != 0 ||
+		    adjust_mtime_at(dirfd, deptree) != 0 ||
+		    write_with_fdopen_at(dirfd, clock_skewed,
+					 "/etc/init.d/networking\n") != 0 ||
+		    read_exact_file_at(dirfd, clock_skewed,
+				       "/etc/init.d/networking\n") != 0 ||
+		    unlink_if_present_at(dirfd, clock_skewed) != 0 ||
 		    read_exact_file_at(
 			    dirfd, deptree,
 			    "depinfo_0_service='networking'\n"
@@ -157,6 +232,11 @@ int main(void)
 			    "depinfo_1_service='localmount'\n") != 0 ||
 		    read_lines_with_fdopen_at(dirfd, deptree) != 0) {
 			close(dirfd);
+			return 1;
+		}
+		close(dirfd);
+		dirfd = open_svcdir();
+		if (dirfd < 0) {
 			return 1;
 		}
 		if ((i & 1) == 0) {

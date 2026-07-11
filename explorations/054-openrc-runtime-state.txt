@@ -66,9 +66,9 @@ Tasks:
 - [x] Preserve the previous stock-networking investigation as exploration 080
       so this slice can stay narrow.
 - [x] Keep the existing `/bin/openrctest` guard as the starting reproducer.
-- [ ] Inspect recent failure artifacts for the exact syscall shape around
+- [x] Inspect recent failure artifacts for the exact syscall shape around
       `deptree`, `depconfig`, `fcntl`, `Bad file descriptor`, and `EINVAL`.
-- [ ] Extend `/bin/openrctest` to cover the smallest missing OpenRC
+- [x] Extend `/bin/openrctest` to cover the smallest missing OpenRC
       dependency-cache behavior found in the artifacts or source.
 - [ ] Fix the underlying Linux/VFS/tmpfs/FD correctness bug without
       OpenRC-specific path handling.
@@ -103,3 +103,28 @@ Implementation Notes:
   `/bin/openrctest` guard and the observed failure artifacts:
   - `build/failures/20260711T085549Z-32532/20260711T090009Z-32532`
   - `build/failures/20260711T091603Z-13124/20260711T091904Z-13124`
+- The recorded `linux-strace.log` files in both failure artifacts are empty,
+  so they do not prove the exact syscall sequence.  The serial logs do prove
+  the visible failure shape:
+  - `fopen '/run/openrc/deptree': Invalid argument`
+  - `fopen '/run/openrc/depconfig': No such file or directory`
+  - a later `Bad file descriptor` report in the stock-networking artifact
+- OpenRC source shows `_rc_deptree_load()` clears cached dirfds, opens
+  `deptree` with `O_WRONLY` as a permission probe, regenerates dependency
+  state with `rc_deptree_update()`, checks the result with `fstatat()`, may
+  adjust mtime with `utimensat()`, writes `clock-skewed`, then reloads
+  `deptree`.
+- `/bin/openrctest` now covers that missing lifecycle more closely:
+  `O_RDONLY|O_DIRECTORY|O_CLOEXEC` service-dir opens, close/reopen cycles,
+  `F_GETFD` validation, `O_WRONLY` permission probes, `fdopen()` writes,
+  `fstatat()`, `utimensat()`, `clock-skewed` write/read/unlink, and repeated
+  `deptree`/`depconfig` update/load cycles.
+- Validation:
+  - `make build/modules/openrctest.user`
+  - `git diff --check`
+  - `BUNIX_CMD=/bin/openrctest make test-command`
+- The expanded guard still passes, so the remaining bug is not reproduced by
+  OpenRC-style cached service-dir FD churn plus the clock-skew runtime-state
+  path.  The next step should add focused runtime diagnostics for failed
+  `fdopen()` inputs, unsupported `fcntl()` commands, and Linux FD table state
+  around the real OpenRC dependency-cache writer.
