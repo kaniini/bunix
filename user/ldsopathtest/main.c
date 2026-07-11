@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -31,6 +32,7 @@ static int expect_missing(const char *path)
 static int expect_elf(const char *path, struct file_id *id)
 {
 	unsigned char ident[4];
+	void *mapping;
 	struct stat st;
 	ssize_t nread;
 	int fd = open(path, O_RDONLY | O_CLOEXEC);
@@ -58,6 +60,29 @@ static int expect_elf(const char *path, struct file_id *id)
 	    ident[2] != 'L' || ident[3] != 'F') {
 		fprintf(stderr, "ldsopathtest: bad elf header %s nread=%zd\n",
 			path, nread);
+		close(fd);
+		return -1;
+	}
+	mapping = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+	if (mapping == MAP_FAILED) {
+		fprintf(stderr, "ldsopathtest: mmap %s: %s\n",
+			path, strerror(errno));
+		close(fd);
+		return -1;
+	}
+	if (((const unsigned char *)mapping)[0] != 0x7f ||
+	    ((const unsigned char *)mapping)[1] != 'E' ||
+	    ((const unsigned char *)mapping)[2] != 'L' ||
+	    ((const unsigned char *)mapping)[3] != 'F') {
+		fprintf(stderr, "ldsopathtest: bad mapped elf header %s\n",
+			path);
+		munmap(mapping, (size_t)st.st_size);
+		close(fd);
+		return -1;
+	}
+	if (munmap(mapping, (size_t)st.st_size) != 0) {
+		fprintf(stderr, "ldsopathtest: munmap %s: %s\n",
+			path, strerror(errno));
 		close(fd);
 		return -1;
 	}

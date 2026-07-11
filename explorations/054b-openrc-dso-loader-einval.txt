@@ -62,12 +62,25 @@ Implementation Notes:
 - Added `/bin/ldsopathtest` to the generated Alpine overlay.  It is a static
   Linux userspace test that opens `/sbin/openrc`, probes `/lib` and
   `/usr/local/lib` misses for OpenRC DSOs, opens `/usr/lib/librc.so.1` and
-  `/usr/lib/libeinfo.so.1`, validates `fstat()` metadata, and checks ELF
-  headers.
+  `/usr/lib/libeinfo.so.1`, validates `fstat()` metadata, checks ELF headers,
+  maps the files with `MAP_PRIVATE|PROT_READ`, and checks ELF headers through
+  the mappings.
 - Validation:
   - `make build/modules/ldsopathtest.user`
   - `git diff --check`
   - `ROOTFS_FLAVOR=alpine-squashfs KERNEL_CMDLINE='log=info' BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' BUNIX_CMD='/bin/ldsopathtest' make test-command`
 - Kept-log evidence from
-  `/tmp/bunix-command-test.20260711T223856Z-18890/serial.log`:
+  `/tmp/bunix-command-test.20260711T224506Z-21846/serial.log`:
   `linux ldso path ok openrc=9:300:42920 librc=9:475:55080 libeinfo=9:472:26312`
+- Direct dynamic-loader reproducer:
+  - `KEEP_TMP=1 ROOTFS_FLAVOR=alpine-squashfs KERNEL_CMDLINE='log=info' BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' BUNIX_CMD='/lib/ld-musl-x86_64.so.1 --list /sbin/openrc' make test-command`
+  - Artifact:
+    `build/failures/20260711T224003Z-19242/20260711T224151Z-19242`
+  - Result: the command segfaulted with `__BUNIX_COMMAND_STATUS__=139`.
+- Structured-strace attempt:
+  - `KEEP_TMP=1 ROOTFS_FLAVOR=alpine-squashfs KERNEL_CMDLINE='log=debug strace=structured' BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' BUNIX_CMD='/lib/ld-musl-x86_64.so.1 --list /sbin/openrc' make test-command`
+  - Artifact:
+    `build/failures/20260711T224212Z-20298/20260711T224407Z-20298`
+  - Result: same segfault; `linux-strace.log` remained empty, so the next
+    trace step should use a focused reproducer or targeted mmap/loader
+    diagnostics instead of relying on the archived strace extraction.
