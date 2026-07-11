@@ -15,6 +15,9 @@ Problem:
 
 - The stock Alpine networking work can bring up interface configuration, but
   the IP stack still has serious correctness gaps after DHCP succeeds.
+- The immediate follow-up to stock OpenRC networking is to examine why the IP
+  stack is still utterly broken under normal Alpine userspace, not to add more
+  boot-time networking policy.
 - This exploration exists to examine why the IP stack is still utterly broken
   once link and DHCP appear to be working, instead of treating DHCP success as
   proof of usable networking.
@@ -37,6 +40,14 @@ Problem:
 - DNS resolution does not work from Alpine userspace.
 - `wget http://example.com` does not work, so TCP, DNS, socket, routing, and
   Linux syscall compatibility are not proven end to end.
+
+Required failure cases:
+
+- `ping` must no longer report wildly inconsistent TTLs for the same remote
+  endpoint.
+- DNS resolution must work through Alpine's normal resolver path.
+- `wget http://example.com` must work from the guest and fetch real HTTP
+  content over the configured network.
 
 Intended outcome:
 
