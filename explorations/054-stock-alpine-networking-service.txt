@@ -649,6 +649,24 @@ Validation:
   `build/failures/20260711T023002Z-25475/20260711T023342Z-25475`.  This points
   back to broader OpenRC dependency/runtime scanning and process/syscall cost,
   not just uncached 1024-byte reads from `deptree`.
+- A focused debug run found one concrete tmpfs correctness issue in the stock
+  OpenRC state path: `unlinkat()` of `/run/openrc/starting/procfs` entered
+  tmpfs `file_unlink()` and then did not return while removing the file from
+  the global path tree.  tmpfs no longer rebuilds the entire files tree on
+  every unlink; it removes the file's existing tree node directly and uses
+  bounded lookup/insert walks so corrupted or stale path-tree state cannot spin
+  forever.
+- Validation for the tmpfs unlink/tree slice:
+  - `make build/modules/tmpfs.server`
+  - `BUNIX_CMD=/bin/fcntllocktest make test-command`
+  - `BUNIX_SHELL_PART=path-limits-statfs make test-shell-part` passed in 97
+    seconds.
+  - `QEMU_TIMEOUT=260s BUNIX_BOOT_LOGIN_WAIT=220
+    BUNIX_BOOT_LOGIN_CAPTURE=380 make test-boot-alpine-stock-networking`
+    still timed out before `login:`, with artifact
+    `build/failures/20260711T032740Z-14947/20260711T033120Z-14947`.  The fix
+    removes the observed tmpfs unlink hard hang, but it does not complete
+    stock OpenRC boot by itself.
 
 Notes:
 

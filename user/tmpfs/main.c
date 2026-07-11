@@ -6,6 +6,7 @@
 
 enum {
 	TMPFS_MAX_PATH = 4096,
+	TMPFS_TREE_WALK_LIMIT = 8192,
 	TMPFS_OPEN_DIR = 1,
 	TMPFS_OPEN_FILE = 2,
 };
@@ -266,17 +267,43 @@ static int read_rename_buffer(const struct bunix_msg *message, char *old_path,
 	return old_path[0] == '/' && new_path[0] == '/' ? 0 : -1;
 }
 
-static struct tmpfs_file *file_find(const char *path)
+static struct bunix_tree_node *files_find_node(const char *path)
 {
-	return (struct tmpfs_file *)bunix_tree_get(&files, path);
+	struct bunix_tree_node *node = files.root;
+	u64 steps = 0;
+	u64 limit = files.count + 1;
+
+	if (path == 0) {
+		return 0;
+	}
+	if (limit == 0 || limit > TMPFS_TREE_WALK_LIMIT) {
+		limit = TMPFS_TREE_WALK_LIMIT;
+	}
+	while (node != 0 && steps++ < limit) {
+		const int cmp = node->key == 0 ? 1 :
+				bunix_tree_key_cmp(path, node->key);
+
+		if (cmp == 0) {
+			return node;
+		}
+		node = cmp < 0 ? node->left : node->right;
+	}
+	return 0;
 }
 
-static void file_remove_stale_node(struct bunix_tree *tree, const char *path)
+static struct tmpfs_file *file_find(const char *path)
 {
-	struct bunix_tree_node *node = bunix_tree_find_node(tree, path);
+	struct bunix_tree_node *node = files_find_node(path);
+
+	return node != 0 ? (struct tmpfs_file *)node->value : 0;
+}
+
+static void file_remove_stale_node(const char *path)
+{
+	struct bunix_tree_node *node = files_find_node(path);
 
 	if (node != 0 && node->value == 0) {
-		bunix_tree_remove_node(tree, node);
+		bunix_tree_remove_node(&files, node);
 	}
 }
 
@@ -290,15 +317,21 @@ static int files_insert_file_into(struct bunix_tree *tree,
 	if (tree == 0 || file == 0 || file->path == 0 || (u64)file == 0) {
 		return -1;
 	}
-	file_remove_stale_node(tree, file->path);
+	file_remove_stale_node(file->path);
 	slot = &tree->root;
-	while (*slot != 0) {
+	for (u64 steps = 0; *slot != 0 && steps < TMPFS_TREE_WALK_LIMIT; steps++) {
 		parent = *slot;
+		if (parent->key == 0) {
+			return -1;
+		}
 		cmp = bunix_tree_key_cmp(file->path, parent->key);
 		if (cmp == 0) {
 			return -1;
 		}
 		slot = cmp < 0 ? &parent->left : &parent->right;
+	}
+	if (*slot != 0) {
+		return -1;
 	}
 	file->node.left = 0;
 	file->node.right = 0;
@@ -545,39 +578,12 @@ static void file_release(struct tmpfs_file *file)
 	}
 }
 
-static void files_rebuild_without_node(struct bunix_tree_node *node,
-				       const struct tmpfs_file *skip,
-				       struct bunix_tree *rebuilt)
-{
-	struct bunix_tree_node *left;
-	struct bunix_tree_node *right;
-	struct tmpfs_file *file;
-
-	if (node == 0) {
-		return;
-	}
-	left = node->left;
-	right = node->right;
-	file = (struct tmpfs_file *)node->value;
-	node->left = 0;
-	node->right = 0;
-	node->parent = 0;
-	node->key = 0;
-	node->value = 0;
-	files_rebuild_without_node(left, skip, rebuilt);
-	files_rebuild_without_node(right, skip, rebuilt);
-	if (file != 0 && file != skip && !file->deleted) {
-		(void)files_insert_file_into(rebuilt, file);
-	}
-}
-
 static void files_remove_file(struct tmpfs_file *file)
 {
-	struct bunix_tree rebuilt;
-
-	bunix_tree_init(&rebuilt);
-	files_rebuild_without_node(files.root, file, &rebuilt);
-	files = rebuilt;
+	if (file == 0) {
+		return;
+	}
+	bunix_tree_remove_node(&files, &file->node);
 }
 
 static int file_resize(struct tmpfs_file *file, u64 size)
