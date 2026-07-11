@@ -84,6 +84,14 @@ Completion criteria:
 - BusyBox init owns login respawn after OpenRC returns.
 - The temporary Bunix networking-service replacement is gone.
 
+Follow-up:
+
+- Immediately continue with `054a-ip-stack-end-to-end-connectivity.txt` after
+  this exploration.  Exploration 054 proves that Alpine/OpenRC brings the
+  interface up through the stock service path; 054a proves that the IP stack is
+  actually usable by validating ping source/TTL correctness, DNS, and
+  `wget http://example.com` end to end from guest userspace.
+
 Implementation Notes:
 
 - Added `ALPINE_NETWORKING_SERVICE=generated|stock` to
