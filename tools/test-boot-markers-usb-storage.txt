@@ -5,4 +5,8 @@ xhci: usb0 registered index=0
 xhci: endpoints configured
 usb-storage: online
 usb-storage: claimed device=0 interface=0
+usb-storage: capacity blocks=
+usb-storage: smoke ok
+usb-storage: block online
+bootstrap: usb storage block ok
 machine: poweroff

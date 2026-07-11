@@ -17,16 +17,23 @@ Constraints:
 
 Tasks:
 
-- [ ] Extend `USB0` bulk endpoint opening and transfer completion APIs enough
+- [x] Extend `USB0` bulk endpoint opening and transfer completion APIs enough
       for class drivers to submit bounded transfers and wait on completions.
 - [ ] Add `usb-storage.server` for Bulk-Only Transport command block wrappers,
       data phase, command status wrappers, reset/retry, and basic inquiry/read
       capacity/read/write commands.
-- [ ] Map USB storage devices into `BLK0` or the existing block-device
+- [x] Map USB storage devices into `BLK0` or the existing block-device
       namespace without adding a new filesystem path.
-- [ ] Add a deterministic QEMU USB storage smoke test with read, write, flush
+- [x] Add a deterministic QEMU USB storage smoke test with read, write, flush
       where supported, and guest poweroff.
-- [ ] Keep `test-boot-virtio-blk`, `test-boot-usb`, and default boot passing.
+- [x] Keep `test-boot-virtio-blk`, `test-boot-usb`, and default boot passing.
+
+Needs:
+
+- Add BOT reset/retry hardening.  The current server performs CBW/data/CSW,
+  inquiry, read capacity, read, write, and external BLK0 read/write/flush
+  smoke coverage, but USB0 still needs a scoped control path for class reset
+  and halt recovery before the BOT task is complete.
 
 Completion criteria:
 

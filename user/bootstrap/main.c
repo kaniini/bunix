@@ -3620,6 +3620,98 @@ static long usb_synth_selftest(u64 usb)
 	return 0;
 }
 
+static long usb_storage_block_selftest(u64 block)
+{
+	unsigned char original[512];
+	unsigned char mutated[512];
+	unsigned char verify[512];
+	long buffer = bunix_buffer_create(sizeof(original));
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_BLOCK,
+		.type = BUNIX_BLOCK_GET_INFO,
+	};
+	struct bunix_msg reply;
+	u64 block_size;
+
+	if (block == 0 || buffer <= 0 ||
+	    bunix_ipc_call(block, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] < sizeof(original) ||
+	    reply.words[2] == 0 || reply.words[2] > sizeof(original)) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	block_size = reply.words[2];
+	request.type = BUNIX_BLOCK_READ_BUFFER;
+	request.cap = (u64)buffer;
+	request.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP;
+	request.words[0] = 0;
+	request.words[1] = block_size;
+	request.words[2] = 0;
+	request.words[3] = 0;
+	if (bunix_ipc_call(block, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] != block_size ||
+	    bunix_buffer_read((u64)buffer, 0, original, block_size) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	for (u64 i = 0; i < block_size; i++) {
+		mutated[i] = original[i];
+	}
+	mutated[0] ^= 0x5au;
+	if (bunix_buffer_write((u64)buffer, 0, mutated, block_size) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_BLOCK_WRITE_BUFFER;
+	request.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP;
+	if (bunix_ipc_call(block, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] != block_size) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_BLOCK_FLUSH;
+	request.cap = 0;
+	request.cap_rights = 0;
+	if (bunix_ipc_call(block, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_BLOCK_READ_BUFFER;
+	request.cap = (u64)buffer;
+	request.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP;
+	if (bunix_ipc_call(block, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] != block_size ||
+	    bunix_buffer_read((u64)buffer, 0, verify, block_size) != 0 ||
+	    verify[0] != mutated[0]) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	if (bunix_buffer_write((u64)buffer, 0, original, block_size) != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_BLOCK_WRITE_BUFFER;
+	request.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP;
+	if (bunix_ipc_call(block, &request, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] != block_size) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	request.type = BUNIX_BLOCK_FLUSH;
+	request.cap = 0;
+	request.cap_rights = 0;
+	if (bunix_ipc_call(block, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		bunix_handle_close((u64)buffer);
+		return -1;
+	}
+	bunix_handle_close((u64)buffer);
+	return 0;
+}
+
 int main(void)
 {
 	const char launching[] = "bootstrap: launching servers\n";
@@ -3631,6 +3723,7 @@ int main(void)
 	const char usb_synth_test[] = "bootstrap: usb synth test\n";
 	const char usb_synth_ok[] = "bootstrap: usb synth ok\n";
 	const char xhci_test[] = "bootstrap: xhci test\n";
+	const char usb_storage_block_ok[] = "bootstrap: usb storage block ok\n";
 	const char input_ready[] = "bootstrap: input ready\n";
 	const char net_loopback_ok[] = "bootstrap: net loopback ok\n";
 	const char net_udp_ok[] = "bootstrap: net udp ok\n";
@@ -3846,11 +3939,23 @@ int main(void)
 			"usb-hid-kbd", usb_hid_caps,
 			sizeof(usb_hid_caps) / sizeof(usb_hid_caps[0]));
 		if (bunix_cmdline_has("xhci-storage-test") > 0) {
+			u64 storage_block;
+
 			usb_storage_caps[2].handle = usb;
-			bunix_launch_module_with_caps(
-				"usb-storage", usb_storage_caps,
+			launch_claimed_module(
+				"usb-storage", BUNIX_NAMES_ROOT,
+				BUNIX_SERVICE_BLOCK, usb_storage_caps,
 				sizeof(usb_storage_caps) /
 					sizeof(usb_storage_caps[0]));
+			storage_block = wait_service_in_namespace(
+				BUNIX_NAMES_ROOT, BUNIX_SERVICE_BLOCK,
+				BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
+			if (storage_block == 0 ||
+			    usb_storage_block_selftest(storage_block) != 0) {
+				return 1;
+			}
+			bunix_console_log(usb_storage_block_ok,
+					  sizeof(usb_storage_block_ok) - 1);
 		}
 		if (bunix_cmdline_has("xhci-hid-test") > 0) {
 			bunix_sleep_ns(6000000000ull);
