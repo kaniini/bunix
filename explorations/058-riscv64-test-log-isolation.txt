@@ -38,6 +38,10 @@ Needs:
   but the guest times out because RISC-V userspace reports unknown native
   syscall `-72` (`BUNIX_SYSCALL_IPC_TRY_RECV`) and core servers exit before
   `bootstrap-riscv64: done`.
+- Follow-up exploration `079-riscv64-early-userspace-server-parity.txt`
+  captures the broader riscv64 userspace/server bringup work exposed while
+  attempting the boot verification.  Keep exploration 058 scoped to serial-log
+  isolation.
 
 Verification:
 

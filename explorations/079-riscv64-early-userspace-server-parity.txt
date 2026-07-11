@@ -1,0 +1,41 @@
+Bring riscv64 early userspace server boot parity up to the point where the
+isolated riscv64 boot tests can run useful guest markers again.
+
+Status:
+
+- Pending.
+- This is follow-up work from exploration 058 verification.  Do not fold this
+  work back into the serial-log isolation slice.
+
+Problem:
+
+- Exploration 058 isolated the riscv64 boot-test serial logs, but the guest
+  boot verification exposed pre-existing riscv64 userspace/server parity gaps.
+- The first clean failure is an unknown native syscall from riscv64 userspace:
+  `BUNIX_SYSCALL_IPC_TRY_RECV` (`-72`).
+- Scratch debugging also found likely next blockers around native task
+  introspection, timer wakeups for sleeping server loops, claimed service
+  registration, and proc/VFS exec authority once the first syscall blocker is
+  removed.
+
+Tasks:
+
+- [ ] Add riscv64 native syscall parity for `BUNIX_SYSCALL_IPC_TRY_RECV`.
+- [ ] Audit riscv64 native syscall parity for task/server bootstrap calls used
+      by the early server set, including task introspection.
+- [ ] Keep timer and sleep semantics work coordinated with
+      `059-riscv64-native-sleep-timer-semantics.txt` rather than duplicating
+      it here.
+- [ ] Audit riscv64 bootstrap service launch capabilities against the x86_64
+      bootstrap path, especially names claims and management ports.
+- [ ] Prove proc can open and exec the riscv64 smoke binaries through VFS with
+      the intended subject authority model.
+- [ ] Remove any temporary diagnostic serial logging before completing the
+      slice, or gate it behind an explicit debug option.
+
+Verification:
+
+- [ ] `make test-boot-riscv64-early`
+- [ ] `make test-boot-riscv64-alpine`
+- [ ] `make test-boot-riscv64-uart-console`
+- [ ] `git diff --check`
