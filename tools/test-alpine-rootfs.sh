@@ -68,6 +68,10 @@ require_grep "boot/networking	/etc/init.d/networking" \
 	"$artifact_dir/openrc-bunix-runlevels.tsv"
 require_grep "add	boot	networking	/etc/init.d/networking" \
 	"$artifact_dir/openrc-policy.tsv"
+require_grep "suppress	boot	modules	/etc/init.d/modules" \
+	"$artifact_dir/openrc-policy.tsv"
+require_grep "suppress	boot	hwdrivers	/etc/init.d/hwdrivers" \
+	"$artifact_dir/openrc-policy.tsv"
 require_grep "replace	inittab	getty	/bin/login" \
 	"$artifact_dir/openrc-policy.tsv"
 require_grep "defer	sysinit	devfs	/etc/init.d/devfs" \
@@ -101,6 +105,10 @@ generated)
 stock)
 	require_grep "#!/sbin/openrc-run" "$root/etc/init.d/networking"
 	reject_grep "start_networking()" "$root/etc/init.d/networking"
+	reject_grep "boot/modules	/etc/init.d/modules" \
+		"$artifact_dir/openrc-bunix-runlevels.tsv"
+	reject_grep "boot/hwdrivers	/etc/init.d/hwdrivers" \
+		"$artifact_dir/openrc-bunix-runlevels.tsv"
 	require_grep "provide dev dev-mount" "$root/etc/init.d/devfs"
 	require_grep "Declare Bunix sysfs availability" "$root/etc/init.d/sysfs"
 	require_grep "Declare Bunix procfs availability" "$root/etc/init.d/procfs"

@@ -531,6 +531,32 @@ Validation:
   `ppoll`, descriptor manipulation, and mmap/munmap activity around shell
   helper execution.  Future fixes should measure those paths directly before
   adding more path caches.
+- Tightened the stock OpenRC runlevel policy after the provider-probing
+  diagnostics.  The boot runlevel now keeps the real dependency chain needed
+  by stock networking (`osclock`, `fsck`, `root`, `localmount`, `hostname`,
+  `bootmisc`, and `networking`) but suppresses Alpine's `modules` and
+  `hwdrivers` services.  Stock networking only orders after those services;
+  Bunix does not currently provide a Linux module loader or Linux coldplug
+  device model for them to operate on, and enabling them expands OpenRC's
+  provider graph without moving the stock networking outcome closer.
+- Validation for the runlevel-policy tightening:
+  - `make test-alpine-rootfs` passed.
+  - `make test-alpine-rootfs-stock-networking` passed when rerun serially.
+    The first concurrent run raced the shared rootfs artifact/cache directory
+    and failed in `apk` before falling back to usermode, matching the known
+    packaging-test isolation issue.
+  - The generated stock-networking runlevel manifest contains only
+    `boot/bootmisc`, `boot/fsck`, `boot/hostname`, `boot/localmount`,
+    `boot/networking`, `boot/osclock`, `boot/root`, and the Bunix-provided
+    `sysinit/devfs`, `sysinit/procfs`, and `sysinit/sysfs` pseudo-filesystem
+    providers.
+  - `QEMU_TIMEOUT=260s BUNIX_BOOT_LOGIN_WAIT=220
+    BUNIX_BOOT_LOGIN_CAPTURE=380 make test-boot-alpine-stock-networking`
+    still timed out before `login:`, with artifact
+    `build/failures/20260711T051558Z-19708/20260711T051938Z-19708`.
+    The visible tail is still OpenRC's dependency-cache/clock-skew/deptree
+    path, so this cleanup reduces the provider graph but does not complete
+    the stock boot.
 - Validation for the syscall-count instrumentation:
   - `make`
   - `make build/modules/linux.server`
