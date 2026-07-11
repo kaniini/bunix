@@ -627,6 +627,19 @@ Validation:
   debugging step should focus on why the stock boot still does not produce the
   visible login prompt reliably after OpenRC progress improves, rather than on
   the fixed regular-file EOF loop.
+- A focused wait/exec trace after the EOF clamp shows the next late stall in
+  `/etc/init.d/osclock`: OpenRC starts the `osclock` `openrc-run` process as
+  `pid=118 task=140`, the shell runner child exits, and then task 140 spends
+  the remaining test window reading and walking OpenRC runtime state.  The
+  task-specific syscall trace identifies `/run/openrc/deptree` as the next hot
+  generated regular file.
+- A trial Linux read-cache extension for `/run/openrc` plus a larger 4 KiB
+  per-open read-ahead trigger passed focused shell guards but was rejected.  It
+  did not move the normal stock-networking boot probe past the visible
+  clock-skew timeout, with artifacts at
+  `build/failures/20260711T023002Z-25475/20260711T023342Z-25475`.  This points
+  back to broader OpenRC dependency/runtime scanning and process/syscall cost,
+  not just uncached 1024-byte reads from `deptree`.
 
 Notes:
 
