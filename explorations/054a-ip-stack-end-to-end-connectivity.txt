@@ -15,6 +15,8 @@ Problem:
 
 - The stock Alpine networking work can bring up interface configuration, but
   the IP stack still has serious correctness gaps after DHCP succeeds.
+- This exploration is specifically for the post-DHCP "network is up but the
+  stack is broken" state observed from a normal Alpine shell.
 - The immediate follow-up to stock OpenRC networking is to examine why the IP
   stack is still utterly broken under normal Alpine userspace, not to add more
   boot-time networking policy.
@@ -45,9 +47,14 @@ Required failure cases:
 
 - `ping` must no longer report wildly inconsistent TTLs for the same remote
   endpoint.
+- `ping -c 4 4.2.2.1` must produce four replies attributed to `4.2.2.1`,
+  not `0.0.0.0`, and must not degrade into repeated `recvfrom: Resource
+  temporarily unavailable` errors after the first reply.
 - DNS resolution must work through Alpine's normal resolver path.
 - `wget http://example.com` must work from the guest and fetch real HTTP
   content over the configured network.
+- The DNS and HTTP checks must run after the interface has been initialized by
+  OpenRC networking, not through a manually preconfigured test shortcut.
 
 Intended outcome:
 
@@ -79,6 +86,9 @@ Investigation targets:
 
 - Audit IPv4 receive dispatch from virtio-net through the network server into
   Linux socket wakeups.
+- Verify that qemu/virtio-net receive packets are delivered to the IP stack and
+  then to the correct userspace socket, with no stale packet metadata reused
+  between receives.
 - Verify ICMP echo reply parsing, source-address selection, TTL propagation,
   route lookup, and socket receive metadata.
 - Verify UDP sockets used by DNS, including ephemeral port binding, reply
@@ -101,6 +111,9 @@ Tasks:
 - [ ] Reproduce and fix the reported ping behavior where replies from
       `4.2.2.1` are displayed as coming from `0.0.0.0` or have inconsistent
       TTLs.
+- [ ] Reproduce and fix the reported follow-on ping failures where later echo
+      replies produce `recvfrom: Resource temporarily unavailable` instead of
+      four successful replies.
 - [ ] Add a deterministic DNS guest test using Alpine's normal resolver path.
 - [ ] Make DNS resolution work from BusyBox/Alpine userspace.
 - [ ] Add a deterministic HTTP guest test using BusyBox `wget
