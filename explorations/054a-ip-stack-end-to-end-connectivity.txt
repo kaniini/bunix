@@ -128,7 +128,7 @@ Tasks:
       replies produce `recvfrom: Resource temporarily unavailable` instead of
       four successful replies.
 - [x] Add a deterministic DNS guest test using Alpine's normal resolver path.
-- [ ] Make DNS resolution work from BusyBox/Alpine userspace.
+- [x] Make DNS resolution work from BusyBox/Alpine userspace.
 - [x] Add a deterministic HTTP guest test using BusyBox `wget
       http://example.com`.
 - [ ] Make `wget http://example.com` complete successfully over TCP.
@@ -195,13 +195,40 @@ Implementation Notes:
   back to `127.0.0.1` and reports `write to '127.0.0.1': Bad file descriptor`,
   and `wget http://example.com` fails with `bad address 'example.com'`.
   Artifact: `build/failures/20260711T105731Z-20972/20260711T110331Z-20972`.
-  The DNS/wget guest script also masks failures today and needs the same
+  The DNS/wget guest script also masked failures and needed the same
   final-status hardening as the strict ping test.
+- Hardened `tools/guest-network-dns-wget.sh` so it accumulates failures and
+  only prints `BUNIX_NET_DNS_WGET_OK` when every resolver and wget assertion
+  succeeds.
+- Generated fallback Alpine networking now publishes `/etc/resolv.conf`
+  through VFS from the netcfg server, using QEMU user networking's DNS server
+  `10.0.2.3`.  A short guest validation passed:
+  `cat /etc/resolv.conf; grep -F "nameserver 10.0.2.3" /etc/resolv.conf`.
+- Fixed Linux `write(2)` on connected UDP sockets by forwarding UDP sockets
+  through the existing `linux_sendto()` path.  This removes the BusyBox
+  `nslookup` failure `write to '10.0.2.2': Bad file descriptor`.
+- BusyBox `nslookup example.com` now works from Alpine userspace through the
+  generated `/etc/resolv.conf` path.  Short guest validation passed:
+  `busybox nslookup example.com >/tmp/d 2>&1; cat /tmp/d; grep -F "Name:"
+  /tmp/d; grep -F "Address" /tmp/d`.
+- BusyBox `wget http://example.com` still fails with `bad address
+  'example.com'` even after `nslookup` works, so the remaining HTTP task is
+  now specifically wget's resolver/API path and subsequent TCP/HTTP behavior.
+  Artifact: `build/failures/20260711T115839Z-9259/20260711T120444Z-9259`.
+- `make test-boot-virtio-net-dns-wget` is still not a trustworthy full-stack
+  validator because the current serial command-file injection path can corrupt
+  long guest scripts before execution.  The DNS fixes above were validated
+  with short `BUNIX_CMD` commands; replacing typed command-file upload remains
+  part of the test-efficiency work.
 - Validation for the test scaffolding:
   - `git diff --check`
   - `make test-alpine-rootfs`
   - `make test-alpine-rootfs-stock-networking`
   - `make build/modules/net.server`
   - `make build/modules/linux.server`
+  - `make build/modules/netcfg.server`
   - `BUNIX_SHELL_PART=network-loopback-ping make test-shell-part`
   - `make test-boot-virtio-net-external-ping-strict`
+  - short Alpine guest `/etc/resolv.conf` validation against
+    `nameserver 10.0.2.3`
+  - short Alpine guest `busybox nslookup example.com` validation

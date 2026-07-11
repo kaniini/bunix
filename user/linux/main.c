@@ -9179,7 +9179,8 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 		return nwritten;
 	}
 	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
-	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP) {
+	    (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
+	     process->fds[fd].handle == LINUX_SOCKET_NET_TCP)) {
 		return linux_sendto(process, fd, len, 0, 0, buffer);
 	}
 	if (process->fds[fd].kind == LINUX_FD_SOCKET &&

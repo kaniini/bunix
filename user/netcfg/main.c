@@ -7,6 +7,7 @@ enum {
 	NETCFG_IFACE_LO = 1,
 	NETCFG_QEMU_USER_IPV4 = 0x0a00020full,
 	NETCFG_QEMU_USER_GW = 0x0a000202ull,
+	NETCFG_QEMU_USER_DNS = 0x0a000203ull,
 	NETCFG_TEST_IPV6_HI = 0x20010db800180000ull,
 	NETCFG_TEST_IPV6_LO = 0x15ull,
 };
@@ -19,6 +20,53 @@ static u64 str_len(const char *text)
 		len++;
 	}
 	return len;
+}
+
+static void str_append_char(char *out, u64 out_size, u64 *pos, char c)
+{
+	if (out == 0 || pos == 0 || *pos + 1 >= out_size) {
+		return;
+	}
+	out[*pos] = c;
+	*pos += 1;
+	out[*pos] = '\0';
+}
+
+static void str_append_text(char *out, u64 out_size, u64 *pos,
+			    const char *text)
+{
+	for (u64 i = 0; text != 0 && text[i] != '\0'; i++) {
+		str_append_char(out, out_size, pos, text[i]);
+	}
+}
+
+static void str_append_u64(char *out, u64 out_size, u64 *pos, u64 value)
+{
+	char digits[20];
+	u64 count = 0;
+
+	if (value == 0) {
+		str_append_char(out, out_size, pos, '0');
+		return;
+	}
+	while (value != 0 && count < sizeof(digits)) {
+		digits[count++] = (char)('0' + value % 10);
+		value /= 10;
+	}
+	while (count != 0) {
+		str_append_char(out, out_size, pos, digits[--count]);
+	}
+}
+
+static void str_append_ipv4(char *out, u64 out_size, u64 *pos, u64 address)
+{
+	str_append_u64(out, out_size, pos, (address >> 24) & 0xff);
+	str_append_char(out, out_size, pos, '.');
+	str_append_u64(out, out_size, pos, (address >> 16) & 0xff);
+	str_append_char(out, out_size, pos, '.');
+	str_append_u64(out, out_size, pos, (address >> 8) & 0xff);
+	str_append_char(out, out_size, pos, '.');
+	str_append_u64(out, out_size, pos, address & 0xff);
 }
 
 static int str_eq_n(const char *left, const char *right, u64 len)
@@ -54,6 +102,150 @@ static u64 resolve_service(u64 service, unsigned int rights)
 		return 0;
 	}
 	return reply.cap;
+}
+
+static long vfs_path_call(u64 vfs, u64 type, const char *path, u64 word3,
+			  struct bunix_msg *reply)
+{
+	const char cwd[] = "/";
+	const u64 cwd_len = sizeof(cwd);
+	const u64 path_len = path != 0 ? str_len(path) + 1 : 0;
+	const long buffer = path_len != 0 ?
+			    bunix_buffer_create(cwd_len + path_len) : -1;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = (unsigned int)type,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { cwd_len, path_len, 0, word3 },
+	};
+	int ok;
+
+	if (vfs == 0 || path == 0 || reply == 0 || buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, cwd, cwd_len) != 0 ||
+	    bunix_buffer_write((u64)buffer, cwd_len, path, path_len) != 0) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	ok = bunix_ipc_call(vfs, &request, reply) == 0;
+	bunix_handle_close((u64)buffer);
+	return ok ? 0 : -1;
+}
+
+static long vfs_open_path(u64 vfs, const char *path, u64 *handle, u64 *type)
+{
+	struct bunix_msg reply;
+
+	if (handle == 0 || type == 0 ||
+	    vfs_path_call(vfs, BUNIX_VFS_OPEN_BUFFER, path, 0, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[1] == 0) {
+		return -1;
+	}
+	*handle = reply.words[1];
+	*type = reply.words[3];
+	return 0;
+}
+
+static void vfs_close_handle(u64 vfs, u64 handle)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_CLOSE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { handle, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (vfs != 0 && handle != 0) {
+		(void)bunix_ipc_call(vfs, &request, &reply);
+	}
+}
+
+static long vfs_truncate_handle(u64 vfs, u64 handle, u64 size)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_TRUNCATE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { handle, size, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	return vfs != 0 && handle != 0 &&
+		       bunix_ipc_call(vfs, &request, &reply) == 0 &&
+		       reply.words[0] == 0 ?
+	       0 :
+	       -1;
+}
+
+static long vfs_write_handle(u64 vfs, u64 handle, const char *text, u64 len)
+{
+	const long buffer = len != 0 ? bunix_buffer_create(len) : -1;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_VFS,
+		.type = BUNIX_VFS_WRITE_FILE_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = buffer > 0 ? (u64)buffer : 0,
+		.words = { handle, 0, len, 0 },
+	};
+	struct bunix_msg reply;
+	int ok;
+
+	if (vfs == 0 || handle == 0 || text == 0 || buffer <= 0 ||
+	    bunix_buffer_write((u64)buffer, 0, text, len) != 0) {
+		if (buffer > 0) {
+			bunix_handle_close((u64)buffer);
+		}
+		return -1;
+	}
+	ok = bunix_ipc_call(vfs, &request, &reply) == 0 &&
+	     reply.words[0] == 0 && reply.words[1] == len;
+	bunix_handle_close((u64)buffer);
+	return ok ? 0 : -1;
+}
+
+static int write_resolv_conf(u64 vfs, const struct bunix_net_dhcp4_lease *lease)
+{
+	char text[128];
+	u64 pos = 0;
+	u64 handle = 0;
+	u64 type = 0;
+
+	if (lease == 0 || lease->dns0 == 0) {
+		return 0;
+	}
+	text[0] = '\0';
+	str_append_text(text, sizeof(text), &pos, "nameserver ");
+	str_append_ipv4(text, sizeof(text), &pos, lease->dns0);
+	str_append_char(text, sizeof(text), &pos, '\n');
+	if (lease->dns1 != 0) {
+		str_append_text(text, sizeof(text), &pos, "nameserver ");
+		str_append_ipv4(text, sizeof(text), &pos, lease->dns1);
+		str_append_char(text, sizeof(text), &pos, '\n');
+	}
+	if (vfs_path_call(vfs, BUNIX_VFS_CREATE_BUFFER, "/etc/resolv.conf",
+			  0644ull << 32, &(struct bunix_msg){ 0 }) != 0 ||
+	    vfs_open_path(vfs, "/etc/resolv.conf", &handle, &type) != 0 ||
+	    type != BUNIX_VFS_TYPE_REGULAR ||
+	    vfs_truncate_handle(vfs, handle, 0) != 0 ||
+	    vfs_write_handle(vfs, handle, text, pos) != 0) {
+		vfs_close_handle(vfs, handle);
+		return -1;
+	}
+	vfs_close_handle(vfs, handle);
+	return 0;
 }
 
 static long register_service(u64 service, u64 handle)
@@ -295,14 +487,15 @@ static long first_packet_iface(u64 net)
 	return 0;
 }
 
-static int install_qemu_user_lease(u64 net, u64 iface)
+static int install_qemu_user_lease(u64 net, u64 iface,
+				   struct bunix_net_dhcp4_lease *installed)
 {
 	struct bunix_net_dhcp4_lease lease = {
 		.iface = iface,
 		.address = NETCFG_QEMU_USER_IPV4,
 		.prefix_len = 24,
 		.gateway = NETCFG_QEMU_USER_GW,
-		.dns0 = NETCFG_QEMU_USER_GW,
+		.dns0 = NETCFG_QEMU_USER_DNS,
 		.dns1 = 0,
 		.lease_lifetime = 3600,
 		.renewal_time = 1800,
@@ -322,6 +515,9 @@ static int install_qemu_user_lease(u64 net, u64 iface)
 		 0 :
 		 -1;
 	bunix_handle_close((u64)buffer);
+	if (result == 0 && installed != 0) {
+		*installed = lease;
+	}
 	return result;
 }
 
@@ -421,14 +617,24 @@ int main(void)
 		}
 		if (iface == 0) {
 			log_text("netcfg: eth0 absent\n");
-		} else if (install_qemu_user_lease(net, (u64)iface) != 0) {
-			log_text("netcfg: dhcp fallback failed\n");
-			return 1;
-		} else if (install_static_ipv6(net, (u64)iface) != 0) {
-			log_text("netcfg: static ipv6 failed\n");
-			return 1;
 		} else {
+			struct bunix_net_dhcp4_lease lease;
+
+			if (install_qemu_user_lease(net, (u64)iface,
+						    &lease) != 0) {
+				log_text("netcfg: dhcp fallback failed\n");
+				return 1;
+			}
+			if (write_resolv_conf(vfs, &lease) != 0) {
+				log_text("netcfg: resolv.conf failed\n");
+				return 1;
+			}
+			if (install_static_ipv6(net, (u64)iface) != 0) {
+				log_text("netcfg: static ipv6 failed\n");
+				return 1;
+			}
 			log_text("netcfg: dhcp fallback lease installed\n");
+			log_text("netcfg: resolv.conf installed\n");
 			log_text("netcfg: static ipv6 installed\n");
 		}
 	}
