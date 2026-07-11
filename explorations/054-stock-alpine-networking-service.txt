@@ -444,6 +444,18 @@ Validation:
 - The fork-sharing slice does not complete stock OpenRC boot by itself.  A
   normal stock-networking boot still timed out before `login:` at
   `build/failures/20260710T234723Z-28674/20260710T235024Z-28674`.
+- A local trial that skipped the post-syscall signal-pending RPC after
+  immediately-ready `poll()`/`ppoll()` returns was rejected.  It preserved
+  `BUNIX_SHELL_PART=linux-signaltest`, but regressed
+  `BUNIX_SHELL_PART=exec-argv-pipe`, which stopped before the normal login
+  prompt after `phdrstress: ok`.  The artifact is
+  `build/failures/20260711T000044Z-32715/20260711T000204Z-32715`.
+  Do not narrow post-syscall signal polling again without first changing the
+  signal-wakeup contract.
+- Fixed the stock-networking boot test harness so `QEMU_TIMEOUT=... make
+  test-boot-alpine-stock-networking` is honored.  The target still defaults to
+  the previous 180 second timeout, but longer OpenRC probes can now set both
+  `QEMU_TIMEOUT` and `BUNIX_BOOT_LOGIN_WAIT` consistently.
 
 Notes:
 

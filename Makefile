@@ -1370,7 +1370,7 @@ test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-b
 
 test-boot-alpine-stock-networking: $(ALPINE_STOCK_NETWORKING_SQUASHFS_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-alpine-smoke.txt
 	$(MAKE) ROOTFS_FLAVOR=alpine-squashfs BLOCK_IMAGE=$(ALPINE_STOCK_NETWORKING_SQUASHFS_IMAGE) VIRTIO_NET_TEST_ESP_DIR=$(BUILD_DIR)/esp-virtio-net-alpine-stock-networking $(BUILD_DIR)/esp-virtio-net-alpine-stock-networking/EFI/BOOT/BOOTX64.EFI
-	ESP_DIR=$(BUILD_DIR)/esp-virtio-net-alpine-stock-networking OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) QEMU_TIMEOUT=180s \
+	ESP_DIR=$(BUILD_DIR)/esp-virtio-net-alpine-stock-networking OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) QEMU_TIMEOUT=$(if $(filter command\ line environment,$(origin QEMU_TIMEOUT)),$(QEMU_TIMEOUT),180s) \
 		ROOTFS_FLAVOR=alpine-squashfs SERIAL_LOG=$(BUILD_DIR)/serial.log QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log tools/test-boot-markers-alpine-smoke.txt
 
