@@ -41,6 +41,7 @@ enum {
 	SYSCALL_TASK_ALLOC = -44,
 	SYSCALL_TASK_CLONE_RANGE = -46,
 	SYSCALL_TASK_KILL = -50,
+	SYSCALL_TASK_INFO = -52,
 	SYSCALL_EARLY_CONSOLE_WRITE = -54,
 	SYSCALL_EARLY_CONSOLE_LOG = -56,
 	SYSCALL_MACHINE_POWER = -64,
@@ -638,6 +639,22 @@ static u64 native_sys_task_id(const struct native_syscall_args *args)
 	return id;
 }
 
+static u64 native_sys_task_info(const struct native_syscall_args *args)
+{
+	u64 pid_threads_flags = 0;
+	u64 name_words[2] = { 0, 0 };
+
+	if (args->arg1 == 0 || args->arg2 == 0 ||
+	    task_info_at(args->arg0, &pid_threads_flags, name_words) != 0 ||
+	    arch_user_copy_to(args->arg1, &pid_threads_flags,
+			      sizeof(pid_threads_flags)) != 0 ||
+	    arch_user_copy_to(args->arg2, name_words, sizeof(name_words)) != 0) {
+		return (u64)-1;
+	}
+
+	return 0;
+}
+
 static u64 native_sys_task_create(const struct native_syscall_args *args)
 {
 	char name[RISCV64_MAX_CSTR];
@@ -918,6 +935,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_TASK_WRITE, "task_write", native_sys_task_write },
 	{ SYSCALL_TASK_START_AT, "task_start_at", native_sys_task_start_at },
 	{ SYSCALL_TASK_ID, "task_id", native_sys_task_id },
+	{ SYSCALL_TASK_INFO, "task_info", native_sys_task_info },
 	{ SYSCALL_TASK_ALLOC, "task_alloc", native_sys_task_alloc },
 	{ SYSCALL_TASK_CLONE_RANGE, "task_clone_range",
 	  native_sys_task_clone_range },

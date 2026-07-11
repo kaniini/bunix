@@ -21,26 +21,36 @@ Problem:
 Tasks:
 
 - [x] Add riscv64 native syscall parity for `BUNIX_SYSCALL_IPC_TRY_RECV`.
-- [ ] Audit riscv64 native syscall parity for task/server bootstrap calls used
+- [x] Audit riscv64 native syscall parity for task/server bootstrap calls used
       by the early server set, including task introspection.
-- [ ] Keep timer and sleep semantics work coordinated with
+- [x] Keep timer and sleep semantics work coordinated with
       `059-riscv64-native-sleep-timer-semantics.txt` rather than duplicating
       it here.
-- [ ] Audit riscv64 bootstrap service launch capabilities against the x86_64
+- [x] Audit riscv64 bootstrap service launch capabilities against the x86_64
       bootstrap path, especially names claims and management ports.
 - [ ] Prove proc can open and exec the riscv64 smoke binaries through VFS with
       the intended subject authority model.
-- [ ] Remove any temporary diagnostic serial logging before completing the
+- [x] Remove any temporary diagnostic serial logging before completing the
       slice, or gate it behind an explicit debug option.
 
 Findings:
 
 - With `ipc_try_recv` implemented, `make test-boot-riscv64-early` no longer
   reports unknown syscall `-72`.
-- The next observed blocker is service registration authority:
-  `bootstrap-riscv64` launches `time`, but `time` exits with status 1 while
-  registering with `names`, because the riscv64 bootstrap still lacks the names
-  claim plumbing used by the x86_64 bootstrap path.
+- RISC-V now has native `task_info` syscall parity, so bootstrap can resolve
+  real task IDs after launching modules that return service handles.
+- The early RISC-V timer now treats the platform timebase and scheduler tick
+  rate separately, re-arms the timer on each interrupt, and wakes sleepers.
+- The RISC-V bootstrap now claims names admin authority, creates service
+  registration claims, passes user/proc/linux management ports, launches core
+  servers with registration claims, and uses the proc management port for
+  exec/spawn control.
+- Proc now opens executable images and interpreters with the target task ID as
+  the VFS subject.  Linux-personality tasks are registered with the Linux server
+  before image load so user/VFS permission checks can resolve credentials.
+- `make test-boot-riscv64-early` now reaches `bootstrap-riscv64: linux ready`.
+  The remaining blocker is a timeout while waiting for the first proc-spawned
+  Linux smoke binary to complete.
 
 Verification:
 

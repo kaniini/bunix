@@ -5,6 +5,37 @@ static void log_line(const char *text, u64 len)
 	(void)bunix_syscall2(BUNIX_SYSCALL_EARLY_CONSOLE_LOG, (u64)text, len);
 }
 
+static long claim_names_admin(void)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_CLAIM_ADMIN,
+		.words = { BUNIX_NAMES_ROOT, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	return bunix_ipc_call(BUNIX_HANDLE_NAMES, &request, &reply) == 0 &&
+		       reply.words[0] == 0 ?
+		       0 :
+		       -1;
+}
+
+static u64 create_registration_claim(u64 namespace, u64 service)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_CREATE_CLAIM,
+		.words = { namespace, service, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (bunix_ipc_call(BUNIX_HANDLE_NAMES, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return 0;
+	}
+	return reply.cap;
+}
+
 static int str_eq(const char *left, const char *right)
 {
 	u64 i = 0;
@@ -29,33 +60,50 @@ static void launch_or_log(const char *name, const char *ok, u64 ok_len,
 	}
 }
 
-static void launch_with_caps_or_log(const char *name,
-				    const struct bunix_launch_cap *caps,
-				    u64 cap_count, const char *ok, u64 ok_len,
-				    const char *fail, u64 fail_len)
+static long launch_claimed_module(const char *name, u64 namespace, u64 service,
+				  const struct bunix_launch_cap *caps,
+				  u64 cap_count)
 {
-	if (bunix_launch_module_with_caps(name, caps, cap_count) >= 0) {
+	struct bunix_launch_cap claimed_caps[16];
+	u64 claim;
+
+	if (name == 0 || service == 0 ||
+	    cap_count + 1 > sizeof(claimed_caps) / sizeof(claimed_caps[0])) {
+		return -1;
+	}
+	claim = create_registration_claim(namespace, service);
+	if (claim == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < cap_count; i++) {
+		claimed_caps[i] = caps[i];
+	}
+	claimed_caps[cap_count].handle = claim;
+	claimed_caps[cap_count].rights = BUNIX_RIGHT_SEND;
+	claimed_caps[cap_count].tag = BUNIX_CAP_CLAM;
+	return bunix_launch_module_with_caps(name, claimed_caps, cap_count + 1);
+}
+
+static void launch_claimed_module_or_log(const char *name, u64 namespace,
+					 u64 service,
+					 const struct bunix_launch_cap *caps,
+					 u64 cap_count, const char *ok,
+					 u64 ok_len, const char *fail,
+					 u64 fail_len)
+{
+	if (launch_claimed_module(name, namespace, service, caps, cap_count) >=
+	    0) {
 		log_line(ok, ok_len);
 	} else {
 		log_line(fail, fail_len);
 	}
 }
 
-static long launch_with_caps_task_id_or_log(const char *name,
-					    const struct bunix_launch_cap *caps,
-					    u64 cap_count, const char *ok,
-					    u64 ok_len, const char *fail,
-					    u64 fail_len)
+static long task_id_by_name(const char *name)
 {
-	const long task = bunix_launch_module_with_caps(name, caps, cap_count);
 	u64 pid_threads_flags = 0;
 	u64 name_words[2] = { 0, 0 };
 
-	if (task < 0) {
-		log_line(fail, fail_len);
-		return -1;
-	}
-	log_line(ok, ok_len);
 	for (u64 i = 0; bunix_task_info(i, &pid_threads_flags,
 					name_words) == 0; i++) {
 		char task_name[17];
@@ -70,6 +118,22 @@ static long launch_with_caps_task_id_or_log(const char *name,
 		}
 	}
 	return -1;
+}
+
+static long launch_claimed_module_task_id_or_log(
+	const char *name, u64 namespace, u64 service,
+	const struct bunix_launch_cap *caps, u64 cap_count, const char *ok,
+	u64 ok_len, const char *fail, u64 fail_len)
+{
+	const long task =
+		launch_claimed_module(name, namespace, service, caps, cap_count);
+
+	if (task < 0) {
+		log_line(fail, fail_len);
+		return -1;
+	}
+	log_line(ok, ok_len);
+	return task_id_by_name(name);
 }
 
 static u64 str_len(const char *text)
@@ -297,8 +361,21 @@ int main(void)
 	const int alpine_test = bunix_cmdline_has("riscv64-alpine-test") > 0;
 	const int uart_console_test =
 		bunix_cmdline_has("riscv64-uart-console") > 0;
+	const u64 user_mgmt = (u64)bunix_port_create("user-mgmt");
+	const u64 proc_mgmt = (u64)bunix_port_create("proc-mgmt");
+	const u64 linux_mgmt = (u64)bunix_port_create("linux-mgmt");
 
 	log_line(online, sizeof(online) - 1);
+	if ((long)user_mgmt <= 0 || (long)proc_mgmt <= 0 ||
+	    (long)linux_mgmt <= 0) {
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
+		return 1;
+	}
+	if (claim_names_admin() != 0) {
+		log_line(time_wait_fail, sizeof(time_wait_fail) - 1);
+		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
+		return 1;
+	}
 	launch_or_log("abi-smoke.user", abi_ok, sizeof(abi_ok) - 1,
 		      abi_fail, sizeof(abi_fail) - 1);
 	if (uart_console_test) {
@@ -310,10 +387,10 @@ int main(void)
 		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
 		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
 	};
-	launch_with_caps_or_log("time", fs_caps,
-				sizeof(fs_caps) / sizeof(fs_caps[0]),
-				time_ok, sizeof(time_ok) - 1,
-				time_fail, sizeof(time_fail) - 1);
+	launch_claimed_module_or_log(
+		"time", BUNIX_NAMES_ROOT, BUNIX_SERVICE_TIME, fs_caps,
+		sizeof(fs_caps) / sizeof(fs_caps[0]), time_ok,
+		sizeof(time_ok) - 1, time_fail, sizeof(time_fail) - 1);
 	const u64 time = wait_service(BUNIX_SERVICE_TIME,
 				      BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	if (time != 0) {
@@ -321,53 +398,69 @@ int main(void)
 	} else {
 		log_line(time_wait_fail, sizeof(time_wait_fail) - 1);
 	}
-	launch_with_caps_or_log("user", fs_caps,
-				sizeof(fs_caps) / sizeof(fs_caps[0]),
-				user_ok, sizeof(user_ok) - 1,
-				user_fail, sizeof(user_fail) - 1);
+	const struct bunix_launch_cap user_caps[] = {
+		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
+		{ user_mgmt, BUNIX_RIGHT_RECV, BUNIX_CAP_USRM },
+	};
+	launch_claimed_module_or_log(
+		"user", BUNIX_NAMES_ROOT, BUNIX_SERVICE_USER, user_caps,
+		sizeof(user_caps) / sizeof(user_caps[0]), user_ok,
+		sizeof(user_ok) - 1, user_fail, sizeof(user_fail) - 1);
 	const struct bunix_launch_cap proc_caps[] = {
 		{ BUNIX_HANDLE_CONSOLE, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 		  BUNIX_CAP_CONS },
 		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
 		  BUNIX_CAP_NAME },
 		{ time, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, BUNIX_CAP_TIME },
+		{ proc_mgmt, BUNIX_RIGHT_RECV, BUNIX_CAP_PRMG },
+		{ user_mgmt, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		  BUNIX_CAP_USRM },
+		{ linux_mgmt, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		  BUNIX_CAP_LNXM },
 	};
+	long proc_task = -1;
 	if (time != 0) {
-		launch_with_caps_or_log("proc", proc_caps,
-					sizeof(proc_caps) / sizeof(proc_caps[0]),
-					proc_ok, sizeof(proc_ok) - 1,
-					proc_fail, sizeof(proc_fail) - 1);
+		proc_task = launch_claimed_module_task_id_or_log(
+			"proc", BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROC,
+			proc_caps, sizeof(proc_caps) / sizeof(proc_caps[0]),
+			proc_ok, sizeof(proc_ok) - 1, proc_fail,
+			sizeof(proc_fail) - 1);
 	} else {
 		log_line(proc_fail, sizeof(proc_fail) - 1);
 	}
 	const u64 proc = wait_service(BUNIX_SERVICE_PROC,
 				      BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
-	launch_with_caps_or_log("block", fs_caps,
-				sizeof(fs_caps) / sizeof(fs_caps[0]),
-				block_ok, sizeof(block_ok) - 1,
-				block_fail, sizeof(block_fail) - 1);
+	(void)proc;
+	launch_claimed_module_or_log(
+		"block", BUNIX_NAMES_ROOT, BUNIX_SERVICE_BLOCK, fs_caps,
+		sizeof(fs_caps) / sizeof(fs_caps[0]), block_ok,
+		sizeof(block_ok) - 1, block_fail, sizeof(block_fail) - 1);
 	const u64 block = wait_service(BUNIX_SERVICE_BLOCK, BUNIX_RIGHT_SEND);
 	if (block != 0) {
 		log_line(block_ready, sizeof(block_ready) - 1);
 	} else {
 		log_line(block_wait_fail, sizeof(block_wait_fail) - 1);
 	}
-	const long vfs_task = launch_with_caps_task_id_or_log(
-		"vfs", fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]),
-		vfs_ok, sizeof(vfs_ok) - 1, vfs_fail, sizeof(vfs_fail) - 1);
+	const long vfs_task = launch_claimed_module_task_id_or_log(
+		"vfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_VFS, fs_caps,
+		sizeof(fs_caps) / sizeof(fs_caps[0]), vfs_ok,
+		sizeof(vfs_ok) - 1, vfs_fail, sizeof(vfs_fail) - 1);
 	const u64 vfs = wait_service(BUNIX_SERVICE_VFS,
 				     BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	if (vfs != 0 && vfs_task > 0 &&
 	    vfs_grant_admin_task(vfs, 0) == 0 &&
-	    vfs_grant_subject_task(vfs, 0) == 0) {
+	    vfs_grant_subject_task(vfs, 0) == 0 &&
+	    (proc_task <= 0 || vfs_grant_subject_task(vfs, proc_task) == 0)) {
 		log_line(vfs_ready, sizeof(vfs_ready) - 1);
 	} else {
 		log_line(vfs_wait_fail, sizeof(vfs_wait_fail) - 1);
 	}
-	const long squashfs_task = launch_with_caps_task_id_or_log(
-		"squashfs", fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]),
-		squashfs_ok, sizeof(squashfs_ok) - 1,
-		squashfs_fail, sizeof(squashfs_fail) - 1);
+	const long squashfs_task = launch_claimed_module_task_id_or_log(
+		"squashfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_SQUASHFS, fs_caps,
+		sizeof(fs_caps) / sizeof(fs_caps[0]), squashfs_ok,
+		sizeof(squashfs_ok) - 1, squashfs_fail,
+		sizeof(squashfs_fail) - 1);
 	const u64 squashfs = wait_service(BUNIX_SERVICE_SQUASHFS,
 					  BUNIX_RIGHT_SEND);
 	if (vfs != 0 && squashfs != 0 && squashfs_task > 0 &&
@@ -389,19 +482,19 @@ int main(void)
 		{ vfs, BUNIX_RIGHT_SEND, BUNIX_CAP_VFS },
 		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
 	};
-	launch_with_caps_or_log("linux", linux_caps,
-				sizeof(linux_caps) / sizeof(linux_caps[0]),
-				linux_ok, sizeof(linux_ok) - 1,
-				linux_fail, sizeof(linux_fail) - 1);
+	launch_claimed_module_or_log(
+		"linux", BUNIX_NAMES_ROOT, BUNIX_SERVICE_LINUX, linux_caps,
+		sizeof(linux_caps) / sizeof(linux_caps[0]), linux_ok,
+		sizeof(linux_ok) - 1, linux_fail, sizeof(linux_fail) - 1);
 	const u64 linux = wait_service(BUNIX_SERVICE_LINUX, BUNIX_RIGHT_SEND);
 	if (linux != 0) {
 		log_line(linux_ready, sizeof(linux_ready) - 1);
 	} else {
 		log_line(linux_wait_fail, sizeof(linux_wait_fail) - 1);
 	}
-	if (proc != 0 && linux != 0 &&
-	    proc_register_exec(proc, "/bin/dyn-hello", "dyn-hello", 1) == 0 &&
-	    proc_spawn_wait(proc, "/bin/dyn-hello") == 0) {
+	if (proc_mgmt != 0 && linux != 0 &&
+	    proc_register_exec(proc_mgmt, "/bin/dyn-hello", "dyn-hello", 1) == 0 &&
+	    proc_spawn_wait(proc_mgmt, "/bin/dyn-hello") == 0) {
 		log_line(dyn_ok, sizeof(dyn_ok) - 1);
 	} else {
 		log_line(dyn_fail, sizeof(dyn_fail) - 1);
@@ -413,9 +506,9 @@ int main(void)
 			"echo BUNIX_RISCV64_ALPINE_SH_OK",
 		};
 
-		if (proc != 0 &&
-		    proc_register_exec(proc, "/bin/sh", "alpine-sh", 1) == 0 &&
-		    proc_spawn_wait_argv(proc, "/bin/sh", sh_argv,
+		if (proc_mgmt != 0 &&
+		    proc_register_exec(proc_mgmt, "/bin/sh", "alpine-sh", 1) == 0 &&
+		    proc_spawn_wait_argv(proc_mgmt, "/bin/sh", sh_argv,
 					sizeof(sh_argv) / sizeof(sh_argv[0])) == 0) {
 			log_line(alpine_sh_ok, sizeof(alpine_sh_ok) - 1);
 		} else {
@@ -425,17 +518,17 @@ int main(void)
 		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 		return 0;
 	}
-	if (proc != 0 && linux != 0 &&
-	    proc_register_exec(proc, "/bin/rv64-syscall-smoke",
+	if (proc_mgmt != 0 && linux != 0 &&
+	    proc_register_exec(proc_mgmt, "/bin/rv64-syscall-smoke",
 			       "rv64-syscall-smoke", 1) == 0 &&
-	    proc_spawn_wait(proc, "/bin/rv64-syscall-smoke") == 0) {
+	    proc_spawn_wait(proc_mgmt, "/bin/rv64-syscall-smoke") == 0) {
 		log_line(syscall_ok, sizeof(syscall_ok) - 1);
 	} else {
 		log_line(syscall_fail, sizeof(syscall_fail) - 1);
 	}
-	if (proc != 0 && linux != 0 &&
-	    proc_register_exec(proc, "/bin/musl-hello", "musl-hello", 1) == 0 &&
-	    proc_spawn_wait(proc, "/bin/musl-hello") == 0) {
+	if (proc_mgmt != 0 && linux != 0 &&
+	    proc_register_exec(proc_mgmt, "/bin/musl-hello", "musl-hello", 1) == 0 &&
+	    proc_spawn_wait(proc_mgmt, "/bin/musl-hello") == 0) {
 		log_line(hello_ok, sizeof(hello_ok) - 1);
 	} else {
 		log_line(hello_fail, sizeof(hello_fail) - 1);

@@ -13,7 +13,8 @@
 #define RISCV64_SIE_STIE (1ULL << 5)
 #define RISCV64_SSTATUS_SIE (1ULL << 1)
 #define RISCV64_SSTATUS_SPP (1ULL << 8)
-#define RISCV64_TIMER_HZ 10000000ULL
+#define RISCV64_TIMEBASE_HZ 10000000ULL
+#define RISCV64_TIMER_HZ 100ULL
 
 extern void riscv64_trap_entry(void);
 extern u64 riscv64_user_test_return_pc;
@@ -150,8 +151,9 @@ void arch_interrupt_dispatch(struct arch_interrupt_frame *frame)
 {
 	if (frame != 0 && frame->scause == RISCV64_SCAUSE_SUPERVISOR_TIMER) {
 		ticks++;
-		(void)riscv64_sbi_call1(RISCV64_SBI_LEGACY_SET_TIMER,
-					~0ULL);
+		sched_wake_sleepers(ticks);
+		riscv64_timer_set_relative(RISCV64_TIMEBASE_HZ /
+					   RISCV64_TIMER_HZ);
 		return;
 	}
 	if (frame != 0 &&

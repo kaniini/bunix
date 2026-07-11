@@ -40,6 +40,8 @@ static const char riscv64_bootpkg_abi_smoke[] = "abi-smoke.user";
 enum {
 	USER_STACK_TOP = 0x800000ULL,
 	USER_STACK_PAGE = USER_STACK_TOP - RISCV64_PAGE_SIZE,
+	RISCV64_TIMEBASE_HZ = 10000000ULL,
+	RISCV64_TIMER_HZ = 100ULL,
 };
 
 const struct riscv64_boot_info *riscv64_boot_info(void)
@@ -459,7 +461,7 @@ static void riscv64_run_lowlevel_self_tests(u64 fdt)
 	if (scheduler_self_test() == 0) {
 		early_puts("sched: riscv64 thread\n");
 	}
-	riscv64_timer_set_relative(arch_timer_hz() / 100);
+	riscv64_timer_set_relative(RISCV64_TIMEBASE_HZ / RISCV64_TIMER_HZ);
 	arch_interrupts_enable();
 	while (arch_timer_ticks() == 0) {
 		__asm__ volatile ("wfi");
@@ -557,7 +559,8 @@ void riscv64_early_main(u64 hart_id, u64 fdt)
 			if (user_copy_self_test() == 0) {
 				early_puts("copy: riscv64 user\n");
 			}
-			riscv64_timer_set_relative(arch_timer_hz() / 100);
+			riscv64_timer_set_relative(RISCV64_TIMEBASE_HZ /
+						   RISCV64_TIMER_HZ);
 			arch_interrupts_enable();
 			server_start_initial_boot_modules();
 			sched_enable_preemption();

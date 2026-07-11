@@ -34,12 +34,15 @@ Deferred:
 Needs:
 
 - RISC-V boot verification is blocked by pre-existing userspace/server parity
-  issues.  The first blocker, unknown native syscall `-72`
-  (`BUNIX_SYSCALL_IPC_TRY_RECV`), has a local fix.  After that fix,
-  `test-boot-riscv64-early` reaches `bootstrap-riscv64: time launched`, then
-  `time` exits with status 1 because the riscv64 bootstrap path still launches
-  services without the names registration claim needed by the current server
-  authority model.
+  issues, not by serial log isolation.  Local follow-up work now gets past the
+  first blockers: unknown native syscall `-72`
+  (`BUNIX_SYSCALL_IPC_TRY_RECV`), unclaimed service registration, sleeping
+  server-loop wakeups, missing task introspection, and proc/VFS exec-open
+  subject authority.
+- `test-boot-riscv64-early` now reaches `bootstrap-riscv64: linux ready`, then
+  times out while waiting for the first proc-spawned Linux smoke binary to
+  complete.  Keep the remaining wait/exit/syscall-forwarding debug in
+  follow-up exploration `079-riscv64-early-userspace-server-parity.txt`.
 - Follow-up exploration `079-riscv64-early-userspace-server-parity.txt`
   captures the broader riscv64 userspace/server bringup work exposed while
   attempting the boot verification.  Keep exploration 058 scoped to serial-log

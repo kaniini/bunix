@@ -889,7 +889,8 @@ out:
 	return result;
 }
 
-static long vfs_open(u64 vfs, const char *path, struct vfs_file *file)
+static long vfs_open(u64 vfs, const char *path, u64 subject,
+		     struct vfs_file *file)
 {
 	const u64 path_len = str_len(path) + 1;
 	const char cwd[] = "/";
@@ -918,7 +919,7 @@ static long vfs_open(u64 vfs, const char *path, struct vfs_file *file)
 		.cap_rights = BUNIX_RIGHT_RECV,
 		.reply = 0,
 		.cap = (u64)path_buffer,
-		.words = { cwd_len, path_len, 0, 0 },
+		.words = { cwd_len, path_len, 0, subject },
 	};
 
 	if (bunix_ipc_call(vfs, &request, &reply) != 0 ||
@@ -1534,7 +1535,7 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 				  sizeof("proc: exec buffer failed\n") - 1);
 		return -1;
 	}
-	if (vfs_open(vfs, load_path, &file) != 0) {
+	if (vfs_open(vfs, load_path, bunix_task_id(task), &file) != 0) {
 		bunix_console_log("proc: exec open failed\n",
 				  sizeof("proc: exec open failed\n") - 1);
 		goto out;
@@ -1591,7 +1592,8 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 		goto out;
 	}
 	if (interp > 0) {
-		if (vfs_open(vfs, interp_path, &interp_file) != 0 ||
+		if (vfs_open(vfs, interp_path, bunix_task_id(task),
+			     &interp_file) != 0 ||
 		    vfs_read_file(vfs, interp_file.handle, interp_file.size, 0,
 				  (unsigned char *)&interp_ehdr,
 				  sizeof(interp_ehdr), (u64)io_buffer) != 0 ||
@@ -1732,11 +1734,6 @@ static long exec_path(u64 vfs, struct process *process,
 		bunix_handle_close((u64)task);
 		return -1;
 	}
-	if (load_task_image(vfs, (u64)task, 0, path, path, strings, 0,
-			    &handles, &start_entry, &stack) != 0) {
-		bunix_handle_close((u64)task);
-		return -1;
-	}
 	if (linux_personality) {
 		if (register_linux_process((u64)bunix_id, process->pid,
 					   linux_parent_pid, session_id,
@@ -1747,6 +1744,11 @@ static long exec_path(u64 vfs, struct process *process,
 		    apply_login_to_task((u64)bunix_id, login_uid) != 0) {
 			return -1;
 		}
+	}
+	if (load_task_image(vfs, (u64)task, 0, path, path, strings, 0,
+			    &handles, &start_entry, &stack) != 0) {
+		bunix_handle_close((u64)task);
+		return -1;
 	}
 	const long started = bunix_task_start_at((u64)task, start_entry, stack);
 
