@@ -3631,6 +3631,7 @@ int main(void)
 	const char usb_synth_test[] = "bootstrap: usb synth test\n";
 	const char usb_synth_ok[] = "bootstrap: usb synth ok\n";
 	const char xhci_test[] = "bootstrap: xhci test\n";
+	const char input_ready[] = "bootstrap: input ready\n";
 	const char net_loopback_ok[] = "bootstrap: net loopback ok\n";
 	const char net_udp_ok[] = "bootstrap: net udp ok\n";
 	const char net_tcp_ok[] = "bootstrap: net tcp ok\n";
@@ -3817,6 +3818,14 @@ int main(void)
 		for (;;) {
 		}
 	}
+	launch_claimed_module("input", BUNIX_NAMES_ROOT, BUNIX_SERVICE_INPUT,
+			      fs_caps,
+			      sizeof(fs_caps) / sizeof(fs_caps[0]));
+	if (wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_INPUT,
+				      BUNIX_RIGHT_SEND) == 0) {
+		return 1;
+	}
+	bunix_console_log(input_ready, sizeof(input_ready) - 1);
 	launch_claimed_module("net", BUNIX_NAMES_ROOT, BUNIX_SERVICE_NET,
 			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	net = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_NET,

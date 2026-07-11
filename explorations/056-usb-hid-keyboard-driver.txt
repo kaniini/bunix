@@ -22,7 +22,7 @@ Constraints:
 
 Tasks:
 
-- [ ] Define an input-event protocol for key events that is independent of USB.
+- [x] Define an input-event protocol for key events that is independent of USB.
 - [ ] Extend `USB0` interface-claim/open-endpoint plumbing enough for a HID
       driver to obtain an interrupt IN endpoint capability.
 - [ ] Add `usb-hid-kbd.server` that scans `USB0` devices, claims HID boot
