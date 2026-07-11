@@ -20,7 +20,7 @@ Problem:
 
 Tasks:
 
-- [ ] Add riscv64 native syscall parity for `BUNIX_SYSCALL_IPC_TRY_RECV`.
+- [x] Add riscv64 native syscall parity for `BUNIX_SYSCALL_IPC_TRY_RECV`.
 - [ ] Audit riscv64 native syscall parity for task/server bootstrap calls used
       by the early server set, including task introspection.
 - [ ] Keep timer and sleep semantics work coordinated with
@@ -32,6 +32,15 @@ Tasks:
       the intended subject authority model.
 - [ ] Remove any temporary diagnostic serial logging before completing the
       slice, or gate it behind an explicit debug option.
+
+Findings:
+
+- With `ipc_try_recv` implemented, `make test-boot-riscv64-early` no longer
+  reports unknown syscall `-72`.
+- The next observed blocker is service registration authority:
+  `bootstrap-riscv64` launches `time`, but `time` exits with status 1 while
+  registering with `names`, because the riscv64 bootstrap still lacks the names
+  claim plumbing used by the x86_64 bootstrap path.
 
 Verification:
 

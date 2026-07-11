@@ -23,6 +23,7 @@ enum {
 	SYSCALL_IPC_SEND = -12,
 	SYSCALL_IPC_RECV = -13,
 	SYSCALL_IPC_CALL = -14,
+	SYSCALL_IPC_TRY_RECV = -72,
 	SYSCALL_HANDLE_CLOSE = -16,
 	SYSCALL_BOOT_MODULE_READ = -18,
 	SYSCALL_CLOCK_MONOTONIC_NS = -20,
@@ -540,6 +541,40 @@ static u64 native_sys_ipc_recv(const struct native_syscall_args *args)
 	return 0;
 }
 
+static u64 native_sys_ipc_try_recv(const struct native_syscall_args *args)
+{
+	struct user_ipc_message user_message;
+	struct ipc_message message;
+	struct ipc_port *port =
+		task_port_from_handle(task_current(), args->arg0,
+				      TASK_RIGHT_RECV);
+	int result;
+
+	if (port == 0 || args->arg1 == 0) {
+		ipc_port_release(port);
+		return (u64)-1;
+	}
+	result = ipc_try_recv(port, &message);
+	if (result < 0) {
+		ipc_port_release(port);
+		return (u64)-1;
+	}
+	if (result > 0) {
+		ipc_port_release(port);
+		return 1;
+	}
+	ipc_message_to_user(&message, &user_message);
+	if (arch_user_copy_to(args->arg1, &user_message,
+			      sizeof(user_message)) != 0) {
+		ipc_message_release(&message);
+		ipc_port_release(port);
+		return (u64)-1;
+	}
+	ipc_message_release(&message);
+	ipc_port_release(port);
+	return 0;
+}
+
 static u64 native_sys_ipc_call(const struct native_syscall_args *args)
 {
 	struct user_ipc_message user_request;
@@ -863,6 +898,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_PORT_CREATE, "port_create", native_sys_port_create },
 	{ SYSCALL_IPC_SEND, "ipc_send", native_sys_ipc_send },
 	{ SYSCALL_IPC_RECV, "ipc_recv", native_sys_ipc_recv },
+	{ SYSCALL_IPC_TRY_RECV, "ipc_try_recv", native_sys_ipc_try_recv },
 	{ SYSCALL_IPC_CALL, "ipc_call", native_sys_ipc_call },
 	{ SYSCALL_HANDLE_CLOSE, "handle_close", native_sys_handle_close },
 	{ SYSCALL_HANDLE_FIND, "handle_find", native_sys_handle_find },
