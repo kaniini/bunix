@@ -15,10 +15,17 @@ Problem:
 
 - The stock Alpine networking work can bring up interface configuration, but
   the IP stack still has serious correctness gaps after DHCP succeeds.
+- This exploration exists to examine why the IP stack is still utterly broken
+  once link and DHCP appear to be working, instead of treating DHCP success as
+  proof of usable networking.
 - The IP stack appears substantially broken after link and DHCP success:
   ping TTLs are inconsistent, ping replies can be attributed to the wrong
   source address, DNS does not work, and `wget http://example.com` does not
   work.
+- Current reported failures to reproduce and fix:
+  - Ping TTLs are all over the place.
+  - DNS does not work.
+  - `wget http://example.com` does not work.
 - Reported external ping behavior includes replies from `4.2.2.1` appearing
   as `0.0.0.0`, missing replies after the first packet, and later
   `recvfrom: Resource temporarily unavailable` errors.
@@ -106,4 +113,6 @@ Completion criteria:
 - `ping -c 4 4.2.2.1` returns four replies from `4.2.2.1` with plausible TTLs.
 - DNS resolution works from the guest using normal resolver configuration.
 - `wget http://example.com` succeeds from the guest.
+- DNS and `wget http://example.com` are validated end to end in the guest after
+  OpenRC networking has initialized the interface.
 - Automated tests cover ping correctness, DNS, and HTTP fetch behavior.
