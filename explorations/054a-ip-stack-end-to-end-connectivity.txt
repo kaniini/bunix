@@ -2,19 +2,25 @@ Fix IP stack correctness and end-to-end userspace networking.
 
 Follow-up:
 
-- This exploration runs immediately after
-  `054-stock-alpine-networking-service.txt`.
+- This exploration runs after `054-stock-alpine-networking-service.txt` is
+  either completed or explicitly postponed.
 - This must stay before VFS-backed mmap/SIGBUS and later unrelated runtime
   work, because a default Alpine boot is not useful until the configured
   network is actually usable from userspace.
 - Exploration 054 is about getting Alpine networking initialized by the
   normal OpenRC/ifupdown-ng service path.  This exploration is the next slice
   for proving that the IP stack itself is correct once the interface is up.
+- Exploration 054 is currently postponed on an OpenRC `/run/openrc/deptree`
+  runtime-state failure.  Until that is resumed, run this exploration against
+  the default generated Bunix networking service path.  Do not treat that as
+  completion of the stock OpenRC service goal; it is only the current way to
+  obtain a configured interface while debugging IP-stack correctness.
 
 Problem:
 
-- The stock Alpine networking work can bring up interface configuration, but
-  the IP stack still has serious correctness gaps after DHCP succeeds.
+- The current default Alpine networking path can bring up interface
+  configuration, but the IP stack still has serious correctness gaps after
+  DHCP succeeds.
 - This exploration is specifically for the post-DHCP "network is up but the
   stack is broken" state observed from a normal Alpine shell.
 - The immediate follow-up to stock OpenRC networking is to examine why the IP
@@ -54,7 +60,10 @@ Required failure cases:
 - `wget http://example.com` must work from the guest and fetch real HTTP
   content over the configured network.
 - The DNS and HTTP checks must run after the interface has been initialized by
-  OpenRC networking, not through a manually preconfigured test shortcut.
+  the default Alpine boot networking path, not through a manually preconfigured
+  test shortcut.  While exploration 054 is postponed, that default path is the
+  generated Bunix networking service; once stock OpenRC networking is restored,
+  these checks should be revalidated through the stock service path too.
 
 Intended outcome:
 
