@@ -20,6 +20,10 @@ if [ -n "${RISCV64_SYSCALL_SMOKE_MODULE:-}" ]; then
 	cp "$RISCV64_SYSCALL_SMOKE_MODULE" "$stage/bin/rv64-syscall-smoke"
 	chmod 0555 "$stage/bin/rv64-syscall-smoke"
 fi
+if [ -n "${RISCV64_USERMEMTEST_MODULE:-}" ]; then
+	cp "$RISCV64_USERMEMTEST_MODULE" "$stage/bin/usermemtest"
+	chmod 0555 "$stage/bin/usermemtest"
+fi
 if [ -n "${RISCV64_MUSL_HELLO_MODULE:-}" ]; then
 	cp "$RISCV64_MUSL_HELLO_MODULE" "$stage/bin/musl-hello"
 	chmod 0555 "$stage/bin/musl-hello"

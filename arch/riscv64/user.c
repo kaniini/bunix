@@ -176,26 +176,6 @@ void arch_user_resume(const struct arch_syscall_frame *frame)
 	}
 }
 
-static u64 riscv64_sstatus_read(void)
-{
-	u64 value;
-
-	__asm__ volatile ("csrr %0, sstatus" : "=r"(value));
-	return value;
-}
-
-static void riscv64_sstatus_write(u64 value)
-{
-	__asm__ volatile ("csrw sstatus, %0" : : "r"(value) : "memory");
-}
-
-static void mem_copy(u8 *dst, const u8 *src, u64 len)
-{
-	for (u64 i = 0; i < len; i++) {
-		dst[i] = src[i];
-	}
-}
-
 static u64 min_u64(u64 left, u64 right)
 {
 	return left < right ? left : right;
@@ -237,30 +217,20 @@ static int user_copy_args_valid(const void *kernel, u64 user, u64 len)
 
 int arch_user_copy_from(void *dst, u64 user_src, u64 len)
 {
-	const u64 saved_status = riscv64_sstatus_read();
-
 	if (!user_copy_args_valid(dst, user_src, len)) {
 		return -1;
 	}
 
-	riscv64_sstatus_write(saved_status | RISCV64_SSTATUS_SUM);
-	mem_copy((u8 *)dst, (const u8 *)user_src, len);
-	riscv64_sstatus_write(saved_status);
-	return 0;
+	return vm_read_user(task_vm_space(task_current()), user_src, dst, len);
 }
 
 int arch_user_copy_to(u64 user_dst, const void *src, u64 len)
 {
-	const u64 saved_status = riscv64_sstatus_read();
-
 	if (!user_copy_args_valid(src, user_dst, len)) {
 		return -1;
 	}
 
-	riscv64_sstatus_write(saved_status | RISCV64_SSTATUS_SUM);
-	mem_copy((u8 *)user_dst, (const u8 *)src, len);
-	riscv64_sstatus_write(saved_status);
-	return 0;
+	return vm_write_user(task_vm_space(task_current()), user_dst, src, len);
 }
 
 static void early_console_write_user(u64 text, u64 len)

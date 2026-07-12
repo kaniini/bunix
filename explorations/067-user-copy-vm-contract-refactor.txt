@@ -37,7 +37,7 @@ Tasks:
 - [x] Rename or wrap APIs so user versus kernel translation is explicit.
 - [x] Add diagnostics for user-copy/protection failures.
 - [x] Audit all server and test-program call sites.
-- [ ] Add cross-architecture user-memory regression tests.
+- [x] Add cross-architecture user-memory regression tests.
 - [ ] Run focused VM/Linux/VFS tests, riscv64 gates, then full `make test`.
 
 Progress:
@@ -56,3 +56,16 @@ Progress:
   direct userspace clients are proc, the shared syscall wrappers, allocator
   self-growth, and the proc exec-stack host unit test; Linux, VFS, procfs,
   tmpfs, and user do not directly issue task-memory mapping calls.
+- Added `usermemtest`, a static Linux test program installed into the
+  synthetic x86_64 rootfs and the riscv64 smoke rootfs.  It verifies low
+  unmapped pointers, kernel-only pointer denial, read-only user-buffer denial,
+  and valid `fstat()` user copies.  On x86_64 it also verifies private
+  mapping copy behavior through `fork()`.  The riscv64 Linux frontend does not
+  yet implement Linux `clone`, so riscv64 runs the user-copy/protection subset
+  and treats Linux fork-copy coverage as an x86_64 gate for now.
+- Riscv64 `arch_user_copy_from()` and `arch_user_copy_to()` now use the
+  generic VM user-copy helpers instead of raw SUM memory copies, so bad user
+  pointers fail with `EFAULT` instead of trapping in the kernel.
+- The riscv64 bootstrap now treats nonzero child exit status from
+  `BUNIX_PROC_WAIT` as a failed spawn-wait, making runtime test markers
+  trustworthy.

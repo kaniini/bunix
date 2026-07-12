@@ -257,7 +257,7 @@ static long proc_spawn_wait_argv(u64 proc, const char *path,
 	    reply.words[0] != 0) {
 		return -1;
 	}
-	return 0;
+	return reply.words[2] == 0 ? 0 : -1;
 }
 
 static long proc_spawn_wait(u64 proc, const char *path)
@@ -357,6 +357,8 @@ int main(void)
 	const char alpine_sh_fail[] = "bootstrap-riscv64: alpine sh failed\n";
 	const char syscall_ok[] = "bootstrap-riscv64: syscall-smoke ok\n";
 	const char syscall_fail[] = "bootstrap-riscv64: syscall-smoke failed\n";
+	const char usermem_ok[] = "bootstrap-riscv64: usermemtest ok\n";
+	const char usermem_fail[] = "bootstrap-riscv64: usermemtest failed\n";
 	const char hello_ok[] = "bootstrap-riscv64: musl-hello ok\n";
 	const char hello_fail[] = "bootstrap-riscv64: musl-hello failed\n";
 	const char done[] = "bootstrap-riscv64: done\n";
@@ -556,6 +558,14 @@ int main(void)
 		log_line(syscall_ok, sizeof(syscall_ok) - 1);
 	} else {
 		log_line(syscall_fail, sizeof(syscall_fail) - 1);
+	}
+	if (proc_mgmt != 0 && linux != 0 &&
+	    proc_register_exec(proc_mgmt, "/bin/usermemtest",
+			       "usermemtest", 1) == 0 &&
+	    proc_spawn_wait(proc_mgmt, "/bin/usermemtest") == 0) {
+		log_line(usermem_ok, sizeof(usermem_ok) - 1);
+	} else {
+		log_line(usermem_fail, sizeof(usermem_fail) - 1);
 	}
 	if (proc_mgmt != 0 && linux != 0 &&
 	    proc_register_exec(proc_mgmt, "/bin/musl-hello", "musl-hello", 1) == 0 &&

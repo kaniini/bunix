@@ -65,6 +65,7 @@ RISCV64_MUSLCC_GCC_LIBDIR := $(RISCV64_MUSLCC_PREFIX)/lib/gcc/riscv64-linux-musl
 RISCV64_MUSL_LDSO_SOURCE := $(RISCV64_MUSLCC_SYSROOT)/lib/libc.so
 RISCV64_MUSL_HELLO_MODULE := $(BUILD_DIR)/riscv64/modules/musl-hello.user
 RISCV64_SYSCALL_SMOKE_MODULE := $(BUILD_DIR)/riscv64/modules/rv64-syscall-smoke.user
+RISCV64_USERMEMTEST_MODULE := $(BUILD_DIR)/riscv64/modules/usermemtest.user
 RISCV64_SLEEP_SMOKE_MODULE := $(BUILD_DIR)/riscv64/modules/sleep-smoke.user
 RISCV64_DYN_HELLO_MODULE := $(BUILD_DIR)/riscv64/modules/dyn-hello.user
 RISCV64_MUSL_LDSO := $(BUILD_DIR)/riscv64/modules/ld-musl-riscv64.so.1
@@ -203,6 +204,7 @@ PHDRSTRESS_MODULE_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/phdrstress/main.c.o
 MUSL_HELLO_MODULE := $(BUILD_DIR)/modules/musl-hello.user
 FPUTEST_MODULE := $(BUILD_DIR)/modules/fputest.user
 IOVTEST_MODULE := $(BUILD_DIR)/modules/iovtest.user
+USERMEMTEST_MODULE := $(BUILD_DIR)/modules/usermemtest.user
 FCHMODATTEST_MODULE := $(BUILD_DIR)/modules/fchmodattest.user
 WAITPGIDTEST_MODULE := $(BUILD_DIR)/modules/waitpgidtest.user
 EXECLONGTEST_MODULE := $(BUILD_DIR)/modules/execlongtest.user
@@ -520,7 +522,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-linux-exec-abi test-proc-exec-stack test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-linux-lifecycle test-lowmem-isolation test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-sleep test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-log-isolation test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-linux-exec-abi test-proc-exec-stack test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-linux-lifecycle test-lowmem-isolation test-user-memory-contract test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-sleep test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-log-isolation test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -620,6 +622,18 @@ $(RISCV64_MUSL_HELLO_MODULE): user/musl-hello/main.c $(RISCV64_MUSLCC_GCC) Makef
 	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
 
 $(RISCV64_SYSCALL_SMOKE_MODULE): user/riscv64-syscall-smoke/main.c $(RISCV64_MUSLCC_GCC) Makefile
+	mkdir -p $(dir $@)
+	$(RISCV64_CC) --target=riscv64-linux-musl -march=rv64gc -mabi=lp64d \
+		-isystem $(RISCV64_MUSLCC_SYSROOT)/include \
+		-static -fuse-ld=/usr/bin/$(RISCV64_LD) \
+		-B $(RISCV64_MUSLCC_SYSROOT)/lib \
+		-B $(RISCV64_MUSLCC_GCC_LIBDIR) \
+		-L $(RISCV64_MUSLCC_SYSROOT)/lib \
+		-L $(RISCV64_MUSLCC_GCC_LIBDIR) \
+		-O2 -g $< -o $@
+	$(RISCV64_READELF) -h $@ | grep -F "RISC-V" >/dev/null
+
+$(RISCV64_USERMEMTEST_MODULE): user/usermemtest/main.c $(RISCV64_MUSLCC_GCC) Makefile
 	mkdir -p $(dir $@)
 	$(RISCV64_CC) --target=riscv64-linux-musl -march=rv64gc -mabi=lp64d \
 		-isystem $(RISCV64_MUSLCC_SYSROOT)/include \
@@ -970,6 +984,10 @@ $(IOVTEST_MODULE): user/iovtest/main.c Makefile
 	mkdir -p $(dir $@)
 	$(MUSL_CC) -static -no-pie -O2 -g $< -o $@
 
+$(USERMEMTEST_MODULE): user/usermemtest/main.c Makefile
+	mkdir -p $(dir $@)
+	$(MUSL_CC) -static -no-pie -O2 -g $< -o $@
+
 $(FCHMODATTEST_MODULE): user/fchmodattest/main.c Makefile
 	mkdir -p $(dir $@)
 	$(MUSL_CC) -static -no-pie -O2 -g $< -o $@
@@ -1050,11 +1068,11 @@ $(PRIVTEST_MODULE): user/privtest/main.c user/include/bunix/syscall.h Makefile
 	mkdir -p $(dir $@)
 	$(MUSL_CC) -static -no-pie -O2 -g -Iuser/include $< -o $@
 
-$(SYNTHETIC_SQUASHFS_IMAGE): tools/build-synthetic-squashfs-rootfs.sh $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(ROOTFS_SHEBANGTEST) $(ROOTFS_SHEBANGLOOP_A) $(ROOTFS_SHEBANGLOOP_B) $(ROOTFS_SHEBANGBAD) $(ROOTFS_ROOT_MOUNT_SOAK) $(FIRST_MODULE) $(ALLOCTEST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(VFORKSTRESS_MODULE) $(LIFECYCLETEST_MODULE) $(EXECOK_MODULE) $(READBIG_MODULE) $(MMAPBIG_MODULE) $(MMAPHUGE_MODULE) $(EXECBIG_MODULE) $(PHDRSTRESS_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(IOVTEST_MODULE) $(FCHMODATTEST_MODULE) $(WAITPGIDTEST_MODULE) $(EXECLONGTEST_MODULE) $(AUXIDTEST_MODULE) $(PATHMAXTEST_MODULE) $(PATHERRTEST_MODULE) $(STATIDTEST_MODULE) $(FCNTLLOCKTEST_MODULE) $(OPENRCTEST_MODULE) $(PROCFSPIPETEST_MODULE) $(SIGNALTEST_MODULE) $(TTYTEST_MODULE) $(TTYSIGTEST_MODULE) $(FAULTTEST_MODULE) $(LOWMEMTEST_MODULE) $(SYSRACETEST_MODULE) $(SCHEDSTRESS_MODULE) $(SCHEDBENCH_MODULE) $(UPTIMETEST_MODULE) $(NETTEST_MODULE) $(NETDHCP_MODULE) $(PRIVTEST_MODULE) $(BUSYBOX) $(MUSL_LDSO)
+$(SYNTHETIC_SQUASHFS_IMAGE): tools/build-synthetic-squashfs-rootfs.sh $(ROOTFS_HELLO) $(ROOTFS_SECRET) $(ROOTFS_NESTED) $(ROOTFS_PASSWD) $(ROOTFS_SHADOW) $(ROOTFS_GROUP) $(ROOTFS_INITTAB) $(ROOTFS_EXECS) $(ROOTFS_SPAWNS) $(ROOTFS_SHEBANGTEST) $(ROOTFS_SHEBANGLOOP_A) $(ROOTFS_SHEBANGLOOP_B) $(ROOTFS_SHEBANGBAD) $(ROOTFS_ROOT_MOUNT_SOAK) $(FIRST_MODULE) $(ALLOCTEST_MODULE) $(IPCSTRESS_MODULE) $(LOGIN_MODULE) $(LXTEST_MODULE) $(GETDENTSTEST_MODULE) $(VFORKSTRESS_MODULE) $(LIFECYCLETEST_MODULE) $(EXECOK_MODULE) $(READBIG_MODULE) $(MMAPBIG_MODULE) $(MMAPHUGE_MODULE) $(EXECBIG_MODULE) $(PHDRSTRESS_MODULE) $(MUSL_HELLO_MODULE) $(DYN_HELLO_MODULE) $(FPUTEST_MODULE) $(IOVTEST_MODULE) $(USERMEMTEST_MODULE) $(FCHMODATTEST_MODULE) $(WAITPGIDTEST_MODULE) $(EXECLONGTEST_MODULE) $(AUXIDTEST_MODULE) $(PATHMAXTEST_MODULE) $(PATHERRTEST_MODULE) $(STATIDTEST_MODULE) $(FCNTLLOCKTEST_MODULE) $(OPENRCTEST_MODULE) $(PROCFSPIPETEST_MODULE) $(SIGNALTEST_MODULE) $(TTYTEST_MODULE) $(TTYSIGTEST_MODULE) $(FAULTTEST_MODULE) $(LOWMEMTEST_MODULE) $(SYSRACETEST_MODULE) $(SCHEDSTRESS_MODULE) $(SCHEDBENCH_MODULE) $(UPTIMETEST_MODULE) $(NETTEST_MODULE) $(NETDHCP_MODULE) $(PRIVTEST_MODULE) $(BUSYBOX) $(MUSL_LDSO)
 	BUSYBOX=$(BUSYBOX) MUSL_LDSO=$(MUSL_LDSO) MODULE_DIR=$(BUILD_DIR)/modules sh tools/build-synthetic-squashfs-rootfs.sh $@
 
-$(RISCV64_SMOKE_SQUASHFS_IMAGE): tools/build-riscv64-smoke-rootfs.sh $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO) $(RISCV64_SYSCALL_SMOKE_MODULE) $(RISCV64_MUSL_HELLO_MODULE)
-	RISCV64_DYN_HELLO_MODULE=$(RISCV64_DYN_HELLO_MODULE) RISCV64_MUSL_LDSO=$(RISCV64_MUSL_LDSO) RISCV64_SYSCALL_SMOKE_MODULE=$(RISCV64_SYSCALL_SMOKE_MODULE) RISCV64_MUSL_HELLO_MODULE=$(RISCV64_MUSL_HELLO_MODULE) sh tools/build-riscv64-smoke-rootfs.sh $@
+$(RISCV64_SMOKE_SQUASHFS_IMAGE): tools/build-riscv64-smoke-rootfs.sh $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO) $(RISCV64_SYSCALL_SMOKE_MODULE) $(RISCV64_USERMEMTEST_MODULE) $(RISCV64_MUSL_HELLO_MODULE)
+	RISCV64_DYN_HELLO_MODULE=$(RISCV64_DYN_HELLO_MODULE) RISCV64_MUSL_LDSO=$(RISCV64_MUSL_LDSO) RISCV64_SYSCALL_SMOKE_MODULE=$(RISCV64_SYSCALL_SMOKE_MODULE) RISCV64_USERMEMTEST_MODULE=$(RISCV64_USERMEMTEST_MODULE) RISCV64_MUSL_HELLO_MODULE=$(RISCV64_MUSL_HELLO_MODULE) sh tools/build-riscv64-smoke-rootfs.sh $@
 
 $(ALPINE_SQUASHFS_IMAGE): $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(LDSOPATHTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy modules/passwd modules/shadow modules/group
 	ROOTFS_IMAGE_FORMAT=squashfs LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) LDSOPATHTEST_MODULE=$(LDSOPATHTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/build-alpine-rootfs.sh $@
@@ -1529,6 +1547,10 @@ test-unionfs-subject-authority:
 test-lowmem-isolation: $(EFI_BOOT_APP) tools/test-lib.sh tools/test-command.sh
 	BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
 		BUNIX_CMD='/bin/lowmemtest' sh tools/test-command.sh
+
+test-user-memory-contract: $(EFI_BOOT_APP) tools/test-lib.sh tools/test-command.sh
+	BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
+		BUNIX_CMD='/bin/usermemtest' sh tools/test-command.sh
 
 test-boot-riscv64-early: $(RISCV64_BOOTPKG) tools/test-riscv64-boot.sh tools/check-markers.sh tools/test-riscv64-markers-early.txt
 	$(MAKE) ARCH=riscv64 all

@@ -42,7 +42,6 @@ cmdline: riscv64 bootpkg
 module: riscv64 registered
 module: riscv64 user elf
 elf: riscv64 loader
-copy: riscv64 user
 kernel: starting module server names
 names: register name=bootstrap
 names: register name=time
@@ -75,6 +74,7 @@ musl hello argc=1 argv0=/bin/dyn-hello
 bootstrap-riscv64: dyn-hello ok
 bootstrap-riscv64: syscall-smoke ok
 rv64 syscall smoke ok
+bootstrap-riscv64: usermemtest ok
 bootstrap-riscv64: musl-hello ok
 musl hello argc=1 argv0=/bin/musl-hello
 native: riscv64 server argc=1 argv0=/bin/abi-smoke.user

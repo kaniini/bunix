@@ -78,7 +78,7 @@ install_file /lib/ld-musl-x86_64.so.1 "$musl_ldso" 0555
 
 for name in first alloctest ipcstress login lxtest getdentstest vforkstress lifecycletest \
 	execok readbig mmapbig mmaphuge execbig phdrstress musl-hello dyn-hello \
-	fputest iovtest fchmodattest waitpgidtest execlongtest auxidtest \
+	fputest iovtest usermemtest fchmodattest waitpgidtest execlongtest auxidtest \
 	pathmaxtest patherrtest statidtest fcntllocktest openrctest sysracetest \
 	procfspipetest \
 	signaltest ttytest ttysigtest faulttest lowmemtest schedstress schedbench uptimetest nettest \
