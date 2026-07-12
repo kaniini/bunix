@@ -37,8 +37,45 @@ Plan:
 
 Tasks:
 
-- [ ] Reproduce both marker corruptions with focused shards and debug logging.
-- [ ] Identify the first layer where expected marker bytes become binary data.
-- [ ] Fix the output corruption at the owning layer.
-- [ ] Add focused regression coverage for the corrupted path.
+- [x] Reproduce both marker corruptions with focused shards and debug logging.
+- [x] Identify the first layer where expected marker bytes become binary data.
+- [x] Fix the output corruption at the owning layer.
+- [x] Add focused regression coverage for the corrupted path.
 - [ ] Re-run `procfs-sysfs-surface`, `large-io-mount`, and full `make test`.
+
+Progress:
+
+- Focused reruns of `procfs-sysfs-surface`, `large-io-mount`, and the paired
+  `procfs-sysfs-surface,large-io-mount` shard passed.
+- Full `make test` run `20260712T183347Z-995` passed the original
+  `procfs-sysfs-surface` and `large-io-mount` shards.
+- The same full run failed two different shards:
+  - `procfs-self-pipe`: `/bin/procfspipetest` hung after
+    `PROCFSPIPETEST_BEGIN_PS_5`.
+  - `root-login-union`: reading `/.upper/usr/share/bunix/nested/created.txt`
+    printed the expected payload followed by binary bytes, so
+    `UNION_LOWER_PARENT_UPPER_OK` was not emitted.
+- The `root-login-union` failure shows the same binary-tail symptom as the old
+  marker failures, but now points more directly at VFS/unionfs/read forwarding
+  or syscall-buffer handling than at console output itself.
+- The repeated binary tail decodes as the Linux termios structure. The owning
+  layer is the x86_64 Linux syscall forwarding path: `ioctl(TCSETS*)` and
+  network-interface ioctl input staging used the global `syscall_copy_buffer`
+  without `syscall_copy_lock`, so concurrent syscall forwarding could copy
+  termios bytes into unrelated shared-buffer payloads under SMP/load.
+- Patched the ioctl forwarding path to hold `syscall_copy_lock` across the
+  read-from-user plus buffer-write staging operations.
+- Focused post-fix checks passed:
+  - `make test-shell-part BUNIX_SHELL_PART=root-login-union`
+  - `make test-shell-part BUNIX_SHELL_PART=procfs-self-pipe`
+  - `make test-shell-part BUNIX_SHELL_PART=procfs-sysfs-surface,large-io-mount`
+- Full post-fix `make test` run `20260712T191102Z-23322` passed 28 of 29
+  shards, including `root-login-union`, `procfs-sysfs-surface`, and
+  `large-io-mount`. The remaining failure is now isolated to
+  `procfs-self-pipe`, which hangs intermittently inside `/bin/procfspipetest`
+  during repeated `/proc/self/*` pipelines.
+- `procfs-self-pipe` passes when run through each focused path:
+  - `make test-shell-part BUNIX_SHELL_PART=procfs-self-pipe`
+  - `QEMU_TIMEOUT=600s make test-shell-part BUNIX_SHELL_PART=procfs-self-pipe`
+  - `BUNIX_TEST_SET=procfs-self-pipe BUNIX_TEST_JOBS=8 sh tools/test-parallel.sh`
+  - `make test BUNIX_TEST_SET=procfs-self-pipe`

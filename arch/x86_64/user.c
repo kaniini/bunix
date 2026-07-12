@@ -5798,37 +5798,44 @@ poll_again:
 			}
 			if ((arg1 == LINUX_TCSETS ||
 			     arg1 == LINUX_TCSETSW ||
-			     arg1 == LINUX_TCSETSF) &&
-			    read_current_user(arg2, syscall_copy_buffer,
-					      output_size) != 0) {
-				buffer_release(buffer);
-				return (u64)-LINUX_EFAULT;
-			}
-			if ((arg1 == LINUX_TCSETS ||
-			     arg1 == LINUX_TCSETSW ||
-			     arg1 == LINUX_TCSETSF) &&
-			    buffer_write(buffer, 0, syscall_copy_buffer,
-					 output_size) != 0) {
-				buffer_release(buffer);
-				return (u64)-LINUX_ENOMEM;
-			}
-			if ((arg1 == LINUX_SIOCGIFFLAGS ||
-			     arg1 == LINUX_SIOCGIFHWADDR ||
-			     arg1 == LINUX_SIOCGIFMTU ||
-			     arg1 == LINUX_SIOCGIFINDEX) &&
-			    read_current_user(arg2, syscall_copy_buffer,
-					      output_size) != 0) {
-				buffer_release(buffer);
-				return (u64)-LINUX_EFAULT;
+			     arg1 == LINUX_TCSETSF)) {
+				const u64 flags =
+					spin_lock_irqsave(&syscall_copy_lock);
+				const int failed =
+					read_current_user(arg2,
+							  syscall_copy_buffer,
+							  output_size) != 0 ||
+					buffer_write(buffer, 0,
+						     syscall_copy_buffer,
+						     output_size) != 0;
+
+				spin_unlock_irqrestore(&syscall_copy_lock,
+						       flags);
+				if (failed) {
+					buffer_release(buffer);
+					return (u64)-LINUX_EFAULT;
+				}
 			}
 			if ((arg1 == LINUX_SIOCGIFFLAGS ||
 			     arg1 == LINUX_SIOCGIFHWADDR ||
 			     arg1 == LINUX_SIOCGIFMTU ||
-			     arg1 == LINUX_SIOCGIFINDEX) &&
-			    buffer_write(buffer, 0, syscall_copy_buffer,
-					 output_size) != 0) {
-				buffer_release(buffer);
-				return (u64)-LINUX_ENOMEM;
+			     arg1 == LINUX_SIOCGIFINDEX)) {
+				const u64 flags =
+					spin_lock_irqsave(&syscall_copy_lock);
+				const int failed =
+					read_current_user(arg2,
+							  syscall_copy_buffer,
+							  output_size) != 0 ||
+					buffer_write(buffer, 0,
+						     syscall_copy_buffer,
+						     output_size) != 0;
+
+				spin_unlock_irqrestore(&syscall_copy_lock,
+						       flags);
+				if (failed) {
+					buffer_release(buffer);
+					return (u64)-LINUX_EFAULT;
+				}
 			}
 		}
 
