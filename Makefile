@@ -1,4 +1,5 @@
 ARCH ?= x86_64
+HOSTCC ?= cc
 BUILD_DIR := build
 ARCH_BUILD_DIR := $(BUILD_DIR)/$(ARCH)
 ISO_ROOT := $(BUILD_DIR)/iso
@@ -519,7 +520,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-linux-lifecycle test-lowmem-isolation test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-sleep test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-log-isolation test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-linux-exec-abi test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-linux-lifecycle test-lowmem-isolation test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-sleep test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-log-isolation test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -562,6 +563,8 @@ $(BUILD_DIR)/user/%.c.o: user/%.c
 $(BUILD_DIR)/user/%.S.o: user/%.S
 	mkdir -p $(dir $@)
 	$(CC) $(USER_ASFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/user/linux/main.c.o: user/linux/exec_abi.c
 
 $(RISCV64_USER_CRT0_OBJ): user/crt0-riscv64.S user/include/bunix/syscall.h Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
@@ -646,7 +649,7 @@ $(RISCV64_MUSL_LDSO): $(RISCV64_MUSLCC_GCC)
 	cp $(RISCV64_MUSL_LDSO_SOURCE) $@
 	chmod 0555 $@
 
-$(RISCV64_SHARED_LINUX_SERVER_MODULE): $(RISCV64_USER_CRT0_OBJ) user/linux/main.c user/user.ld user/include/bunix/syscall.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
+$(RISCV64_SHARED_LINUX_SERVER_MODULE): $(RISCV64_USER_CRT0_OBJ) user/linux/main.c user/linux/exec_abi.c user/user.ld user/include/bunix/syscall.h $(RISCV64_USER_RUNTIME_OBJS) Makefile
 	mkdir -p $(dir $@) $(BUILD_DIR)/riscv64/user/
 	$(RISCV64_CC) $(RISCV64_CC_TARGET_FLAGS) -march=rv64gc -mabi=lp64 -mcmodel=medany \
 		-std=c11 -O2 -g -ffreestanding -fno-stack-protector \
@@ -1441,6 +1444,13 @@ test-riscv64-dynamic-linker-artifacts: $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUS
 	test -s $(RISCV64_DYN_HELLO_MODULE)
 	test -s $(RISCV64_MUSL_LDSO)
 	$(RISCV64_READELF) -l $(RISCV64_DYN_HELLO_MODULE) | grep -F "/lib/ld-musl-riscv64.so.1" >/dev/null
+
+$(BUILD_DIR)/test-linux-exec-abi: tools/test-linux-exec-abi.c user/linux/exec_abi.c Makefile
+	mkdir -p $(dir $@)
+	$(HOSTCC) -std=c11 -O2 -g -Wall -Wextra -Werror $< -o $@
+
+test-linux-exec-abi: $(BUILD_DIR)/test-linux-exec-abi
+	$(BUILD_DIR)/test-linux-exec-abi
 
 test-riscv64-alpine-rootfs: tools/build-riscv64-alpine-rootfs.sh tools/build-alpine-rootfs.sh tools/test-riscv64-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO)
 	RISCV64_DYN_HELLO_MODULE=$(RISCV64_DYN_HELLO_MODULE) RISCV64_MUSL_LDSO=$(RISCV64_MUSL_LDSO) sh tools/test-riscv64-alpine-rootfs.sh

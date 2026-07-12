@@ -33,10 +33,38 @@ Plan:
 
 Tasks:
 
-- [ ] Map current exec path ownership and identify pure helper boundaries.
-- [ ] Extract vector serialization/deserialization helpers with tests.
+- [x] Map current exec path ownership and identify pure helper boundaries.
+- [x] Extract vector serialization/deserialization helpers with tests.
 - [ ] Extract user stack/auxv construction helpers with tests.
 - [ ] Wire Linux server exec through the new helpers without behavior changes.
 - [ ] Add guest regression coverage for BusyBox, musl, shebang, login, and
       OpenRC exec paths.
 - [ ] Run focused exec/login/OpenRC tests, then full `make test`.
+
+Progress:
+
+- Current exec path ownership:
+  - `arch/x86_64/user.c` handles the Linux `execve` syscall entry, copies the
+    user path, argv, and envp out of the calling task, reads shebang prefixes,
+    and forwards shebang vector preparation to the Linux server.
+  - `user/linux/main.c` owns Linux personality policy for exec preparation,
+    including vector deserialization/serialization, shebang parsing, shebang
+    argv rewrite, credential collection, and RPCs to proc.
+  - `user/proc/main.c` now owns ELF loading, interpreter loading, segment
+    mapping, initial stack construction, auxv construction, and task image
+    replacement.
+- Extracted the Linux-server exec vector and shebang ABI helpers into
+  `user/linux/exec_abi.c`, included by `user/linux/main.c`.
+- Added `tools/test-linux-exec-abi.c` and `make test-linux-exec-abi` to cover:
+  - argv/envp serialization and deserialization round-trips.
+  - shebang interpreter and optional argument parsing.
+  - shebang argv rewriting with preserved tail arguments.
+  - rejection of invalid relative shebang interpreters.
+
+Verification:
+
+- `make test-linux-exec-abi` passed.
+- `make build/modules/linux.server` passed.
+- `make test-riscv64-shared-linux-server-build` passed.
+- `make test-shell-part BUNIX_SHELL_PART=exec-argv-pipe` passed.
+- `make test-shell-part BUNIX_SHELL_PART=login-smoke` passed.
