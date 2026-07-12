@@ -2106,6 +2106,31 @@ static int linux_path_prefix(const char *path, const char *prefix)
 	return path[i] == '\0' || path[i] == '/';
 }
 
+static int linux_path_final_dot_component(const char *path)
+{
+	u64 end;
+	u64 start;
+
+	if (path == 0 || path[0] == '\0') {
+		return 0;
+	}
+	end = string_len(path);
+	while (end > 0 && path[end - 1] == '/') {
+		end--;
+	}
+	if (end == 0) {
+		return 0;
+	}
+	start = end;
+	while (start > 0 && path[start - 1] != '/') {
+		start--;
+	}
+	if (end - start == 1 && path[start] == '.') {
+		return 1;
+	}
+	return end - start == 2 && path[start] == '.' && path[start + 1] == '.';
+}
+
 static int linux_debug_openrc_state_enabled(void)
 {
 	static int enabled = -1;
@@ -5895,25 +5920,48 @@ static long linux_unlinkat(struct linux_process *process, u64 dirfd,
 	if (path_result != 0) {
 		return path_result;
 	}
+	if (linux_path_final_dot_component(path)) {
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "unlinkat-dot", path, 0,
+						  -LINUX_EINVAL, flags);
+		return -LINUX_EINVAL;
+	}
 	normalize_result = path_normalize(process->cwd, path, full_path);
 	if (normalize_result != 0) {
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "unlinkat-normalize", path,
+						  0, normalize_result, flags);
 		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
 	if (base_result != 0) {
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "unlinkat-dirfd", path,
+						  0, base_result, flags);
 		return base_result;
 	}
 	if (linux_cache_path_for_dirfd(process, dirfd, path, full_path) != 0) {
 		full_path[0] = '\0';
 	}
+	linux_debug_openrc_state_log_path(process, dirfd, "unlinkat-call",
+					  path, full_path, 0, flags);
 	if (linux_vfs_path_call_word3(process, type, base_handle, path,
 				      process->bunix_task | (flags << 32),
 				      &reply) != 0) {
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "unlinkat-vfs-call", path,
+						  full_path, -LINUX_EIO,
+						  flags);
 		return -LINUX_EIO;
 	}
 	if (reply.words[0] != 0) {
-		return linux_vfs_error(reply.words[0]);
+		const long result = linux_vfs_error(reply.words[0]);
+
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "unlinkat-result", path,
+						  full_path, result, flags);
+		return result;
 	}
 	linux_vfs_note_mutation(full_path[0] != '\0' ? full_path : 0);
 	return 0;
@@ -5937,20 +5985,36 @@ static long linux_rmdir(struct linux_process *process, u64 path_len,
 	}
 	normalize_result = path_normalize(process->cwd, path, full_path);
 	if (normalize_result != 0) {
+		linux_debug_openrc_state_log_path(process, LINUX_AT_FDCWD,
+						  "rmdir-normalize", path,
+						  0, normalize_result, 0);
 		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, LINUX_AT_FDCWD, path,
 					      &base_handle);
 	if (base_result != 0) {
+		linux_debug_openrc_state_log_path(process, LINUX_AT_FDCWD,
+						  "rmdir-dirfd", path, 0,
+						  base_result, 0);
 		return base_result;
 	}
+	linux_debug_openrc_state_log_path(process, LINUX_AT_FDCWD,
+					  "rmdir-call", path, full_path, 0, 0);
 	if (linux_vfs_path_call_word3(process, BUNIX_VFS_RMDIR_BUFFER,
 				      base_handle, path,
 				      process->bunix_task, &reply) != 0) {
+		linux_debug_openrc_state_log_path(process, LINUX_AT_FDCWD,
+						  "rmdir-vfs-call", path,
+						  full_path, -LINUX_EIO, 0);
 		return -LINUX_EIO;
 	}
 	if (reply.words[0] != 0) {
-		return linux_vfs_error(reply.words[0]);
+		const long result = linux_vfs_error(reply.words[0]);
+
+		linux_debug_openrc_state_log_path(process, LINUX_AT_FDCWD,
+						  "rmdir-result", path,
+						  full_path, result, 0);
+		return result;
 	}
 	linux_vfs_note_mutation(full_path);
 	return 0;
@@ -6014,25 +6078,42 @@ static long linux_mkdirat(struct linux_process *process, u64 dirfd,
 	}
 	normalize_result = path_normalize(process->cwd, path, full_path);
 	if (normalize_result != 0) {
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "mkdirat-normalize", path,
+						  0, normalize_result, mode);
 		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
 	if (base_result != 0) {
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "mkdirat-dirfd", path,
+						  0, base_result, mode);
 		return base_result;
 	}
 	if (linux_cache_path_for_dirfd(process, dirfd, path, full_path) != 0) {
 		full_path[0] = '\0';
 	}
+	linux_debug_openrc_state_log_path(process, dirfd, "mkdirat-call",
+					  path, full_path, 0, mode);
 	if (linux_vfs_path_call_word3(process, BUNIX_VFS_MKDIR_BUFFER,
 				      base_handle, path,
 				      process->bunix_task |
 				      (((mode & ~process->umask) & 0777) << 32),
 				      &reply) != 0) {
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "mkdirat-vfs-call", path,
+						  full_path, -LINUX_EIO,
+						  mode);
 		return -LINUX_EIO;
 	}
 	if (reply.words[0] != 0) {
-		return linux_vfs_error(reply.words[0]);
+		const long result = linux_vfs_error(reply.words[0]);
+
+		linux_debug_openrc_state_log_path(process, dirfd,
+						  "mkdirat-result", path,
+						  full_path, result, mode);
+		return result;
 	}
 	linux_vfs_note_mutation(full_path[0] != '\0' ? full_path : 0);
 	return 0;

@@ -15,6 +15,70 @@ static int ensure_dir(const char *path)
 	return 0;
 }
 
+static int ensure_dir_at(int dirfd, const char *path)
+{
+	if (mkdirat(dirfd, path, 0755) != 0 && errno != EEXIST) {
+		fprintf(stderr, "mkdirat %s: %s\n", path, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+static int check_absolute_openrc_dir(void)
+{
+	int fd;
+
+	if (ensure_dir("/run/openrc") != 0) {
+		return -1;
+	}
+	fd = open("/run/openrc", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (fd < 0) {
+		fprintf(stderr, "absolute open /run/openrc: %s\n",
+			strerror(errno));
+		return -1;
+	}
+	if (close(fd) != 0) {
+		fprintf(stderr, "absolute close /run/openrc: %s\n",
+			strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+static int check_reject_dot_rmdir_at(int dirfd)
+{
+	int scheduled_fd;
+
+	if (ensure_dir_at(dirfd, "scheduled") != 0) {
+		return -1;
+	}
+	scheduled_fd = openat(dirfd, "scheduled",
+			      O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (scheduled_fd < 0) {
+		fprintf(stderr, "open scheduled: %s\n", strerror(errno));
+		return -1;
+	}
+	errno = 0;
+	if (unlinkat(scheduled_fd, ".", AT_REMOVEDIR) == 0 ||
+	    errno != EINVAL) {
+		fprintf(stderr, "unlinkat scheduled . errno=%d\n", errno);
+		close(scheduled_fd);
+		return -1;
+	}
+	errno = 0;
+	if (unlinkat(scheduled_fd, "..", AT_REMOVEDIR) == 0 ||
+	    errno != EINVAL) {
+		fprintf(stderr, "unlinkat scheduled .. errno=%d\n", errno);
+		close(scheduled_fd);
+		return -1;
+	}
+	if (close(scheduled_fd) != 0) {
+		fprintf(stderr, "close scheduled: %s\n", strerror(errno));
+		return -1;
+	}
+	return check_absolute_openrc_dir();
+}
+
 static FILE *openrc_fopenat(int dirfd, const char *path, int flags)
 {
 	int fd = openat(dirfd, path, flags, 0666);
@@ -242,6 +306,9 @@ int main(void)
 
 	for (unsigned int i = 0; i < 8; i++) {
 		if (probe_write_permission_at(dirfd, deptree) != 0 ||
+		    ensure_dir_at(dirfd, "scheduled") != 0 ||
+		    check_absolute_openrc_dir() != 0 ||
+		    check_reject_dot_rmdir_at(dirfd) != 0 ||
 		    run_generator_probe() != 0 ||
 		    write_with_fdopen_at(
 			    dirfd, deptree,

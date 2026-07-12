@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 054-openrc-runtime-state.txt
+The current exploration is: 059-riscv64-native-sleep-timer-semantics.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.

@@ -2,7 +2,7 @@ Fix OpenRC runtime-state file handling.
 
 Status:
 
-- Active.
+- Complete.
 - This slice exists to stop the previous stock-networking exploration from
   absorbing every OpenRC, VFS, tmpfs, and Linux compatibility issue.
 - Do not debug this primarily through full stock OpenRC boot probes.  Build
@@ -72,12 +72,12 @@ Tasks:
       dependency-cache behavior found in the artifacts or source.
 - [x] Add focused runtime diagnostics for the real OpenRC dependency-cache
       path without enabling broad syscall tracing.
-- [ ] Fix the underlying Linux/VFS/tmpfs/FD correctness bug without
+- [x] Fix the underlying Linux/VFS/tmpfs/FD correctness bug without
       OpenRC-specific path handling.
-- [ ] Verify the focused guard fails before the fix or explicitly covers the
+- [x] Verify the focused guard fails before the fix or explicitly covers the
       fixed missing behavior.
-- [ ] Verify generated Alpine reaches login after the fix.
-- [ ] Run a bounded stock-networking probe only after the focused guard and
+- [x] Verify generated Alpine reaches login after the fix.
+- [x] Run a bounded stock-networking probe only after the focused guard and
       generated boot path are green.
 
 Completion criteria:
@@ -95,6 +95,11 @@ Follow-up:
 - Continue with `080-stock-alpine-networking-service.txt` after this slice.
   That exploration should focus on restoring Alpine's stock networking
   service, not rediscovering `/run/openrc` runtime-state correctness.
+- The remaining stock-networking boot failure is repeated
+  `fcntl(F_DUPFD_CLOEXEC)` on bad fd 3 in later OpenRC service execution.
+  That is outside the `/run/openrc` runtime-state failure fixed here.
+- The generated Alpine boot probe reaches login and passes the first login
+  smoke command, then hits an unrelated procfs pipeline smoke timeout.
 
 Implementation Notes:
 
@@ -125,6 +130,33 @@ Implementation Notes:
   - `make build/modules/openrctest.user`
   - `git diff --check`
   - `BUNIX_CMD=/bin/openrctest make test-command`
+- Final fix:
+  - Linux `unlinkat(..., "."/"..", AT_REMOVEDIR)` now rejects final dot
+    components before VFS normalization, preventing relative dirfd cleanup
+    from targeting the directory itself or its parent.
+  - `/bin/openrctest` covers OpenRC-style scheduled-directory cleanup and
+    verifies `/run/openrc` survives those dot-rmdir attempts.
+  - Tmpfs normal path lookup and directory-empty checks no longer stop after
+    `TMPFS_TREE_WALK_LIMIT`, which prevented false `ENOENT` once the stock
+    OpenRC workload had enough runtime-state churn.
+  - Tmpfs duplicate insertion races now report `BUNIX_VFS_ERR_EXIST` instead
+    of collapsing to `BUNIX_VFS_ERR_INVAL`, so Linux `mkdir -p` observes
+    `EEXIST` rather than fatal `EINVAL`.
+- Final validation:
+  - `make build/modules/linux.server build/modules/openrctest.user build/modules/tmpfs.server`
+  - `git diff --check`
+  - `BUNIX_CMD=/bin/openrctest make test-command`
+  - `QEMU_TIMEOUT=300s ROOTFS_FLAVOR=alpine-squashfs KERNEL_CMDLINE='log=info debug-linux-openrc-state' BUNIX_BOOT_LOGIN_WAIT=180 BUNIX_BOOT_LOGIN_CAPTURE=260 make test-boot`
+    reached login and did not show OpenRC `deptree`/`depconfig` failures.
+    Artifact:
+    `build/failures/20260712T002804Z-714/20260712T003156Z-714`.
+    The harness later failed at the known procfs pipeline smoke command.
+  - `QEMU_TIMEOUT=300s VIRTIO_NET_TEST_CMDLINE='log=info virtio-net-test debug-linux-openrc-state debug-serial-userspace' ROOTFS_FLAVOR=alpine-squashfs BUNIX_BOOT_LOGIN_WAIT=180 BUNIX_BOOT_LOGIN_CAPTURE=260 make test-boot-alpine-stock-networking`
+    no longer failed at `/run/openrc` `mkdir`, `deptree`, or `depconfig`.
+    Artifact:
+    `build/failures/20260712T002434Z-32023/20260712T002735Z-32023`.
+    It still timed out later in the stock-networking path with repeated
+    `fcntl(F_DUPFD_CLOEXEC)` bad-fd diagnostics for exploration 080.
 - Bounded generated Alpine probe:
   - `ROOTFS_FLAVOR=alpine-squashfs KERNEL_CMDLINE='log=info debug-linux-openrc-state' BUNIX_BOOT_LOGIN_WAIT=180 BUNIX_BOOT_LOGIN_CAPTURE=260 make test-boot`
   - Artifact:

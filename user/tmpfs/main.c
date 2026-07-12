@@ -303,13 +303,10 @@ static void file_list_remove(struct tmpfs_file *file)
 
 static struct tmpfs_file *file_find(const char *path)
 {
-	u64 steps = 0;
-
 	if (path == 0) {
 		return 0;
 	}
-	for (struct tmpfs_file *file = files_head;
-	     file != 0 && steps++ < TMPFS_TREE_WALK_LIMIT; file = file->next) {
+	for (struct tmpfs_file *file = files_head; file != 0; file = file->next) {
 		if (!file->deleted && file->path != 0 &&
 		    str_eq(file->path, path)) {
 			return file;
@@ -320,8 +317,11 @@ static struct tmpfs_file *file_find(const char *path)
 
 static int files_insert_file(struct tmpfs_file *file)
 {
-	if (file == 0 || file->path == 0 || file_find(file->path) != 0) {
+	if (file == 0 || file->path == 0) {
 		return -1;
+	}
+	if (file_find(file->path) != 0) {
+		return -2;
 	}
 	file->node.left = 0;
 	file->node.right = 0;
@@ -474,10 +474,7 @@ static struct tmpfs_file *parent_file_for_path(const char *path)
 
 static int directory_is_empty(const char *path)
 {
-	u64 steps = 0;
-
-	for (struct tmpfs_file *file = files_head;
-	     file != 0 && steps++ < TMPFS_TREE_WALK_LIMIT; file = file->next) {
+	for (struct tmpfs_file *file = files_head; file != 0; file = file->next) {
 		if (file_is_child_of(file, path)) {
 			return 0;
 		}
@@ -618,6 +615,7 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 				      u64 task, u64 *status)
 {
 	struct tmpfs_file *file;
+	int insert_result;
 	u64 uid = 0;
 	u64 gid = 0;
 
@@ -685,9 +683,11 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 	file->inode->atime = 0;
 	file->inode->mtime = 0;
 	file->inode->ctime = 0;
-	if (files_insert_file(file) != 0) {
+	insert_result = files_insert_file(file);
+	if (insert_result != 0) {
 		if (status != 0) {
-			*status = BUNIX_VFS_ERR_INVAL;
+			*status = insert_result == -2 ? BUNIX_VFS_ERR_EXIST :
+				 BUNIX_VFS_ERR_INVAL;
 		}
 		inode_release(file->inode);
 		bunix_free(file->path);
