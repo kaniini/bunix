@@ -100,6 +100,32 @@ writable user pages.
 - Userspace task-memory clients: `user/include/bunix/syscall.h`,
   `user/proc/main.c`, `user/proc/exec_stack.c`.
 
+## Call-Site Audit
+
+The current task-memory authority surface is intentionally narrow:
+
+- `user/proc/main.c` maps ELF segments with `bunix_task_map_prot()`, applies
+  in-place relocations with `bunix_task_write()`, allocates initial stacks with
+  `bunix_task_alloc_prot()`, and delegates stack population to
+  `user/proc/exec_stack.c`.
+- `user/proc/exec_stack.c` writes the constructed argv/envp/auxv stack through
+  its injected `task_write_bytes()` callback.
+- `user/include/bunix/alloc.h` uses `bunix_task_alloc(0, ...)` only to grow the
+  current userspace server heap.
+- `user/include/bunix/syscall.h` contains the shared wrappers for the native
+  task-memory syscalls; callers pass task handles, user virtual addresses, and
+  kernel/current-task source buffers as defined above.
+- `tools/test-proc-exec-stack.c` stubs `task_write_bytes()` to capture the
+  constructed stack in host memory for unit testing; it does not exercise
+  kernel VM authority directly.
+
+The Linux personality server, VFS, procfs, tmpfs, and user server do not
+currently call the native task-memory mapping/write/alloc/clone wrappers
+directly.  Kernel-side direct `vm_*_user*` call sites are limited to
+architecture syscall frontends, interrupt COW recovery, kernel server task
+helpers, scheduler task teardown/fault handling, and the generic VM
+implementation itself.
+
 ## Cleanup Targets
 
 Exploration 067 should make the contract harder to misuse by:

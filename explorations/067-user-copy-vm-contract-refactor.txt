@@ -36,7 +36,7 @@ Tasks:
 - [x] Document the current user-copy and VM API contract.
 - [x] Rename or wrap APIs so user versus kernel translation is explicit.
 - [x] Add diagnostics for user-copy/protection failures.
-- [ ] Audit all server and test-program call sites.
+- [x] Audit all server and test-program call sites.
 - [ ] Add cross-architecture user-memory regression tests.
 - [ ] Run focused VM/Linux/VFS tests, riscv64 gates, then full `make test`.
 
@@ -52,3 +52,7 @@ Progress:
 - Added debug-level VM failure diagnostics for user read, user write, and user
   protection operations.  Logs include operation, reason, current task, target
   VM space, address, and length without dumping user data.
+- Audited task-memory wrapper users and kernel `vm_*_user*` call sites.  The
+  direct userspace clients are proc, the shared syscall wrappers, allocator
+  self-growth, and the proc exec-stack host unit test; Linux, VFS, procfs,
+  tmpfs, and user do not directly issue task-memory mapping calls.
