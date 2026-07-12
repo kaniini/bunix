@@ -645,7 +645,8 @@ static void sched_enqueue_on_reason(struct cpu_sched *cpu, struct thread *thread
 	}
 	cpu->runq.idle = 0;
 	runq_push(&cpu->runq, thread);
-	if ((thread->sched_class == SCHED_CLASS_USER ||
+	if (wakeup &&
+	    (thread->sched_class == SCHED_CLASS_USER ||
 	     thread->sched_class == SCHED_CLASS_BATCH) &&
 	    cpu->runq.count >= SCHED_IDLE_PULL_MIN_SOURCE_RUNQ) {
 		kick_idle_pullers = 1;
