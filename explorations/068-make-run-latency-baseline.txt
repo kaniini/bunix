@@ -27,7 +27,7 @@ Tasks:
 
 - [x] Add a `make run-profile` or equivalent harness that records monotonic
       host timestamps and guest uptime markers without requiring manual input.
-- [ ] Split host-side time into rootfs/ESP rebuild, QEMU launch, firmware,
+- [x] Split host-side time into rootfs/ESP rebuild, QEMU launch, firmware,
       kernel/server boot, OpenRC/networking, login prompt, and first shell
       command phases.
 - [ ] Collect baseline profiles for `make run`, `ROOTFS_FLAVOR=alpine make run`,
@@ -84,3 +84,18 @@ Progress:
   rebuild or kernel/server bootstrap.  The synthetic profile reaches login in
   about 8.6s, while the Alpine networking profile reaches login in about
   41.7s.
+- Refined `make run-profile` to split host build/staging into rootfs image and
+  ESP/boot artifact phases.
+  - Run: `build/run-profile/20260712T232438Z-16182`
+  - Rootfs build done: 535 ms
+  - ESP build done: 639 ms
+  - QEMU start: 649 ms
+  - Kernel start: 1651 ms
+  - `bootstrap: fs ready`: 6659 ms
+  - `bootstrap: linux init exec`: 6661 ms
+  - Login prompt: 40718 ms
+  - Root shell: 41723 ms
+  - First command: 42726 ms
+  - Total through poweroff: 44092 ms
+  - This confirms the main slow interval is still the approximately 34s gap
+    between Linux init handoff and the login prompt.

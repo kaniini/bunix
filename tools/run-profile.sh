@@ -9,6 +9,7 @@ ovmf=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE.fd}
 rootfs=${RUN_PROFILE_ROOTFS_FLAVOR:-${ROOTFS_FLAVOR:-alpine-squashfs}}
 esp=${RUN_PROFILE_ESP_DIR:-${ESP_DIR:-build/esp-virtio-net}}
 target=${RUN_PROFILE_BUILD_TARGET:-$esp/EFI/BOOT/BOOTX64.EFI}
+rootfs_target=${RUN_PROFILE_ROOTFS_TARGET:-}
 qemu_memory=${RUN_PROFILE_QEMU_MEMORY:-${QEMU_MEMORY:-128M}}
 qemu_timeout=${RUN_PROFILE_QEMU_TIMEOUT:-${QEMU_TIMEOUT:-180s}}
 qemu_extra_args=${RUN_PROFILE_QEMU_ARGS:-${RUN_QEMU_NET_ARGS:-}}
@@ -26,6 +27,17 @@ timeout_cmd=${TIMEOUT:-timeout}
 qemu_pid=
 cat_pid=
 start_ms=
+
+if [ -z "$rootfs_target" ]; then
+	case "$rootfs" in
+	alpine-squashfs)
+		rootfs_target=build/modules/alpine-disk0.sqfs
+		;;
+	squashfs)
+		rootfs_target=build/modules/disk0.sqfs
+		;;
+	esac
+fi
 
 now_ms() {
 	date +%s%3N
@@ -147,9 +159,14 @@ start_ms=$(now_ms)
 trap cleanup EXIT INT TERM
 
 event profile-start "rootfs=$rootfs"
-event build-start "$target"
+if [ -n "$rootfs_target" ]; then
+	event rootfs-build-start "$rootfs_target"
+	"${MAKE:-make}" ROOTFS_FLAVOR="$rootfs" "$rootfs_target"
+	event rootfs-build-done "$rootfs_target"
+fi
+event esp-build-start "$target"
 "${MAKE:-make}" ROOTFS_FLAVOR="$rootfs" "$target"
-event build-done "$target"
+event esp-build-done "$target"
 
 if [ ! -d "$esp" ]; then
 	fail_profile "ESP directory missing: $esp"
@@ -215,6 +232,7 @@ total_ms=$(elapsed_ms)
 {
 	printf 'run_id=%s\n' "$run_id"
 	printf 'rootfs=%s\n' "$rootfs"
+	printf 'rootfs_target=%s\n' "$rootfs_target"
 	printf 'esp=%s\n' "$esp"
 	printf 'total_ms=%s\n' "$total_ms"
 	printf 'serial_lines=%s\n' "$serial_lines"
