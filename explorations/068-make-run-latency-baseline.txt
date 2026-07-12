@@ -32,7 +32,7 @@ Tasks:
       command phases.
 - [x] Collect baseline profiles for `make run`, Alpine squashfs/default run,
       synthetic shell boot, and a no-network/default-device variant.
-- [ ] Measure console output volume by prefix and log level during the slow
+- [x] Measure console output volume by prefix and log level during the slow
       path, including `user-syscall:`, scheduler, IPC, VFS, Linux, OpenRC, and
       networking logs.
 - [x] Record whether stale build artifacts, FAT ESP writes, or full-test
@@ -153,3 +153,59 @@ Progress:
   - The synthetic shell profile reaches login in about 8.6s, so the expensive
     behavior is specific to the default Alpine/OpenRC/login/networking run
     policy rather than the kernel boot path alone.
+- Extended `tools/run-profile.sh` to write classified serial-output reports:
+  - `serial-phases.tsv`: lines and bytes by boot phase.
+  - `serial-categories.tsv`: lines and bytes by phase and broad category.
+  - `serial-levels.tsv`: lines and bytes by phase and effective log class.
+  - `serial-phase-prefixes.tsv`: lines and bytes by phase, prefix, category,
+    and class.
+  - `serial-slowpath.log`: the serial lines between Linux init handoff and the
+    login prompt.
+- Final classified default Alpine networking profile:
+  - Command: `make run-profile`
+  - Run: `build/run-profile/20260712T233726Z-21452`
+  - Rootfs target was up to date; rootfs phase completed at 19 ms.
+  - ESP phase completed at 43 ms.
+  - Runtime ESP copy and QEMU start completed at 54 ms.
+  - Kernel start: 1056 ms
+  - `bootstrap: fs ready`: 6065 ms
+  - `bootstrap: linux init exec`: 7070 ms
+  - Login prompt: 41125 ms
+  - Root shell: 42129 ms
+  - First command: 43133 ms
+  - Total through poweroff: 44536 ms
+  - Serial output: 360 lines, 17693 bytes.
+  - Phase totals:
+    - Firmware: 14 lines, 788 bytes.
+    - Kernel/server bringup: 319 lines, 15671 bytes.
+    - Linux-init-to-login slow path: 19 lines, 640 bytes.
+    - Post-login harness commands: 8 lines, 259 bytes.
+  - Kernel/server bringup category totals:
+    - `kernel`: 89 lines, 7103 bytes.
+    - `names`: 85 lines, 2286 bytes.
+    - `vm`: 35 lines, 2148 bytes.
+    - `vfs-fs`: 32 lines, 998 bytes.
+    - `networking`: 17 lines, 629 bytes.
+    - `drivers-bus`: 16 lines, 912 bytes.
+    - `sched-irq`: 15 lines, 580 bytes.
+    - `ipc-buffer`: 2 lines, 77 bytes.
+    - `linux-compat`: 6 lines, 194 bytes.
+  - Linux-init-to-login slow path category totals:
+    - `openrc`: 14 lines, 561 bytes.
+    - `vm`: 1 line, 64 bytes.
+    - `login-shell`: 1 line, 12 bytes.
+    - `other`: 3 blank lines, 3 bytes.
+  - Effective slow-path class totals:
+    - `guest-stdout`: 15 lines, 573 bytes.
+    - `info`: 1 line, 64 bytes.
+    - `other`: 3 blank lines, 3 bytes.
+  - Default Alpine `log=info` did not emit `user-syscall:` lines in this run.
+    The synthetic profile remains the measured high-volume `user-syscall:`
+    case, with 52 lines before login.
+  - Interpretation: console/log output is noisy during kernel/server bringup
+    and should be reduced, especially `kernel`, `names`, `vm-server`, and
+    synthetic-path `user-syscall:` output.  However, the default run's dominant
+    31-34s Linux-init-to-login delay is not caused by serial byte volume: the
+    measured slow-path output is only 640 bytes.  The next boot-critical-path
+    work should look for blocking OpenRC, login, Linux syscall, VFS, clock, or
+    readiness waits that produce little output while they stall.

@@ -22,6 +22,11 @@ serial_log=$out_dir/serial.log
 qemu_log=$out_dir/qemu.log
 events_log=$out_dir/events.tsv
 prefix_log=$out_dir/serial-prefixes.tsv
+phase_log=$out_dir/serial-phases.tsv
+category_log=$out_dir/serial-categories.tsv
+level_log=$out_dir/serial-levels.tsv
+phase_prefix_log=$out_dir/serial-phase-prefixes.tsv
+slowpath_log=$out_dir/serial-slowpath.log
 summary_log=$out_dir/summary.txt
 timeout_cmd=${TIMEOUT:-timeout}
 qemu_pid=
@@ -133,22 +138,212 @@ wait_count_gt() {
 	event "$name" "$pattern"
 }
 
-serial_prefix_counts() {
+serial_output_reports() {
+	: > "$prefix_log"
+	: > "$phase_log"
+	: > "$category_log"
+	: > "$level_log"
+	: > "$phase_prefix_log"
+	: > "$slowpath_log"
+
 	awk '
+	function starts(text, prefix)
+	{
+		return index(text, prefix) == 1
+	}
+
+	function strip_timestamp(text, out)
+	{
+		out = text
+		sub(/^\[[^]]+\] /, "", out)
+		return out
+	}
+
+	function line_prefix(text, out)
+	{
+		out = strip_timestamp(text)
+		if (starts(out, "BdsDxe:"))
+			return "firmware"
+		if (out ~ /^   OpenRC /)
+			return "openrc"
+		if (out ~ /^ \* /)
+			return "openrc"
+		if (starts(out, "Service "))
+			return "openrc-service"
+		if (starts(out, "login:"))
+			return "login"
+		if (starts(out, "password:"))
+			return "login"
+		if (starts(out, "~ # "))
+			return "shell"
+		if (match(out, /^[A-Za-z0-9_-]+:/))
+			return substr(out, RSTART, RLENGTH - 1)
+		return "-"
+	}
+
+	function line_category(prefix, text)
+	{
+		if (prefix == "firmware")
+			return "firmware"
+		if (prefix == "openrc" || prefix == "openrc-service")
+			return "openrc"
+		if (prefix == "login" || prefix == "shell")
+			return "login-shell"
+		if (prefix == "bootstrap")
+			return "bootstrap"
+		if (prefix == "kernel" || prefix == "bunixos" ||
+		    prefix == "multiboot2" || prefix == "elf" ||
+		    prefix == "slab" || prefix == "pmm")
+			return "kernel"
+		if (prefix == "sched" || prefix == "smp" ||
+		    prefix == "timer" || prefix == "irq" ||
+		    prefix == "interrupts")
+			return "sched-irq"
+		if (prefix == "ipc" || prefix == "buffer")
+			return "ipc-buffer"
+		if (prefix == "vfs" || prefix == "squashfs" ||
+		    prefix == "unionfs" || prefix == "procfs" ||
+		    prefix == "tmpfs" || prefix == "devfs" ||
+		    prefix == "sysfs" || prefix == "utmpfs" ||
+		    prefix == "block")
+			return "vfs-fs"
+		if (prefix == "net" || prefix == "netcfg" ||
+		    prefix == "virtio-net" || text ~ /udhcpc|eth0|networking/)
+			return "networking"
+		if (prefix == "pci" || prefix == "virtio-bus" ||
+		    prefix == "usb-bus" || prefix == "xhci" ||
+		    prefix == "input")
+			return "drivers-bus"
+		if (prefix == "linux" || prefix == "linux-server" ||
+		    prefix == "linux-einval" || prefix == "linux-strace" ||
+		    prefix == "linux-strace-enter" ||
+		    prefix == "linux-debug" || prefix == "user-syscall" ||
+		    prefix == "syscall" || prefix == "user")
+			return "linux-compat"
+		if (prefix == "names")
+			return "names"
+		if (prefix == "vm-server" || prefix == "vm" ||
+		    prefix == "arch-vm")
+			return "vm"
+		if (prefix == "console")
+			return "console"
+		if (prefix == "power" || prefix == "machine")
+			return "power"
+		return "other"
+	}
+
+	function console_level(text)
+	{
+		text = strip_timestamp(text)
+		if (starts(text, "interrupts: vector=") ||
+		    starts(text, "bunixos: invalid") ||
+		    starts(text, "arch-vm: failed") ||
+		    starts(text, "elf: invalid") ||
+		    starts(text, "elf: failed") ||
+		    starts(text, "kernel: failed") ||
+		    starts(text, "kernel: invalid") ||
+		    starts(text, "kernel: too many") ||
+		    starts(text, "kernel: no module") ||
+		    starts(text, "sched: refusing") ||
+		    starts(text, "sched: thread alloc failed") ||
+		    starts(text, "sched: task alloc failed") ||
+		    starts(text, "sched: handle table full") ||
+		    starts(text, "sched: vma table full") ||
+		    starts(text, "smp: ap start timeout") ||
+		    starts(text, "smp: lapic delivery timeout") ||
+		    starts(text, "syscall: unknown") ||
+		    starts(text, "linux: unknown"))
+			return "error"
+		if (starts(text, "sched: cap denied") ||
+		    starts(text, "sched: close denied") ||
+		    starts(text, "sched: handle denied") ||
+		    starts(text, "sched: inherit denied") ||
+		    starts(text, "sched: task handle denied") ||
+		    starts(text, "sched: buffer handle denied") ||
+		    starts(text, "sched: vma overlap") ||
+		    starts(text, "names: table full") ||
+		    starts(text, "ipc: message alloc failed") ||
+		    starts(text, "buffer: alloc failed"))
+			return "warn"
+		if (starts(text, "BdsDxe:"))
+			return "firmware"
+		if (text ~ /^   OpenRC / || text ~ /^ \* / ||
+		    starts(text, "Service ") || starts(text, "login:") ||
+		    starts(text, "password:") || starts(text, "~ # "))
+			return "guest-stdout"
+		if (text ~ /^[A-Za-z0-9_-]+:/)
+			return "info"
+		return "other"
+	}
+
 	{
 		line = $0
 		gsub(/\r/, "", line)
-		sub(/^\[[^]]+\] /, "", line)
-		if (match(line, /^[A-Za-z0-9_-]+:/)) {
-			prefix = substr(line, RSTART, RLENGTH - 1)
-			count[prefix]++
-		}
+		if (phase == "")
+			phase = "firmware"
+		if (phase == "firmware" && index(line, "bunixos:") != 0)
+			phase = "kernel-servers"
+
+		line_phase = phase
+		prefix = line_prefix(line)
+		category = line_category(prefix, line)
+		level = console_level(line)
+		bytes = length(line) + 1
+
+		prefix_count[prefix]++
+		phase_lines[line_phase]++
+		phase_bytes[line_phase] += bytes
+		category_key = line_phase SUBSEP category
+		category_lines[category_key]++
+		category_bytes[category_key] += bytes
+		level_key = line_phase SUBSEP level
+		level_lines[level_key]++
+		level_bytes[level_key] += bytes
+		phase_prefix_key = line_phase SUBSEP prefix SUBSEP category SUBSEP level
+		phase_prefix_lines[phase_prefix_key]++
+		phase_prefix_bytes[phase_prefix_key] += bytes
+
+		if (line_phase == "linux-init-to-login")
+			print line > slowpath_log
+
+		if (index(line, "bootstrap: linux init exec") != 0)
+			phase = "linux-init-to-login"
+		else if (starts(strip_timestamp(line), "login: "))
+			phase = "post-login"
 	}
 	END {
-		for (prefix in count)
-			printf "%d\t%s\n", count[prefix], prefix
+		for (prefix in prefix_count)
+			printf "%d\t%s\n", prefix_count[prefix], prefix > prefix_log
+		for (phase in phase_lines)
+			printf "%d\t%d\t%s\n", phase_lines[phase],
+			    phase_bytes[phase], phase > phase_log
+		for (key in category_lines) {
+			split(key, parts, SUBSEP)
+			printf "%d\t%d\t%s\t%s\n", category_lines[key],
+			    category_bytes[key], parts[1], parts[2] > category_log
+		}
+		for (key in level_lines) {
+			split(key, parts, SUBSEP)
+			printf "%d\t%d\t%s\t%s\n", level_lines[key],
+			    level_bytes[key], parts[1], parts[2] > level_log
+		}
+		for (key in phase_prefix_lines) {
+			split(key, parts, SUBSEP)
+			printf "%d\t%d\t%s\t%s\t%s\t%s\n",
+			    phase_prefix_lines[key], phase_prefix_bytes[key],
+			    parts[1], parts[2], parts[3], parts[4] > phase_prefix_log
+		}
 	}
-	' "$serial_log" | sort -nr > "$prefix_log"
+	' prefix_log="$prefix_log" phase_log="$phase_log" \
+		category_log="$category_log" level_log="$level_log" \
+		phase_prefix_log="$phase_prefix_log" \
+		slowpath_log="$slowpath_log" "$serial_log" >/dev/null
+
+	sort -nr "$prefix_log" -o "$prefix_log"
+	sort -k3,3 -nr "$phase_log" -o "$phase_log"
+	sort -k3,3 -k1,1nr "$category_log" -o "$category_log"
+	sort -k3,3 -k1,1nr "$level_log" -o "$level_log"
+	sort -k3,3 -k1,1nr "$phase_prefix_log" -o "$phase_prefix_log"
 }
 
 mkdir -p "$out_dir" "$tmp"
@@ -225,7 +420,7 @@ else
 	fail_profile "qemu exited with status $status"
 fi
 
-serial_prefix_counts
+serial_output_reports
 serial_lines=$(wc -l < "$serial_log" | tr -d ' ')
 serial_bytes=$(wc -c < "$serial_log" | tr -d ' ')
 total_ms=$(elapsed_ms)
@@ -241,9 +436,16 @@ total_ms=$(elapsed_ms)
 	printf 'serial_log=%s\n' "$serial_log"
 	printf 'qemu_log=%s\n' "$qemu_log"
 	printf 'prefixes=%s\n' "$prefix_log"
+	printf 'phases=%s\n' "$phase_log"
+	printf 'categories=%s\n' "$category_log"
+	printf 'levels=%s\n' "$level_log"
+	printf 'phase_prefixes=%s\n' "$phase_prefix_log"
+	printf 'slowpath_log=%s\n' "$slowpath_log"
 } > "$summary_log"
 
 printf 'run-profile summary=%s total_ms=%s serial_lines=%s serial_bytes=%s\n' \
 	"$summary_log" "$total_ms" "$serial_lines" "$serial_bytes"
 awk 'NR <= 20 { printf "run-profile prefix_count=%s prefix=%s\n", $1, $2 }' \
 	"$prefix_log"
+awk 'NR <= 20 { printf "run-profile category_count=%s bytes=%s phase=%s category=%s\n", $1, $2, $3, $4 }' \
+	"$category_log"

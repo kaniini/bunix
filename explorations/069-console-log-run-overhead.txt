@@ -61,3 +61,21 @@ Baseline from exploration 068:
     exploration should still clean log overhead, while exploration 070 should
     treat OpenRC/login/networking startup as the primary boot critical-path
     suspect.
+- Classified default Alpine networking profile
+  `build/run-profile/20260712T233726Z-21452`:
+  - Total serial output before poweroff: 360 lines, 17693 bytes.
+  - Kernel/server bringup emitted 319 lines and 15671 bytes.  Top categories:
+    `kernel` 89 lines, `names` 85, `vm` 35, `vfs-fs` 32, `networking` 17,
+    `drivers-bus` 16, `sched-irq` 15, `linux-compat` 6, `ipc-buffer` 2.
+  - The Linux-init-to-login slow path emitted only 19 lines and 640 bytes:
+    `openrc` 14 lines, `vm` 1, `login-shell` 1, plus 3 blank lines.
+  - Slow-path class totals were `guest-stdout` 15 lines / 573 bytes,
+    Bunix `info` 1 line / 64 bytes, and blank `other` 3 bytes.
+  - Default Alpine `log=info` did not emit `user-syscall:` in this run.
+    Synthetic shell boot remains the measured `user-syscall:` offender, with
+    52 lines before login in `build/run-profile/20260712T232231Z-14525`.
+- Refined read:
+  - This exploration should still quiet kernel/server bringup and
+    `user-syscall:` dumps, because they dominate the serial volume.
+  - It should not be expected to remove the entire 31-34s default login delay
+    by itself: the measured slow path is mostly silent.

@@ -51,3 +51,9 @@ Baseline from exploration 068:
   removing it does not collapse the roughly 31-34s login delay.  This
   exploration should focus on OpenRC service ordering, readiness waits, login
   spawn policy, and any blocking Linux/VFS calls made during that interval.
+- Classified output profile `build/run-profile/20260712T233726Z-21452` shows
+  the Linux-init-to-login interval emitted only 19 serial lines and 640 bytes:
+  14 OpenRC lines, 1 VM grant line, 1 login line, and 3 blank lines.  The next
+  investigation should therefore prioritize silent blocking work: OpenRC
+  dependency evaluation, clock skew handling, VFS metadata/read behavior,
+  Linux syscall compatibility waits, login spawn timing, and readiness polling.
