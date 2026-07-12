@@ -3,7 +3,7 @@ Plan BPI-F3 HDMI/display bringup.
 Status:
 
 - Postponed.  Do not start BPI-F3-specific display work until the generic
-  riscv64 port boots an Alpine environment in QEMU, exploration 070 has been
+  riscv64 port boots an Alpine environment in QEMU, exploration 081 has been
   explicitly resumed, and serial, storage, USB, and network bringup are stable
   enough to make display debugging observable.
 

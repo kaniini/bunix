@@ -3,7 +3,7 @@ Bring up BPI-F3 PCIe and M.2 support.
 Status:
 
 - Postponed.  Do not start BPI-F3-specific PCIe/M.2 work until the generic
-  riscv64 port boots an Alpine environment in QEMU and exploration 070 has
+  riscv64 port boots an Alpine environment in QEMU and exploration 081 has
   been explicitly resumed.
 - Start after the PCI/PCIe server exploration and the first BPI-F3 hardware
   boot milestone.
