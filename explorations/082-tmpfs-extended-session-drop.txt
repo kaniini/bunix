@@ -57,11 +57,21 @@ Verification:
   `make test BUNIX_TEST_SET=tmpfs-extended` passed:
   - run `20260712T200152Z-23062`
   - `tmpfs-extended`: passed in 201s.
+- Ordered four-shard cohort
+  `make test BUNIX_TEST_SET=procfs-self-pipe,relogin-session,root-mount-soak,tmpfs-extended`
+  passed:
+  - run `20260712T200606Z-25232`
+  - `procfs-self-pipe`: passed in 71s.
+  - `relogin-session`: passed in 29s.
+  - `root-mount-soak`: passed in 41s.
+  - `tmpfs-extended`: passed in 199s.
 
 Notes:
 
 - The failure reproduces in a full parallel suite, but not when
   `tmpfs-extended` runs as the only selected parallel shard.
-- That points away from a deterministic tmpfs hardlink/rename bug and toward a
-  load-sensitive guest race, test-order interaction, or harness/session
-  synchronization defect.
+- The failure also does not reproduce when `tmpfs-extended` runs after the
+  three preceding shards from the failing full-suite run.
+- That points away from a deterministic tmpfs hardlink/rename bug or simple
+  prior-shard-order dependency and toward broader full-suite pressure, a rare
+  guest race, or harness/session synchronization defect.
