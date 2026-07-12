@@ -20,9 +20,9 @@ Goal:
 
 Tasks:
 
-- [ ] Add a generic native syscall ABI path for five or six arguments, or add a
+- [x] Add a generic native syscall ABI path for five or six arguments, or add a
       structured request-buffer convention for privileged native syscalls.
-- [ ] Convert PCI BAR and IRQ grant wrappers plus kernel handlers to pass
+- [x] Convert PCI BAR and IRQ grant wrappers plus kernel handlers to pass
       authority handles as explicit arguments.
 - [ ] Replace overlapping task-local authority constants with a documented
       bootstrap/server authority descriptor table.

@@ -6487,6 +6487,8 @@ struct native_syscall_args {
 	u64 arg1;
 	u64 arg2;
 	u64 arg3;
+	u64 arg4;
+	u64 arg5;
 };
 
 typedef u64 (*native_syscall_fn)(const struct native_syscall_args *args);
@@ -7194,7 +7196,7 @@ static u64 native_sys_hw_pci_bar_grant(const struct native_syscall_args *args)
 	const u64 offset = args->arg1;
 	const u64 len = args->arg2;
 	const u32 ops = (u32)args->arg3;
-	const u64 authority_handle = args->arg3 >> 32;
+	const u64 authority_handle = args->arg4;
 	const struct task_hw_resource *authority =
 		task_hw_resource_from_handle(task_current(), authority_handle,
 					     TASK_RIGHT_SEND);
@@ -7846,6 +7848,8 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 		.arg1 = frame->arg1,
 		.arg2 = frame->arg2,
 		.arg3 = frame->arg3,
+		.arg4 = frame->r8,
+		.arg5 = frame->r9,
 	};
 
 	return entry->handler(&args);

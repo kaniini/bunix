@@ -1051,6 +1051,75 @@ static inline long bunix_syscall4(long number, u64 arg0, u64 arg1, u64 arg2,
 #endif
 }
 
+static inline long bunix_syscall5(long number, u64 arg0, u64 arg1, u64 arg2,
+				  u64 arg3, u64 arg4)
+{
+#if defined(__riscv) && __riscv_xlen == 64
+	register long a0 __asm__("a0") = (long)arg0;
+	register long a1 __asm__("a1") = (long)arg1;
+	register long a2 __asm__("a2") = (long)arg2;
+	register long a3 __asm__("a3") = (long)arg3;
+	register long a4 __asm__("a4") = (long)arg4;
+	register long a7 __asm__("a7") = number;
+
+	__asm__ volatile ("ecall"
+			  : "+r"(a0)
+			  : "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a7)
+			  : "memory");
+	return a0;
+#else
+	long rax = number;
+	register u64 rdi __asm__("rdi") = arg0;
+	register u64 rsi __asm__("rsi") = arg1;
+	register u64 rdx __asm__("rdx") = arg2;
+	register u64 r10 __asm__("r10") = arg3;
+	register u64 r8 __asm__("r8") = arg4;
+
+	__asm__ volatile ("syscall"
+			  : "+a"(rax), "+D"(rdi), "+S"(rsi), "+d"(rdx),
+			    "+r"(r10), "+r"(r8)
+			  :
+			  : "rcx", "r9", "r11", "memory");
+	return rax;
+#endif
+}
+
+static inline long bunix_syscall6(long number, u64 arg0, u64 arg1, u64 arg2,
+				  u64 arg3, u64 arg4, u64 arg5)
+{
+#if defined(__riscv) && __riscv_xlen == 64
+	register long a0 __asm__("a0") = (long)arg0;
+	register long a1 __asm__("a1") = (long)arg1;
+	register long a2 __asm__("a2") = (long)arg2;
+	register long a3 __asm__("a3") = (long)arg3;
+	register long a4 __asm__("a4") = (long)arg4;
+	register long a5 __asm__("a5") = (long)arg5;
+	register long a7 __asm__("a7") = number;
+
+	__asm__ volatile ("ecall"
+			  : "+r"(a0)
+			  : "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5),
+			    "r"(a7)
+			  : "memory");
+	return a0;
+#else
+	long rax = number;
+	register u64 rdi __asm__("rdi") = arg0;
+	register u64 rsi __asm__("rsi") = arg1;
+	register u64 rdx __asm__("rdx") = arg2;
+	register u64 r10 __asm__("r10") = arg3;
+	register u64 r8 __asm__("r8") = arg4;
+	register u64 r9 __asm__("r9") = arg5;
+
+	__asm__ volatile ("syscall"
+			  : "+a"(rax), "+D"(rdi), "+S"(rsi), "+d"(rdx),
+			    "+r"(r10), "+r"(r8), "+r"(r9)
+			  :
+			  : "rcx", "r11", "memory");
+	return rax;
+#endif
+}
+
 static inline long bunix_launch_module(const char *name)
 {
 	return bunix_syscall3(BUNIX_SYSCALL_LAUNCH_MODULE, (u64)name, 0, 0);
@@ -1526,11 +1595,8 @@ static inline long bunix_hw_port_out32(u64 handle, u64 offset, u64 value)
 static inline long bunix_hw_pci_bar_grant(u64 authority, u64 device,
 					  u64 offset, u64 len, u64 ops)
 {
-	const u64 packed_ops = ((authority & 0xffffffffull) << 32) |
-			       (ops & 0xffffffffull);
-
-	return bunix_syscall4(BUNIX_SYSCALL_HW_PCI_BAR_GRANT, device, offset,
-			      len, packed_ops);
+	return bunix_syscall5(BUNIX_SYSCALL_HW_PCI_BAR_GRANT, device, offset,
+			      len, ops, authority);
 }
 
 static inline long bunix_hw_pci_irq_grant(u64 authority, u64 device, u64 line)
