@@ -29,7 +29,7 @@ Tasks:
 - [x] Move kernel bootstrap authority grants from scattered string checks into
       the descriptor table without changing which tasks receive authority.
 - [x] Preserve the unprivileged denial regression from exploration 041.
-- [ ] Run focused privileged-native, virtio, OpenRC tests, then full
+- [x] Run focused privileged-native, virtio, OpenRC tests, then full
       `make test`.
 
 Validation:
@@ -39,3 +39,16 @@ Validation:
 - `make test-boot-virtio-blk-backend` passed after refreshing stale backend
   markers for the current `/sbin/init` boot path.
 - `BUNIX_TEST_SET=alpine-openrc-smoke make test-parallel` passed.
+- Default `make test` exposed nondeterministic full-suite timeouts:
+  - run `20260712T163144Z-25954` failed `procfs-self-pipe` and
+    `exec-argv-pipe`, but both passed in the focused rerun
+    `20260712T165730Z-9670`.
+  - run `20260712T165937Z-10819` failed `tmpfs-extended`, but that shard
+    passed in the focused rerun `20260712T171504Z-21876`.
+- `BUNIX_TEST_RETRIES=1 make test` passed all 29 shards in run
+  `20260712T171910Z-24048`.
+
+Follow-up:
+
+- Planned `079-test-parallel-timeout-instability.txt` to make the default full
+  suite deterministic without requiring manual retry overrides.

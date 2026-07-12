@@ -1,0 +1,38 @@
+Make the default full parallel test gate deterministic.
+
+Parent exploration: `063-native-authority-abi-refactor.txt`
+
+Problem:
+
+- Exploration 063 passed all focused authority, virtio, and OpenRC validation.
+- Two default `make test` runs selected all shards but failed on different long
+  shell shards:
+  - `20260712T163144Z-25954`: `procfs-self-pipe` and `exec-argv-pipe`.
+  - `20260712T165937Z-10819`: `tmpfs-extended`.
+- Each failing shard passed when rerun in a focused `make test-parallel`
+  invocation.
+- `BUNIX_TEST_RETRIES=1 make test` passed all 29 shards in run
+  `20260712T171910Z-24048`, so the issue is full-suite scheduling or timeout
+  instability rather than a deterministic regression in those shards.
+
+Goal:
+
+- Make plain default `make test` complete reliably without manual retry
+  overrides.
+- Preserve the parallel test scheduler's throughput while improving failure
+  signal quality.
+
+Tasks:
+
+- [ ] Compare failed full-run artifacts against focused-pass artifacts for
+      `procfs-self-pipe`, `exec-argv-pipe`, and `tmpfs-extended`.
+- [ ] Determine whether the instability is guest-side starvation, shell harness
+      prompt accounting, per-command timeout sizing, QEMU lifecycle handling, or
+      host-side shard scheduling.
+- [ ] Add instrumentation or harness accounting that distinguishes a guest hang
+      from a slow command drain.
+- [ ] Fix the underlying scheduler/harness/timeout issue without masking real
+      deterministic failures.
+- [ ] Run the previously failing focused shards repeatedly.
+- [ ] Run plain default `make test` with no retry override and require it to
+      pass.
