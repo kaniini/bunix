@@ -1012,7 +1012,8 @@ int server_task_start_fork(struct task *child,
 		       task_id(parent), task_id(child),
 		       (const void *)arch_syscall_frame_ip(frame),
 		       (const void *)arch_syscall_frame_sp(frame));
-	if (thread_create(child, task_name(child), fork_entry_thread, start) == 0) {
+	if (thread_create_on_cpu(child, task_name(child), fork_entry_thread,
+				 start, sched_current_cpu_id()) == 0) {
 		slab_free(start);
 		return -1;
 	}

@@ -250,6 +250,9 @@ static int read_path_buffer(u64 buffer, u64 offset, u64 len, char *path)
 static u64 get_proc_handle(void)
 {
 	if (proc_handle == 0) {
+		proc_handle = bunix_handle_find(BUNIX_CAP_PROC);
+	}
+	if (proc_handle == 0) {
 		proc_handle = resolve_service(BUNIX_SERVICE_PROC,
 					      BUNIX_RIGHT_SEND);
 	}
@@ -462,22 +465,25 @@ static int proc_details(u64 pid, struct proc_details *details)
 	return 0;
 }
 
-static u64 proc_self_pid(u64 caller_task)
+static u64 proc_self_pid(u64 caller_task, u64 caller_linux_pid)
 {
 	struct proc_info info;
 
+	if (caller_linux_pid != 0) {
+		return caller_linux_pid;
+	}
 	if (proc_info_by_task(caller_task, &info) != 0) {
 		return 0;
 	}
 	return info.pid;
 }
 
-static u64 proc_path_pid(u64 pid, u64 caller_task)
+static u64 proc_path_pid(u64 pid, u64 caller_task, u64 caller_linux_pid)
 {
 	struct proc_info info;
 
 	if (pid == 0) {
-		pid = proc_self_pid(caller_task);
+		return proc_self_pid(caller_task, caller_linux_pid);
 	}
 	if (proc_info(pid, &info) == 0) {
 		return pid;
@@ -506,7 +512,8 @@ static long mount_procfs(const char *path)
 	return 0;
 }
 
-static u64 file_for_path(const char *path, u64 caller_task)
+static u64 file_for_path(const char *path, u64 caller_task,
+			 u64 caller_linux_pid)
 {
 	if (str_eq(path, "/proc")) {
 		return make_file(PROCFS_KIND_PROC, 0);
@@ -587,59 +594,59 @@ static u64 file_for_path(const char *path, u64 caller_task)
 		return make_file(PROCFS_KIND_NET_NDISC, 0);
 	}
 	if (str_eq(path, "/proc/self")) {
-		const u64 pid = proc_path_pid(0, caller_task);
+		const u64 pid = proc_path_pid(0, caller_task, caller_linux_pid);
 
 		return pid == 0 ? 0 : make_file(PROCFS_KIND_SELF, pid);
 	}
 	if (str_eq(path, "/proc/self/stat")) {
-		const u64 pid = proc_path_pid(0, caller_task);
+		const u64 pid = proc_path_pid(0, caller_task, caller_linux_pid);
 
 		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_STAT, pid);
 	}
 	if (str_eq(path, "/proc/self/status")) {
-		const u64 pid = proc_path_pid(0, caller_task);
+		const u64 pid = proc_path_pid(0, caller_task, caller_linux_pid);
 
 		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_STATUS, pid);
 	}
 	if (str_eq(path, "/proc/self/cmdline")) {
-		const u64 pid = proc_path_pid(0, caller_task);
+		const u64 pid = proc_path_pid(0, caller_task, caller_linux_pid);
 
 		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_CMDLINE, pid);
 	}
 	if (str_eq(path, "/proc/self/statm")) {
-		const u64 pid = proc_path_pid(0, caller_task);
+		const u64 pid = proc_path_pid(0, caller_task, caller_linux_pid);
 
 		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_STATM, pid);
 	}
 	if (str_eq(path, "/proc/self/mounts")) {
-		const u64 pid = proc_path_pid(0, caller_task);
+		const u64 pid = proc_path_pid(0, caller_task, caller_linux_pid);
 
 		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_MOUNTS, pid);
 	}
 	if (str_eq(path, "/proc/self/mountinfo")) {
-		const u64 pid = proc_path_pid(0, caller_task);
+		const u64 pid = proc_path_pid(0, caller_task, caller_linux_pid);
 
 		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_MOUNTINFO, pid);
 	}
 	if (str_eq(path, "/proc/self/cgroup")) {
-		const u64 pid = proc_path_pid(0, caller_task);
+		const u64 pid = proc_path_pid(0, caller_task, caller_linux_pid);
 
 		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_CGROUP, pid);
 	}
 	if (str_eq(path, "/proc/self/exe")) {
-		const u64 pid = proc_path_pid(0, caller_task);
+		const u64 pid = proc_path_pid(0, caller_task, caller_linux_pid);
 
 		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_EXE, pid);
 	}
 	if (str_eq(path, "/proc/self/fd")) {
-		const u64 pid = proc_path_pid(0, caller_task);
+		const u64 pid = proc_path_pid(0, caller_task, caller_linux_pid);
 
 		return pid == 0 ? 0 : make_file(PROCFS_KIND_PID_FD, pid);
 	}
 	if (path_has_prefix(path, "/proc/self/fd/")) {
 		const char *cursor = path + 14;
 		u64 fd;
-		const u64 pid = proc_path_pid(0, caller_task);
+		const u64 pid = proc_path_pid(0, caller_task, caller_linux_pid);
 
 		if (pid != 0 &&
 		    parse_u64_component(&cursor, &fd) == 0 && *cursor == '\0') {
@@ -653,7 +660,7 @@ static u64 file_for_path(const char *path, u64 caller_task)
 		if (parse_u64_component(&cursor, &pid) != 0 || pid == 0) {
 			return 0;
 		}
-		pid = proc_path_pid(pid, caller_task);
+		pid = proc_path_pid(pid, caller_task, caller_linux_pid);
 		if (pid == 0) {
 			return 0;
 		}
@@ -708,7 +715,11 @@ static u64 file_size(u64 file)
 	if (file_kind(file) == PROCFS_KIND_PID_EXE) {
 		return str_len(pid_cmdline(file_arg(file)));
 	}
-	if (file_kind(file) == PROCFS_KIND_PID_CMDLINE) {
+	if (file_kind(file) == PROCFS_KIND_PID_STAT ||
+	    file_kind(file) == PROCFS_KIND_PID_STATUS ||
+	    file_kind(file) == PROCFS_KIND_PID_CMDLINE ||
+	    file_kind(file) == PROCFS_KIND_PID_STATM ||
+	    file_kind(file) == PROCFS_KIND_PID_SMAPS) {
 		return 0;
 	}
 	if (file_kind(file) != PROCFS_KIND_PROC &&
@@ -1951,17 +1962,9 @@ static const char *pid_cmdline(u64 pid)
 static u64 build_pid_stat(u64 pid)
 {
 	u64 len = 0;
-	struct proc_details details = { 0, 'S', 0 };
-
-	(void)proc_details(pid, &details);
 
 	append_u64(&len, pid);
-	append_str(&len, " (");
-	append_str(&len, pid_name(pid));
-	append_str(&len, ") ");
-	append_char(&len, details.state == '\0' ? 'S' : details.state);
-	append_char(&len, ' ');
-	append_u64(&len, details.ppid);
+	append_str(&len, " (process) S 1");
 	append_str(&len, " 1 1 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ");
 	append_u64(&len, bunix_timer_ticks());
 	append_str(&len, " 0 0 0 4194304 5242880 8388608 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 4194304 5242880 9437184 8384512 8388608 0 0 0\n");
@@ -2465,10 +2468,13 @@ int main(void)
 			const u64 cwd_len = message.words[0];
 			const u64 path_len = message.words[1];
 			const u64 caller_task = message.words[3] & 0xffffffff;
+			const u64 caller_linux_pid = message.type == BUNIX_VFS_OPEN_BUFFER ?
+						     message.words[3] >> 32 : 0;
 			const u64 file =
 				read_path_buffer(message.cap, cwd_len, path_len,
 						 path) == 0 ?
-				file_for_path(path, caller_task) : 0;
+				file_for_path(path, caller_task,
+					      caller_linux_pid) : 0;
 
 			if (file == 0) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
@@ -2497,10 +2503,12 @@ int main(void)
 			const u64 cwd_len = message.words[0];
 			const u64 path_len = message.words[1];
 			const u64 caller_task = message.words[3] & 0xffffffff;
+			const u64 caller_linux_pid = 0;
 			const u64 file =
 				read_path_buffer(message.cap, cwd_len, path_len,
 						 path) == 0 ?
-				file_for_path(path, caller_task) : 0;
+				file_for_path(path, caller_task,
+					      caller_linux_pid) : 0;
 
 			if (file == 0) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;

@@ -422,8 +422,6 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 	port->affinity_cpu = sched_current_cpu_id();
 	port->affinity_valid = 1;
 	while (port->head == 0) {
-		port->receiver = thread_current();
-		port->receiver_wait = &wait;
 		wait.delivered = 0;
 		if (!str_eq(port->name, "block") &&
 		    !str_eq(port->name, "vfs") &&
@@ -431,6 +429,8 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 			console_printf("ipc: recv block port=%s\n", port->name);
 		}
 		thread_prepare_block();
+		port->receiver = thread_current();
+		port->receiver_wait = &wait;
 		spin_unlock_irqrestore(&ipc_lock, flags);
 		thread_block_prepared();
 		flags = spin_lock_irqsave(&ipc_lock);

@@ -4024,9 +4024,14 @@ int main(void)
 		return 1;
 	}
 	vfs_launch = vfs;
+	const struct bunix_launch_cap procfs_caps[] = {
+		{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
+		{ proc, BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP, BUNIX_CAP_PROC },
+	};
 	const long procfs_task = launch_claimed_module_task_id(
 		"procfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_PROCFS,
-		fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
+		procfs_caps, sizeof(procfs_caps) / sizeof(procfs_caps[0]));
 	if (procfs_task <= 0 || vfs_grant_admin_task(vfs, procfs_task) != 0) {
 		return 1;
 	}

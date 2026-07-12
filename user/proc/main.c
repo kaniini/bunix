@@ -598,6 +598,29 @@ static void log_exec_timing_line(const char *path, long result,
 	bunix_console_log(line, cursor);
 }
 
+static void log_exec_load_stage(u64 task, const char *stage, const char *path)
+{
+	char line[512];
+	u64 cursor = 0;
+
+	if (bunix_cmdline_has("debug-proc-exec-load") <= 0) {
+		return;
+	}
+
+	append_text_bounded(line, sizeof(line), &cursor,
+			    "proc-exec-load: task=");
+	append_dec_bounded(line, sizeof(line), &cursor, task);
+	append_text_bounded(line, sizeof(line), &cursor, " stage=");
+	append_text_bounded(line, sizeof(line), &cursor, stage);
+	append_text_bounded(line, sizeof(line), &cursor, " path=");
+	append_text_bounded(line, sizeof(line), &cursor,
+			    path != 0 ? path : "");
+	if (cursor < sizeof(line)) {
+		line[cursor++] = '\n';
+	}
+	bunix_console_log(line, cursor);
+}
+
 static void log_exit_line(const char *prefix, u64 pid, u64 status)
 {
 	char line[96];
@@ -1529,17 +1552,20 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 		return -1;
 	}
 
+	log_exec_load_stage(bunix_task_id(task), "buffer", load_path);
 	io_buffer = bunix_buffer_create(PROC_SEGMENT_MAX);
 	if (io_buffer <= 0) {
 		bunix_console_log("proc: exec buffer failed\n",
 				  sizeof("proc: exec buffer failed\n") - 1);
 		return -1;
 	}
+	log_exec_load_stage(bunix_task_id(task), "open-main", load_path);
 	if (vfs_open(vfs, load_path, bunix_task_id(task), &file) != 0) {
 		bunix_console_log("proc: exec open failed\n",
 				  sizeof("proc: exec open failed\n") - 1);
 		goto out;
 	}
+	log_exec_load_stage(bunix_task_id(task), "read-ehdr", load_path);
 	if (vfs_read_file(vfs, file.handle, file.size, 0,
 			  (unsigned char *)&ehdr, sizeof(ehdr),
 			  (u64)io_buffer) != 0) {
@@ -1564,6 +1590,7 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 				  sizeof("proc: exec phdr alloc failed\n") - 1);
 		goto out;
 	}
+	log_exec_load_stage(bunix_task_id(task), "read-phdrs", load_path);
 	if (vfs_read_file(vfs, file.handle, file.size, ehdr.phoff,
 			  (unsigned char *)phdrs, phdr_bytes,
 			  (u64)io_buffer) != 0) {
@@ -1585,6 +1612,7 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 	exec.phdrs = aux_phdrs;
 	start_entry = exec.entry;
 
+	log_exec_load_stage(bunix_task_id(task), "read-interp", load_path);
 	const long interp = read_interp_path(vfs, &file, phdrs, ehdr.phnum,
 					     interp_path, sizeof(interp_path),
 					     (u64)io_buffer);
@@ -1592,6 +1620,8 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 		goto out;
 	}
 	if (interp > 0) {
+		log_exec_load_stage(bunix_task_id(task), "open-interp",
+				    interp_path);
 		if (vfs_open(vfs, interp_path, bunix_task_id(task),
 			     &interp_file) != 0 ||
 		    vfs_read_file(vfs, interp_file.handle, interp_file.size, 0,
@@ -1608,6 +1638,8 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 			goto out;
 		}
 		interp_phdrs = (struct elf64_phdr *)bunix_alloc(interp_phdr_bytes);
+		log_exec_load_stage(bunix_task_id(task), "read-interp-phdrs",
+				    interp_path);
 		if (interp_phdrs == 0 ||
 		    vfs_read_file(vfs, interp_file.handle, interp_file.size,
 				  interp_ehdr.phoff,
@@ -1622,10 +1654,12 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 	}
 	timing_interp = bunix_timer_ticks();
 
+	log_exec_load_stage(bunix_task_id(task), "clear", load_path);
 	if (clear_existing && bunix_task_clear(task) != 0) {
 		goto out;
 	}
 
+	log_exec_load_stage(bunix_task_id(task), "map", load_path);
 	if (map_load_segments(vfs, &file, phdrs, ehdr.phnum, task,
 			      load_bias, (u64)io_buffer) != 0 ||
 	    (interp_file.handle != 0 &&
@@ -1636,6 +1670,7 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 	}
 	timing_mapped = bunix_timer_ticks();
 
+	log_exec_load_stage(bunix_task_id(task), "reloc", load_path);
 	if (interp_file.handle == 0 &&
 	    apply_relative_relocations(vfs, &file, phdrs, ehdr.phnum,
 				       task, load_bias,
@@ -1644,18 +1679,21 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 	}
 	timing_relocated = bunix_timer_ticks();
 
+	log_exec_load_stage(bunix_task_id(task), "stack-alloc", load_path);
 	if (clear_existing &&
 	    bunix_task_alloc(task, USER_STACK_TOP - PROC_INIT_STACK_MAX,
 			     PROC_INIT_STACK_MAX, 1) != 0) {
 		goto out;
 	}
 
+	log_exec_load_stage(bunix_task_id(task), "stack-build", load_path);
 	if (build_initial_stack(task, execfn_path, &exec, load_bias,
 				interp_bias, strings, creds, handles, stack) != 0) {
 		goto out;
 	}
 	timing_stacked = bunix_timer_ticks();
 
+	log_exec_load_stage(bunix_task_id(task), "done", load_path);
 	*entry = start_entry;
 	result = 0;
 
@@ -2239,8 +2277,7 @@ int main(void)
 			u64 stack = 0;
 			struct pending_exec_replace *pending =
 				exec_replace_find(message.words[0]);
-			u64 vfs = resolve_service(BUNIX_SERVICE_VFS,
-						  BUNIX_RIGHT_SEND);
+			u64 vfs = 0;
 
 			if (!management &&
 			    (pending == 0 || pending->sender != message.sender)) {
@@ -2248,11 +2285,10 @@ int main(void)
 				if (message.cap != 0) {
 					bunix_handle_close(message.cap);
 				}
-				if (vfs != 0) {
-					bunix_handle_close(vfs);
-				}
 				break;
 			}
+			vfs = resolve_service(BUNIX_SERVICE_VFS,
+					      BUNIX_RIGHT_SEND);
 			if (vfs != 0 &&
 			    exec_replace_from_message(vfs, &message, &entry,
 						      &stack) == 0) {

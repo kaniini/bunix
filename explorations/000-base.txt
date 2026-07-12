@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 060-task-lifecycle-cleanup-hooks.txt
+The current exploration is: 061-scheduler-policy-server-affinity.txt
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.

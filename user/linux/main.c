@@ -91,12 +91,16 @@ enum {
 	LINUX_VEOF = 4,
 	LINUX_VTIME = 5,
 	LINUX_VMIN = 6,
+	LINUX_SIGHUP = 1,
 	LINUX_SIGINT = 2,
 	LINUX_SIGBUS = 7,
+	LINUX_SIGKILL = 9,
 	LINUX_SIGSEGV = 11,
+	LINUX_SIGPIPE = 13,
 	LINUX_SIGALRM = 14,
 	LINUX_SIGTERM = 15,
 	LINUX_SIGCHLD = 17,
+	LINUX_SIGSTOP = 19,
 	LINUX_ICRNL = 0000400,
 	LINUX_OPOST = 0000001,
 	LINUX_ONLCR = 0000004,
@@ -1046,6 +1050,27 @@ static u64 string_len(const char *text)
 	return len;
 }
 
+static int path_has_prefix(const char *path, const char *prefix)
+{
+	u64 i = 0;
+
+	if (path == 0 || prefix == 0) {
+		return 0;
+	}
+	while (prefix[i] != '\0') {
+		if (path[i] != prefix[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return 1;
+}
+
+static int linux_fd_allows_zero_size_read(const struct linux_fd *fd)
+{
+	return fd != 0 && path_has_prefix(fd->path, "/proc/");
+}
+
 static void append_char(char *line, u64 line_size, u64 *cursor, char value)
 {
 	if (*cursor + 1 < line_size) {
@@ -1131,7 +1156,7 @@ static void linux_debug_path_log(const struct linux_process *process,
 		append_text(line, sizeof(line), &cursor, path);
 	}
 	append_char(line, sizeof(line), &cursor, '\n');
-	bunix_console_log(line, cursor);
+	(void)bunix_early_console_write(line, cursor);
 }
 
 static void linux_debug_path_result_log(const struct linux_process *process,
@@ -1241,7 +1266,7 @@ static void linux_debug_getdents_log(const struct linux_process *process,
 		append_text(line, sizeof(line), &cursor, linux_fd->path);
 	}
 	append_char(line, sizeof(line), &cursor, '\n');
-	bunix_console_log(line, cursor);
+	(void)bunix_early_console_write(line, cursor);
 }
 
 static void linux_debug_rpc_log(const char *line, u64 len)
@@ -3122,6 +3147,13 @@ static void linux_pipe_ref_drop(const struct linux_fd *fd)
 	} else if (fd->kind == LINUX_FD_PIPE_WRITE && pipe->write_refs != 0) {
 		pipe->write_refs--;
 	}
+}
+
+static void linux_pipe_destroy_if_unused(struct linux_pipe *pipe)
+{
+	if (pipe == 0) {
+		return;
+	}
 	if (pipe->read_refs == 0 && pipe->write_refs == 0) {
 		if (pipe->reader_buffer != 0) {
 			bunix_handle_close(pipe->reader_buffer);
@@ -3809,6 +3841,12 @@ static void linux_reparent_children(struct linux_process *process)
 
 		child->parent = 0;
 		child->next_sibling = 0;
+		if (child->exited) {
+			child->waited = 1;
+			linux_process_reset(child);
+			child = next;
+			continue;
+		}
 		if (init != 0 && init != process) {
 			linux_child_link(init, child);
 		} else {
@@ -3984,6 +4022,51 @@ static u64 linux_signal_bit(u64 signal)
 	return signal > 0 && signal < 64 ? 1ull << (signal - 1) : 0;
 }
 
+static int linux_signal_default_terminates(u64 signal)
+{
+	switch (signal) {
+	case LINUX_SIGHUP:
+	case LINUX_SIGINT:
+	case LINUX_SIGBUS:
+	case LINUX_SIGKILL:
+	case LINUX_SIGSEGV:
+	case LINUX_SIGPIPE:
+	case LINUX_SIGALRM:
+	case LINUX_SIGTERM:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+static int linux_signal_has_handler(const struct linux_process *process,
+				    u64 signal)
+{
+	return process != 0 &&
+	       process->signal_handlers[signal] != 0 &&
+	       process->signal_restorers[signal] != 0;
+}
+
+static void linux_apply_pending_default_signals(struct linux_process *process)
+{
+	if (process == 0 || process->exited) {
+		return;
+	}
+	for (u64 signal = 1; signal < 64; signal++) {
+		const u64 bit = linux_signal_bit(signal);
+
+		if ((process->pending_signals & bit) == 0 ||
+		    (process->signal_mask & bit) != 0 ||
+		    (process->signal_ignored & bit) != 0 ||
+		    linux_signal_has_handler(process, signal) ||
+		    !linux_signal_default_terminates(signal)) {
+			continue;
+		}
+		linux_process_exit_status(process, signal, 1);
+		return;
+	}
+}
+
 static int linux_signal_process(struct linux_process *process, u64 signal)
 {
 	const u64 bit = linux_signal_bit(signal);
@@ -3998,6 +4081,10 @@ static int linux_signal_process(struct linux_process *process, u64 signal)
 	if (bit == 0) {
 		return 0;
 	}
+	if (signal == LINUX_SIGKILL) {
+		linux_process_exit_status(process, signal, 1);
+		return 1;
+	}
 	if ((process->signal_ignored & bit) != 0) {
 		return 1;
 	}
@@ -4005,12 +4092,12 @@ static int linux_signal_process(struct linux_process *process, u64 signal)
 	if ((process->signal_mask & bit) != 0) {
 		return 1;
 	}
-	if (signal == LINUX_SIGINT || signal == LINUX_SIGTERM) {
+	if (!linux_signal_has_handler(process, signal) &&
+	    linux_signal_default_terminates(signal)) {
 		linux_process_exit_status(process, signal, 1);
-		return 1;
 	}
 
-	return 0;
+	return 1;
 }
 
 static long linux_alarm(struct linux_process *process, u64 seconds)
@@ -4264,6 +4351,9 @@ static long linux_rt_sigprocmask(struct linux_process *process, u64 how,
 	} else {
 		return -LINUX_EINVAL;
 	}
+	process->signal_mask &= ~(linux_signal_bit(LINUX_SIGKILL) |
+				  linux_signal_bit(LINUX_SIGSTOP));
+	linux_apply_pending_default_signals(process);
 	return 0;
 }
 
@@ -4956,7 +5046,6 @@ static long linux_tty_read(struct linux_tty *tty, struct linux_process *process,
 	}
 	if (linux_tty_session_matches(tty, process)) {
 		linux_tty_bind_session(tty, process);
-		tty->foreground_pgid = process->pgid;
 	}
 	nread = linux_tty_read_available(tty, len, buffer);
 	if (nread != -(long)LINUX_EAGAIN) {
@@ -5381,8 +5470,13 @@ static long linux_vfs_path_call(struct linux_process *process, u64 type,
 				u64 base_handle, const char *path,
 				struct bunix_msg *reply)
 {
-	return linux_vfs_path_call_flags(process, type, base_handle, path, 0,
-					 reply);
+	u64 word3 = process->bunix_task;
+
+	if (type == BUNIX_VFS_OPEN_BUFFER) {
+		word3 |= process->pid << 32;
+	}
+	return linux_vfs_path_call_word3(process, type, base_handle, path,
+					 word3, reply);
 }
 
 static long linux_vfs_symlink_call(struct linux_process *process,
@@ -9304,10 +9398,12 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 		const u64 offset = linux_fd_offset(&process->fds[fd]);
 		const u64 size = linux_fd_size(&process->fds[fd]);
 
-		if (offset >= size) {
+		if (offset >= size &&
+		    !(size == 0 &&
+		      linux_fd_allows_zero_size_read(&process->fds[fd]))) {
 			return 0;
 		}
-		if (len > size - offset) {
+		if (size != 0 && len > size - offset) {
 			len = size - offset;
 		}
 	}
@@ -9561,6 +9657,9 @@ static long linux_sendfile(struct linux_process *process, u64 out_fd,
 	if (in_fd >= process->fd_capacity || process->fds[in_fd].kind == 0) {
 		return -LINUX_EBADF;
 	}
+	if (process->fds[in_fd].kind != LINUX_FD_FILE) {
+		return -LINUX_EINVAL;
+	}
 	if (positioned) {
 		saved_offset = linux_fd_offset(&process->fds[in_fd]);
 		linux_fd_set_offset(process, in_fd, offset);
@@ -9625,10 +9724,12 @@ static long linux_close(struct linux_process *process, u64 fd)
 	if (process->fds[fd].kind == LINUX_FD_PIPE_READ ||
 	    process->fds[fd].kind == LINUX_FD_PIPE_WRITE) {
 		const u64 pipe_id = process->fds[fd].handle;
+		struct linux_pipe *pipe = linux_pipe_find(pipe_id);
 
 		linux_pipe_ref_drop(&process->fds[fd]);
-		linux_pipe_wake_reader(linux_pipe_find(pipe_id));
-		linux_pipe_wake_writer(linux_pipe_find(pipe_id));
+		linux_pipe_wake_reader(pipe);
+		linux_pipe_wake_writer(pipe);
+		linux_pipe_destroy_if_unused(pipe);
 	}
 	if (linux_fd_is_refcounted_net_socket(&process->fds[fd]) &&
 	    linux_net_socket_ref_drop(&process->fds[fd]) == 0) {

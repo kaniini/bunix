@@ -4,6 +4,7 @@
 #include "sched.h"
 #include "slab.h"
 #include "spinlock.h"
+#include "task_lifecycle.h"
 #include "timer.h"
 #include "tree.h"
 #include "vm.h"
@@ -1794,6 +1795,8 @@ static void task_teardown(struct task *task)
 	const u32 pid = task->pid;
 	const char *name = task->name;
 	u32 owns_vm_space;
+
+	task_lifecycle_notify_death(task);
 
 	if (task_vm_space_owned(task)) {
 		while (task_vm_region_count(task) != 0) {

@@ -1,0 +1,50 @@
+Add generic task lifecycle cleanup hooks for subsystem-owned per-task state.
+
+Status:
+
+- Complete.
+- Schedule after the x86_64/riscv64 DRYness refactor exploration.
+
+Problem:
+
+- Some architecture frontend and kernel subsystem state is keyed by Bunix task
+  ID but currently cleaned up only from the success path that subsystem owns.
+- The riscv64 Linux frontend state added during exploration 039 is released on
+  Linux `exit_group`, which is sufficient for the current smoke path but not a
+  general task-lifecycle contract.
+- As more per-task state moves out of fixed tables and into dynamic subsystem
+  structures, cleanup should be driven by task death rather than by each syscall
+  frontend remembering every possible exit path.
+
+Tasks:
+
+- [x] Audit dynamically allocated per-task state in kernel, architecture
+      frontend, scheduler, VM, IPC, and Linux-personality paths.
+- [x] Define a small task lifecycle notification API with clear lock-ordering
+      rules.
+- [x] Wire task-death cleanup for riscv64 Linux frontend registration state.
+- [x] Move any similar ad hoc per-task cleanup to the shared lifecycle path.
+- [x] Add tests that kill or abandon Linux tasks without taking the ordinary
+      `exit_group` path and verify stale per-task state is released.
+- [x] Document when subsystem state should live on `struct task` directly and
+      when a lifecycle hook is the better boundary.
+
+Verification:
+
+- [x] `make ARCH=x86_64 all`
+- [x] `make ARCH=riscv64 all`
+- [x] x86_64 Linux process lifecycle smoke target: `make test-linux-lifecycle`
+- [x] riscv64 Alpine boot target: `make test-boot-riscv64-alpine`
+- [x] Full `make test` before completing the exploration
+
+Notes:
+
+- Added task lifecycle death hooks for subsystem-owned per-task cleanup.
+- Wired x86_64 vfork wait cleanup and riscv64 Linux frontend registration
+  cleanup through task death rather than only ordinary Linux exit paths.
+- Added a lifecycle smoke binary that exercises a Linux vfork child exiting via
+  the native Bunix syscall path.
+- While validating the new lifecycle tests, fixed a foreground procfs pipeline
+  deadlock by preserving VFS caller metadata when forwarding mounted paths and
+  resolving `/proc/self` from the caller-supplied Linux PID without reentering
+  the proc server.

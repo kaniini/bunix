@@ -12,8 +12,9 @@
 #include "sched.h"
 #include "slab.h"
 #include "spinlock.h"
-#include "timer.h"
 #include "server.h"
+#include "task_lifecycle.h"
+#include "timer.h"
 #include "vm.h"
 #include "../servers/vm/vm_server.h"
 
@@ -389,6 +390,7 @@ static u8 console_input_buffer[LINUX_MAX_SYSCALL_BUFFER];
 static struct spinlock syscall_copy_lock = SPINLOCK_INIT("syscall-copy");
 static struct spinlock linux_vfork_lock = SPINLOCK_INIT("linux-vfork");
 static struct linux_vfork_wait *linux_vfork_waiters;
+static void linux_vfork_complete_task(u32 child_task);
 static int str_eq(const char *left, const char *right);
 
 struct linux_signal_frame {
@@ -1663,6 +1665,12 @@ static void linux_vfork_complete_task(u32 child_task)
 	}
 
 	spin_unlock_irqrestore(&linux_vfork_lock, flags);
+}
+
+static void linux_task_died(u32 task_id, const char *task_name)
+{
+	(void)task_name;
+	linux_vfork_complete_task(task_id);
 }
 
 static u64 linux_forward_output_words(struct ipc_port *linux,
@@ -3216,6 +3224,15 @@ static void linux_debug_exec_log(struct task *task, const char *phase,
 		return;
 	}
 
+	console_write("linux-exec-raw: task=");
+	console_write_hex64(task != 0 ? task_id(task) : 0);
+	console_write(" phase=");
+	console_write(phase != 0 ? phase : "");
+	console_write(" result=");
+	console_write_hex64((u64)(i64)result);
+	console_write(" path=");
+	console_write(path != 0 ? path : "");
+	console_write("\n");
 	console_printf("linux-exec: task=%u phase=%s result=%d path=%s\n",
 		       task != 0 ? task_id(task) : 0, phase, result,
 		       path != 0 ? path : "");
@@ -3376,21 +3393,31 @@ static int linux_proc_exec_replace(struct task *task, const char *load_path,
 		return -LINUX_ENOSYS;
 	}
 
+	linux_debug_exec_log(task, "replace-creds-start", load_path, 0);
 	linux_exec_credentials_load(task, creds);
+	linux_debug_exec_log(task, "replace-creds-done", load_path, 0);
+	linux_debug_exec_log(task, "replace-buffer-start", load_path, 0);
 	result = linux_exec_replace_buffer_create(load_path, execfn_path,
 						  args, creds, &buffer, &total);
 	if (result != 0) {
+		linux_debug_exec_log(task, "replace-buffer", load_path,
+				     result);
 		return result;
 	}
+	linux_debug_exec_log(task, "replace-buffer-done", load_path, 0);
 
+	linux_debug_exec_log(task, "replace-token-start", load_path, 0);
 	if (ipc_send(proc, &request) != 0 ||
 	    ipc_recv(reply_port, &reply) != 0 ||
 	    reply.words[0] != 0 ||
 	    reply.words[1] == 0) {
 		buffer_release(buffer);
+		linux_debug_exec_log(task, "replace-token", load_path,
+				     -LINUX_ENOSYS);
 		return -LINUX_ENOSYS;
 	}
 	token = reply.words[1];
+	linux_debug_exec_log(task, "replace-token-done", load_path, 0);
 
 	request = (struct ipc_message){
 		.protocol = USER_FOURCC_PROC,
@@ -3402,14 +3429,18 @@ static int linux_proc_exec_replace(struct task *task, const char *load_path,
 		.cap_object = buffer,
 		.words = { token, total, args->argc, args->envc },
 	};
+	linux_debug_exec_log(task, "replace-rpc-start", load_path, 0);
 	if (ipc_send(proc, &request) != 0 ||
 	    ipc_recv(reply_port, &reply) != 0 ||
 	    reply.words[0] != 0 ||
 	    reply.words[1] == 0 ||
 	    reply.words[2] == 0) {
 		buffer_release(buffer);
+		linux_debug_exec_log(task, "replace-rpc", load_path,
+				     -LINUX_EINVAL);
 		return -LINUX_EINVAL;
 	}
+	linux_debug_exec_log(task, "replace-rpc-done", load_path, 0);
 
 	buffer_release(buffer);
 	*entry = reply.words[1];
@@ -6112,6 +6143,7 @@ void arch_user_init_cpu(u32 cpu_id)
 void arch_user_init(void)
 {
 	arch_user_init_cpu(arch_smp_current_cpu_id());
+	(void)task_lifecycle_register_death_hook(linux_task_died);
 }
 
 void arch_user_set_kernel_stack(u64 stack)
@@ -7420,9 +7452,6 @@ u64 arch_syscall_dispatch(struct arch_syscall_frame *frame)
 	const i64 number = (i64)frame->number;
 
 	if (task_is_killing(current) && number != SYSCALL_EXIT) {
-		if (task_uses_linux_personality(current)) {
-			linux_vfork_complete_task(task_id(current));
-		}
 		__asm__ volatile ("sti");
 		thread_exit();
 	}

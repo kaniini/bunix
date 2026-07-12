@@ -404,6 +404,11 @@ static struct vfs_mount *mount_for_path(const char *path)
 	return best;
 }
 
+static int mount_resolves_own_paths(const struct vfs_mount *mount)
+{
+	return mount != 0 && mount->fstype == BUNIX_SERVICE_PROCFS;
+}
+
 static int path_dirname(const char *path, char *out)
 {
 	u64 len;
@@ -774,6 +779,7 @@ static int forward_mount_buffer_path(struct vfs_mount *mount,
 	forwarded.words[1] = path_len;
 	forwarded.words[2] = message->type == BUNIX_VFS_CHOWN_BUFFER ?
 			     message->words[2] : 0;
+	forwarded.words[3] = message->words[3];
 	if (forwarded.type == BUNIX_VFS_READLINK_BUFFER) {
 		forwarded.words[3] = (message->words[3] & 0xffffffff) |
 				     (out_cap << 32);
@@ -1418,9 +1424,13 @@ static void vfs_open_path(struct bunix_msg *message, struct bunix_msg *reply,
 {
 	char resolved[VFS_MAX_PATH];
 	u64 error = (u64)-1;
-	struct vfs_mount *mount;
+	struct vfs_mount *mount = mount_for_path(path);
 	const u64 subject = message_subject(message);
 
+	if (mount_resolves_own_paths(mount)) {
+		(void)forward_mount_buffer_path(mount, message, reply, path);
+		return;
+	}
 	message_set_subject(message, subject);
 	if (vfs_resolve_symlinks(path, resolved, subject, 1, &error) != 0) {
 		reply->words[0] = error;
@@ -1447,10 +1457,14 @@ static void vfs_stat_path(struct bunix_msg *message, struct bunix_msg *reply,
 {
 	char resolved[VFS_MAX_PATH];
 	u64 error = (u64)-1;
-	struct vfs_mount *mount;
+	struct vfs_mount *mount = mount_for_path(path);
 	const int nofollow = ((message->words[3] >> 32) & 1) != 0;
 	const u64 subject = message_subject(message);
 
+	if (mount_resolves_own_paths(mount)) {
+		(void)forward_mount_buffer_path(mount, message, reply, path);
+		return;
+	}
 	message_set_subject(message, subject);
 	if (vfs_resolve_symlinks(path, resolved, subject, !nofollow,
 				 &error) != 0) {

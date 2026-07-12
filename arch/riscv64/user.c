@@ -12,6 +12,7 @@
 #include "server.h"
 #include "slab.h"
 #include "spinlock.h"
+#include "task_lifecycle.h"
 #include "timer.h"
 #include "vm.h"
 
@@ -125,6 +126,8 @@ struct user_ipc_message {
 static const char *strace_mode;
 static u64 current_kernel_stack;
 
+static void linux_frontend_task_died(u32 task_id, const char *task_name);
+
 void riscv64_user_enter(u64 entry, u64 stack, u64 kernel_stack)
 	__attribute__((noreturn));
 
@@ -132,6 +135,7 @@ void arch_user_init(void)
 {
 	strace_mode = "off";
 	current_kernel_stack = 0;
+	(void)task_lifecycle_register_death_hook(linux_frontend_task_died);
 }
 
 void arch_user_set_strace_mode(const char *mode)
@@ -1057,6 +1061,12 @@ static void linux_frontend_forget(u32 task_id)
 	spin_unlock_irqrestore(&linux_frontend_lock, flags);
 }
 
+static void linux_frontend_task_died(u32 task_id, const char *task_name)
+{
+	(void)task_name;
+	linux_frontend_forget(task_id);
+}
+
 static u64 linux_register_current(struct ipc_port *linux,
 				  struct ipc_port *reply_port)
 {
@@ -1611,7 +1621,6 @@ static u64 linux_mprotect_current(u64 addr, u64 size, u64 linux_prot)
 static u64 linux_exit_current(struct ipc_port *linux, struct ipc_port *reply_port,
 			      u64 status)
 {
-	const u32 current_task = task_id(task_current());
 	struct ipc_message request = {
 		.protocol = USER_FOURCC_LINX,
 		.type = LINUX_MSG_EXIT_GROUP,
@@ -1627,7 +1636,6 @@ static u64 linux_exit_current(struct ipc_port *linux, struct ipc_port *reply_por
 	if (linux_forward_message(linux, reply_port, &request, &reply) == 0) {
 		ipc_message_release(&reply);
 	}
-	linux_frontend_forget(current_task);
 	console_printf("linux-riscv64: exit_group status=%u\n", (u32)status);
 	thread_exit();
 }

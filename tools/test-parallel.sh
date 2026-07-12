@@ -319,7 +319,7 @@ run_worker() {
 		attempt_ok=0
 
 		if [ "$harness" = boot ]; then
-			worker_esp=$ESP_DIR
+			worker_esp=${ESP_DIR:-}
 			case "$rootfs" in
 			alpine|alpine-squashfs) worker_esp=${ALPINE_ESP_DIR:-build/esp-alpine} ;;
 			synthetic) worker_esp=${ESP_DIR:-build/esp} ;;
@@ -438,9 +438,20 @@ while IFS='	' read -r name smp memory timeout_seconds cost clean_boot harness ro
 		continue
 	fi
 	echo "$name" >> "$run_dir/shards.txt"
+	if [ "$count" -gt 0 ] && [ "$((count + cost))" -gt "$jobs" ]; then
+		# shellcheck disable=SC2086
+		if ! wait_batch $pids; then
+			overall=1
+			if [ "$stop_on_fail" -eq 1 ]; then
+				stopped=1
+			fi
+		fi
+		pids=
+		count=0
+	fi
 	run_worker "$name" "$smp" "$memory" "$timeout_seconds" "$cost" "$clean_boot" "$harness" "$rootfs" "$boot_phase" "$marker_file" &
 	pids="$pids $!"
-	count=$((count + 1))
+	count=$((count + cost))
 	launched=$((launched + 1))
 
 	if [ "$count" -ge "$jobs" ]; then

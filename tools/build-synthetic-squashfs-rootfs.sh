@@ -76,7 +76,7 @@ install_file /bin/shebangbad modules/shebangbad.sh 0555
 install_file /bin/root-mount-soak modules/root-mount-soak.sh 0555
 install_file /lib/ld-musl-x86_64.so.1 "$musl_ldso" 0555
 
-for name in first alloctest ipcstress login lxtest getdentstest vforkstress \
+for name in first alloctest ipcstress login lxtest getdentstest vforkstress lifecycletest \
 	execok readbig mmapbig mmaphuge execbig phdrstress musl-hello dyn-hello \
 	fputest iovtest fchmodattest waitpgidtest execlongtest auxidtest \
 	pathmaxtest patherrtest statidtest fcntllocktest openrctest sysracetest \
