@@ -13,8 +13,9 @@ Problem:
 Idle-balancing invariants:
 
 - An idle CPU may pull only after its local run queue is empty.
-- A source CPU is stealable only when it has queued runnable user/batch work,
-  leaving server/kernel placement alone.
+- A source CPU is stealable only when it has at least two queued runnable
+  user/batch threads, leaving singleton interactive work and server/kernel
+  placement alone.
 - The destination CPU must be present in the candidate thread's affinity mask.
 - Each idle pass pulls at most one eligible thread from the busiest eligible
   source CPU.
