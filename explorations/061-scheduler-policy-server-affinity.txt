@@ -32,4 +32,4 @@ Verification:
 
 - [x] Focused scheduler-policy capability tests.
 - [x] `BUNIX_TEST_SET=scheduler-bench make test-parallel`
-- [ ] `make test`
+- [x] `make test`
