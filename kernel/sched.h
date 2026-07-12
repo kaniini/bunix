@@ -100,6 +100,8 @@ struct sched_stats {
 	u64 wakeups;
 	u64 preemptions;
 	u64 migrations;
+	u64 idle_pulls;
+	u64 idle_migrations;
 	u64 runtime_ticks;
 	u64 wait_ticks;
 	u64 max_wait_ticks;
@@ -110,6 +112,8 @@ struct sched_stats {
 	u64 cpu_wakeups[SCHED_STATS_CPUS];
 	u64 cpu_preemptions[SCHED_STATS_CPUS];
 	u64 cpu_migrations[SCHED_STATS_CPUS];
+	u64 cpu_idle_pulls[SCHED_STATS_CPUS];
+	u64 cpu_idle_migrations[SCHED_STATS_CPUS];
 	u64 cpu_runtime_ticks[SCHED_STATS_CPUS];
 	u64 cpu_wait_ticks[SCHED_STATS_CPUS];
 	u64 cpu_max_wait_ticks[SCHED_STATS_CPUS];

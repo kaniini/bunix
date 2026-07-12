@@ -306,7 +306,7 @@ require_supported_parts() {
 		case "$part" in
 		all|vfs|procfs|devfs|tmpfs|path|statfs|large-io|mount|\
 		smoke|login-smoke|relogin-session|exec-argv-pipe|procfs-cmdline|procfs-self-pipe|rootfs-vfs-proc-dev|rootfs-vfs-paths|procfs-sysfs-surface|devfs-console-surface|linux-signaltest|tty-foreground|tty-sigint-session|\
-		network-loopback-ping|scheduler-bench|privileged-native-denial|tmpfs-basic-linux-tests|path-limits-statfs|union-root-user|\
+		network-loopback-ping|scheduler-bench|scheduler-migration|privileged-native-denial|tmpfs-basic-linux-tests|path-limits-statfs|union-root-user|\
 		tmpfs-extended|large-io-mount|interactive-tty|root-login-union|\
 		root-tmpfs-chown|long-login|root-mount-soak)
 			;;
@@ -441,6 +441,12 @@ if part_selected scheduler-bench; then
 	run_scheduler_bench
 fi
 
+if part_selected scheduler-migration; then
+	begin_shard scheduler-migration
+	login_user_if_needed
+	run_scheduler_migration
+fi
+
 if part_selected privileged-native-denial; then
 	begin_shard privileged-native-denial
 	login_user_if_needed
@@ -561,6 +567,11 @@ fi
 if part_selected scheduler-bench; then
 	check_scheduler_bench
 	finish_shard scheduler-bench
+fi
+
+if part_selected scheduler-migration; then
+	check_scheduler_migration
+	finish_shard scheduler-migration
 fi
 
 if part_selected privileged-native-denial; then

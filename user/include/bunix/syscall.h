@@ -704,6 +704,8 @@ struct bunix_sched_stats {
 	u64 wakeups;
 	u64 preemptions;
 	u64 migrations;
+	u64 idle_pulls;
+	u64 idle_migrations;
 	u64 runtime_ticks;
 	u64 wait_ticks;
 	u64 max_wait_ticks;
@@ -714,6 +716,8 @@ struct bunix_sched_stats {
 	u64 cpu_wakeups[BUNIX_SCHED_STATS_CPUS];
 	u64 cpu_preemptions[BUNIX_SCHED_STATS_CPUS];
 	u64 cpu_migrations[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_idle_pulls[BUNIX_SCHED_STATS_CPUS];
+	u64 cpu_idle_migrations[BUNIX_SCHED_STATS_CPUS];
 	u64 cpu_runtime_ticks[BUNIX_SCHED_STATS_CPUS];
 	u64 cpu_wait_ticks[BUNIX_SCHED_STATS_CPUS];
 	u64 cpu_max_wait_ticks[BUNIX_SCHED_STATS_CPUS];

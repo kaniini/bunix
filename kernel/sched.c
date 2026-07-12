@@ -22,6 +22,7 @@ enum {
 	SCHED_BASE_WEIGHT = 1024,
 	SCHED_BASE_SLICE_TICKS = 5,
 	SCHED_WAKE_BONUS_MAX_TICKS = 20,
+	SCHED_IDLE_PULL_MIN_SOURCE_RUNQ = 2,
 	TASK_NAME_MAX = 64,
 };
 
@@ -473,6 +474,146 @@ static int runq_remove(struct run_queue *runq, struct thread *thread)
 	return 0;
 }
 
+static struct thread *runq_remove_first_eligible(struct run_queue *runq,
+						 u32 dst_cpu_id)
+{
+	struct thread **link;
+
+	if (runq == 0 || dst_cpu_id >= sched_cpu_count) {
+		return 0;
+	}
+
+	link = &runq->head;
+	while (*link != 0) {
+		struct thread *thread = *link;
+
+		if (thread->sched_class != SCHED_CLASS_USER &&
+		    thread->sched_class != SCHED_CLASS_BATCH) {
+			link = &thread->run_next;
+			continue;
+		}
+		if ((thread->affinity_mask & (1ull << dst_cpu_id)) == 0) {
+			link = &thread->run_next;
+			continue;
+		}
+
+		*link = thread->run_next;
+		if (runq->tail == thread) {
+			runq->tail = 0;
+			for (struct thread *scan = runq->head; scan != 0;
+			     scan = scan->run_next) {
+				runq->tail = scan;
+			}
+		}
+		thread->run_next = 0;
+		if (runq->count > 0) {
+			runq->count--;
+		}
+		return thread;
+	}
+	return 0;
+}
+
+static struct thread *sched_idle_pull(struct cpu_sched *dst)
+{
+	u32 best_cpu = MAX_CPUS;
+	u32 best_load = 0;
+	struct thread *thread = 0;
+
+	if (dst == 0 || sched_cpu_count < 2) {
+		return 0;
+	}
+
+	for (u32 cpu_id = 0; cpu_id < sched_cpu_count; cpu_id++) {
+		struct cpu_sched *src = &cpus[cpu_id];
+		u32 load;
+		u32 has_eligible = 0;
+
+		if (src == dst) {
+			continue;
+		}
+
+		const u64 flags = spin_lock_irqsave(&src->runq.lock);
+		load = src->runq.count;
+		if (load >= SCHED_IDLE_PULL_MIN_SOURCE_RUNQ) {
+			for (struct thread *scan = src->runq.head; scan != 0;
+			     scan = scan->run_next) {
+				if ((scan->sched_class == SCHED_CLASS_USER ||
+				     scan->sched_class == SCHED_CLASS_BATCH) &&
+				    (scan->affinity_mask & (1ull << dst->id)) != 0) {
+					has_eligible = 1;
+					break;
+				}
+			}
+		}
+		spin_unlock_irqrestore(&src->runq.lock, flags);
+
+		if (has_eligible && load > best_load) {
+			best_cpu = cpu_id;
+			best_load = load;
+		}
+	}
+
+	if (best_cpu >= sched_cpu_count) {
+		return 0;
+	}
+
+	struct cpu_sched *src = &cpus[best_cpu];
+	const u64 src_flags = spin_lock_irqsave(&src->runq.lock);
+	if (src->runq.count >= SCHED_IDLE_PULL_MIN_SOURCE_RUNQ) {
+		thread = runq_remove_first_eligible(&src->runq, dst->id);
+	}
+	spin_unlock_irqrestore(&src->runq.lock, src_flags);
+
+	if (thread == 0) {
+		return 0;
+	}
+
+	const u64 dst_flags = spin_lock_irqsave(&dst->runq.lock);
+	if (thread->vruntime < dst->runq.min_vruntime) {
+		thread->vruntime = dst->runq.min_vruntime;
+		sched_refresh_deadline(thread);
+	}
+	dst->runq.idle = 0;
+	thread->cpu_id = dst->id;
+	spin_unlock_irqrestore(&dst->runq.lock, dst_flags);
+
+	thread->migrations++;
+	sched_stats_add_cpu(&sched_counters.migrations,
+			    sched_counters.cpu_migrations, dst->id, 1);
+	sched_stats_add_cpu(&sched_counters.idle_pulls,
+			    sched_counters.cpu_idle_pulls, dst->id, 1);
+	sched_stats_add_cpu(&sched_counters.idle_migrations,
+			    sched_counters.cpu_idle_migrations, dst->id, 1);
+	console_printf("sched: idle-pull tid=%u from=%u to=%u vruntime=%u deadline=%u\n",
+		       thread->tid, best_cpu, dst->id, (u32)thread->vruntime,
+		       (u32)thread->virtual_deadline);
+	return thread;
+}
+
+static void sched_kick_idle_pullers(struct cpu_sched *src)
+{
+	if (src == 0 || sched_cpu_count < 2) {
+		return;
+	}
+
+	for (u32 cpu_id = 0; cpu_id < sched_cpu_count; cpu_id++) {
+		struct cpu_sched *dst = &cpus[cpu_id];
+
+		if (dst == src) {
+			continue;
+		}
+
+		const u64 flags = spin_lock_irqsave(&dst->runq.lock);
+		const u32 idle = dst->runq.idle;
+		spin_unlock_irqrestore(&dst->runq.lock, flags);
+
+		if (idle) {
+			arch_smp_send_scheduler_ipi(dst->id);
+		}
+	}
+}
+
 static void sched_enqueue_on_reason(struct cpu_sched *cpu, struct thread *thread,
 				    int wakeup)
 {
@@ -485,6 +626,7 @@ static void sched_enqueue_on_reason(struct cpu_sched *cpu, struct thread *thread
 	const u32 was_idle = cpu->runq.idle;
 	const u32 old_cpu = thread->cpu_id;
 	const enum thread_state old_state = thread->state;
+	u32 kick_idle_pullers = 0;
 
 	thread->cpu_id = cpu->id;
 	thread->state = THREAD_READY;
@@ -503,6 +645,11 @@ static void sched_enqueue_on_reason(struct cpu_sched *cpu, struct thread *thread
 	}
 	cpu->runq.idle = 0;
 	runq_push(&cpu->runq, thread);
+	if ((thread->sched_class == SCHED_CLASS_USER ||
+	     thread->sched_class == SCHED_CLASS_BATCH) &&
+	    cpu->runq.count >= SCHED_IDLE_PULL_MIN_SOURCE_RUNQ) {
+		kick_idle_pullers = 1;
+	}
 	console_printf("sched: enqueue tid=%u cpu=%u runq=%u vruntime=%u deadline=%u\n",
 		       thread->tid, cpu->id, cpu->runq.count,
 		       (u32)thread->vruntime, (u32)thread->virtual_deadline);
@@ -510,6 +657,9 @@ static void sched_enqueue_on_reason(struct cpu_sched *cpu, struct thread *thread
 
 	if (remote && was_idle) {
 		arch_smp_send_scheduler_ipi(cpu->id);
+	}
+	if (kick_idle_pullers) {
+		sched_kick_idle_pullers(cpu);
 	}
 }
 
@@ -2428,9 +2578,13 @@ void sched_run(void)
 
 		if (next == 0) {
 			spin_unlock_irqrestore(&cpu->runq.lock, flags);
-			return;
+			next = sched_idle_pull(cpu);
+			if (next == 0) {
+				return;
+			}
+		} else {
+			spin_unlock_irqrestore(&cpu->runq.lock, flags);
 		}
-		spin_unlock_irqrestore(&cpu->runq.lock, flags);
 
 		struct thread *prev = cpu->current;
 		if (thread_task_is_killing(next)) {

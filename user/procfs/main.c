@@ -1414,6 +1414,12 @@ static u64 build_sched(void)
 	append_str(&len, "migrations ");
 	append_u64(&len, stats.migrations);
 	append_char(&len, '\n');
+	append_str(&len, "idle_pulls ");
+	append_u64(&len, stats.idle_pulls);
+	append_char(&len, '\n');
+	append_str(&len, "idle_migrations ");
+	append_u64(&len, stats.idle_migrations);
+	append_char(&len, '\n');
 	append_str(&len, "runtime_ticks ");
 	append_u64(&len, stats.runtime_ticks);
 	append_char(&len, '\n');
@@ -1436,6 +1442,8 @@ static u64 build_sched(void)
 		    stats.cpu_wakeups[cpu] == 0 &&
 		    stats.cpu_preemptions[cpu] == 0 &&
 		    stats.cpu_migrations[cpu] == 0 &&
+		    stats.cpu_idle_pulls[cpu] == 0 &&
+		    stats.cpu_idle_migrations[cpu] == 0 &&
 		    stats.cpu_runtime_ticks[cpu] == 0 &&
 		    stats.cpu_wait_ticks[cpu] == 0 &&
 		    stats.cpu_max_wait_ticks[cpu] == 0 &&
@@ -1458,6 +1466,10 @@ static u64 build_sched(void)
 		append_u64(&len, stats.cpu_preemptions[cpu]);
 		append_str(&len, " migrations ");
 		append_u64(&len, stats.cpu_migrations[cpu]);
+		append_str(&len, " idle_pulls ");
+		append_u64(&len, stats.cpu_idle_pulls[cpu]);
+		append_str(&len, " idle_migrations ");
+		append_u64(&len, stats.cpu_idle_migrations[cpu]);
 		append_str(&len, " runtime_ticks ");
 		append_u64(&len, stats.cpu_runtime_ticks[cpu]);
 		append_str(&len, " wait_ticks ");

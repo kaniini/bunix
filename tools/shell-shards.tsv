@@ -8,6 +8,7 @@ procfs-cmdline	user	2	128M	120	1	no	Live non-self procfs cmdline/status coverage
 procfs-self-pipe	user	2	128M	600	8	no	Repeated piped reads of /proc/self/stat, /proc/self/cmdline, and busybox ps.
 network-loopback-ping	user	2	128M	120	1	no	BusyBox IPv4 and IPv6 loopback ping through Linux raw ICMP sockets and NET0.
 scheduler-bench	user	2	128M	120	1	no	Focused scheduler fairness benchmark with equal CPU-bound workers and scheduler counter checks.
+scheduler-migration	user	4	128M	120	1	no	SMP idle-pull migration benchmark with scheduler idle migration counters and deadline preservation checks.
 privileged-native-denial	user	2	128M	90	1	no	Unprivileged Linux callers must not be able to power off or mint PCI hardware handles.
 rootfs-vfs-paths	user	2	128M	300	2	no	Rootfs stat/list/readlink, long paths, cwd/dotdot/slash resolution, and procfs translator survival after VFS path tests.
 procfs-sysfs-surface	user	2	128M	420	2	no	Procfs process/stat/ipc/scheduler/mount surfaces, sysfs CPU/TTY surfaces, dmesg prefixes, and writable runtime tmpfs mounts.

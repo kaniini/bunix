@@ -10,25 +10,40 @@ Problem:
 - SMP migration tests should only be added once migration is an explicit
   scheduler policy rather than an accidental side effect of task placement.
 
+Idle-balancing invariants:
+
+- An idle CPU may pull only after its local run queue is empty.
+- A source CPU is stealable only when it has at least two queued runnable
+  user/batch threads, leaving singleton interactive work and server/kernel
+  placement alone.
+- The destination CPU must be present in the candidate thread's affinity mask.
+- Each idle pass pulls at most one eligible thread from the busiest eligible
+  source CPU.
+- Migration preserves the thread's virtual runtime/deadline state except that
+  virtual runtime is clamped up to the destination run queue minimum before the
+  deadline is refreshed, avoiding unfair credit from moving to another CPU.
+- Enqueue only kicks idle pullers when queued user/batch work reaches the same
+  bounded source threshold.
+
 Tasks:
 
-- [ ] Define idle-balancing invariants: when an idle CPU may pull work, which
+- [x] Define idle-balancing invariants: when an idle CPU may pull work, which
       source CPU can be stolen from, and how virtual runtime/deadline state is
       preserved.
-- [ ] Implement a bounded idle-pull path that avoids eager load chasing and
+- [x] Implement a bounded idle-pull path that avoids eager load chasing and
       preserves interactivity.
-- [ ] Count policy-driven migrations separately enough that tests can
+- [x] Count policy-driven migrations separately enough that tests can
       distinguish idle balancing from initial placement.
-- [ ] Extend `/proc/sched` and `/proc/sched_threads` if additional migration
+- [x] Extend `/proc/sched` and `/proc/sched_threads` if additional migration
       reason counters are needed for stable tests.
-- [ ] Add scheduler benchmarks that create a temporary imbalance, prove an
+- [x] Add scheduler benchmarks that create a temporary imbalance, prove an
       idle CPU pulls work, prove migrations are counted, and prove virtual
       runtime/deadline state remains bounded after migration.
-- [ ] Verify idle balancing does not regress the fairness, starvation, IPC, or
+- [x] Verify idle balancing does not regress the fairness, starvation, IPC, or
       shell-latency modes from `schedbench`.
 
 Verification:
 
-- [ ] `BUNIX_TEST_SET=scheduler-bench make test-parallel`
-- [ ] SMP-specific migration benchmark target.
+- [x] `BUNIX_TEST_SET=scheduler-bench make test-parallel`
+- [x] SMP-specific migration benchmark target.
 - [ ] `make test`
