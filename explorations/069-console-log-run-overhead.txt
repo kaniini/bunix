@@ -37,3 +37,27 @@ Tasks:
 - [ ] Add a regression or smoke check that default run logs do not contain
       repeated high-volume diagnostic prefixes before login.
 - [ ] Re-profile `make run` and record the latency/output delta.
+
+Baseline from exploration 068:
+
+- Default Alpine networking profile
+  `build/run-profile/20260712T232619Z-17014`:
+  - Serial output before poweroff: 357 lines, 17620 bytes.
+  - Top prefixes: `kernel` 84, `names` 82, `vm-server` 35, `bootstrap` 14,
+    `vfs` 13, `pci` 8, `netcfg` 8, `virtio-net` 7, `virtio-bus` 6.
+  - Login prompt appeared at 40126 ms, while `bootstrap: linux init exec`
+    appeared at 7071 ms.
+- Synthetic comparison profile
+  `build/run-profile/20260712T232231Z-14525`:
+  - Serial output before poweroff: 420 lines, 22293 bytes.
+  - Top prefixes: `names` 93, `kernel` 83, `user-syscall` 52, `vm-server` 33,
+    `sched` 20.
+- First read:
+  - Console/log volume is real and should be reduced, especially routine
+    `kernel`, `names`, `vm-server`, and `user-syscall` chatter.
+  - The largest default `make run` latency gap is not explained by serial byte
+    volume alone: the repeated profile showed a roughly 33s gap between Linux
+    init handoff and login prompt with only 17 KB of serial output.  This
+    exploration should still clean log overhead, while exploration 070 should
+    treat OpenRC/login/networking startup as the primary boot critical-path
+    suspect.

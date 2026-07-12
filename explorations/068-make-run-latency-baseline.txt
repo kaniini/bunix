@@ -35,9 +35,9 @@ Tasks:
 - [ ] Measure console output volume by prefix and log level during the slow
       path, including `user-syscall:`, scheduler, IPC, VFS, Linux, OpenRC, and
       networking logs.
-- [ ] Record whether stale build artifacts, FAT ESP writes, or full-test
+- [x] Record whether stale build artifacts, FAT ESP writes, or full-test
       leftovers materially affect `make run`.
-- [ ] Update the next performance exploration with the measured top offenders.
+- [x] Update the next performance exploration with the measured top offenders.
 
 Progress:
 
@@ -99,3 +99,23 @@ Progress:
   - Total through poweroff: 44092 ms
   - This confirms the main slow interval is still the approximately 34s gap
     between Linux init handoff and the login prompt.
+- Repeated `make run-profile` without source changes after the full test and
+  prior profile runs:
+  - Run: `build/run-profile/20260712T232619Z-17014`
+  - Rootfs target was up to date; rootfs phase completed at 19 ms.
+  - ESP phase completed at 44 ms.
+  - Runtime ESP copy and QEMU start completed at 55 ms.
+  - Kernel start: 1058 ms
+  - `bootstrap: linux init exec`: 7071 ms
+  - Login prompt: 40126 ms
+  - Root shell: 41130 ms
+  - First command: 42132 ms
+  - Total through poweroff: 43638 ms
+  - Conclusion: stale build outputs, FAT ESP staging, and full-test leftovers
+    are not material contributors to the repeated `make run` latency.  The
+    recurring slow interval is still the guest-side handoff from Linux init to
+    login.
+- Updated `069-console-log-run-overhead.txt` with measured serial prefix
+  counts and the key interpretation: log noise should still be reduced, but
+  the largest default-run delay is probably in the OpenRC/login/networking
+  critical path rather than serial byte volume alone.
