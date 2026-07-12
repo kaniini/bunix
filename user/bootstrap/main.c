@@ -3739,6 +3739,7 @@ int main(void)
 	u64 console;
 	u64 vm;
 	u64 time = 0;
+	u64 sched = 0;
 	u64 proc = 0;
 	u64 proc_mgmt = 0;
 	u64 linux = 0;
@@ -3787,6 +3788,19 @@ int main(void)
 	time = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_TIME,
 					 BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	if (time == 0) {
+		return 1;
+	}
+	const struct bunix_launch_cap sched_caps[] = {
+		{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
+		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
+	};
+
+	launch_claimed_module("sched", BUNIX_NAMES_ROOT, BUNIX_SERVICE_SCHED,
+			      sched_caps,
+			      sizeof(sched_caps) / sizeof(sched_caps[0]));
+	sched = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_SCHED,
+					  BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
+	if (sched == 0) {
 		return 1;
 	}
 	const struct bunix_launch_cap user_caps[] = {

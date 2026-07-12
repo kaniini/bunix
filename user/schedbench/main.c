@@ -6,16 +6,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <bunix/syscall.h>
 
 enum {
 	WORKERS = 4,
 	CPU_WORKERS = 4,
 	SLEEPER_WORKERS = 2,
 	STARVATION_WORKERS = CPU_WORKERS + SLEEPER_WORKERS,
-	PROC_SCHED_BUF = 4096,
+	PROC_SCHED_BUF = 65536,
 	BENCH_DURATION_NS = 750000000,
 	SHELL_BENCH_DURATION_NS = 1500000000,
 	SLEEP_INTERVAL_NS = 1000000,
@@ -249,6 +251,142 @@ static int read_proc_sched_threads(void)
 		fprintf(stderr, "schedbench bad /proc/sched_threads header\n");
 		return -1;
 	}
+	return 0;
+}
+
+static int parse_sched_thread_line(const char *line, unsigned long task_id,
+				   unsigned long *cpu_out,
+				   unsigned long *affinity_out)
+{
+	unsigned long task;
+	unsigned long tid;
+	unsigned long state;
+	unsigned long cpu;
+	unsigned long sched_class;
+	unsigned long priority;
+	unsigned long weight;
+	unsigned long runtime;
+	unsigned long wakeups;
+	unsigned long migrations;
+	unsigned long preemptions;
+	unsigned long vruntime;
+	unsigned long deadline;
+	unsigned long runnable_wait;
+	unsigned long wake_pending;
+	unsigned long affinity;
+	int consumed = 0;
+
+	if (sscanf(line,
+		   "%lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %n",
+		   &task, &tid, &state, &cpu, &sched_class, &priority, &weight,
+		   &runtime, &wakeups, &migrations, &preemptions, &vruntime,
+		   &deadline, &runnable_wait, &wake_pending, &affinity,
+		   &consumed) != 16 ||
+	    consumed <= 0 || task != task_id) {
+		return -1;
+	}
+	*cpu_out = cpu;
+	*affinity_out = affinity;
+	return 0;
+}
+
+static int find_sched_thread(unsigned long task_id, unsigned long *cpu_out,
+			     unsigned long *affinity_out)
+{
+	char buf[PROC_SCHED_BUF];
+	char *line;
+	int fd = open("/proc/sched_threads", O_RDONLY);
+	ssize_t nread;
+
+	if (fd < 0) {
+		perror("schedbench affinity open /proc/sched_threads");
+		return -1;
+	}
+	nread = read(fd, buf, sizeof(buf) - 1);
+	if (close(fd) != 0) {
+		perror("schedbench affinity close /proc/sched_threads");
+		return -1;
+	}
+	if (nread <= 0) {
+		fprintf(stderr, "schedbench affinity empty sched_threads\n");
+		return -1;
+	}
+	buf[nread] = '\0';
+	line = strchr(buf, '\n');
+	while (line != NULL && line[1] != '\0') {
+		line++;
+		if (parse_sched_thread_line(line, task_id, cpu_out,
+					    affinity_out) == 0) {
+			return 0;
+		}
+		line = strchr(line, '\n');
+	}
+	fprintf(stderr, "schedbench affinity missing task=%lu\n", task_id);
+	return -1;
+}
+
+static int run_affinity(void)
+{
+	const unsigned long task_id = (unsigned long)bunix_task_id(0);
+	unsigned long mask = 1;
+	unsigned long got = 0;
+	unsigned long cpu = 0;
+	unsigned long proc_mask = 0;
+	struct bunix_sched_policy_state denied = {
+		.target_kind = BUNIX_SCHED_TARGET_TASK,
+		.target_id = task_id,
+		.sched_class = BUNIX_SCHED_CLASS_USER,
+		.priority = 1,
+		.weight = 1024,
+		.cpu_mask = 1,
+	};
+
+	if (task_id == 0 || task_id == (unsigned long)-1) {
+		fprintf(stderr, "schedbench affinity no bunix task id\n");
+		return 1;
+	}
+	if (bunix_sched_policy_set(0, &denied) == 0) {
+		fprintf(stderr,
+			"schedbench affinity native set without cap accepted\n");
+		return 1;
+	}
+	if (syscall(SYS_sched_setaffinity, 0, sizeof(mask), &mask) != 0) {
+		perror("schedbench affinity set");
+		return 1;
+	}
+	if (syscall(SYS_sched_getaffinity, 0, sizeof(got), &got) !=
+	    (long)sizeof(got)) {
+		perror("schedbench affinity get");
+		return 1;
+	}
+	if (got != mask) {
+		fprintf(stderr, "schedbench affinity got mask=%lu expected=%lu\n",
+			got, mask);
+		return 1;
+	}
+	mask = 0;
+	if (syscall(SYS_sched_setaffinity, 0, sizeof(mask), &mask) == 0 ||
+	    errno != EINVAL) {
+		fprintf(stderr,
+			"schedbench affinity invalid zero mask accepted errno=%d\n",
+			errno);
+		return 1;
+	}
+	mask = 1;
+	for (int i = 0; i < 16; i++) {
+		sched_yield();
+	}
+	if (find_sched_thread(task_id, &cpu, &proc_mask) != 0) {
+		return 1;
+	}
+	if ((mask & (1ul << cpu)) == 0 || proc_mask != mask) {
+		fprintf(stderr,
+			"schedbench affinity bad proc cpu=%lu mask=%lu expected=%lu\n",
+			cpu, proc_mask, mask);
+		return 1;
+	}
+	printf("schedbench affinity task=%lu cpu=%lu mask=%lu ok\n",
+	       task_id, cpu, proc_mask);
 	return 0;
 }
 
@@ -866,6 +1004,11 @@ int main(int argc, char **argv)
 	if (strcmp(argv[1], "shell") == 0) {
 		return run_shell_latency();
 	}
-	fprintf(stderr, "usage: %s [fairness|starvation|ipc|shell]\n", argv[0]);
+	if (strcmp(argv[1], "affinity") == 0) {
+		return run_affinity();
+	}
+	fprintf(stderr,
+		"usage: %s [fairness|starvation|ipc|shell|affinity]\n",
+		argv[0]);
 	return 2;
 }

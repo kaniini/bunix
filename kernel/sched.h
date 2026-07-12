@@ -22,9 +22,18 @@ enum sched_class {
 };
 
 enum sched_policy_rights {
-	SCHED_POLICY_RIGHT_CLASS = 1 << 0,
-	SCHED_POLICY_RIGHT_PRIORITY = 1 << 1,
-	SCHED_POLICY_RIGHT_WEIGHT = 1 << 2,
+	SCHED_POLICY_RIGHT_OBSERVE = 1 << 0,
+	SCHED_POLICY_RIGHT_CLASS = 1 << 1,
+	SCHED_POLICY_RIGHT_PRIORITY = 1 << 2,
+	SCHED_POLICY_RIGHT_WEIGHT = 1 << 3,
+	SCHED_POLICY_RIGHT_AFFINITY = 1 << 4,
+	SCHED_POLICY_RIGHT_DELEGATE = 1 << 5,
+};
+
+enum sched_policy_target_kind {
+	SCHED_POLICY_TARGET_TASK = 1,
+	SCHED_POLICY_TARGET_THREAD = 2,
+	SCHED_POLICY_TARGET_SYSTEM = 5,
 };
 
 struct task;
@@ -40,6 +49,7 @@ enum task_cap_type {
 	TASK_CAP_BUFFER,
 	TASK_CAP_TASK,
 	TASK_CAP_HW_RESOURCE,
+	TASK_CAP_SCHED_POLICY,
 };
 
 enum task_handle_rights {
@@ -125,8 +135,33 @@ struct sched_thread_info {
 	u64 virtual_deadline;
 	u64 runnable_wait_ticks;
 	u64 wake_to_run_pending_ticks;
+	u64 affinity_mask;
 	u64 task_name_words[2];
 	u64 thread_name_words[2];
+};
+
+struct sched_policy_cap {
+	u32 ref_count;
+	u32 target_kind;
+	u32 rights;
+	u32 delegation_depth;
+	u64 target_id;
+	u64 class_mask;
+	u32 min_priority;
+	u32 max_priority;
+	u32 min_weight;
+	u32 max_weight;
+	u64 cpu_mask;
+};
+
+struct sched_policy_state {
+	u64 target_kind;
+	u64 target_id;
+	u64 sched_class;
+	u64 priority;
+	u64 weight;
+	u64 cpu_mask;
+	u64 online_cpu_mask;
 };
 
 enum task_vm_region_kind {
@@ -189,6 +224,22 @@ void task_set_ipc_affinity(struct task *task, u32 cpu_id);
 void task_set_sched_policy(struct task *task, enum sched_class sched_class,
 			   u32 priority, u32 rights);
 void task_inherit_sched_policy(struct task *dst, const struct task *src);
+u64 sched_online_cpu_mask(void);
+struct sched_policy_cap *sched_policy_cap_create_system(void);
+int sched_policy_cap_retain(const struct sched_policy_cap *cap);
+void sched_policy_cap_release(const struct sched_policy_cap *cap);
+u64 task_grant_sched_policy(struct task *task,
+			    const struct sched_policy_cap *policy,
+			    u32 rights);
+const struct sched_policy_cap *task_sched_policy_from_handle(
+	struct task *task, u64 handle, u32 rights);
+u64 sched_policy_grant(struct task *owner, u64 authority_handle,
+		       struct task *target_task,
+		       const struct sched_policy_cap *requested);
+int sched_policy_get(struct task *owner, u64 authority_handle,
+		     struct sched_policy_state *state);
+int sched_policy_set(struct task *owner, u64 authority_handle,
+		     const struct sched_policy_state *state);
 struct thread *thread_create(struct task *task, const char *name,
 			     thread_entry_t entry, void *arg);
 struct thread *thread_create_on_cpu(struct task *task, const char *name,

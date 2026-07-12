@@ -1482,7 +1482,7 @@ static u64 build_sched_threads(void)
 {
 	u64 len = 0;
 
-	append_str(&len, "task tid state cpu class priority weight runtime wakeups migrations preemptions vruntime deadline runnable_wait wake_pending task_name thread_name\n");
+	append_str(&len, "task tid state cpu class priority weight runtime wakeups migrations preemptions vruntime deadline runnable_wait wake_pending affinity task_name thread_name\n");
 	for (u64 index = 0;; index++) {
 		struct bunix_sched_thread_info info;
 
@@ -1518,6 +1518,8 @@ static u64 build_sched_threads(void)
 		append_u64(&len, info.runnable_wait_ticks);
 		append_char(&len, ' ');
 		append_u64(&len, info.wake_to_run_pending_ticks);
+		append_char(&len, ' ');
+		append_u64(&len, info.affinity_mask);
 		append_char(&len, ' ');
 		append_task_name(&len, info.task_name_words);
 		append_char(&len, ' ');

@@ -19,6 +19,7 @@ static const struct server boot_servers[] = {
 	{ "consoled", 0 },
 	{ "bootstrap", 0 },
 	{ "time", 0 },
+	{ "sched", 0 },
 	{ "user", 0 },
 	{ "linux", 0 },
 	{ "proc", 0 },
@@ -85,6 +86,7 @@ enum {
 	SERVER_CAP_PCFG = SERVER_FOURCC('P', 'C', 'F', 'G'),
 	SERVER_CAP_PAUT = SERVER_FOURCC('P', 'A', 'U', 'T'),
 	SERVER_CAP_COM1 = SERVER_FOURCC('C', 'O', 'M', '1'),
+	SERVER_CAP_SCHD = SERVER_FOURCC('S', 'C', 'H', 'D'),
 };
 
 struct task_start {
@@ -473,6 +475,19 @@ static void grant_bootstrap_caps(struct task *task, const char *server_name)
 
 		(void)task_set_handle_tag(task, config, SERVER_CAP_PCFG);
 		(void)task_set_handle_tag(task, authority, SERVER_CAP_PAUT);
+		return;
+	}
+
+	if (str_eq(server_name, "sched")) {
+		struct sched_policy_cap *authority =
+			sched_policy_cap_create_system();
+		const u64 policy =
+			task_grant_sched_policy(task, authority,
+						TASK_RIGHT_SEND |
+						TASK_RIGHT_DUP);
+
+		sched_policy_cap_release(authority);
+		(void)task_set_handle_tag(task, policy, SERVER_CAP_SCHD);
 		return;
 	}
 

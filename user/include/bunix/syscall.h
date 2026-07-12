@@ -64,6 +64,9 @@ enum {
 	BUNIX_SYSCALL_HANDLE_FIND = -112,
 	BUNIX_SYSCALL_TASK_GRANT_TAGGED = -114,
 	BUNIX_SYSCALL_TASK_HANDLE_FIND = -116,
+	BUNIX_SYSCALL_SCHED_POLICY_GRANT = -118,
+	BUNIX_SYSCALL_SCHED_POLICY_GET = -120,
+	BUNIX_SYSCALL_SCHED_POLICY_SET = -122,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_SCHED_STATS_CPUS = 8,
@@ -97,6 +100,7 @@ enum {
 	BUNIX_PROTO_NETCFG = ('N') | ('E' << 8) | ('T' << 16) | ('C' << 24),
 	BUNIX_PROTO_EXT2 = ('E') | ('X' << 8) | ('T' << 16) | ('2' << 24),
 	BUNIX_PROTO_SQUASHFS = ('S') | ('Q' << 8) | ('F' << 16) | ('S' << 24),
+	BUNIX_PROTO_SCHED = ('S') | ('C' << 8) | ('H' << 16) | ('D' << 24),
 	BUNIX_PROCFS_MOUNT_NOTIFY = 1,
 	BUNIX_PROCFS_MOUNT_PATH = 2,
 	BUNIX_PROCFS_UNMOUNT_NOTIFY = 3,
@@ -318,6 +322,25 @@ enum {
 	BUNIX_PROC_EXEC_REPLACE_TASK = 16,
 	BUNIX_PROC_EXEC_REPLACE_BUFFER = 17,
 	BUNIX_PROC_INFO_BY_LINUX_PID = 18,
+	BUNIX_SCHED_INFO = 1,
+	BUNIX_SCHED_GRANT = 2,
+	BUNIX_SCHED_GETP = 3,
+	BUNIX_SCHED_SETP = 4,
+	BUNIX_SCHED_STAT = 5,
+	BUNIX_SCHED_TARGET_TASK = 1,
+	BUNIX_SCHED_TARGET_THREAD = 2,
+	BUNIX_SCHED_TARGET_SYSTEM = 5,
+	BUNIX_SCHED_RIGHT_OBSERVE = 1 << 0,
+	BUNIX_SCHED_RIGHT_CLASS = 1 << 1,
+	BUNIX_SCHED_RIGHT_PRIORITY = 1 << 2,
+	BUNIX_SCHED_RIGHT_WEIGHT = 1 << 3,
+	BUNIX_SCHED_RIGHT_AFFINITY = 1 << 4,
+	BUNIX_SCHED_RIGHT_DELEGATE = 1 << 5,
+	BUNIX_SCHED_CLASS_KERNEL = 1,
+	BUNIX_SCHED_CLASS_SERVER = 2,
+	BUNIX_SCHED_CLASS_USER = 3,
+	BUNIX_SCHED_CLASS_BATCH = 4,
+	BUNIX_SCHED_CLASS_IDLE = 5,
 	BUNIX_SERVICE_CONSOLE = BUNIX_PROTO_CONSOLE,
 	BUNIX_SERVICE_VM = BUNIX_PROTO_VM,
 	BUNIX_SERVICE_TIME = BUNIX_PROTO_TIME,
@@ -341,6 +364,7 @@ enum {
 	BUNIX_SERVICE_NETCFG = BUNIX_PROTO_NETCFG,
 	BUNIX_SERVICE_EXT2 = BUNIX_PROTO_EXT2,
 	BUNIX_SERVICE_SQUASHFS = BUNIX_PROTO_SQUASHFS,
+	BUNIX_SERVICE_SCHED = BUNIX_PROTO_SCHED,
 	BUNIX_NET_INTERFACE_COUNT = 1,
 	BUNIX_NET_INTERFACE_INFO = 2,
 	BUNIX_NET_LOOPBACK_SEND = 3,
@@ -652,6 +676,7 @@ enum {
 	BUNIX_CAP_LNXM = BUNIX_FOURCC('L', 'N', 'X', 'M'),
 	BUNIX_CAP_VADM = BUNIX_FOURCC('V', 'A', 'D', 'M'),
 	BUNIX_CAP_VSUB = BUNIX_FOURCC('V', 'S', 'U', 'B'),
+	BUNIX_CAP_SCHD = BUNIX_FOURCC('S', 'C', 'H', 'D'),
 };
 
 struct bunix_ipc_stats {
@@ -714,8 +739,32 @@ struct bunix_sched_thread_info {
 	u64 virtual_deadline;
 	u64 runnable_wait_ticks;
 	u64 wake_to_run_pending_ticks;
+	u64 affinity_mask;
 	u64 task_name_words[2];
 	u64 thread_name_words[2];
+};
+
+struct bunix_sched_policy {
+	u64 target_kind;
+	u64 target_id;
+	u64 rights;
+	u64 class_mask;
+	u64 min_priority;
+	u64 max_priority;
+	u64 min_weight;
+	u64 max_weight;
+	u64 cpu_mask;
+	u64 delegation_depth;
+};
+
+struct bunix_sched_policy_state {
+	u64 target_kind;
+	u64 target_id;
+	u64 sched_class;
+	u64 priority;
+	u64 weight;
+	u64 cpu_mask;
+	u64 online_cpu_mask;
 };
 
 struct bunix_vm_stats {
@@ -1407,6 +1456,27 @@ static inline long bunix_sched_thread_info(u64 index,
 {
 	return bunix_syscall2(BUNIX_SYSCALL_SCHED_THREAD_INFO, index,
 			      (u64)info);
+}
+
+static inline long bunix_sched_policy_grant(
+	u64 authority, u64 task, const struct bunix_sched_policy *policy)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_SCHED_POLICY_GRANT,
+			      authority, task, (u64)policy);
+}
+
+static inline long bunix_sched_policy_get(
+	u64 authority, struct bunix_sched_policy_state *state)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_SCHED_POLICY_GET, authority,
+			      (u64)state);
+}
+
+static inline long bunix_sched_policy_set(
+	u64 authority, const struct bunix_sched_policy_state *state)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_SCHED_POLICY_SET, authority,
+			      (u64)state);
 }
 
 static inline long bunix_vm_stats(struct bunix_vm_stats *stats)

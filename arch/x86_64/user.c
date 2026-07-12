@@ -90,6 +90,9 @@ enum {
 	SYSCALL_HANDLE_FIND = -112,
 	SYSCALL_TASK_GRANT_TAGGED = -114,
 	SYSCALL_TASK_HANDLE_FIND = -116,
+	SYSCALL_SCHED_POLICY_GRANT = -118,
+	SYSCALL_SCHED_POLICY_GET = -120,
+	SYSCALL_SCHED_POLICY_SET = -122,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -175,6 +178,14 @@ enum {
 	LINUX_SYSCALL_MKNOD = 133,
 	LINUX_SYSCALL_STATFS = 137,
 	LINUX_SYSCALL_FSTATFS = 138,
+	LINUX_SYSCALL_GETPRIORITY = 140,
+	LINUX_SYSCALL_SETPRIORITY = 141,
+	LINUX_SYSCALL_SCHED_SETPARAM = 142,
+	LINUX_SYSCALL_SCHED_GETPARAM = 143,
+	LINUX_SYSCALL_SCHED_SETSCHEDULER = 144,
+	LINUX_SYSCALL_SCHED_GETSCHEDULER = 145,
+	LINUX_SYSCALL_SCHED_GET_PRIORITY_MAX = 146,
+	LINUX_SYSCALL_SCHED_GET_PRIORITY_MIN = 147,
 	LINUX_SYSCALL_GETGROUPS = 115,
 	LINUX_SYSCALL_SETGROUPS = 116,
 	LINUX_SYSCALL_SETRESUID = 117,
@@ -186,6 +197,8 @@ enum {
 	LINUX_SYSCALL_REBOOT = 169,
 	LINUX_SYSCALL_TIME = 201,
 	LINUX_SYSCALL_FUTEX = 202,
+	LINUX_SYSCALL_SCHED_SETAFFINITY = 203,
+	LINUX_SYSCALL_SCHED_GETAFFINITY = 204,
 	LINUX_SYSCALL_SET_TID_ADDRESS = 218,
 	LINUX_SYSCALL_CLOCK_GETTIME = 228,
 	LINUX_SYSCALL_CLOCK_NANOSLEEP = 230,
@@ -225,7 +238,9 @@ enum {
 	LINUX_RPC_SIGNAL_PENDING = 1007,
 	LINUX_RPC_SIGNAL_DEQUEUE = 1008,
 	LINUX_CLONE_VFORK = 0x00004000,
+	LINUX_EPERM = 1,
 	LINUX_ENOENT = 2,
+	LINUX_ESRCH = 3,
 	LINUX_EINTR = 4,
 	LINUX_EIO = 5,
 	LINUX_E2BIG = 7,
@@ -350,6 +365,7 @@ enum {
 	LINUX_RPC_EXEC_PROCESS = 1002,
 	LINUX_RPC_EXEC_PREPARE = 1005,
 	USER_PROC_SET_CMDLINE_BUFFER = 14,
+	USER_PROC_INFO_BY_LINUX_PID = 18,
 	USER_PROC_EXEC_REPLACE_TASK = 16,
 	USER_PROC_EXEC_REPLACE_BUFFER = 17,
 };
@@ -447,7 +463,8 @@ static int user_message_to_ipc(const struct user_ipc_message *user_message,
 		message->cap_type = type == TASK_CAP_PORT ? IPC_CAP_PORT :
 			(type == TASK_CAP_BUFFER ? IPC_CAP_BUFFER :
 			 type == TASK_CAP_TASK ? IPC_CAP_TASK :
-			 IPC_CAP_HW_RESOURCE);
+			 type == TASK_CAP_HW_RESOURCE ? IPC_CAP_HW_RESOURCE :
+			 IPC_CAP_SCHED_POLICY);
 		message->cap_object = object;
 	}
 
@@ -488,6 +505,13 @@ static void ipc_message_to_user(const struct ipc_message *message,
 			task_grant_hw_resource(
 				task_current(),
 				(const struct task_hw_resource *)
+					message->cap_object,
+				message->cap_rights);
+	} else if (message->cap_type == IPC_CAP_SCHED_POLICY) {
+		user_message->cap =
+			task_grant_sched_policy(
+				task_current(),
+				(const struct sched_policy_cap *)
 					message->cap_object,
 				message->cap_rights);
 	}
@@ -3654,6 +3678,84 @@ static void linux_proc_set_cmdline(struct task *task, u64 linux_pid,
 	buffer_release(buffer);
 }
 
+static int linux_task_id_from_pid(u64 linux_pid, u64 *task_id_out)
+{
+	struct ipc_port *proc = ipc_port_find("proc");
+	struct ipc_port *reply_port = task_reply_port(task_current());
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_PROC,
+		.type = USER_PROC_INFO_BY_LINUX_PID,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_NONE,
+		.cap_object = 0,
+		.words = { linux_pid, 0, 0, 0 },
+	};
+	struct ipc_message reply;
+
+	if (task_id_out == 0) {
+		return -LINUX_EINVAL;
+	}
+	if (linux_pid == 0) {
+		*task_id_out = task_id(task_current());
+		return 0;
+	}
+	if (proc == 0 || reply_port == 0 ||
+	    ipc_send(proc, &request) != 0 ||
+	    ipc_recv(reply_port, &reply) != 0 ||
+	    reply.words[0] != 0 || reply.words[2] == 0) {
+		return -LINUX_ESRCH;
+	}
+	*task_id_out = reply.words[2];
+	return 0;
+}
+
+static u64 linux_sched_authority_handle(void)
+{
+	struct sched_policy_cap *authority = sched_policy_cap_create_system();
+	u64 handle;
+
+	if (authority == 0) {
+		return 0;
+	}
+	handle = task_grant_sched_policy(task_current(), authority,
+					 TASK_RIGHT_SEND);
+	sched_policy_cap_release(authority);
+	return handle;
+}
+
+static int linux_sched_get_task_state(u64 linux_pid,
+				      struct sched_policy_state *state,
+				      u64 *authority_out)
+{
+	u64 task_id_value;
+	u64 authority;
+	int result;
+
+	if (state == 0 || authority_out == 0) {
+		return -LINUX_EINVAL;
+	}
+	result = linux_task_id_from_pid(linux_pid, &task_id_value);
+	if (result != 0) {
+		return result;
+	}
+	authority = linux_sched_authority_handle();
+	if (authority == 0) {
+		return -LINUX_EPERM;
+	}
+	*state = (struct sched_policy_state){
+		.target_kind = SCHED_POLICY_TARGET_TASK,
+		.target_id = task_id_value,
+	};
+	if (sched_policy_get(task_current(), authority, state) != 0) {
+		(void)task_close_handle(task_current(), authority);
+		return -LINUX_ESRCH;
+	}
+	*authority_out = authority;
+	return 0;
+}
+
 static const char *linux_syscall_name(u64 number)
 {
 	switch (number) {
@@ -3677,6 +3779,26 @@ static const char *linux_syscall_name(u64 number)
 		return "select";
 	case LINUX_SYSCALL_SCHED_YIELD:
 		return "sched_yield";
+	case LINUX_SYSCALL_SCHED_SETAFFINITY:
+		return "sched_setaffinity";
+	case LINUX_SYSCALL_SCHED_GETAFFINITY:
+		return "sched_getaffinity";
+	case LINUX_SYSCALL_GETPRIORITY:
+		return "getpriority";
+	case LINUX_SYSCALL_SETPRIORITY:
+		return "setpriority";
+	case LINUX_SYSCALL_SCHED_SETPARAM:
+		return "sched_setparam";
+	case LINUX_SYSCALL_SCHED_GETPARAM:
+		return "sched_getparam";
+	case LINUX_SYSCALL_SCHED_SETSCHEDULER:
+		return "sched_setscheduler";
+	case LINUX_SYSCALL_SCHED_GETSCHEDULER:
+		return "sched_getscheduler";
+	case LINUX_SYSCALL_SCHED_GET_PRIORITY_MAX:
+		return "sched_get_priority_max";
+	case LINUX_SYSCALL_SCHED_GET_PRIORITY_MIN:
+		return "sched_get_priority_min";
 	case LINUX_SYSCALL_MMAP:
 		return "mmap";
 	case LINUX_SYSCALL_MPROTECT:
@@ -4944,6 +5066,170 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	case LINUX_SYSCALL_SCHED_YIELD:
 		thread_yield();
 		return 0;
+	case LINUX_SYSCALL_SCHED_SETAFFINITY: {
+		struct sched_policy_state state;
+		u64 authority;
+		u64 cpu_mask;
+		int result;
+
+		if (arg1 < sizeof(cpu_mask) || arg2 == 0 ||
+		    read_current_user(arg2, &cpu_mask, sizeof(cpu_mask)) != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		result = linux_sched_get_task_state(arg0, &state, &authority);
+		if (result != 0) {
+			return (u64)(i64)result;
+		}
+		state.cpu_mask = cpu_mask;
+		result = sched_policy_set(task_current(), authority, &state) == 0 ?
+				 0 :
+				 -LINUX_EINVAL;
+		(void)task_close_handle(task_current(), authority);
+		return (u64)(i64)result;
+	}
+	case LINUX_SYSCALL_SCHED_GETAFFINITY: {
+		struct sched_policy_state state;
+		u64 authority;
+		int result;
+
+		if (arg1 < sizeof(state.cpu_mask) || arg2 == 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		result = linux_sched_get_task_state(arg0, &state, &authority);
+		if (result != 0) {
+			return (u64)(i64)result;
+		}
+		result = write_current_user(arg2, &state.cpu_mask,
+					    sizeof(state.cpu_mask)) == 0 ?
+				 (int)sizeof(state.cpu_mask) :
+				 -LINUX_EFAULT;
+		(void)task_close_handle(task_current(), authority);
+		return (u64)(i64)result;
+	}
+	case LINUX_SYSCALL_SCHED_GET_PRIORITY_MAX:
+		return arg0 == 0 || arg0 == 1 || arg0 == 2 ? 127 :
+		       (u64)-LINUX_EINVAL;
+	case LINUX_SYSCALL_SCHED_GET_PRIORITY_MIN:
+		return arg0 == 0 || arg0 == 1 || arg0 == 2 ? 0 :
+		       (u64)-LINUX_EINVAL;
+	case LINUX_SYSCALL_SCHED_GETPARAM: {
+		struct sched_policy_state state;
+		u64 authority;
+		u32 priority;
+		int result;
+
+		if (arg1 == 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		result = linux_sched_get_task_state(arg0, &state, &authority);
+		if (result != 0) {
+			return (u64)(i64)result;
+		}
+		priority = (u32)state.priority;
+		result = write_current_user(arg1, &priority, sizeof(priority)) == 0 ?
+				 0 :
+				 -LINUX_EFAULT;
+		(void)task_close_handle(task_current(), authority);
+		return (u64)(i64)result;
+	}
+	case LINUX_SYSCALL_SCHED_SETPARAM: {
+		struct sched_policy_state state;
+		u64 authority;
+		u32 priority;
+		int result;
+
+		if (arg1 == 0 ||
+		    read_current_user(arg1, &priority, sizeof(priority)) != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		result = linux_sched_get_task_state(arg0, &state, &authority);
+		if (result != 0) {
+			return (u64)(i64)result;
+		}
+		state.priority = priority;
+		result = sched_policy_set(task_current(), authority, &state) == 0 ?
+				 0 :
+				 -LINUX_EINVAL;
+		(void)task_close_handle(task_current(), authority);
+		return (u64)(i64)result;
+	}
+	case LINUX_SYSCALL_SCHED_GETSCHEDULER: {
+		struct sched_policy_state state;
+		u64 authority;
+		u64 policy;
+		int result = linux_sched_get_task_state(arg0, &state, &authority);
+
+		if (result != 0) {
+			return (u64)(i64)result;
+		}
+		policy = state.sched_class == SCHED_CLASS_BATCH ? 3 :
+			 state.sched_class == SCHED_CLASS_IDLE ? 5 : 0;
+		(void)task_close_handle(task_current(), authority);
+		return policy;
+	}
+	case LINUX_SYSCALL_SCHED_SETSCHEDULER: {
+		struct sched_policy_state state;
+		u64 authority;
+		u32 priority = 0;
+		int result;
+
+		if (arg2 != 0 &&
+		    read_current_user(arg2, &priority, sizeof(priority)) != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		result = linux_sched_get_task_state(arg0, &state, &authority);
+		if (result != 0) {
+			return (u64)(i64)result;
+		}
+		state.sched_class = arg1 == 3 ? SCHED_CLASS_BATCH :
+				    arg1 == 5 ? SCHED_CLASS_IDLE :
+				    SCHED_CLASS_USER;
+		state.priority = priority;
+		result = (arg1 == 0 || arg1 == 1 || arg1 == 2 ||
+			  arg1 == 3 || arg1 == 5) &&
+					 sched_policy_set(task_current(),
+							  authority,
+							  &state) == 0 ?
+				 0 :
+				 -LINUX_EINVAL;
+		(void)task_close_handle(task_current(), authority);
+		return (u64)(i64)result;
+	}
+	case LINUX_SYSCALL_GETPRIORITY: {
+		struct sched_policy_state state;
+		u64 authority;
+		int result;
+
+		if (arg0 != 0) {
+			return (u64)-LINUX_EINVAL;
+		}
+		result = linux_sched_get_task_state(arg1, &state, &authority);
+		if (result != 0) {
+			return (u64)(i64)result;
+		}
+		(void)task_close_handle(task_current(), authority);
+		return state.priority > 40 ? 0 : 20 - state.priority;
+	}
+	case LINUX_SYSCALL_SETPRIORITY: {
+		struct sched_policy_state state;
+		u64 authority;
+		i64 nice = (i64)arg2;
+		int result;
+
+		if (arg0 != 0 || nice < -20 || nice > 19) {
+			return (u64)-LINUX_EINVAL;
+		}
+		result = linux_sched_get_task_state(arg1, &state, &authority);
+		if (result != 0) {
+			return (u64)(i64)result;
+		}
+		state.priority = (u64)(20 - nice);
+		result = sched_policy_set(task_current(), authority, &state) == 0 ?
+				 0 :
+				 -LINUX_EINVAL;
+		(void)task_close_handle(task_current(), authority);
+		return (u64)(i64)result;
+	}
 	case LINUX_SYSCALL_NANOSLEEP:
 		return linux_sleep_relative(arg0, arg1);
 	case LINUX_SYSCALL_ALARM:
@@ -6287,14 +6573,18 @@ static u64 native_sys_task_create(const struct native_syscall_args *args)
 static u64 native_sys_task_id(const struct native_syscall_args *args)
 {
 	struct task *task =
-		task_from_handle(task_current(), args->arg0, TASK_RIGHT_SEND);
+		args->arg0 == 0 ? task_current() :
+				  task_from_handle(task_current(), args->arg0,
+						   TASK_RIGHT_SEND);
 	u64 id;
 
 	if (task == 0) {
 		return (u64)-1;
 	}
 	id = task_id(task);
-	task_release(task);
+	if (args->arg0 != 0) {
+		task_release(task);
+	}
 	return id;
 }
 
@@ -6656,6 +6946,81 @@ static u64 native_sys_sched_thread_info(const struct native_syscall_args *args)
 	}
 	return write_current_user(args->arg1, &info, sizeof(info)) == 0 ?
 	       0 : (u64)-1;
+}
+
+struct user_sched_policy {
+	u64 target_kind;
+	u64 target_id;
+	u64 rights;
+	u64 class_mask;
+	u64 min_priority;
+	u64 max_priority;
+	u64 min_weight;
+	u64 max_weight;
+	u64 cpu_mask;
+	u64 delegation_depth;
+};
+
+static u64 native_sys_sched_policy_grant(
+	const struct native_syscall_args *args)
+{
+	struct user_sched_policy user_policy;
+	struct sched_policy_cap policy;
+	struct task *target;
+	u64 granted;
+
+	if (args->arg2 == 0 ||
+	    read_current_user(args->arg2, &user_policy,
+			      sizeof(user_policy)) != 0) {
+		return (u64)-1;
+	}
+
+	policy = (struct sched_policy_cap){
+		.ref_count = 1,
+		.target_kind = (u32)user_policy.target_kind,
+		.rights = (u32)user_policy.rights,
+		.delegation_depth = (u32)user_policy.delegation_depth,
+		.target_id = user_policy.target_id,
+		.class_mask = user_policy.class_mask,
+		.min_priority = (u32)user_policy.min_priority,
+		.max_priority = (u32)user_policy.max_priority,
+		.min_weight = (u32)user_policy.min_weight,
+		.max_weight = (u32)user_policy.max_weight,
+		.cpu_mask = user_policy.cpu_mask,
+	};
+	target = task_from_handle(task_current(), args->arg1, TASK_RIGHT_SEND);
+	if (target == 0) {
+		return (u64)-1;
+	}
+	granted = sched_policy_grant(task_current(), args->arg0, target,
+				     &policy);
+	task_release(target);
+	return granted != 0 ? granted : (u64)-1;
+}
+
+static u64 native_sys_sched_policy_get(const struct native_syscall_args *args)
+{
+	struct sched_policy_state state;
+
+	if (args->arg1 == 0 ||
+	    read_current_user(args->arg1, &state, sizeof(state)) != 0 ||
+	    sched_policy_get(task_current(), args->arg0, &state) != 0) {
+		return (u64)-1;
+	}
+	return write_current_user(args->arg1, &state, sizeof(state)) == 0 ?
+	       0 : (u64)-1;
+}
+
+static u64 native_sys_sched_policy_set(const struct native_syscall_args *args)
+{
+	struct sched_policy_state state;
+
+	if (args->arg1 == 0 ||
+	    read_current_user(args->arg1, &state, sizeof(state)) != 0 ||
+	    sched_policy_set(task_current(), args->arg0, &state) != 0) {
+		return (u64)-1;
+	}
+	return 0;
 }
 
 static u64 native_sys_vm_stats(const struct native_syscall_args *args)
@@ -7409,6 +7774,12 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_SCHED_STATS, "sched_stats", native_sys_sched_stats },
 	{ SYSCALL_SCHED_THREAD_INFO, "sched_thread_info",
 	  native_sys_sched_thread_info },
+	{ SYSCALL_SCHED_POLICY_GRANT, "sched_policy_grant",
+	  native_sys_sched_policy_grant },
+	{ SYSCALL_SCHED_POLICY_GET, "sched_policy_get",
+	  native_sys_sched_policy_get },
+	{ SYSCALL_SCHED_POLICY_SET, "sched_policy_set",
+	  native_sys_sched_policy_set },
 	{ SYSCALL_VM_STATS, "vm_stats", native_sys_vm_stats },
 	{ SYSCALL_MACHINE_POWER, "machine_power", native_sys_machine_power },
 	{ SYSCALL_HW_PORT_IN8, "hw_port_in8", native_sys_hw_port_in8 },

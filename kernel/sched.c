@@ -31,6 +31,7 @@ enum task_handle_type {
 	TASK_HANDLE_TASK,
 	TASK_HANDLE_BUFFER,
 	TASK_HANDLE_HW_RESOURCE,
+	TASK_HANDLE_SCHED_POLICY,
 };
 
 struct task_handle {
@@ -59,6 +60,7 @@ struct task {
 	enum sched_class sched_class;
 	u32 sched_priority;
 	u32 sched_rights;
+	u64 sched_affinity_mask;
 	struct task_vm_region *vm_regions;
 	u32 vm_region_count;
 	u32 vm_region_capacity;
@@ -79,6 +81,7 @@ struct thread {
 	u32 weight;
 	enum sched_class sched_class;
 	u32 sched_priority;
+	u64 affinity_mask;
 	struct thread *run_next;
 	struct thread *sleep_next;
 	struct thread *task_next;
@@ -142,6 +145,9 @@ static int task_handle_retain_from_locked_task(struct task *locked_task,
 					       enum task_handle_type type,
 					       void *object);
 static void task_handle_release(enum task_handle_type type, void *object);
+static u32 sched_policy_mask_first_cpu(u64 mask);
+static u32 sched_policy_valid_cpu_mask(u64 mask);
+static u32 sched_select_auto_cpu_mask(u64 mask);
 static char *task_name_copy(const char *name);
 
 static void mem_copy(void *dst, const void *src, u64 len)
@@ -470,6 +476,10 @@ static int runq_remove(struct run_queue *runq, struct thread *thread)
 static void sched_enqueue_on_reason(struct cpu_sched *cpu, struct thread *thread,
 				    int wakeup)
 {
+	if (thread != 0 && thread->affinity_mask != 0 &&
+	    (thread->affinity_mask & (1ull << cpu->id)) == 0) {
+		cpu = &cpus[sched_select_auto_cpu_mask(thread->affinity_mask)];
+	}
 	const u32 remote = cpu->id != sched_current_cpu_id();
 	const u64 flags = spin_lock_irqsave(&cpu->runq.lock);
 	const u32 was_idle = cpu->runq.idle;
@@ -521,6 +531,384 @@ static u32 sched_cpu_load(struct cpu_sched *cpu)
 
 	spin_unlock_irqrestore(&cpu->runq.lock, flags);
 	return load;
+}
+
+u64 sched_online_cpu_mask(void)
+{
+	u64 mask = 0;
+
+	for (u32 i = 0; i < sched_cpu_count && i < 64; i++) {
+		mask |= 1ull << i;
+	}
+	return mask;
+}
+
+static u32 sched_policy_class_bit(enum sched_class sched_class)
+{
+	return 1u << (u32)sched_class;
+}
+
+static u32 sched_policy_valid_class_mask(u64 class_mask)
+{
+	const u64 valid = sched_policy_class_bit(SCHED_CLASS_KERNEL) |
+			  sched_policy_class_bit(SCHED_CLASS_SERVER) |
+			  sched_policy_class_bit(SCHED_CLASS_USER) |
+			  sched_policy_class_bit(SCHED_CLASS_BATCH) |
+			  sched_policy_class_bit(SCHED_CLASS_IDLE);
+
+	return class_mask != 0 && (class_mask & ~valid) == 0;
+}
+
+static u32 sched_policy_valid_cpu_mask(u64 mask)
+{
+	const u64 online = sched_online_cpu_mask();
+
+	return mask != 0 && (mask & ~online) == 0;
+}
+
+static u32 sched_policy_mask_first_cpu(u64 mask)
+{
+	for (u32 i = 0; i < sched_cpu_count && i < 64; i++) {
+		if ((mask & (1ull << i)) != 0) {
+			return i;
+		}
+	}
+	return 0;
+}
+
+struct sched_policy_cap *sched_policy_cap_create_system(void)
+{
+	struct sched_policy_cap *cap =
+		(struct sched_policy_cap *)slab_zalloc(sizeof(*cap));
+
+	if (cap == 0) {
+		return 0;
+	}
+	cap->ref_count = 1;
+	cap->target_kind = SCHED_POLICY_TARGET_SYSTEM;
+	cap->rights = SCHED_POLICY_RIGHT_OBSERVE |
+		      SCHED_POLICY_RIGHT_CLASS |
+		      SCHED_POLICY_RIGHT_PRIORITY |
+		      SCHED_POLICY_RIGHT_WEIGHT |
+		      SCHED_POLICY_RIGHT_AFFINITY |
+		      SCHED_POLICY_RIGHT_DELEGATE;
+	cap->delegation_depth = 8;
+	cap->target_id = 0;
+	cap->class_mask = sched_policy_class_bit(SCHED_CLASS_KERNEL) |
+			  sched_policy_class_bit(SCHED_CLASS_SERVER) |
+			  sched_policy_class_bit(SCHED_CLASS_USER) |
+			  sched_policy_class_bit(SCHED_CLASS_BATCH) |
+			  sched_policy_class_bit(SCHED_CLASS_IDLE);
+	cap->min_priority = 0;
+	cap->max_priority = 255;
+	cap->min_weight = 1;
+	cap->max_weight = 65535;
+	cap->cpu_mask = sched_online_cpu_mask();
+	return cap;
+}
+
+int sched_policy_cap_retain(const struct sched_policy_cap *cap)
+{
+	if (cap == 0) {
+		return -1;
+	}
+	__sync_fetch_and_add((u32 *)&cap->ref_count, 1);
+	return 0;
+}
+
+void sched_policy_cap_release(const struct sched_policy_cap *cap)
+{
+	if (cap != 0 &&
+	    __sync_sub_and_fetch((u32 *)&cap->ref_count, 1) == 0) {
+		slab_free((void *)cap);
+	}
+}
+
+static int sched_policy_cap_allows_target(
+	const struct sched_policy_cap *cap, u32 kind, u64 id)
+{
+	if (cap == 0) {
+		return 0;
+	}
+	if (cap->target_kind == SCHED_POLICY_TARGET_SYSTEM) {
+		return kind == SCHED_POLICY_TARGET_TASK ||
+		       kind == SCHED_POLICY_TARGET_THREAD ||
+		       kind == SCHED_POLICY_TARGET_SYSTEM;
+	}
+	return cap->target_kind == kind && cap->target_id == id;
+}
+
+static int sched_policy_is_attenuated(const struct sched_policy_cap *parent,
+				      const struct sched_policy_cap *child)
+{
+	if (parent == 0 || child == 0 ||
+	    (parent->rights & SCHED_POLICY_RIGHT_DELEGATE) == 0 ||
+	    parent->delegation_depth == 0 ||
+	    child->delegation_depth >= parent->delegation_depth ||
+	    (child->rights & ~parent->rights) != 0 ||
+	    (child->class_mask & ~parent->class_mask) != 0 ||
+	    child->min_priority < parent->min_priority ||
+	    child->max_priority > parent->max_priority ||
+	    child->min_priority > child->max_priority ||
+	    child->min_weight < parent->min_weight ||
+	    child->max_weight > parent->max_weight ||
+	    child->min_weight > child->max_weight ||
+	    (child->cpu_mask & ~parent->cpu_mask) != 0 ||
+	    !sched_policy_valid_class_mask(child->class_mask) ||
+	    !sched_policy_valid_cpu_mask(child->cpu_mask)) {
+		return 0;
+	}
+	return sched_policy_cap_allows_target(parent, child->target_kind,
+					      child->target_id);
+}
+
+static int sched_policy_state_allowed(const struct sched_policy_cap *cap,
+				      const struct sched_policy_state *state)
+{
+	if (cap == 0 || state == 0 ||
+	    !sched_policy_cap_allows_target(cap, (u32)state->target_kind,
+					    state->target_id) ||
+	    state->sched_class < SCHED_CLASS_KERNEL ||
+	    state->sched_class > SCHED_CLASS_IDLE ||
+	    (cap->class_mask &
+	     sched_policy_class_bit((enum sched_class)state->sched_class)) == 0 ||
+	    state->priority < cap->min_priority ||
+	    state->priority > cap->max_priority ||
+	    state->weight < cap->min_weight ||
+	    state->weight > cap->max_weight ||
+	    !sched_policy_valid_cpu_mask(state->cpu_mask) ||
+	    (state->cpu_mask & ~cap->cpu_mask) != 0) {
+		return 0;
+	}
+	return 1;
+}
+
+static struct task *task_find_by_id_retain(u64 id)
+{
+	struct task *task;
+
+	const u64 flags = spin_lock_irqsave(&task_table_lock);
+	task = (struct task *)u64_tree_get(&tasks_by_pid, id);
+	if (task != 0 && task_retain(task) != 0) {
+		task = 0;
+	}
+	spin_unlock_irqrestore(&task_table_lock, flags);
+	return task;
+}
+
+u64 sched_policy_grant(struct task *owner, u64 authority_handle,
+		       struct task *target_task,
+		       const struct sched_policy_cap *requested)
+{
+	const struct sched_policy_cap *authority;
+	struct sched_policy_cap *child;
+	u64 granted;
+
+	if (owner == 0 || target_task == 0 || requested == 0) {
+		return 0;
+	}
+
+	authority = task_sched_policy_from_handle(owner, authority_handle,
+						  TASK_RIGHT_SEND);
+	if (authority == 0) {
+		return 0;
+	}
+
+	child = (struct sched_policy_cap *)slab_zalloc(sizeof(*child));
+	if (child == 0) {
+		sched_policy_cap_release(authority);
+		return 0;
+	}
+	*child = *requested;
+	child->ref_count = 1;
+	if (child->target_kind == SCHED_POLICY_TARGET_TASK &&
+	    child->target_id == 0) {
+		child->target_id = task_id(target_task);
+	}
+	if (!sched_policy_is_attenuated(authority, child)) {
+		slab_free(child);
+		sched_policy_cap_release(authority);
+		return 0;
+	}
+
+	granted = task_grant_sched_policy(target_task, child,
+					  TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+	sched_policy_cap_release(child);
+	sched_policy_cap_release(authority);
+	return granted;
+}
+
+int sched_policy_get(struct task *owner, u64 authority_handle,
+		     struct sched_policy_state *state)
+{
+	const struct sched_policy_cap *authority;
+
+	if (owner == 0 || state == 0) {
+		return -1;
+	}
+
+	authority = task_sched_policy_from_handle(owner, authority_handle,
+						  TASK_RIGHT_SEND);
+	if (authority == 0) {
+		return -1;
+	}
+	if (state->target_kind == 0) {
+		state->target_kind = authority->target_kind;
+		state->target_id = authority->target_id;
+	}
+	if ((authority->rights & SCHED_POLICY_RIGHT_OBSERVE) == 0 ||
+	    !sched_policy_cap_allows_target(authority, (u32)state->target_kind,
+					    state->target_id)) {
+		sched_policy_cap_release(authority);
+		return -1;
+	}
+
+	state->online_cpu_mask = sched_online_cpu_mask();
+	if (state->target_kind == SCHED_POLICY_TARGET_SYSTEM) {
+		state->sched_class = 0;
+		state->priority = 0;
+		state->weight = SCHED_BASE_WEIGHT;
+		state->cpu_mask = state->online_cpu_mask;
+		sched_policy_cap_release(authority);
+		return 0;
+	}
+	if (state->target_kind == SCHED_POLICY_TARGET_TASK) {
+		struct task *target = task_find_by_id_retain(state->target_id);
+
+		if (target == 0) {
+			sched_policy_cap_release(authority);
+			return -1;
+		}
+		const u64 flags = spin_lock_irqsave(&target->lock);
+		state->sched_class = target->sched_class;
+		state->priority = target->sched_priority;
+		state->weight = target->threads != 0 ? target->threads->weight :
+						       SCHED_BASE_WEIGHT;
+		state->cpu_mask = target->sched_affinity_mask;
+		spin_unlock_irqrestore(&target->lock, flags);
+		task_release(target);
+		sched_policy_cap_release(authority);
+		return 0;
+	}
+	if (state->target_kind == SCHED_POLICY_TARGET_THREAD) {
+		const u64 table_flags = spin_lock_irqsave(&task_table_lock);
+
+		for (struct u64_tree_node *node =
+			     u64_tree_first_node(&tasks_by_pid);
+		     node != 0; node = u64_tree_next_node(node)) {
+			struct task *task = (struct task *)node->value;
+			const u64 flags = spin_lock_irqsave(&task->lock);
+
+			for (struct thread *thread = task->threads;
+			     thread != 0; thread = thread->task_next) {
+				if (thread->tid != state->target_id ||
+				    thread->state == THREAD_DEAD) {
+					continue;
+				}
+				state->sched_class = thread->sched_class;
+				state->priority = thread->sched_priority;
+				state->weight = thread->weight;
+				state->cpu_mask = thread->affinity_mask;
+				spin_unlock_irqrestore(&task->lock, flags);
+				spin_unlock_irqrestore(&task_table_lock,
+						       table_flags);
+				sched_policy_cap_release(authority);
+				return 0;
+			}
+			spin_unlock_irqrestore(&task->lock, flags);
+		}
+		spin_unlock_irqrestore(&task_table_lock, table_flags);
+	}
+
+	sched_policy_cap_release(authority);
+	return -1;
+}
+
+int sched_policy_set(struct task *owner, u64 authority_handle,
+		     const struct sched_policy_state *requested)
+{
+	const struct sched_policy_cap *authority;
+	struct sched_policy_state state;
+
+	if (owner == 0 || requested == 0) {
+		return -1;
+	}
+	state = *requested;
+	authority = task_sched_policy_from_handle(owner, authority_handle,
+						  TASK_RIGHT_SEND);
+	if (authority == 0) {
+		return -1;
+	}
+	if (state.target_kind == 0) {
+		state.target_kind = authority->target_kind;
+		state.target_id = authority->target_id;
+	}
+	if ((authority->rights &
+	     (SCHED_POLICY_RIGHT_CLASS | SCHED_POLICY_RIGHT_PRIORITY |
+	      SCHED_POLICY_RIGHT_WEIGHT | SCHED_POLICY_RIGHT_AFFINITY)) !=
+		    (SCHED_POLICY_RIGHT_CLASS | SCHED_POLICY_RIGHT_PRIORITY |
+		     SCHED_POLICY_RIGHT_WEIGHT | SCHED_POLICY_RIGHT_AFFINITY) ||
+	    !sched_policy_state_allowed(authority, &state)) {
+		sched_policy_cap_release(authority);
+		return -1;
+	}
+
+	if (state.target_kind == SCHED_POLICY_TARGET_TASK) {
+		struct task *target = task_find_by_id_retain(state.target_id);
+
+		if (target == 0) {
+			sched_policy_cap_release(authority);
+			return -1;
+		}
+		const u64 flags = spin_lock_irqsave(&target->lock);
+		target->sched_class = (enum sched_class)state.sched_class;
+		target->sched_priority = (u32)state.priority;
+		target->sched_affinity_mask = state.cpu_mask;
+		for (struct thread *thread = target->threads; thread != 0;
+		     thread = thread->task_next) {
+			thread->sched_class = (enum sched_class)state.sched_class;
+			thread->sched_priority = (u32)state.priority;
+			thread->weight = (u32)state.weight;
+			thread->affinity_mask = state.cpu_mask;
+		}
+		spin_unlock_irqrestore(&target->lock, flags);
+		task_release(target);
+		sched_policy_cap_release(authority);
+		return 0;
+	}
+	if (state.target_kind == SCHED_POLICY_TARGET_THREAD) {
+		const u64 table_flags = spin_lock_irqsave(&task_table_lock);
+
+		for (struct u64_tree_node *node =
+			     u64_tree_first_node(&tasks_by_pid);
+		     node != 0; node = u64_tree_next_node(node)) {
+			struct task *task = (struct task *)node->value;
+			const u64 flags = spin_lock_irqsave(&task->lock);
+
+			for (struct thread *thread = task->threads;
+			     thread != 0; thread = thread->task_next) {
+				if (thread->tid != state.target_id ||
+				    thread->state == THREAD_DEAD) {
+					continue;
+				}
+				thread->sched_class =
+					(enum sched_class)state.sched_class;
+				thread->sched_priority = (u32)state.priority;
+				thread->weight = (u32)state.weight;
+				thread->affinity_mask = state.cpu_mask;
+				spin_unlock_irqrestore(&task->lock, flags);
+				spin_unlock_irqrestore(&task_table_lock,
+						       table_flags);
+				sched_policy_cap_release(authority);
+				return 0;
+			}
+			spin_unlock_irqrestore(&task->lock, flags);
+		}
+		spin_unlock_irqrestore(&task_table_lock, table_flags);
+	}
+
+	sched_policy_cap_release(authority);
+	return -1;
 }
 
 static void sched_reap_thread(struct thread *thread)
@@ -596,14 +984,20 @@ static int thread_task_is_killing(const struct thread *thread)
 	return thread != 0 && thread->task != 0 && thread->task->killing;
 }
 
-static u32 sched_select_auto_cpu(void)
+static u32 sched_select_auto_cpu_mask(u64 mask)
 {
 	const u64 flags = spin_lock_irqsave(&placement_lock);
-	u32 best_cpu = next_auto_cpu % sched_cpu_count;
+	if (!sched_policy_valid_cpu_mask(mask)) {
+		mask = sched_online_cpu_mask();
+	}
+	u32 best_cpu = sched_policy_mask_first_cpu(mask);
 	u32 best_load = sched_cpu_load(&cpus[best_cpu]);
 
-	for (u32 scanned = 1; scanned < sched_cpu_count; scanned++) {
+	for (u32 scanned = 0; scanned < sched_cpu_count; scanned++) {
 		const u32 cpu_id = (next_auto_cpu + scanned) % sched_cpu_count;
+		if ((mask & (1ull << cpu_id)) == 0) {
+			continue;
+		}
 		const u32 load = sched_cpu_load(&cpus[cpu_id]);
 
 		if (load < best_load) {
@@ -667,7 +1061,9 @@ void sched_init(void)
 	kernel_task.sched_priority = 0;
 	kernel_task.sched_rights = SCHED_POLICY_RIGHT_CLASS |
 				   SCHED_POLICY_RIGHT_PRIORITY |
-				   SCHED_POLICY_RIGHT_WEIGHT;
+				   SCHED_POLICY_RIGHT_WEIGHT |
+				   SCHED_POLICY_RIGHT_AFFINITY;
+	kernel_task.sched_affinity_mask = 1;
 	kernel_task.vm_regions = 0;
 	kernel_task.vm_region_count = 0;
 	kernel_task.vm_region_capacity = 0;
@@ -700,12 +1096,14 @@ void sched_init(void)
 		cpus[i].scheduler_thread.weight = SCHED_BASE_WEIGHT;
 		cpus[i].scheduler_thread.sched_class = SCHED_CLASS_KERNEL;
 		cpus[i].scheduler_thread.sched_priority = 0;
+		cpus[i].scheduler_thread.affinity_mask = 1ull << i;
 		cpus[i].current = &cpus[i].scheduler_thread;
 		cpus[i].reap = 0;
 		cpus[i].quantum_left = SCHED_QUANTUM_TICKS;
 	}
 
 	boot_cpu_id = 0;
+	kernel_task.sched_affinity_mask = sched_online_cpu_mask();
 	arch_thread_context_init_current(&cpus[boot_cpu_id].scheduler_thread.context);
 	next_auto_cpu = 0;
 	console_printf("sched: init cpus=%u boot_cpu=%u\n", sched_cpu_count,
@@ -775,6 +1173,7 @@ static struct task *task_create_with_vm_ownership(const char *name,
 	task->sched_class = SCHED_CLASS_USER;
 	task->sched_priority = 0;
 	task->sched_rights = 0;
+	task->sched_affinity_mask = sched_online_cpu_mask();
 	task->vm_regions = 0;
 	task->vm_region_count = 0;
 	task->vm_region_capacity = 0;
@@ -906,18 +1305,29 @@ void task_inherit_sched_policy(struct task *dst, const struct task *src)
 	const enum sched_class sched_class = src->sched_class;
 	const u32 priority = src->sched_priority;
 	const u32 rights = src->sched_rights;
+	const u64 affinity_mask = src->sched_affinity_mask;
 	spin_unlock_irqrestore(&((struct task *)src)->lock, src_flags);
 
 	task_set_sched_policy(dst, sched_class, priority, rights);
+	const u64 dst_flags = spin_lock_irqsave(&dst->lock);
+	dst->sched_affinity_mask = sched_policy_valid_cpu_mask(affinity_mask) ?
+					   affinity_mask :
+					   sched_online_cpu_mask();
+	spin_unlock_irqrestore(&dst->lock, dst_flags);
 }
 
 static u32 task_select_cpu(struct task *task, const char **policy)
 {
+	u64 affinity_mask = sched_online_cpu_mask();
+
 	if (task != 0) {
 		const u64 flags = spin_lock_irqsave(&task->lock);
 		const u32 valid = task->ipc_affinity_valid &&
-				  task->ipc_affinity_cpu < sched_cpu_count;
+				  task->ipc_affinity_cpu < sched_cpu_count &&
+				  (task->sched_affinity_mask &
+				   (1ull << task->ipc_affinity_cpu)) != 0;
 		const u32 cpu = task->ipc_affinity_cpu;
+		affinity_mask = task->sched_affinity_mask;
 
 		spin_unlock_irqrestore(&task->lock, flags);
 		if (valid) {
@@ -931,7 +1341,7 @@ static u32 task_select_cpu(struct task *task, const char **policy)
 	if (policy != 0) {
 		*policy = "auto";
 	}
-	return sched_select_auto_cpu();
+	return sched_select_auto_cpu_mask(affinity_mask);
 }
 
 static struct thread *thread_create_placed(struct task *task, const char *name,
@@ -967,6 +1377,14 @@ static struct thread *thread_create_placed(struct task *task, const char *name,
 	thread->weight = SCHED_BASE_WEIGHT;
 	thread->sched_class = task->sched_class;
 	thread->sched_priority = task->sched_priority;
+	thread->affinity_mask = sched_policy_valid_cpu_mask(
+					task->sched_affinity_mask) ?
+					task->sched_affinity_mask :
+					sched_online_cpu_mask();
+	if ((thread->affinity_mask & (1ull << cpu_id)) == 0) {
+		cpu_id = sched_select_auto_cpu_mask(thread->affinity_mask);
+		placement_policy = "affinity";
+	}
 	thread->run_next = 0;
 	thread->sleep_next = 0;
 	thread->task_next = task->threads;
@@ -1256,6 +1674,58 @@ u64 task_grant_hw_resource(struct task *task,
 	return 0;
 }
 
+u64 task_grant_sched_policy(struct task *task,
+			    const struct sched_policy_cap *policy,
+			    u32 rights)
+{
+	if (task == 0 || policy == 0 || rights == 0) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+
+	for (u32 i = 0; i < task->handle_capacity; i++) {
+		if (task->handles[i].type == TASK_HANDLE_SCHED_POLICY &&
+		    task->handles[i].object == policy &&
+		    task->handles[i].rights == rights) {
+			spin_unlock_irqrestore(&task->lock, flags);
+			return i + 1;
+		}
+	}
+
+	for (;;) {
+		for (u32 i = 0; i < task->handle_capacity; i++) {
+			if (task->handles[i].type != TASK_HANDLE_EMPTY) {
+				continue;
+			}
+
+			if (task_handle_retain(TASK_HANDLE_SCHED_POLICY,
+					       (void *)policy) != 0) {
+				spin_unlock_irqrestore(&task->lock, flags);
+				return 0;
+			}
+			task->handles[i].type = TASK_HANDLE_SCHED_POLICY;
+			task->handles[i].rights = rights;
+			task->handles[i].object = (void *)policy;
+			console_printf("sched: grant task=%u handle=%u type=schd rights=0x%x target=%u id=%u mask=0x%x\n",
+				       task->pid, i + 1, rights,
+				       policy->target_kind,
+				       (u32)policy->target_id,
+				       (u32)policy->cpu_mask);
+			spin_unlock_irqrestore(&task->lock, flags);
+			return i + 1;
+		}
+		if (task_grow_handles_locked(task,
+					     task->handle_capacity + 1) != 0) {
+			break;
+		}
+	}
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	console_printf("sched: handle table grow failed task=%u\n", task->pid);
+	return 0;
+}
+
 int task_hw_resource_retain(const struct task_hw_resource *resource)
 {
 	if (resource == 0) {
@@ -1410,6 +1880,10 @@ u64 task_grant_inherited_handle(struct task *dst, struct task *src, u64 handle,
 		granted = task_grant_hw_resource(
 			dst, (const struct task_hw_resource *)src_handle.object,
 			rights);
+	} else if (src_handle.type == TASK_HANDLE_SCHED_POLICY) {
+		granted = task_grant_sched_policy(
+			dst, (const struct sched_policy_cap *)src_handle.object,
+			rights);
 	}
 
 	task_handle_release(src_handle.type, src_handle.object);
@@ -1473,7 +1947,8 @@ int task_export_cap(struct task *task, u64 handle, u32 rights,
 	if ((task_handle.type != TASK_HANDLE_PORT &&
 	     task_handle.type != TASK_HANDLE_BUFFER &&
 	     task_handle.type != TASK_HANDLE_TASK &&
-	     task_handle.type != TASK_HANDLE_HW_RESOURCE) ||
+	     task_handle.type != TASK_HANDLE_HW_RESOURCE &&
+	     task_handle.type != TASK_HANDLE_SCHED_POLICY) ||
 	    (task_handle.rights & rights) != rights ||
 	    task_handle_retain_from_locked_task(task, task_handle.type,
 						task_handle.object) != 0) {
@@ -1488,7 +1963,9 @@ int task_export_cap(struct task *task, u64 handle, u32 rights,
 	*type = task_handle.type == TASK_HANDLE_PORT ? TASK_CAP_PORT :
 		(task_handle.type == TASK_HANDLE_BUFFER ? TASK_CAP_BUFFER :
 		 task_handle.type == TASK_HANDLE_TASK ? TASK_CAP_TASK :
-		 TASK_CAP_HW_RESOURCE);
+		 task_handle.type == TASK_HANDLE_HW_RESOURCE ?
+		 TASK_CAP_HW_RESOURCE :
+		 TASK_CAP_SCHED_POLICY);
 	spin_unlock_irqrestore(&task->lock, flags);
 	return 0;
 }
@@ -1588,6 +2065,38 @@ const struct task_hw_resource *task_hw_resource_from_handle(struct task *task,
 	return resource;
 }
 
+const struct sched_policy_cap *task_sched_policy_from_handle(
+	struct task *task, u64 handle, u32 rights)
+{
+	if (task == 0 || handle == 0) {
+		return 0;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	if (handle > task->handle_capacity) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		return 0;
+	}
+	const struct task_handle task_handle = task->handles[handle - 1];
+
+	if (task_handle.type != TASK_HANDLE_SCHED_POLICY ||
+	    (task_handle.rights & rights) != rights ||
+	    task_handle_retain_from_locked_task(task, task_handle.type,
+						task_handle.object) != 0) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		console_printf("sched: policy handle denied task=%u handle=%u need=0x%x rights=0x%x\n",
+			       task->pid, (u32)handle, rights,
+			       task_handle.rights);
+		return 0;
+	}
+
+	const struct sched_policy_cap *policy =
+		(const struct sched_policy_cap *)task_handle.object;
+
+	spin_unlock_irqrestore(&task->lock, flags);
+	return policy;
+}
+
 int task_close_handle(struct task *task, u64 handle)
 {
 	if (task == 0 || handle == 0 || handle > task->handle_capacity) {
@@ -1620,7 +2129,8 @@ int task_close_handle(struct task *task, u64 handle)
 		       type == TASK_HANDLE_PORT ? "port" :
 		       type == TASK_HANDLE_TASK ? "task" :
 		       type == TASK_HANDLE_BUFFER ? "buffer" :
-		       type == TASK_HANDLE_HW_RESOURCE ? "hw" : "unknown",
+		       type == TASK_HANDLE_HW_RESOURCE ? "hw" :
+		       type == TASK_HANDLE_SCHED_POLICY ? "schd" : "unknown",
 		       rights);
 	return 0;
 }
@@ -1663,6 +2173,10 @@ static int task_handle_retain(enum task_handle_type type, void *object)
 		return task_hw_resource_retain(
 			(const struct task_hw_resource *)object);
 	}
+	if (type == TASK_HANDLE_SCHED_POLICY) {
+		return sched_policy_cap_retain(
+			(const struct sched_policy_cap *)object);
+	}
 	return -1;
 }
 
@@ -1693,6 +2207,9 @@ static void task_handle_release(enum task_handle_type type, void *object)
 	} else if (type == TASK_HANDLE_HW_RESOURCE) {
 		task_hw_resource_release(
 			(const struct task_hw_resource *)object);
+	} else if (type == TASK_HANDLE_SCHED_POLICY) {
+		sched_policy_cap_release(
+			(const struct sched_policy_cap *)object);
 	}
 }
 
@@ -2473,6 +2990,7 @@ int sched_thread_info_at(u64 index, struct sched_thread_info *info)
 						now >= thread->wake_ready_tick ?
 					now - thread->wake_ready_tick :
 					0;
+			info->affinity_mask = thread->affinity_mask;
 			pack_name_words(task->name, info->task_name_words);
 			pack_name_words(thread->name, info->thread_name_words);
 

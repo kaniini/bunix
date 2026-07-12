@@ -19,6 +19,7 @@ enum ipc_cap_type {
 	IPC_CAP_BUFFER,
 	IPC_CAP_TASK,
 	IPC_CAP_HW_RESOURCE,
+	IPC_CAP_SCHED_POLICY,
 };
 
 struct ipc_message {

@@ -108,6 +108,9 @@ static void ipc_message_retain(struct ipc_message *message)
 	} else if (message->cap_type == IPC_CAP_HW_RESOURCE) {
 		(void)task_hw_resource_retain(
 			(const struct task_hw_resource *)message->cap_object);
+	} else if (message->cap_type == IPC_CAP_SCHED_POLICY) {
+		(void)sched_policy_cap_retain(
+			(const struct sched_policy_cap *)message->cap_object);
 	}
 }
 
@@ -123,6 +126,10 @@ void ipc_message_release(struct ipc_message *message)
 		   message->cap_type == IPC_CAP_HW_RESOURCE) {
 		task_hw_resource_release(
 			(const struct task_hw_resource *)message->cap_object);
+	} else if (message != 0 &&
+		   message->cap_type == IPC_CAP_SCHED_POLICY) {
+		sched_policy_cap_release(
+			(const struct sched_policy_cap *)message->cap_object);
 	}
 	if (message != 0) {
 		ipc_port_release(message->reply_port);

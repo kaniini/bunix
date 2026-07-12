@@ -354,7 +354,8 @@ static int user_message_to_ipc(const struct user_ipc_message *user_message,
 		message->cap_type = type == TASK_CAP_PORT ? IPC_CAP_PORT :
 			(type == TASK_CAP_BUFFER ? IPC_CAP_BUFFER :
 			 type == TASK_CAP_TASK ? IPC_CAP_TASK :
-			 IPC_CAP_HW_RESOURCE);
+			 type == TASK_CAP_HW_RESOURCE ? IPC_CAP_HW_RESOURCE :
+			 IPC_CAP_SCHED_POLICY);
 		message->cap_object = object;
 	}
 
@@ -394,6 +395,13 @@ static void ipc_message_to_user(const struct ipc_message *message,
 			task_grant_hw_resource(
 				task_current(),
 				(const struct task_hw_resource *)
+					message->cap_object,
+				message->cap_rights);
+	} else if (message->cap_type == IPC_CAP_SCHED_POLICY) {
+		user_message->cap =
+			task_grant_sched_policy(
+				task_current(),
+				(const struct sched_policy_cap *)
 					message->cap_object,
 				message->cap_rights);
 	}
