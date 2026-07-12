@@ -38,7 +38,7 @@ Tasks:
 - [x] Add diagnostics for user-copy/protection failures.
 - [x] Audit all server and test-program call sites.
 - [x] Add cross-architecture user-memory regression tests.
-- [ ] Run focused VM/Linux/VFS tests, riscv64 gates, then full `make test`.
+- [x] Run focused VM/Linux/VFS tests, riscv64 gates, then full `make test`.
 
 Progress:
 
@@ -69,3 +69,17 @@ Progress:
 - The riscv64 bootstrap now treats nonzero child exit status from
   `BUNIX_PROC_WAIT` as a failed spawn-wait, making runtime test markers
   trustworthy.
+- Validation passed:
+  - `make build/modules/usermemtest.user build/riscv64/modules/usermemtest.user`
+  - `make test-user-memory-contract`
+  - `make test-boot-riscv64-early`
+  - `make test-linux-exec-abi test-proc-exec-stack test-lowmem-isolation test-user-memory-contract`
+  - `BUNIX_TEST_SET=vfs BUNIX_TEST_JOBS=2 make test-parallel`
+  - `BUNIX_TEST_SET=procfs-self-pipe BUNIX_TEST_JOBS=1 make test-parallel`
+  - `BUNIX_TEST_RETRIES=1 make test`, run
+    `build/test-runs/20260712T225214Z-28946`, launched 29 shards, skipped 0,
+    all shards `ok`.
+- Plain no-retry `make test` was interrupted after `procfs-self-pipe` stopped
+  advancing in a full-suite run.  A focused `procfs-self-pipe` run passed, and
+  the full suite passed with one retry.  The default no-retry instability
+  remains tracked by `079-test-parallel-timeout-instability.txt`.
