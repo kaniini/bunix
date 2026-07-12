@@ -48,9 +48,28 @@ Plan:
 
 Tasks:
 
-- [ ] Add focused non-root login command reproducer.
-- [ ] Add gated TTY/session trace points for prompt/read readiness.
-- [ ] Compare root versus non-root shell startup and first read.
-- [ ] Fix the guest TTY/session bug or harness readiness race.
-- [ ] Add regression coverage for non-root command execution.
-- [ ] Rerun `make test-smoke`, then the full gate blocked by exploration 043.
+- [x] Audit the original non-root command reproducer against the current tree.
+- [x] Verify existing focused command coverage for non-root command execution.
+- [x] Verify existing smoke coverage for non-root shell command execution.
+- [x] Verify full-suite coverage for the non-root login shell path.
+- [x] Determine whether new TTY/session trace points are still needed.
+
+Resolution:
+
+- The original bug is no longer reproducible in the current tree.
+- `tools/test-command.sh` already provides the focused non-root login command
+  reproducer described by this exploration.
+- Additional gated TTY/session trace points are not needed for this stale
+  failure because the original reproducer and smoke gate now pass.
+- The likely historical fix was the later shell-readiness and TTY/session work
+  already present in the tree; no new guest behavior change was required in
+  this slice.
+
+Verification:
+
+- `BUNIX_CMD='echo USER_OK' make test-command` passed with
+  `command regression ok`.
+- `make test-smoke` passed with `test-shell-part name=smoke status=ok`.
+- Full `make test` run `20260712T202347Z-426` passed all 29 shards, including
+  the non-root shell shards `smoke`, `login-smoke`, `relogin-session`,
+  `interactive-tty`, `tty-foreground`, and `tty-sigint-session`.
