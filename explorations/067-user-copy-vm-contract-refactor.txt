@@ -34,7 +34,7 @@ Plan:
 Tasks:
 
 - [x] Document the current user-copy and VM API contract.
-- [ ] Rename or wrap APIs so user versus kernel translation is explicit.
+- [x] Rename or wrap APIs so user versus kernel translation is explicit.
 - [ ] Add diagnostics for user-copy/protection failures.
 - [ ] Audit all server and test-program call sites.
 - [ ] Add cross-architecture user-memory regression tests.
@@ -45,3 +45,7 @@ Progress:
 - Added `docs/user-memory-contract.md` to define the current contract between
   architecture page-table translation, generic VM helpers, kernel task
   authority, Linux syscall frontends, and userspace task-memory clients.
+- Added generic `vm_translate_user_read()`, `vm_translate_user_write()`,
+  `vm_translate_kernel_read()`, and `vm_translate_kernel_write()` wrappers.
+  Generic VM code now uses the explicit user wrappers instead of direct
+  architecture user-translation calls.
