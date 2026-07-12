@@ -31,3 +31,15 @@ Tasks:
 - [ ] Document the run targets in `README.md` with expected boot milestones and
       when to use each target.
 - [ ] Add lightweight smoke tests for the fast and faithful profiles.
+
+Baseline from exploration 068:
+
+- Warm `make run` host rebuild and staging overhead is negligible when outputs
+  are current, but the current default Alpine networking profile reaches login
+  at about 37-40s.
+- The synthetic shell profile reaches login at about 8.6s.
+- The default target should be reviewed with this data: if `make run` is meant
+  for fast kernel/server iteration, it should use the fast profile; if it is
+  meant to prove the full Alpine/OpenRC/networking environment, that slower
+  behavior should move behind a name like `make run-alpine` or
+  `make run-alpine-net`.

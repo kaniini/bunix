@@ -35,3 +35,19 @@ Tasks:
       diagnosed from inside the guest.
 - [ ] Re-run `make run-profile`, shell smoke, networking smoke, and full test
       shards affected by boot ordering.
+
+Baseline from exploration 068:
+
+- Repeated warm default Alpine networking profile
+  `build/run-profile/20260712T232619Z-17014` reached the Linux init handoff at
+  7071 ms, but the login prompt did not appear until 40126 ms.
+- No-external-QEMU-network-device Alpine profile
+  `build/run-profile/20260712T232817Z-17851` reached the Linux init handoff at
+  6068 ms and login at 37119 ms.
+- Synthetic shell profile `build/run-profile/20260712T232231Z-14525` reached
+  login at 8639 ms.
+- First read: the largest cost is the default Alpine/OpenRC/login path after
+  Linux init starts.  External virtio-net networking adds several seconds, but
+  removing it does not collapse the roughly 31-34s login delay.  This
+  exploration should focus on OpenRC service ordering, readiness waits, login
+  spawn policy, and any blocking Linux/VFS calls made during that interval.

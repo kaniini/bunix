@@ -30,7 +30,7 @@ Tasks:
 - [x] Split host-side time into rootfs/ESP rebuild, QEMU launch, firmware,
       kernel/server boot, OpenRC/networking, login prompt, and first shell
       command phases.
-- [ ] Collect baseline profiles for `make run`, `ROOTFS_FLAVOR=alpine make run`,
+- [x] Collect baseline profiles for `make run`, Alpine squashfs/default run,
       synthetic shell boot, and a no-network/default-device variant.
 - [ ] Measure console output volume by prefix and log level during the slow
       path, including `user-syscall:`, scheduler, IPC, VFS, Linux, OpenRC, and
@@ -119,3 +119,37 @@ Progress:
   counts and the key interpretation: log noise should still be reduced, but
   the largest default-run delay is probably in the OpenRC/login/networking
   critical path rather than serial byte volume alone.
+- No-external-QEMU-network-device Alpine comparison:
+  - Command: `RUN_QEMU_NET_ARGS= make run-profile`
+  - Run: `build/run-profile/20260712T232817Z-17851`
+  - Rootfs target was up to date; rootfs phase completed at 20 ms.
+  - ESP phase completed at 44 ms.
+  - Runtime ESP copy and QEMU start completed at 54 ms.
+  - Kernel start: 1057 ms
+  - `bootstrap: fs ready`: 6066 ms
+  - `bootstrap: linux init exec`: 6068 ms
+  - Login prompt: 37119 ms
+  - Root shell: 38123 ms
+  - First command: 39126 ms
+  - Network command marker: 40129 ms
+  - Total through poweroff: 40516 ms
+  - Serial output: 345 lines, 16918 bytes
+  - Top prefixes: `names` 84, `kernel` 84, `vm-server` 33,
+    `bootstrap` 14, `vfs` 13, `pci` 8.
+  - Interpretation: removing the external QEMU network device only reduced
+    login latency by about 3s compared with the repeated default profile.
+    Virtio-net and DHCP are contributors, but they are not the whole slow
+    path.
+- Current explanation:
+  - `make run` defaults to `RUN_ROOTFS_FLAVOR=alpine-squashfs` and runs the
+    virtio-net Alpine profile.
+  - Warm host-side work is not the problem: rootfs rebuild, ESP rebuild, ESP
+    copy, and QEMU launch complete in about 55 ms when outputs are current.
+  - Firmware plus kernel/server bringup reaches the Linux init handoff in
+    about 6-7s on the measured runs.
+  - The dominant delay is the guest userspace interval between
+    `bootstrap: linux init exec` and `login:`, which remains about 31-34s even
+    when the external QEMU network backend is removed.
+  - The synthetic shell profile reaches login in about 8.6s, so the expensive
+    behavior is specific to the default Alpine/OpenRC/login/networking run
+    policy rather than the kernel boot path alone.
