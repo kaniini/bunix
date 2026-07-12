@@ -1,0 +1,67 @@
+Debug tmpfs-extended session drop after hardlink rename.
+
+Parent explorations:
+
+- `064-vm-execute-permission-api.txt`
+- `081-console-output-marker-corruption.txt`
+
+Problem:
+
+- Full `make test` run `20260712T194159Z-9436` passed the VM execute-permission
+  and console-output corruption gates, but failed `tmpfs-extended`.
+- The failure is not binary marker corruption. The login shell appears to exit
+  after:
+  `busybox mv /tmp/bunix-link-src.txt /tmp/bunix-link-renamed.txt`
+- The next harness command,
+  `echo TMP_LINK_THREE >> /tmp/bunix-link-renamed.txt`, is then echoed at the
+  `login:` prompt and the shard times out waiting for the user shell prompt.
+
+Why this matters:
+
+- `tmpfs-extended` is part of the full-suite gate for completing exploration
+  064.
+- A user shell exiting during a simple tmpfs hardlink/rename sequence can hide
+  real VFS, process, TTY, or shell-session bugs behind harness prompt failures.
+- The failure appeared only in the full parallel run, so the investigation
+  should distinguish a real guest race from harness synchronization drift.
+
+Plan:
+
+- Reproduce `tmpfs-extended` focused, then under parallel load, and capture
+  serial/log evidence around the `busybox mv` command.
+- Determine whether the shell process exits, receives a signal, loses its
+  controlling TTY/session, or whether the harness observes a stale prompt.
+- If the shell exits, trace the failing syscall path through Linux syscall
+  forwarding, VFS, tmpfs, hardlink, rename, and process cleanup.
+- If the harness is at fault, harden prompt synchronization without weakening
+  marker validation.
+- Fix the owning layer and add a regression that covers the hardlink rename
+  sequence without relying only on the large tmpfs shard.
+- Re-run `tmpfs-extended`, the relevant focused regression, and full
+  `make test`.
+
+Tasks:
+
+- [x] Reproduce the session drop in `tmpfs-extended` with enough logging to see
+      whether the shell exits or the harness desynchronizes.
+- [ ] Identify the owning layer for the post-rename shell/session loss.
+- [ ] Fix the owning layer without weakening shell marker checks.
+- [ ] Add focused regression coverage for the hardlink rename sequence.
+- [ ] Re-run `tmpfs-extended` and full `make test`.
+
+Verification:
+
+- Full `make test` run `20260712T194159Z-9436` failed only
+  `tmpfs-extended`; all other 28 shards passed.
+- Focused single-shard parallel run
+  `make test BUNIX_TEST_SET=tmpfs-extended` passed:
+  - run `20260712T200152Z-23062`
+  - `tmpfs-extended`: passed in 201s.
+
+Notes:
+
+- The failure reproduces in a full parallel suite, but not when
+  `tmpfs-extended` runs as the only selected parallel shard.
+- That points away from a deterministic tmpfs hardlink/rename bug and toward a
+  load-sensitive guest race, test-order interaction, or harness/session
+  synchronization defect.

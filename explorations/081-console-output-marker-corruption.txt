@@ -79,3 +79,16 @@ Progress:
   - `QEMU_TIMEOUT=600s make test-shell-part BUNIX_SHELL_PART=procfs-self-pipe`
   - `BUNIX_TEST_SET=procfs-self-pipe BUNIX_TEST_JOBS=8 sh tools/test-parallel.sh`
   - `make test BUNIX_TEST_SET=procfs-self-pipe`
+- Full post-fix `make test` run `20260712T194159Z-9436` passed 28 of 29
+  shards. The original affected shards passed:
+  - `procfs-sysfs-surface`: passed in 132s.
+  - `large-io-mount`: passed in 25s.
+  - `procfs-self-pipe`: passed in 71s.
+  - `root-login-union`: passed in 42s.
+  - `linux-signaltest`: passed in 21s.
+- The only remaining full-suite failure in that run was unrelated to the binary
+  marker corruption: `tmpfs-extended` returned to `login:` after
+  `busybox mv /tmp/bunix-link-src.txt /tmp/bunix-link-renamed.txt`, so the next
+  harness command was sent to the login prompt instead of the shell.
+- Follow-up exploration `082-tmpfs-extended-session-drop.txt` tracks the new
+  full-suite blocker separately.
