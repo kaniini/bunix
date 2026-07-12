@@ -37,7 +37,7 @@ Tasks:
       contract.
 - [x] Update ELF, mmap, stack, shared-buffer, and server mapping callers.
 - [x] Add execute-permission regression tests.
-- [ ] Run focused boot/shell tests, riscv64 build/boot gates, then full
+- [x] Run focused boot/shell tests, riscv64 build/boot gates, then full
       `make test`.
 
 Verification:
@@ -55,3 +55,7 @@ Verification:
     successfully, but binary bytes appeared where `MNT_OK` was expected.
 - Follow-up exploration `081-console-output-marker-corruption.txt` tracks the
   blocker before this exploration can be completed.
+- The console-output blocker was fixed in exploration 081 and the follow-up
+  tmpfs harness synchronization blocker was fixed in exploration 082.
+- Full `make test` run `20260712T202347Z-426` passed all 29 shards, including
+  the execute-permission regression shard `linux-signaltest`.

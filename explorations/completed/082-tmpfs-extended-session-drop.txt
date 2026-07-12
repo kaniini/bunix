@@ -47,7 +47,7 @@ Tasks:
 - [x] Identify the owning layer for the post-rename shell/session loss.
 - [x] Fix the owning layer without weakening shell marker checks.
 - [x] Add focused regression coverage for the hardlink rename sequence.
-- [ ] Re-run `tmpfs-extended` and full `make test`.
+- [x] Re-run `tmpfs-extended` and full `make test`.
 
 Verification:
 
@@ -71,6 +71,8 @@ Verification:
     `20260712T201333Z-28828`; `tmpfs-extended` passed in 214s.
   - `make test BUNIX_TEST_SET=procfs-self-pipe,relogin-session,root-mount-soak,tmpfs-extended`
     passed in run `20260712T201710Z-30135`; `tmpfs-extended` passed in 213s.
+- Full `make test` run `20260712T202347Z-426` passed all 29 shards, including
+  `tmpfs-extended` in 217s.
 
 Notes:
 

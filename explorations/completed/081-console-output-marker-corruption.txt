@@ -41,7 +41,7 @@ Tasks:
 - [x] Identify the first layer where expected marker bytes become binary data.
 - [x] Fix the output corruption at the owning layer.
 - [x] Add focused regression coverage for the corrupted path.
-- [ ] Re-run `procfs-sysfs-surface`, `large-io-mount`, and full `make test`.
+- [x] Re-run `procfs-sysfs-surface`, `large-io-mount`, and full `make test`.
 
 Progress:
 
@@ -92,3 +92,9 @@ Progress:
   harness command was sent to the login prompt instead of the shell.
 - Follow-up exploration `082-tmpfs-extended-session-drop.txt` tracks the new
   full-suite blocker separately.
+- Full `make test` run `20260712T202347Z-426` passed all 29 shards. The
+  originally corrupted shards passed:
+  - `procfs-sysfs-surface`: passed in 125s.
+  - `large-io-mount`: passed in 28s.
+  - `root-login-union`: passed in 41s.
+  - `procfs-self-pipe`: passed in 68s.
