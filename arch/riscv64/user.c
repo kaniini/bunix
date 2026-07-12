@@ -1496,6 +1496,7 @@ static u64 linux_mmap_current(struct ipc_port *linux,
 	const u32 task_prot = linux_prot_to_task(prot);
 	const u32 task_flags = linux_map_flags_to_task(flags);
 	const u32 writable = (task_prot & TASK_VM_PROT_WRITE) != 0;
+	const u32 executable = (task_prot & TASK_VM_PROT_EXEC) != 0;
 	const u32 alloc_writable = writable || !anonymous;
 	u64 base = frame->arg0;
 	u64 len = frame->arg1;
@@ -1532,7 +1533,7 @@ static u64 linux_mmap_current(struct ipc_port *linux,
 		return (u64)-LINUX_ENOMEM;
 	}
 	if (vm_alloc_user_range(task_vm_space(task), base, len,
-				alloc_writable) != 0) {
+				alloc_writable, executable) != 0) {
 		return (u64)-LINUX_ENOMEM;
 	}
 	if (task_add_vm_mapping(task, base, len, task_prot, task_flags,
@@ -1553,7 +1554,7 @@ static u64 linux_mmap_current(struct ipc_port *linux,
 	if (!anonymous && !writable && populated_len != 0 &&
 	    vm_protect_user_range(task_vm_space(task), base,
 				  align_up(populated_len, VM_PAGE_SIZE),
-				  0) != 0) {
+				  0, executable) != 0) {
 		(void)linux_unmap_task_range(task, base, len);
 		return (u64)-LINUX_EINVAL;
 	}
@@ -1577,7 +1578,7 @@ static u64 linux_brk_current(u64 requested)
 
 		if (new_page > old_page &&
 		    (vm_alloc_user_range(task_vm_space(task), old_page,
-					 new_page - old_page, 1) != 0 ||
+					 new_page - old_page, 1, 0) != 0 ||
 		     task_add_or_extend_vm_mapping(task, old_page,
 						   new_page - old_page,
 						   TASK_VM_PROT_READ |
@@ -1605,6 +1606,7 @@ static u64 linux_mprotect_current(u64 addr, u64 size, u64 linux_prot)
 	const u64 len = align_up(size, VM_PAGE_SIZE);
 	const u32 prot = linux_prot_to_task(linux_prot);
 	const u32 writable = (prot & TASK_VM_PROT_WRITE) != 0;
+	const u32 executable = (prot & TASK_VM_PROT_EXEC) != 0;
 	int vm_rc;
 	int task_rc;
 
@@ -1614,7 +1616,8 @@ static u64 linux_mprotect_current(u64 addr, u64 size, u64 linux_prot)
 		return (u64)-LINUX_EINVAL;
 	}
 
-	vm_rc = vm_protect_user_range(task_vm_space(task), addr, len, writable);
+	vm_rc = vm_protect_user_range(task_vm_space(task), addr, len, writable,
+				      executable);
 	task_rc = vm_rc != 0 ? -1 :
 		task_protect_vm_region(task, addr, len, prot);
 	if (vm_rc != 0 || task_rc != 0) {

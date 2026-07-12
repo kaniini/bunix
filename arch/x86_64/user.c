@@ -4689,6 +4689,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		const u32 task_prot = linux_prot_to_task(prot);
 		const u32 task_flags = linux_map_flags_to_task(flags);
 		const u32 writable = (task_prot & TASK_VM_PROT_WRITE) != 0;
+		const u32 executable = (task_prot & TASK_VM_PROT_EXEC) != 0;
 		const u32 alloc_writable = writable || !anonymous;
 		u64 base = arg0;
 		u64 len = arg1;
@@ -4730,7 +4731,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 
 		if (vm_alloc_user_range(task_vm_space(task), base, len,
-					alloc_writable) != 0) {
+					alloc_writable, executable) != 0) {
 			return (u64)-LINUX_ENOMEM;
 		}
 		if (task_add_vm_mapping(task, base, len, task_prot,
@@ -4751,7 +4752,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		if (!anonymous && !writable && populated_len != 0 &&
 		    vm_protect_user_range(task_vm_space(task), base,
 					  align_up(populated_len, VM_PAGE_SIZE),
-					  0) != 0) {
+					  0, executable) != 0) {
 			(void)linux_unmap_task_range(task, base, len);
 			return linux_einval_u64(__func__, __LINE__);
 		}
@@ -4840,7 +4841,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 
 			if (new_page > old_page &&
 			    (vm_alloc_user_range(task_vm_space(task), old_page,
-						 new_page - old_page, 1) != 0 ||
+						 new_page - old_page, 1, 0) != 0 ||
 			     task_add_or_extend_vm_mapping(task, old_page,
 							   new_page - old_page,
 							   TASK_VM_PROT_READ |
@@ -5033,11 +5034,14 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			const u32 prot = linux_prot_to_task(arg2);
 			const u32 writable =
 				(prot & TASK_VM_PROT_WRITE) != 0;
+			const u32 executable =
+				(prot & TASK_VM_PROT_EXEC) != 0;
 
 			const int vm_rc = arg0 + len < arg0 ? -1 :
 					  vm_protect_user_range(task_vm_space(task),
 								arg0, len,
-								writable);
+								writable,
+								executable);
 			const int task_rc = vm_rc != 0 ? -1 :
 					    task_protect_vm_region(task, arg0,
 								   len, prot);

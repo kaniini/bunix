@@ -74,6 +74,9 @@ enum {
 	BUNIX_RIGHT_SEND = 1 << 0,
 	BUNIX_RIGHT_RECV = 1 << 1,
 	BUNIX_RIGHT_DUP = 1 << 2,
+	BUNIX_VM_PROT_READ = 1 << 0,
+	BUNIX_VM_PROT_WRITE = 1 << 1,
+	BUNIX_VM_PROT_EXEC = 1 << 2,
 	BUNIX_PROTO_CONSOLE = ('C') | ('O' << 8) | ('N' << 16) | ('S' << 24),
 	BUNIX_PROTO_VM = ('V') | ('M' << 8) | ('E' << 16) | ('M' << 24),
 	BUNIX_PROTO_PING = ('P') | ('I' << 8) | ('N' << 16) | ('G' << 24),
@@ -1237,12 +1240,22 @@ static inline long bunix_task_info(u64 index, u64 *pid_threads_flags,
 			      (u64)pid_threads_flags, (u64)name_words);
 }
 
+static inline long bunix_task_map_prot(u64 task, u64 vaddr, const void *src,
+				       u64 filesz, u64 memsz, u64 prot)
+{
+	const u64 args[] = { task, vaddr, (u64)src, filesz, memsz, prot };
+
+	return bunix_syscall3(BUNIX_SYSCALL_TASK_MAP, (u64)args, 0, 0);
+}
+
 static inline long bunix_task_map(u64 task, u64 vaddr, const void *src,
 				  u64 filesz, u64 memsz, u64 writable)
 {
-	const u64 args[] = { task, vaddr, (u64)src, filesz, memsz, writable };
+	const u64 prot = writable != 0 ?
+		BUNIX_VM_PROT_READ | BUNIX_VM_PROT_WRITE :
+		BUNIX_VM_PROT_READ | BUNIX_VM_PROT_EXEC;
 
-	return bunix_syscall3(BUNIX_SYSCALL_TASK_MAP, (u64)args, 0, 0);
+	return bunix_task_map_prot(task, vaddr, src, filesz, memsz, prot);
 }
 
 static inline long bunix_task_grant(u64 task, u64 handle, unsigned int rights)
@@ -1271,20 +1284,44 @@ static inline long bunix_task_write(u64 task, u64 vaddr, const void *src,
 	return bunix_syscall3(BUNIX_SYSCALL_TASK_WRITE, (u64)args, 0, 0);
 }
 
+static inline long bunix_task_alloc_prot(u64 task, u64 vaddr, u64 len,
+					 u64 prot)
+{
+	const u64 args[] = { task, vaddr, len, prot };
+
+	return bunix_syscall3(BUNIX_SYSCALL_TASK_ALLOC, (u64)args, 0, 0);
+}
+
 static inline long bunix_task_alloc(u64 task, u64 vaddr, u64 len,
 				    u64 writable)
 {
-	const u64 args[] = { task, vaddr, len, writable };
+	const u64 prot = writable != 0 ?
+		BUNIX_VM_PROT_READ | BUNIX_VM_PROT_WRITE :
+		BUNIX_VM_PROT_READ;
 
-	return bunix_syscall3(BUNIX_SYSCALL_TASK_ALLOC, (u64)args, 0, 0);
+	return bunix_task_alloc_prot(task, vaddr, len, prot);
+}
+
+static inline long bunix_task_clone_range(u64 dst_task, u64 src_task,
+					  u64 vaddr, u64 len, u64 writable);
+
+static inline long bunix_task_clone_range_prot(u64 dst_task, u64 src_task,
+					       u64 vaddr, u64 len, u64 prot)
+{
+	const u64 args[] = { dst_task, src_task, vaddr, len, prot };
+
+	return bunix_syscall3(BUNIX_SYSCALL_TASK_CLONE_RANGE, (u64)args, 0, 0);
 }
 
 static inline long bunix_task_clone_range(u64 dst_task, u64 src_task,
 					  u64 vaddr, u64 len, u64 writable)
 {
-	const u64 args[] = { dst_task, src_task, vaddr, len, writable };
+	const u64 prot = writable != 0 ?
+		BUNIX_VM_PROT_READ | BUNIX_VM_PROT_WRITE :
+		BUNIX_VM_PROT_READ | BUNIX_VM_PROT_EXEC;
 
-	return bunix_syscall3(BUNIX_SYSCALL_TASK_CLONE_RANGE, (u64)args, 0, 0);
+	return bunix_task_clone_range_prot(dst_task, src_task, vaddr, len,
+					   prot);
 }
 
 static inline long bunix_task_start_at(u64 task, u64 entry, u64 stack)

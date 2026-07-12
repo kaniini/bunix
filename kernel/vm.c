@@ -42,7 +42,7 @@ struct vm_space *vm_rpc_create_space(const char *owner)
 	}
 	const u64 lapic = arch_smp_lapic_address();
 	if (lapic != 0 &&
-	    arch_vm_map_page(&space->arch, lapic, lapic, 1, 0) != 0) {
+	    arch_vm_map_page(&space->arch, lapic, lapic, 1, 0, 0) != 0) {
 		slab_free(space);
 		spin_unlock_irqrestore(&vm_spaces_lock, flags);
 		return 0;
@@ -114,13 +114,14 @@ void vm_rpc_free_frame(struct vm_frame frame)
 }
 
 int vm_map_user_page(struct vm_space *space, u64 vaddr, struct vm_frame frame,
-		     u32 writable)
+		     u32 writable, u32 executable)
 {
 	if (space == 0 || frame.addr == 0) {
 		return -1;
 	}
 
-	return arch_vm_map_page(&space->arch, vaddr, frame.addr, writable, 1);
+	return arch_vm_map_page(&space->arch, vaddr, frame.addr, writable, 1,
+				executable);
 }
 
 static void mem_copy(u8 *dst, const u8 *src, u64 len)
@@ -207,11 +208,11 @@ int vm_write_user(struct vm_space *space, u64 vaddr, const void *src, u64 len)
 
 int vm_map_kernel_page(u64 vaddr, u64 phys, u32 writable)
 {
-	return arch_vm_map_page(&kernel_space.arch, vaddr, phys, writable, 0);
+	return arch_vm_map_page(&kernel_space.arch, vaddr, phys, writable, 0, 0);
 }
 
 struct vm_frame vm_alloc_user_page(struct vm_space *space, u64 vaddr,
-				   u32 writable)
+				   u32 writable, u32 executable)
 {
 	struct vm_frame frame = vm_rpc_alloc_frame();
 
@@ -219,7 +220,7 @@ struct vm_frame vm_alloc_user_page(struct vm_space *space, u64 vaddr,
 		return frame;
 	}
 
-	if (vm_map_user_page(space, vaddr, frame, writable) != 0) {
+	if (vm_map_user_page(space, vaddr, frame, writable, executable) != 0) {
 		vm_rpc_free_frame(frame);
 		return (struct vm_frame){ .addr = 0 };
 	}
@@ -228,7 +229,7 @@ struct vm_frame vm_alloc_user_page(struct vm_space *space, u64 vaddr,
 }
 
 int vm_alloc_user_range(struct vm_space *space, u64 vaddr, u64 len,
-			u32 writable)
+			u32 writable, u32 executable)
 {
 	if (space == 0 || len == 0 || vaddr + len < vaddr) {
 		return -1;
@@ -249,7 +250,8 @@ int vm_alloc_user_range(struct vm_space *space, u64 vaddr, u64 len,
 		}
 
 		mem_zero((u8 *)frame.addr, VM_PAGE_SIZE);
-		if (vm_map_user_page(space, page, frame, writable) != 0) {
+		if (vm_map_user_page(space, page, frame, writable,
+				     executable) != 0) {
 			vm_rpc_free_frame(frame);
 			(void)vm_unmap_user_range(space, start, page - start);
 			return -1;
@@ -260,7 +262,7 @@ int vm_alloc_user_range(struct vm_space *space, u64 vaddr, u64 len,
 }
 
 int vm_protect_user_range(struct vm_space *space, u64 vaddr, u64 len,
-			  u32 writable)
+			  u32 writable, u32 executable)
 {
 	if (space == 0 || len == 0 || vaddr + len < vaddr) {
 		return -1;
@@ -273,7 +275,8 @@ int vm_protect_user_range(struct vm_space *space, u64 vaddr, u64 len,
 	}
 
 	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
-		if (arch_vm_protect_user_page(&space->arch, page, writable) != 0) {
+		if (arch_vm_protect_user_page(&space->arch, page, writable,
+					      executable) != 0) {
 			return -1;
 		}
 	}
@@ -306,7 +309,7 @@ int vm_unmap_user_range(struct vm_space *space, u64 vaddr, u64 len)
 }
 
 int vm_clone_user_range(struct vm_space *dst, struct vm_space *src,
-			u64 vaddr, u64 len, u32 writable)
+			u64 vaddr, u64 len, u32 writable, u32 executable)
 {
 	if (dst == 0 || src == 0 || len == 0 || vaddr + len < vaddr) {
 		return -1;
@@ -319,7 +322,8 @@ int vm_clone_user_range(struct vm_space *dst, struct vm_space *src,
 	}
 
 	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
-		struct vm_frame frame = vm_alloc_user_page(dst, page, writable);
+		struct vm_frame frame = vm_alloc_user_page(dst, page, writable,
+							  executable);
 		const u64 src_phys =
 			arch_vm_translate_user(&src->arch, page, 0);
 
@@ -339,7 +343,7 @@ int vm_clone_user_range(struct vm_space *dst, struct vm_space *src,
 }
 
 int vm_share_user_range(struct vm_space *dst, struct vm_space *src,
-			u64 vaddr, u64 len, u32 writable)
+			u64 vaddr, u64 len, u32 writable, u32 executable)
 {
 	if (dst == 0 || src == 0 || len == 0 || vaddr + len < vaddr) {
 		return -1;
@@ -359,7 +363,8 @@ int vm_share_user_range(struct vm_space *dst, struct vm_space *src,
 			(void)vm_unmap_user_range(dst, start, page - start);
 			return -1;
 		}
-		if (arch_vm_map_page(&dst->arch, page, src_phys, writable, 1) != 0) {
+		if (arch_vm_map_page(&dst->arch, page, src_phys, writable, 1,
+				     executable) != 0) {
 			vm_rpc_free_frame((struct vm_frame){ .addr = src_phys });
 			(void)vm_unmap_user_range(dst, start, page - start);
 			return -1;
@@ -370,7 +375,7 @@ int vm_share_user_range(struct vm_space *dst, struct vm_space *src,
 }
 
 int vm_share_cow_user_range(struct vm_space *dst, struct vm_space *src,
-			    u64 vaddr, u64 len)
+			    u64 vaddr, u64 len, u32 executable)
 {
 	if (dst == 0 || src == 0 || len == 0 || vaddr + len < vaddr) {
 		return -1;
@@ -390,8 +395,10 @@ int vm_share_cow_user_range(struct vm_space *dst, struct vm_space *src,
 			(void)vm_unmap_user_range(dst, start, page - start);
 			return -1;
 		}
-		if (arch_vm_protect_user_page(&src->arch, page, 0) != 0 ||
-		    arch_vm_map_page(&dst->arch, page, src_phys, 0, 1) != 0) {
+		if (arch_vm_protect_user_page(&src->arch, page, 0,
+					      executable) != 0 ||
+		    arch_vm_map_page(&dst->arch, page, src_phys, 0, 1,
+				     executable) != 0) {
 			vm_rpc_free_frame((struct vm_frame){ .addr = src_phys });
 			(void)vm_unmap_user_range(dst, start, page - start);
 			return -1;
@@ -401,7 +408,7 @@ int vm_share_cow_user_range(struct vm_space *dst, struct vm_space *src,
 	return 0;
 }
 
-int vm_cow_user_page(struct vm_space *space, u64 vaddr)
+int vm_cow_user_page(struct vm_space *space, u64 vaddr, u32 executable)
 {
 	const u64 page = align_down(vaddr, VM_PAGE_SIZE);
 	const u64 old_phys = arch_vm_translate_user(&space->arch, page, 0);
@@ -415,7 +422,8 @@ int vm_cow_user_page(struct vm_space *space, u64 vaddr)
 		return -1;
 	}
 	mem_copy((u8 *)frame.addr, (const u8 *)old_phys, VM_PAGE_SIZE);
-	if (arch_vm_map_page(&space->arch, page, frame.addr, 1, 1) != 0) {
+	if (arch_vm_map_page(&space->arch, page, frame.addr, 1, 1,
+			     executable) != 0) {
 		vm_rpc_free_frame(frame);
 		return -1;
 	}

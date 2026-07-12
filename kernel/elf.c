@@ -10,6 +10,7 @@ enum {
 	ET_EXEC = 2,
 	PT_LOAD = 1,
 	PF_W = 1 << 1,
+	PF_X = 1 << 0,
 };
 
 struct elf64_ehdr {
@@ -105,7 +106,8 @@ static int load_segment_page(struct vm_space *space, u64 image_start,
 	}
 
 	if (vm_map_user_page(space, page_vaddr, frame,
-			     (phdr->flags & PF_W) != 0) != 0) {
+			     (phdr->flags & PF_W) != 0,
+			     (phdr->flags & PF_X) != 0) != 0) {
 		vm_rpc_free_frame(frame);
 		return -1;
 	}

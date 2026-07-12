@@ -24,7 +24,9 @@ enum {
 	PT_LOAD = 1,
 	PT_DYNAMIC = 2,
 	PT_INTERP = 3,
+	PF_X = 1 << 0,
 	PF_W = 1 << 1,
+	PF_R = 1 << 2,
 	DT_NULL = 0,
 	DT_RELR = 0x24,
 	DT_RELRSZ = 0x23,
@@ -214,6 +216,22 @@ static int grant_login_management_caps(u64 task)
 		return -1;
 	}
 	return 0;
+}
+
+static u64 elf_phdr_to_bunix_prot(const struct elf64_phdr *phdr)
+{
+	u64 prot = 0;
+
+	if ((phdr->flags & PF_R) != 0) {
+		prot |= BUNIX_VM_PROT_READ;
+	}
+	if ((phdr->flags & PF_W) != 0) {
+		prot |= BUNIX_VM_PROT_WRITE;
+	}
+	if ((phdr->flags & PF_X) != 0) {
+		prot |= BUNIX_VM_PROT_EXEC;
+	}
+	return prot;
 }
 
 static long register_service(u64 service, u64 handle)
@@ -1253,9 +1271,10 @@ static long map_load_segments(u64 vfs, const struct vfs_file *file,
 					  filesz, io_buffer) != 0) {
 				return -1;
 			}
-			if (bunix_task_map(task, page, segment_buffer,
-					   4096, 4096,
-					   (phdr->flags & PF_W) != 0) != 0) {
+			if (bunix_task_map_prot(task, page, segment_buffer,
+						4096, 4096,
+						elf_phdr_to_bunix_prot(phdr))
+			    != 0) {
 				return -1;
 			}
 		}
@@ -1681,8 +1700,10 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 
 	log_exec_load_stage(bunix_task_id(task), "stack-alloc", load_path);
 	if (clear_existing &&
-	    bunix_task_alloc(task, USER_STACK_TOP - PROC_INIT_STACK_MAX,
-			     PROC_INIT_STACK_MAX, 1) != 0) {
+	    bunix_task_alloc_prot(task, USER_STACK_TOP - PROC_INIT_STACK_MAX,
+				  PROC_INIT_STACK_MAX,
+				  BUNIX_VM_PROT_READ |
+				  BUNIX_VM_PROT_WRITE) != 0) {
 		goto out;
 	}
 

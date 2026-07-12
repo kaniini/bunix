@@ -53,6 +53,83 @@ static int wait_exit(pid_t child, int code, const char *label)
 	return 0;
 }
 
+static void machine_ret_code(unsigned char *code, size_t *len)
+{
+#if defined(__x86_64__)
+	code[0] = 0xc3;
+	*len = 1;
+#elif defined(__riscv)
+	code[0] = 0x67;
+	code[1] = 0x80;
+	code[2] = 0x00;
+	code[3] = 0x00;
+	*len = 4;
+#else
+#error unsupported signaltest architecture
+#endif
+}
+
+static int test_execute_permissions(void)
+{
+	struct sigaction action;
+	pid_t child;
+
+	memset(&action, 0, sizeof(action));
+	action.sa_sigaction = fault_handler;
+	action.sa_flags = SA_SIGINFO;
+	sigemptyset(&action.sa_mask);
+
+	child = fork();
+	if (child < 0) {
+		perror("signaltest nx fork");
+		return 1;
+	}
+	if (child == 0) {
+		unsigned char code[8];
+		size_t code_len = 0;
+		void (*fn)(void);
+		unsigned char *rx;
+		unsigned char *rw;
+
+		machine_ret_code(code, &code_len);
+		rx = mmap(0, 4096, PROT_READ | PROT_WRITE,
+			  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (rx == MAP_FAILED) {
+			_exit(5);
+		}
+		memcpy(rx, code, code_len);
+		if (mprotect(rx, 4096, PROT_READ | PROT_EXEC) != 0) {
+			_exit(6);
+		}
+		__builtin___clear_cache((char *)rx, (char *)rx + code_len);
+		fn = (void (*)(void))rx;
+		fn();
+
+		rw = mmap(0, 4096, PROT_READ | PROT_WRITE,
+			  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (rw == MAP_FAILED) {
+			_exit(7);
+		}
+		memcpy(rw, code, code_len);
+		__builtin___clear_cache((char *)rw, (char *)rw + code_len);
+		expected_fault_signal = SIGSEGV;
+		expected_fault_code = SEGV_ACCERR;
+		expected_fault_addr = rw;
+		if (sigaction(SIGSEGV, &action, 0) != 0) {
+			_exit(2);
+		}
+		fn = (void (*)(void))rw;
+		fn();
+		_exit(3);
+	}
+	if (wait_exit(child, 42, "signaltest nx") != 0) {
+		return 1;
+	}
+
+	puts("linux execute permissions ok");
+	return 0;
+}
+
 static int test_caught_faults(void)
 {
 	struct sigaction action;
@@ -247,6 +324,7 @@ static int test_sigchld_self_pipe(void)
 int main(void)
 {
 	if (test_sigchld_self_pipe() != 0 ||
+	    test_execute_permissions() != 0 ||
 	    test_caught_faults() != 0) {
 		return 1;
 	}

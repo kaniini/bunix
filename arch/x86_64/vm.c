@@ -1,4 +1,5 @@
 #include <arch/vm.h>
+#include <arch/io.h>
 #include "console.h"
 #include "pmm.h"
 
@@ -7,12 +8,27 @@ enum {
 	PTE_WRITABLE = 1 << 1,
 	PTE_USER = 1 << 2,
 	PTE_LARGE = 1 << 7,
+	PTE_NO_EXEC = 1ULL << 63,
+	PTE_ADDR_MASK = 0x000ffffffffff000ULL,
 	PAGE_ENTRIES = 512,
 	PAGE_SIZE = 0x1000,
 	LARGE_PAGE_SIZE = 0x200000,
+	MSR_EFER = 0xc0000080,
+	EFER_NXE = 1 << 11,
+	CPUID_EXTENDED_MAX = 0x80000000,
+	CPUID_EXTENDED_FEATURES = 0x80000001,
+	CPUID_EDX_NX = 1 << 20,
 };
 
 extern u64 arch_boot_pml4[];
+static u32 nx_supported;
+
+static void cpuid(u32 leaf, u32 *eax, u32 *ebx, u32 *ecx, u32 *edx)
+{
+	__asm__ volatile ("cpuid"
+			  : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx)
+			  : "a"(leaf), "c"(0));
+}
 
 static void zero_page(u64 phys)
 {
@@ -50,6 +66,23 @@ static u64 table_flags(u32 writable, u32 user)
 	return flags;
 }
 
+static u64 page_flags(u32 writable, u32 user, u32 executable)
+{
+	u64 flags = table_flags(writable, user);
+
+	if (nx_supported != 0 && executable == 0) {
+		flags |= PTE_NO_EXEC;
+	}
+	return flags;
+}
+
+void arch_vm_init_cpu(void)
+{
+	if (nx_supported != 0) {
+		arch_wrmsr(MSR_EFER, arch_rdmsr(MSR_EFER) | EFER_NXE);
+	}
+}
+
 static int ensure_table(u64 *parent, u64 index, u32 writable, u32 user,
 			u64 *table_phys)
 {
@@ -69,7 +102,7 @@ static int ensure_table(u64 *parent, u64 index, u32 writable, u32 user,
 	}
 
 	parent[index] |= table_flags(writable, user);
-	*table_phys = parent[index] & ~0xfffull;
+	*table_phys = parent[index] & PTE_ADDR_MASK;
 	return 0;
 }
 
@@ -101,8 +134,22 @@ static int split_large_page(u64 *pd, u64 pd_index)
 
 void arch_vm_kernel_space_init(struct arch_vm_space *space)
 {
+	u32 eax;
+	u32 ebx;
+	u32 ecx;
+	u32 edx;
+
 	space->cr3 = (u64)arch_boot_pml4;
-	console_printf("arch-vm: kernel cr3=%p\n", (const void *)space->cr3);
+	cpuid(CPUID_EXTENDED_MAX, &eax, &ebx, &ecx, &edx);
+	if (eax >= CPUID_EXTENDED_FEATURES) {
+		cpuid(CPUID_EXTENDED_FEATURES, &eax, &ebx, &ecx, &edx);
+		if ((edx & CPUID_EDX_NX) != 0) {
+			nx_supported = 1;
+			arch_vm_init_cpu();
+		}
+	}
+	console_printf("arch-vm: kernel cr3=%p nx=%u\n",
+		       (const void *)space->cr3, nx_supported);
 }
 
 int arch_vm_space_init(struct arch_vm_space *space)
@@ -148,7 +195,7 @@ void arch_vm_space_destroy(struct arch_vm_space *space)
 			continue;
 		}
 
-		u64 *pdpt = (u64 *)(pml4e & ~0xfffull);
+		u64 *pdpt = (u64 *)(pml4e & PTE_ADDR_MASK);
 		for (u64 pdpt_index = 0; pdpt_index < PAGE_ENTRIES; pdpt_index++) {
 			u64 pdpte = pdpt[pdpt_index];
 
@@ -157,7 +204,7 @@ void arch_vm_space_destroy(struct arch_vm_space *space)
 				continue;
 			}
 
-			u64 *pd = (u64 *)(pdpte & ~0xfffull);
+			u64 *pd = (u64 *)(pdpte & PTE_ADDR_MASK);
 			for (u64 pd_index = 0; pd_index < PAGE_ENTRIES; pd_index++) {
 				u64 pde = pd[pd_index];
 
@@ -166,11 +213,11 @@ void arch_vm_space_destroy(struct arch_vm_space *space)
 					continue;
 				}
 
-				pmm_page_free_addr(pde & ~0xfffull);
+				pmm_page_free_addr(pde & PTE_ADDR_MASK);
 			}
-			pmm_page_free_addr(pdpte & ~0xfffull);
+			pmm_page_free_addr(pdpte & PTE_ADDR_MASK);
 		}
-		pmm_page_free_addr(pml4e & ~0xfffull);
+		pmm_page_free_addr(pml4e & PTE_ADDR_MASK);
 	}
 
 	pmm_page_free_addr(space->cr3);
@@ -178,7 +225,7 @@ void arch_vm_space_destroy(struct arch_vm_space *space)
 }
 
 int arch_vm_map_page(struct arch_vm_space *space, u64 vaddr, u64 phys,
-		     u32 writable, u32 user)
+		     u32 writable, u32 user, u32 executable)
 {
 	u64 *pml4 = (u64 *)space->cr3;
 	u64 pdpt_phys;
@@ -211,13 +258,14 @@ int arch_vm_map_page(struct arch_vm_space *space, u64 vaddr, u64 phys,
 	}
 
 	u64 *pt = (u64 *)pt_phys;
-	pt[pt_index] = phys | table_flags(writable, user);
+	pt[pt_index] = phys | page_flags(writable, user, executable);
 
 	__asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
 	return 0;
 }
 
-int arch_vm_protect_page(struct arch_vm_space *space, u64 vaddr, u32 writable)
+int arch_vm_protect_page(struct arch_vm_space *space, u64 vaddr, u32 writable,
+			 u32 executable)
 {
 	u64 *pml4 = (u64 *)space->cr3;
 	const u64 pml4_index = (vaddr >> 39) & 0x1ff;
@@ -235,19 +283,19 @@ int arch_vm_protect_page(struct arch_vm_space *space, u64 vaddr, u32 writable)
 		return -1;
 	}
 
-	u64 *pdpt = (u64 *)(entry & ~0xfffull);
+	u64 *pdpt = (u64 *)(entry & PTE_ADDR_MASK);
 	entry = pdpt[pdpt_index];
 	if ((entry & PTE_PRESENT) == 0 || (entry & PTE_LARGE) != 0) {
 		return -1;
 	}
 
-	u64 *pd = (u64 *)(entry & ~0xfffull);
+	u64 *pd = (u64 *)(entry & PTE_ADDR_MASK);
 	entry = pd[pd_index];
 	if ((entry & PTE_PRESENT) == 0 || (entry & PTE_LARGE) != 0) {
 		return -1;
 	}
 
-	u64 *pt = (u64 *)(entry & ~0xfffull);
+	u64 *pt = (u64 *)(entry & PTE_ADDR_MASK);
 	entry = pt[pt_index];
 	if ((entry & PTE_PRESENT) == 0) {
 		return -1;
@@ -258,13 +306,20 @@ int arch_vm_protect_page(struct arch_vm_space *space, u64 vaddr, u32 writable)
 	} else {
 		entry &= ~((u64)PTE_WRITABLE);
 	}
+	if (nx_supported != 0) {
+		if (executable) {
+			entry &= ~((u64)PTE_NO_EXEC);
+		} else {
+			entry |= PTE_NO_EXEC;
+		}
+	}
 	pt[pt_index] = entry;
 	__asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
 	return 0;
 }
 
 int arch_vm_protect_user_page(struct arch_vm_space *space, u64 vaddr,
-			      u32 writable)
+			      u32 writable, u32 executable)
 {
 	u64 *pml4 = (u64 *)space->cr3;
 	const u64 pml4_index = (vaddr >> 39) & 0x1ff;
@@ -283,21 +338,21 @@ int arch_vm_protect_user_page(struct arch_vm_space *space, u64 vaddr,
 		return -1;
 	}
 
-	u64 *pdpt = (u64 *)(entry & ~0xfffull);
+	u64 *pdpt = (u64 *)(entry & PTE_ADDR_MASK);
 	entry = pdpt[pdpt_index];
 	if ((entry & (PTE_PRESENT | PTE_USER)) !=
 	    (PTE_PRESENT | PTE_USER) || (entry & PTE_LARGE) != 0) {
 		return -1;
 	}
 
-	u64 *pd = (u64 *)(entry & ~0xfffull);
+	u64 *pd = (u64 *)(entry & PTE_ADDR_MASK);
 	entry = pd[pd_index];
 	if ((entry & (PTE_PRESENT | PTE_USER)) !=
 	    (PTE_PRESENT | PTE_USER) || (entry & PTE_LARGE) != 0) {
 		return -1;
 	}
 
-	u64 *pt = (u64 *)(entry & ~0xfffull);
+	u64 *pt = (u64 *)(entry & PTE_ADDR_MASK);
 	entry = pt[pt_index];
 	if ((entry & (PTE_PRESENT | PTE_USER)) !=
 	    (PTE_PRESENT | PTE_USER)) {
@@ -308,6 +363,13 @@ int arch_vm_protect_user_page(struct arch_vm_space *space, u64 vaddr,
 		entry |= PTE_WRITABLE;
 	} else {
 		entry &= ~((u64)PTE_WRITABLE);
+	}
+	if (nx_supported != 0) {
+		if (executable) {
+			entry &= ~((u64)PTE_NO_EXEC);
+		} else {
+			entry |= PTE_NO_EXEC;
+		}
 	}
 	pt[pt_index] = entry;
 	__asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
@@ -332,25 +394,25 @@ u64 arch_vm_unmap_page(struct arch_vm_space *space, u64 vaddr)
 		return 0;
 	}
 
-	u64 *pdpt = (u64 *)(entry & ~0xfffull);
+	u64 *pdpt = (u64 *)(entry & PTE_ADDR_MASK);
 	entry = pdpt[pdpt_index];
 	if ((entry & PTE_PRESENT) == 0 || (entry & PTE_LARGE) != 0) {
 		return 0;
 	}
 
-	u64 *pd = (u64 *)(entry & ~0xfffull);
+	u64 *pd = (u64 *)(entry & PTE_ADDR_MASK);
 	entry = pd[pd_index];
 	if ((entry & PTE_PRESENT) == 0 || (entry & PTE_LARGE) != 0) {
 		return 0;
 	}
 
-	u64 *pt = (u64 *)(entry & ~0xfffull);
+	u64 *pt = (u64 *)(entry & PTE_ADDR_MASK);
 	entry = pt[pt_index];
 	if ((entry & PTE_PRESENT) == 0) {
 		return 0;
 	}
 
-	const u64 phys = entry & ~0xfffull;
+	const u64 phys = entry & PTE_ADDR_MASK;
 	pt[pt_index] = 0;
 	__asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
 	return phys;
@@ -375,28 +437,28 @@ u64 arch_vm_unmap_user_page(struct arch_vm_space *space, u64 vaddr)
 		return 0;
 	}
 
-	u64 *pdpt = (u64 *)(entry & ~0xfffull);
+	u64 *pdpt = (u64 *)(entry & PTE_ADDR_MASK);
 	entry = pdpt[pdpt_index];
 	if ((entry & (PTE_PRESENT | PTE_USER)) !=
 	    (PTE_PRESENT | PTE_USER) || (entry & PTE_LARGE) != 0) {
 		return 0;
 	}
 
-	u64 *pd = (u64 *)(entry & ~0xfffull);
+	u64 *pd = (u64 *)(entry & PTE_ADDR_MASK);
 	entry = pd[pd_index];
 	if ((entry & (PTE_PRESENT | PTE_USER)) !=
 	    (PTE_PRESENT | PTE_USER) || (entry & PTE_LARGE) != 0) {
 		return 0;
 	}
 
-	u64 *pt = (u64 *)(entry & ~0xfffull);
+	u64 *pt = (u64 *)(entry & PTE_ADDR_MASK);
 	entry = pt[pt_index];
 	if ((entry & (PTE_PRESENT | PTE_USER)) !=
 	    (PTE_PRESENT | PTE_USER)) {
 		return 0;
 	}
 
-	const u64 phys = entry & ~0xfffull;
+	const u64 phys = entry & PTE_ADDR_MASK;
 	pt[pt_index] = 0;
 	__asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
 	return phys;
@@ -418,13 +480,13 @@ u64 arch_vm_translate(const struct arch_vm_space *space, u64 vaddr, u32 write)
 		return 0;
 	}
 
-	const u64 *pdpt = (const u64 *)(entry & ~0xfffull);
+	const u64 *pdpt = (const u64 *)(entry & PTE_ADDR_MASK);
 	entry = pdpt[pdpt_index];
 	if ((entry & PTE_PRESENT) == 0 || (write && (entry & PTE_WRITABLE) == 0)) {
 		return 0;
 	}
 
-	const u64 *pd = (const u64 *)(entry & ~0xfffull);
+	const u64 *pd = (const u64 *)(entry & PTE_ADDR_MASK);
 	entry = pd[pd_index];
 	if ((entry & PTE_PRESENT) == 0 || (write && (entry & PTE_WRITABLE) == 0)) {
 		return 0;
@@ -433,13 +495,13 @@ u64 arch_vm_translate(const struct arch_vm_space *space, u64 vaddr, u32 write)
 		return (entry & ~((u64)LARGE_PAGE_SIZE - 1)) + large_offset;
 	}
 
-	const u64 *pt = (const u64 *)(entry & ~0xfffull);
+	const u64 *pt = (const u64 *)(entry & PTE_ADDR_MASK);
 	entry = pt[pt_index];
 	if ((entry & PTE_PRESENT) == 0 || (write && (entry & PTE_WRITABLE) == 0)) {
 		return 0;
 	}
 
-	return (entry & ~0xfffull) + page_offset;
+	return (entry & PTE_ADDR_MASK) + page_offset;
 }
 
 u64 arch_vm_translate_user(const struct arch_vm_space *space, u64 vaddr,
@@ -460,7 +522,7 @@ u64 arch_vm_translate_user(const struct arch_vm_space *space, u64 vaddr,
 		return 0;
 	}
 
-	const u64 *pdpt = (const u64 *)(entry & ~0xfffull);
+	const u64 *pdpt = (const u64 *)(entry & PTE_ADDR_MASK);
 	entry = pdpt[pdpt_index];
 	if ((entry & (PTE_PRESENT | PTE_USER)) !=
 	    (PTE_PRESENT | PTE_USER) ||
@@ -468,7 +530,7 @@ u64 arch_vm_translate_user(const struct arch_vm_space *space, u64 vaddr,
 		return 0;
 	}
 
-	const u64 *pd = (const u64 *)(entry & ~0xfffull);
+	const u64 *pd = (const u64 *)(entry & PTE_ADDR_MASK);
 	entry = pd[pd_index];
 	if ((entry & (PTE_PRESENT | PTE_USER)) !=
 	    (PTE_PRESENT | PTE_USER) ||
@@ -477,7 +539,7 @@ u64 arch_vm_translate_user(const struct arch_vm_space *space, u64 vaddr,
 		return 0;
 	}
 
-	const u64 *pt = (const u64 *)(entry & ~0xfffull);
+	const u64 *pt = (const u64 *)(entry & PTE_ADDR_MASK);
 	entry = pt[pt_index];
 	if ((entry & (PTE_PRESENT | PTE_USER)) !=
 	    (PTE_PRESENT | PTE_USER) ||
@@ -485,7 +547,7 @@ u64 arch_vm_translate_user(const struct arch_vm_space *space, u64 vaddr,
 		return 0;
 	}
 
-	return (entry & ~0xfffull) + page_offset;
+	return (entry & PTE_ADDR_MASK) + page_offset;
 }
 
 void arch_vm_activate(const struct arch_vm_space *space)

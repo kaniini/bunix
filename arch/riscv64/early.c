@@ -327,7 +327,7 @@ static int vm_hook_self_test(void)
 	if (arch_vm_space_init(&space) != 0) {
 		return -1;
 	}
-	if (arch_vm_map_page(&space, vaddr, phys, 1, 1) != 0) {
+	if (arch_vm_map_page(&space, vaddr, phys, 1, 1, 0) != 0) {
 		arch_vm_space_destroy(&space);
 		return -1;
 	}
@@ -335,7 +335,7 @@ static int vm_hook_self_test(void)
 		arch_vm_space_destroy(&space);
 		return -1;
 	}
-	if (arch_vm_protect_page(&space, vaddr, 0) != 0 ||
+	if (arch_vm_protect_page(&space, vaddr, 0, 0) != 0 ||
 	    arch_vm_translate(&space, vaddr + offset, 1) != 0 ||
 	    arch_vm_translate(&space, vaddr + offset, 0) != phys + offset) {
 		arch_vm_space_destroy(&space);
@@ -414,7 +414,7 @@ static int user_copy_self_test(void)
 		actual[i] = 0;
 	}
 	if (space == 0 ||
-	    vm_alloc_user_page(space, USER_STACK_PAGE, 1).addr == 0) {
+	    vm_alloc_user_page(space, USER_STACK_PAGE, 1, 0).addr == 0) {
 		return -1;
 	}
 	vm_rpc_activate_space(space);

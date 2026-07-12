@@ -337,7 +337,7 @@ static u64 launch_user_image(const char *name, struct task *parent,
 
 	for (u64 page = 0; page < USER_STACK_PAGES; page++) {
 		const u64 vaddr = USER_STACK_TOP - (page + 1) * VM_PAGE_SIZE;
-		if (vm_alloc_user_page(space, vaddr, 1).addr == 0) {
+		if (vm_alloc_user_page(space, vaddr, 1, 0).addr == 0) {
 			console_printf("kernel: failed to map stack for %s\n",
 				       name);
 			return (u64)-1;
@@ -630,7 +630,7 @@ u64 server_task_create(struct task *parent, const char *name)
 
 	for (u64 page = 0; page < USER_STACK_PAGES; page++) {
 		const u64 vaddr = USER_STACK_TOP - (page + 1) * VM_PAGE_SIZE;
-		if (vm_alloc_user_page(space, vaddr, 1).addr == 0) {
+		if (vm_alloc_user_page(space, vaddr, 1, 0).addr == 0) {
 			console_printf("kernel: failed to map stack for %s\n",
 				       task_label);
 			return (u64)-1;
@@ -654,11 +654,13 @@ u64 server_task_create(struct task *parent, const char *name)
 }
 
 int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
-		    const void *src, u64 filesz, u64 memsz, u32 writable)
+		    const void *src, u64 filesz, u64 memsz, u32 prot)
 {
 	struct task *task = task_from_handle(parent, task_handle,
 					    TASK_RIGHT_SEND);
 	int result = -1;
+	const u32 writable = (prot & TASK_VM_PROT_WRITE) != 0;
+	const u32 executable = (prot & TASK_VM_PROT_EXEC) != 0;
 	if (task == 0 || src == 0 || filesz > memsz ||
 	    vaddr + memsz < vaddr) {
 		task_release(task);
@@ -688,17 +690,19 @@ int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
 				 (const u8 *)src + src_offset,
 				 copy_end - copy_start);
 		}
-		if (vm_map_user_page(space, page, frame, writable) != 0) {
+		if (vm_map_user_page(space, page, frame, writable,
+				     executable) != 0) {
 			vm_rpc_free_frame(frame);
 			goto out;
 		}
 	}
 
-	console_printf("kernel: task map task=%u vaddr=%p filesz=%u memsz=%u\n",
+	console_printf("kernel: task map task=%u vaddr=%p filesz=%u memsz=%u prot=0x%x\n",
 		       task_id(task), (const void *)vaddr, (u32)filesz,
-		       (u32)memsz);
-	if (task_add_vm_region(task, page_start, page_end - page_start,
-			       writable, TASK_VM_REGION_ELF) != 0) {
+		       (u32)memsz, prot);
+	if (task_add_vm_mapping(task, page_start, page_end - page_start,
+				prot, TASK_VM_MAP_PRIVATE, TASK_VM_REGION_ELF,
+				TASK_VM_OBJECT_FILE, 0, 0) != 0) {
 		goto out;
 	}
 	result = 0;
@@ -729,19 +733,21 @@ int server_task_write(struct task *parent, u64 task_handle, u64 vaddr,
 }
 
 int server_task_alloc(struct task *parent, u64 task_handle, u64 vaddr,
-		      u64 len, u32 writable)
+		      u64 len, u32 prot)
 {
-	return server_task_alloc_kind(parent, task_handle, vaddr, len, writable,
+	return server_task_alloc_kind(parent, task_handle, vaddr, len, prot,
 				      TASK_VM_REGION_MMAP);
 }
 
 int server_task_alloc_kind(struct task *parent, u64 task_handle, u64 vaddr,
-			   u64 len, u32 writable, u32 kind)
+			   u64 len, u32 prot, u32 kind)
 {
 	struct task *task = task_handle == 0 ? parent :
 			    task_from_handle(parent, task_handle,
 					     TASK_RIGHT_SEND);
 	const int release_task = task_handle != 0;
+	const u32 writable = (prot & TASK_VM_PROT_WRITE) != 0;
+	const u32 executable = (prot & TASK_VM_PROT_EXEC) != 0;
 	if (task == 0 || len == 0 || vaddr + len < vaddr) {
 		if (release_task) {
 			task_release(task);
@@ -749,19 +755,29 @@ int server_task_alloc_kind(struct task *parent, u64 task_handle, u64 vaddr,
 		return -1;
 	}
 
-	if (vm_alloc_user_range(task_vm_space(task), vaddr, len, writable) != 0) {
+	if (vm_alloc_user_range(task_vm_space(task), vaddr, len, writable,
+				executable) != 0) {
 		if (release_task) {
 			task_release(task);
 		}
 		return -1;
 	}
 
-	console_printf("kernel: task alloc task=%u vaddr=%p len=%u writable=%u\n",
-		       task_id(task), (const void *)vaddr, (u32)len, writable);
-	if (task_add_vm_region(task, align_down(vaddr, VM_PAGE_SIZE),
-			       align_up(vaddr + len, VM_PAGE_SIZE) -
-			       align_down(vaddr, VM_PAGE_SIZE),
-			       writable, kind) != 0) {
+	console_printf("kernel: task alloc task=%u vaddr=%p len=%u prot=0x%x\n",
+		       task_id(task), (const void *)vaddr, (u32)len, prot);
+	if (task_add_vm_mapping(task, align_down(vaddr, VM_PAGE_SIZE),
+				align_up(vaddr + len, VM_PAGE_SIZE) -
+				align_down(vaddr, VM_PAGE_SIZE),
+				prot,
+				TASK_VM_MAP_PRIVATE |
+				(kind == TASK_VM_REGION_MMAP ||
+				 kind == TASK_VM_REGION_BRK ||
+				 kind == TASK_VM_REGION_STACK ?
+				 TASK_VM_MAP_ANONYMOUS : 0),
+				kind,
+				kind == TASK_VM_REGION_ELF ?
+				TASK_VM_OBJECT_FILE : TASK_VM_OBJECT_ANON,
+				0, 0) != 0) {
 		if (release_task) {
 			task_release(task);
 		}
@@ -774,24 +790,26 @@ int server_task_alloc_kind(struct task *parent, u64 task_handle, u64 vaddr,
 }
 
 int server_task_clone_range(struct task *parent, u64 dst_handle,
-			    u64 src_handle, u64 vaddr, u64 len, u32 writable)
+			    u64 src_handle, u64 vaddr, u64 len, u32 prot)
 {
 	struct task *dst = task_from_handle(parent, dst_handle, TASK_RIGHT_SEND);
 	struct task *src = task_from_handle(parent, src_handle, TASK_RIGHT_SEND);
 	int result = -1;
+	const u32 writable = (prot & TASK_VM_PROT_WRITE) != 0;
+	const u32 executable = (prot & TASK_VM_PROT_EXEC) != 0;
 
 	if (dst == 0 || src == 0 || len == 0 || vaddr + len < vaddr) {
 		goto out;
 	}
 
 	if (vm_clone_user_range(task_vm_space(dst), task_vm_space(src),
-				vaddr, len, writable) != 0) {
+				vaddr, len, writable, executable) != 0) {
 		goto out;
 	}
 
-	console_printf("kernel: task clone dst=%u src=%u vaddr=%p len=%u writable=%u\n",
+	console_printf("kernel: task clone dst=%u src=%u vaddr=%p len=%u prot=0x%x\n",
 		       task_id(dst), task_id(src), (const void *)vaddr,
-		       (u32)len, writable);
+		       (u32)len, prot);
 	result = 0;
 out:
 	task_release(dst);
@@ -1002,21 +1020,28 @@ struct task *server_task_fork_current_stopped(
 			(region->prot & TASK_VM_PROT_WRITE) != 0 &&
 			(region->flags & TASK_VM_MAP_PRIVATE) != 0 &&
 			(region->flags & TASK_VM_MAP_ANONYMOUS) != 0;
+		const u32 writable =
+			region != 0 &&
+			(region->prot & TASK_VM_PROT_WRITE) != 0;
+		const u32 executable =
+			region != 0 &&
+			(region->prot & TASK_VM_PROT_EXEC) != 0;
 
 		if (region == 0 ||
 		    (share_file_region ?
 		     vm_share_user_range(task_vm_space(child),
 					 task_vm_space(parent),
 					 region->base, region->len,
-					 region->writable) :
+					 writable, executable) :
 		     share_cow_region ?
 		     vm_share_cow_user_range(task_vm_space(child),
 					     task_vm_space(parent),
-					     region->base, region->len) :
+					     region->base, region->len,
+					     executable) :
 		     vm_clone_user_range(task_vm_space(child),
 					 task_vm_space(parent),
 					 region->base, region->len,
-					 region->writable)) != 0 ||
+					 writable, executable)) != 0 ||
 		    task_add_vm_mapping(child, region->base, region->len,
 					region->prot, region->flags,
 					region->kind, region->object_type,

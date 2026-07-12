@@ -3550,8 +3550,12 @@ int task_handle_cow_fault(struct task *task, u64 addr, int write_fault)
 			region->object_type == TASK_VM_OBJECT_ANON;
 
 		if (cow_candidate) {
+			const u32 executable =
+				(region->prot & TASK_VM_PROT_EXEC) != 0;
+
 			spin_unlock_irqrestore(&task->lock, flags);
-			return vm_cow_user_page(task->vm_space, page);
+			return vm_cow_user_page(task->vm_space, page,
+						executable);
 		}
 	}
 	spin_unlock_irqrestore(&task->lock, flags);

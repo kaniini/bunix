@@ -31,11 +31,11 @@ Plan:
 
 Tasks:
 
-- [ ] Audit all user mapping call sites and assign intended execute policy.
-- [ ] Extend generic VM APIs with execute permission.
-- [ ] Implement x86_64 NX and riscv64 execute-bit handling through the shared
+- [x] Audit all user mapping call sites and assign intended execute policy.
+- [x] Extend generic VM APIs with execute permission.
+- [x] Implement x86_64 NX and riscv64 execute-bit handling through the shared
       contract.
-- [ ] Update ELF, mmap, stack, shared-buffer, and server mapping callers.
-- [ ] Add execute-permission regression tests.
+- [x] Update ELF, mmap, stack, shared-buffer, and server mapping callers.
+- [x] Add execute-permission regression tests.
 - [ ] Run focused boot/shell tests, riscv64 build/boot gates, then full
       `make test`.

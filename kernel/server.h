@@ -31,15 +31,15 @@ u64 server_launch_module_with_caps(const char *name, struct task *parent,
 				   u64 cap_count);
 u64 server_task_create(struct task *parent, const char *name);
 int server_task_map(struct task *parent, u64 task_handle, u64 vaddr,
-		    const void *src, u64 filesz, u64 memsz, u32 writable);
+		    const void *src, u64 filesz, u64 memsz, u32 prot);
 int server_task_write(struct task *parent, u64 task_handle, u64 vaddr,
 		      const void *src, u64 len);
 int server_task_alloc(struct task *parent, u64 task_handle, u64 vaddr,
-		      u64 len, u32 writable);
+		      u64 len, u32 prot);
 int server_task_alloc_kind(struct task *parent, u64 task_handle, u64 vaddr,
-			   u64 len, u32 writable, u32 kind);
+			   u64 len, u32 prot, u32 kind);
 int server_task_clone_range(struct task *parent, u64 dst_handle,
-			    u64 src_handle, u64 vaddr, u64 len, u32 writable);
+			    u64 src_handle, u64 vaddr, u64 len, u32 prot);
 int server_task_grant(struct task *parent, u64 task_handle, u64 handle,
 		      u32 rights);
 u64 server_task_grant_tagged(struct task *parent, u64 task_handle, u64 handle,

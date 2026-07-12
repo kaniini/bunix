@@ -2,6 +2,7 @@
 #include <arch/interrupts.h>
 #include <arch/io.h>
 #include <arch/user.h>
+#include <arch/vm.h>
 #include "console.h"
 #include "multiboot2.h"
 #include "sched.h"
@@ -624,6 +625,7 @@ void arch_smp_ap_entry(u32 cpu_index)
 		__asm__ volatile ("pause");
 	}
 
+	arch_vm_init_cpu();
 	arch_interrupts_load();
 	arch_user_init_cpu(cpu_index);
 	lapic_timer_init_current_cpu();

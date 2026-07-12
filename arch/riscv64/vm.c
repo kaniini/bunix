@@ -91,15 +91,10 @@ static u64 page_flags(u32 writable, u32 user, u32 executable)
 	return flags;
 }
 
-static u64 pte_leaf(u64 phys, u32 writable, u32 user)
+static u64 pte_leaf(u64 phys, u32 writable, u32 user, u32 executable)
 {
-	/*
-	 * The existing generic VM contract has no execute bit because the
-	 * x86_64 path does not use NX.  Keep riscv64 mappings executable until
-	 * the shared VM API grows explicit execute permissions.
-	 */
 	return ((phys >> RISCV64_PAGE_SHIFT) << 10) |
-	       page_flags(writable, user, 1);
+	       page_flags(writable, user, executable);
 }
 
 static u32 vpn_index(u64 vaddr, u32 level)
@@ -228,7 +223,7 @@ void arch_vm_space_destroy(struct arch_vm_space *space)
 }
 
 int arch_vm_map_page(struct arch_vm_space *space, u64 vaddr, u64 phys,
-		     u32 writable, u32 user)
+		     u32 writable, u32 user, u32 executable)
 {
 	u64 *root;
 	u64 *l1;
@@ -246,7 +241,7 @@ int arch_vm_map_page(struct arch_vm_space *space, u64 vaddr, u64 phys,
 		return -1;
 	}
 
-	l0[vpn_index(vaddr, 0)] = pte_leaf(phys, writable, user);
+	l0[vpn_index(vaddr, 0)] = pte_leaf(phys, writable, user, executable);
 	flush_vma();
 	return 0;
 }
@@ -258,7 +253,7 @@ static int map_supervisor_identity_window(struct arch_vm_space *space,
 	end = (end + RISCV64_PAGE_SIZE - 1) & ~(RISCV64_PAGE_SIZE - 1);
 
 	for (u64 page = start; page < end; page += RISCV64_PAGE_SIZE) {
-		if (arch_vm_map_page(space, page, page, 1, 0) != 0) {
+		if (arch_vm_map_page(space, page, page, 1, 0, 0) != 0) {
 			return -1;
 		}
 	}
@@ -302,7 +297,8 @@ int arch_vm_register_mmio_identity(u64 start, u64 len)
 	return 0;
 }
 
-int arch_vm_protect_page(struct arch_vm_space *space, u64 vaddr, u32 writable)
+int arch_vm_protect_page(struct arch_vm_space *space, u64 vaddr, u32 writable,
+			 u32 executable)
 {
 	u64 *slot;
 	u64 entry;
@@ -322,13 +318,18 @@ int arch_vm_protect_page(struct arch_vm_space *space, u64 vaddr, u32 writable)
 	} else {
 		entry &= ~((u64)RISCV64_PTE_W);
 	}
+	if (executable != 0) {
+		entry |= RISCV64_PTE_X;
+	} else {
+		entry &= ~((u64)RISCV64_PTE_X);
+	}
 	*slot = entry;
 	flush_vma();
 	return 0;
 }
 
 int arch_vm_protect_user_page(struct arch_vm_space *space, u64 vaddr,
-			      u32 writable)
+			      u32 writable, u32 executable)
 {
 	u64 *slot;
 	u64 entry;
@@ -347,6 +348,11 @@ int arch_vm_protect_user_page(struct arch_vm_space *space, u64 vaddr,
 		entry |= RISCV64_PTE_W | RISCV64_PTE_D;
 	} else {
 		entry &= ~((u64)RISCV64_PTE_W);
+	}
+	if (executable != 0) {
+		entry |= RISCV64_PTE_X;
+	} else {
+		entry &= ~((u64)RISCV64_PTE_X);
 	}
 	*slot = entry;
 	flush_vma();
