@@ -1,0 +1,44 @@
+Fix binary command-output corruption in shell test markers.
+
+Parent exploration: `064-vm-execute-permission-api.txt`
+
+Problem:
+
+- Full `make test` for exploration 064 reached the expected VM execute
+  permission coverage, but failed two shell shards because command output was
+  replaced by binary bytes.
+- `procfs-sysfs-surface` failed `DMESG_PREFIX_OK`: `busybox dmesg` wrote binary
+  bytes instead of a line matching the expected uptime-prefixed log format.
+- `large-io-mount` failed `MNT_OK`: `mount -t tmpfs tmpfs /mnt && echo MNT_OK`
+  mounted tmpfs successfully and later `cat`, `mount`, and `umount` checks
+  passed, but binary bytes appeared where `MNT_OK` should have been printed.
+
+Why this matters:
+
+- The failing operations appear to succeed, so this is likely output-path,
+  console-ring, dmesg, TTY, or harness synchronization corruption rather than
+  the underlying VFS operation failing.
+- The corruption blocks full-suite validation for VM execute permissions and
+  will make future shell-marker failures ambiguous.
+
+Plan:
+
+- Reproduce `procfs-sysfs-surface` and `large-io-mount` independently with
+  `log=debug` and capture serial, dmesg, and linux strace evidence around the
+  corrupted writes.
+- Trace the bytes emitted by `busybox dmesg` and by the `mount && echo MNT_OK`
+  command path from Linux `write(2)` through the Linux server, TTY/console
+  handling, consoled, and early-console fallback.
+- Determine whether the bytes originate in guest userspace, Linux-server write
+  handling, the console ring, serial output, or host-side harness capture.
+- Fix the corruption at the owning layer without weakening marker checks.
+- Re-run the two failed shards independently, then re-run full `make test` for
+  exploration 064.
+
+Tasks:
+
+- [ ] Reproduce both marker corruptions with focused shards and debug logging.
+- [ ] Identify the first layer where expected marker bytes become binary data.
+- [ ] Fix the output corruption at the owning layer.
+- [ ] Add focused regression coverage for the corrupted path.
+- [ ] Re-run `procfs-sysfs-surface`, `large-io-mount`, and full `make test`.

@@ -39,3 +39,19 @@ Tasks:
 - [x] Add execute-permission regression tests.
 - [ ] Run focused boot/shell tests, riscv64 build/boot gates, then full
       `make test`.
+
+Verification:
+
+- `make test-shell-part BUNIX_SHELL_PART=linux-signaltest` passed after adding
+  RX/RW execute-permission coverage.
+- `make test-riscv64-shared-linux-server-build test-riscv64-proc-server-build
+  test-boot-riscv64-early` reached the riscv64 early boot gate after a fix for
+  supervisor RAM identity mappings.
+- `make test` ran 29 shards and proved the new `linux-signaltest` shard, but
+  failed on unrelated command-output marker corruption:
+  - `procfs-sysfs-surface`: `busybox dmesg` produced binary bytes instead of
+    `DMESG_PREFIX_OK`.
+  - `large-io-mount`: `mount -t tmpfs tmpfs /mnt && echo MNT_OK` mounted
+    successfully, but binary bytes appeared where `MNT_OK` was expected.
+- Follow-up exploration `081-console-output-marker-corruption.txt` tracks the
+  blocker before this exploration can be completed.
