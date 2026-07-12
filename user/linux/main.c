@@ -5066,6 +5066,8 @@ static long linux_tty_read(struct linux_tty *tty, struct linux_process *process,
 
 static long linux_tty_write_buffer(struct linux_tty *tty, u64 len, u64 buffer)
 {
+	char tty_write_buffer[256];
+
 	if (tty == 0) {
 		return -LINUX_EBADF;
 	}
@@ -5074,16 +5076,17 @@ static long linux_tty_write_buffer(struct linux_tty *tty, u64 len, u64 buffer)
 	}
 
 	for (u64 done = 0; done < len;) {
-		const u64 chunk = len - done > sizeof(write_buffer) ?
-				  sizeof(write_buffer) : len - done;
+		const u64 chunk = len - done > sizeof(tty_write_buffer) ?
+				  sizeof(tty_write_buffer) : len - done;
 
-		if (bunix_buffer_read(buffer, done, write_buffer, chunk) != 0) {
+		if (bunix_buffer_read(buffer, done, tty_write_buffer,
+				      chunk) != 0) {
 			return done != 0 ? (long)done : -(long)LINUX_EFAULT;
 		}
 		for (u64 i = 0; i < chunk; i++) {
-			linux_tty_output_event(tty, write_buffer[i]);
+			linux_tty_output_event(tty, tty_write_buffer[i]);
 		}
-		bunix_console_write((const char *)write_buffer, chunk);
+		bunix_console_write((const char *)tty_write_buffer, chunk);
 		done += chunk;
 	}
 	return (long)len;
