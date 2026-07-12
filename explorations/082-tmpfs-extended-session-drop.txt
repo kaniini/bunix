@@ -44,9 +44,9 @@ Tasks:
 
 - [x] Reproduce the session drop in `tmpfs-extended` with enough logging to see
       whether the shell exits or the harness desynchronizes.
-- [ ] Identify the owning layer for the post-rename shell/session loss.
-- [ ] Fix the owning layer without weakening shell marker checks.
-- [ ] Add focused regression coverage for the hardlink rename sequence.
+- [x] Identify the owning layer for the post-rename shell/session loss.
+- [x] Fix the owning layer without weakening shell marker checks.
+- [x] Add focused regression coverage for the hardlink rename sequence.
 - [ ] Re-run `tmpfs-extended` and full `make test`.
 
 Verification:
@@ -65,6 +65,12 @@ Verification:
   - `relogin-session`: passed in 29s.
   - `root-mount-soak`: passed in 41s.
   - `tmpfs-extended`: passed in 199s.
+- After changing `tmpfs-extended` to synchronize on a unique shell-emitted
+  marker after every command instead of only counting prompts:
+  - `make test BUNIX_TEST_SET=tmpfs-extended` passed in run
+    `20260712T201333Z-28828`; `tmpfs-extended` passed in 214s.
+  - `make test BUNIX_TEST_SET=procfs-self-pipe,relogin-session,root-mount-soak,tmpfs-extended`
+    passed in run `20260712T201710Z-30135`; `tmpfs-extended` passed in 213s.
 
 Notes:
 
@@ -75,3 +81,9 @@ Notes:
 - That points away from a deterministic tmpfs hardlink/rename bug or simple
   prior-shard-order dependency and toward broader full-suite pressure, a rare
   guest race, or harness/session synchronization defect.
+- The owning layer for the observed bad behavior is the `tmpfs-extended`
+  harness synchronization. Counting a new `~ $ ` prompt proved command return
+  but did not prove the shell remained alive long enough for the next test
+  command, so a session drop could send that next command to `login:`.
+- The hardened sync keeps marker validation strict and turns any future
+  post-command shell death into an immediate per-command marker timeout.
