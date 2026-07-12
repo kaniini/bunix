@@ -522,7 +522,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-linux-exec-abi test-proc-exec-stack test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-linux-lifecycle test-lowmem-isolation test-user-memory-contract test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-sleep test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-log-isolation test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-profile run-alpine-net run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain riscv64-bpi-f3-artifacts test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-linux-exec-abi test-proc-exec-stack test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-linux-lifecycle test-lowmem-isolation test-user-memory-contract test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-sleep test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-log-isolation test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-riscv64-bpi-f3-artifacts test-riscv64-bpi-f3-smoke-script test-riscv64-bpi-f3-emulator-gate test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -1403,6 +1403,14 @@ RUN_QEMU_NET_ARGS ?= $(QEMU_VIRTIO_NET_EXTERNAL_ARGS)
 
 run:
 	$(MAKE) ROOTFS_FLAVOR=$(RUN_ROOTFS_FLAVOR) run-alpine-net
+
+run-profile:
+	RUN_PROFILE_ROOTFS_FLAVOR=$(RUN_ROOTFS_FLAVOR) \
+		RUN_PROFILE_ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) \
+		RUN_PROFILE_BUILD_TARGET=$(VIRTIO_NET_TEST_EFI_BOOT_APP) \
+		RUN_QEMU_NET_ARGS="$(RUN_QEMU_NET_ARGS)" \
+		OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		sh tools/run-profile.sh
 
 run-alpine-net: $(VIRTIO_NET_TEST_EFI_BOOT_APP)
 	$(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \

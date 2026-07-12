@@ -25,7 +25,7 @@ Goal:
 
 Tasks:
 
-- [ ] Add a `make run-profile` or equivalent harness that records monotonic
+- [x] Add a `make run-profile` or equivalent harness that records monotonic
       host timestamps and guest uptime markers without requiring manual input.
 - [ ] Split host-side time into rootfs/ESP rebuild, QEMU launch, firmware,
       kernel/server boot, OpenRC/networking, login prompt, and first shell
@@ -38,3 +38,49 @@ Tasks:
 - [ ] Record whether stale build artifacts, FAT ESP writes, or full-test
       leftovers materially affect `make run`.
 - [ ] Update the next performance exploration with the measured top offenders.
+
+Progress:
+
+- Added `tools/run-profile.sh` and `make run-profile`.
+  - The harness builds the selected boot artifact, copies the ESP to a runtime
+    directory, runs QEMU with the same virtio-net arguments used by `make run`,
+    logs in as root, runs a first shell marker command, runs a minimal network
+    command, powers off the guest, and writes timing artifacts under
+    `build/run-profile/<run-id>/`.
+  - Events are recorded in `events.tsv`; serial output, QEMU stderr, summary
+    metadata, and serial prefix counts are retained for later analysis.
+- First default `make run`-equivalent profile:
+  - Command: `make run-profile`
+  - Run: `build/run-profile/20260712T232134Z-13917`
+  - Rootfs: `alpine-squashfs`
+  - Warm build done: 595 ms
+  - Kernel start: 1605 ms
+  - `bootstrap: fs ready`: 6615 ms
+  - `bootstrap: linux init exec`: 6617 ms
+  - Login prompt: 41674 ms
+  - Root shell: 42679 ms
+  - First command: 43682 ms
+  - Total through poweroff: 45297 ms
+  - Serial output: 354 lines, 17452 bytes
+  - Top prefixes: `kernel` 84, `names` 82, `vm-server` 33, `bootstrap` 14,
+    `vfs` 13.
+- First synthetic no-network comparison profile:
+  - Command:
+    `RUN_PROFILE_ROOTFS_FLAVOR=squashfs RUN_PROFILE_ESP_DIR=build/esp RUN_PROFILE_BUILD_TARGET=build/esp/EFI/BOOT/BOOTX64.EFI RUN_QEMU_NET_ARGS= sh tools/run-profile.sh`
+  - Run: `build/run-profile/20260712T232231Z-14525`
+  - Warm build done: 1613 ms
+  - Kernel start: 2625 ms
+  - `bootstrap: fs ready`: 8635 ms
+  - `bootstrap: linux init exec`: 8638 ms
+  - Login prompt: 8639 ms
+  - Root shell: 9643 ms
+  - First command: 10646 ms
+  - Total through poweroff: 12049 ms
+  - Serial output: 420 lines, 22293 bytes
+  - Top prefixes: `names` 93, `kernel` 83, `user-syscall` 52, `vm-server` 33,
+    `sched` 20.
+- Initial read: on a warm tree, default `make run` latency is dominated by the
+  gap between `bootstrap: linux init exec` and the login prompt, not host
+  rebuild or kernel/server bootstrap.  The synthetic profile reaches login in
+  about 8.6s, while the Alpine networking profile reaches login in about
+  41.7s.
