@@ -1,0 +1,37 @@
+Shorten the boot and service startup critical path.
+
+Parent exploration: `068-make-run-latency-baseline.txt`
+
+Problem:
+
+- Even with logging fixed, `make run` may still spend too much time launching
+  servers, mounting translators, waiting for names, configuring networking,
+  starting OpenRC, and spawning login.
+- Several boot paths still use broad waits, fixed sleeps, or serialized
+  readiness checks that were reasonable during bringup but are expensive for
+  everyday interactive runs.
+- The default run target starts a feature-rich environment.  That is valuable,
+  but routine development needs boot phases to be explicit and measurable.
+
+Goal:
+
+- Reduce time from kernel entry to usable login shell without weakening the
+  multi-server architecture or hiding readiness failures.
+
+Tasks:
+
+- [ ] Use exploration 068 phase data to identify the slowest guest-side boot
+      phases and the server responsible for each delay.
+- [ ] Replace fixed sleeps and polling loops on the interactive path with
+      explicit readiness RPCs or event notifications where practical.
+- [ ] Audit bootstrap server launch ordering for unnecessary serialization;
+      allow independent servers to start in parallel when capability and mount
+      dependencies permit.
+- [ ] Separate critical-path services needed for login from deferred services
+      that can start after the prompt.
+- [ ] Profile OpenRC and networking startup under the default Alpine run path,
+      and decide which services must block login.
+- [ ] Add boot timing markers to dmesg or `/proc` so future regressions can be
+      diagnosed from inside the guest.
+- [ ] Re-run `make run-profile`, shell smoke, networking smoke, and full test
+      shards affected by boot ordering.

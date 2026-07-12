@@ -1,0 +1,39 @@
+Reduce console/log overhead on interactive runs.
+
+Parent exploration: `068-make-run-latency-baseline.txt`
+
+Problem:
+
+- `make run` defaults to `log=info`, and `-serial stdio` makes every emitted
+  line part of the interactive critical path.
+- The logger already demotes many scheduler, IPC, buffer, and task lifecycle
+  lines to trace, but some expensive diagnostic paths still emit at info/error
+  during normal boot.
+- `arch/x86_64/user.c` negative Linux syscall dumps print multiple stack,
+  byte, and register lines through `console_printf()`.  These are useful when
+  debugging syscall personality bugs, but they are not acceptable as default
+  run-path noise.
+- Server logs should remain available through dmesg/ring-buffer diagnostics
+  without slowing the controlling console once real userspace is up.
+
+Goal:
+
+- Make normal `make run` quiet and fast while preserving explicit debug and
+  strace-style observability when requested.
+
+Tasks:
+
+- [ ] Use the baseline from exploration 068 to identify all high-volume log
+      prefixes emitted before and after Linux userspace starts.
+- [ ] Move `user-syscall:` negative syscall backtrace dumps behind an explicit
+      debug/trace flag or `log=debug`, and keep a compact single-line warning
+      only when needed.
+- [ ] Audit info-level server logs and demote routine readiness/chatter to
+      trace while keeping boot-critical milestones and errors visible.
+- [ ] Ensure scheduler, IPC, buffer, VM, and VFS diagnostic prefixes are
+      consistently classified by `kernel/console.c`.
+- [ ] Keep `log=debug` and Linux server strace behavior available for focused
+      debugging without changing default `make run`.
+- [ ] Add a regression or smoke check that default run logs do not contain
+      repeated high-volume diagnostic prefixes before login.
+- [ ] Re-profile `make run` and record the latency/output delta.

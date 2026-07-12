@@ -1,0 +1,33 @@
+Create fast and faithful developer run profiles.
+
+Parent exploration: `068-make-run-latency-baseline.txt`
+
+Problem:
+
+- `make run` currently mixes multiple goals: faithful Alpine boot, networking
+  by default, OpenRC, login, broad server coverage, and an interactive shell.
+- For everyday kernel/server development, a fast boot-to-shell profile is
+  often more useful than the most complete environment.
+- For integration debugging, the faithful profile must remain available and
+  should be explicitly named so slow behavior is expected.
+
+Goal:
+
+- Provide clear run targets for fast iteration and full-system validation,
+  with documented differences and stable timing expectations.
+
+Tasks:
+
+- [ ] Define the intended semantics for `make run`, `make run-fast`,
+      `make run-alpine`, and networking-enabled run targets.
+- [ ] Decide whether default `make run` should prioritize fast interactive
+      development or faithful Alpine/OpenRC/networking bringup.
+- [ ] Add a fast profile that boots to an interactive shell with minimal
+      blocking services, quiet logs, and clean poweroff behavior.
+- [ ] Keep a faithful Alpine networking profile that starts OpenRC/networking
+      and validates DHCP, DNS, ping, and login behavior.
+- [ ] Ensure both profiles use the same kernel/server artifacts so performance
+      differences come from policy, not hidden build skew.
+- [ ] Document the run targets in `README.md` with expected boot milestones and
+      when to use each target.
+- [ ] Add lightweight smoke tests for the fast and faithful profiles.

@@ -1,0 +1,40 @@
+Baseline and explain `make run` latency.
+
+Parent exploration: `067-user-copy-vm-contract-refactor.txt`
+
+Problem:
+
+- Interactive `make run` has become noticeably slow.
+- The current default run path boots the Alpine squashfs image with networking,
+  OpenRC, many userspace servers, `log=info`, serial stdio, and QEMU external
+  network plumbing.
+- Recent logs show high-volume diagnostics such as `user-syscall:` dumps and
+  repeated service chatter on the console path.  Console I/O can dominate boot
+  time under `-serial stdio`, so we need measurements before changing policy.
+- Full parallel tests also exposed a procfs self-pipe hang while `make test`
+  was interrupted for this planning slice.  That belongs primarily to
+  exploration 079, but the same instrumentation may help explain slow runs.
+
+Goal:
+
+- Produce a repeatable latency profile for `make run` from host command start
+  to login prompt, network readiness, and first shell command completion.
+- Identify whether the dominant cost is host build/staging work, GRUB/OVMF,
+  kernel boot, server startup, VFS/rootfs setup, OpenRC, networking, logging,
+  or QEMU/device configuration.
+
+Tasks:
+
+- [ ] Add a `make run-profile` or equivalent harness that records monotonic
+      host timestamps and guest uptime markers without requiring manual input.
+- [ ] Split host-side time into rootfs/ESP rebuild, QEMU launch, firmware,
+      kernel/server boot, OpenRC/networking, login prompt, and first shell
+      command phases.
+- [ ] Collect baseline profiles for `make run`, `ROOTFS_FLAVOR=alpine make run`,
+      synthetic shell boot, and a no-network/default-device variant.
+- [ ] Measure console output volume by prefix and log level during the slow
+      path, including `user-syscall:`, scheduler, IPC, VFS, Linux, OpenRC, and
+      networking logs.
+- [ ] Record whether stale build artifacts, FAT ESP writes, or full-test
+      leftovers materially affect `make run`.
+- [ ] Update the next performance exploration with the measured top offenders.
