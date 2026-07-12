@@ -954,7 +954,7 @@ $(DYN_HELLO_MODULE): user/musl-hello/main.c Makefile
 	mkdir -p $(dir $@)
 	$(MUSL_CC) -O2 -g -Wl,--dynamic-linker=/lib/ld-musl-x86_64.so.1 $< -o $@
 
-$(EXECBIG_MODULE): $(EXECOK_MODULE) Makefile
+$(EXECBIG_MODULE): $(EXECOK_MODULE) Makefile FORCE
 	mkdir -p $(dir $@)
 	chmod u+w $@ 2>/dev/null || true
 	cp $(EXECOK_MODULE) $@

@@ -37,9 +37,9 @@ Tasks:
 - [x] Extract vector serialization/deserialization helpers with tests.
 - [x] Extract user stack/auxv construction helpers with tests.
 - [x] Wire exec path through the new helpers without behavior changes.
-- [ ] Add guest regression coverage for BusyBox, musl, shebang, login, and
+- [x] Add guest regression coverage for BusyBox, musl, shebang, login, and
       OpenRC exec paths.
-- [ ] Run focused exec/login/OpenRC tests, then full `make test`.
+- [x] Run focused exec/login/OpenRC tests, then full `make test`.
 
 Progress:
 
@@ -84,10 +84,21 @@ Verification:
   stack helper extraction.
 - `make test-shell-part BUNIX_SHELL_PART=login-smoke` passed after the stack
   helper extraction.
-
-Open items:
-
-- `make test-boot-alpine-stock-networking` reached OpenRC startup and root
-  login, then failed the dmesg smoke command because redirecting to
-  `/tmp/bunix-dmesg` reported `File exists`. Keep OpenRC/full validation
-  unchecked until this unrelated runtime failure is resolved or narrowed.
+- `make test-boot-alpine-stock-networking` passed after changing the Alpine
+  dmesg smoke check to validate dmesg output through a pipe instead of a
+  temporary file redirection that can collide with stale `/tmp` state.
+- Final focused reruns passed:
+  - `make test-linux-exec-abi`
+  - `make test-proc-exec-stack`
+  - `make test-riscv64-shared-linux-server-build`
+  - `make test-riscv64-proc-server-build`
+  - `make test-shell-part BUNIX_SHELL_PART=exec-argv-pipe`
+  - `make test-shell-part BUNIX_SHELL_PART=login-smoke`
+- Initial full `make test` run `20260712T212854Z-2241` passed both Alpine
+  OpenRC shards but failed `large-io-mount` because stale
+  `build/modules/execbig.user` was only 9,752 bytes while make considered it
+  up to date. `$(EXECBIG_MODULE)` now depends on `FORCE`, and a focused
+  `make test-shell-part BUNIX_SHELL_PART=large-io-mount` passed with
+  `execbig.user` rebuilt to 2,097,153 bytes.
+- Full `make test` rerun `20260712T214804Z-18524` passed all 29 launched
+  shards.
