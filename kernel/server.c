@@ -89,6 +89,124 @@ enum {
 	SERVER_CAP_SCHD = SERVER_FOURCC('S', 'C', 'H', 'D'),
 };
 
+enum bootstrap_authority_kind {
+	BOOTSTRAP_AUTHORITY_PORT,
+	BOOTSTRAP_AUTHORITY_HW_RESOURCE,
+	BOOTSTRAP_AUTHORITY_SCHED_POLICY,
+};
+
+struct bootstrap_authority_desc {
+	const char *server_name;
+	enum bootstrap_authority_kind kind;
+	u64 rights;
+	u32 tag;
+	const char *port_name;
+	const struct task_hw_resource *resource;
+};
+
+static const struct task_hw_resource bootstrap_com1_port = {
+	.type = TASK_HW_RESOURCE_PORT,
+	.ops = TASK_HW_OP_READ | TASK_HW_OP_WRITE,
+	.base = 0x3f8,
+	.len = 8,
+};
+
+static const struct task_hw_resource bootstrap_pci_config_ports = {
+	.type = TASK_HW_RESOURCE_PORT,
+	.ops = TASK_HW_OP_READ | TASK_HW_OP_WRITE,
+	.base = 0xcf8,
+	.len = 8,
+};
+
+static const struct task_hw_resource bootstrap_power_authority = {
+	.type = TASK_HW_RESOURCE_POWER_AUTH,
+	.ops = TASK_HW_OP_POWER,
+};
+
+static const struct task_hw_resource bootstrap_pci_authority = {
+	.type = TASK_HW_RESOURCE_PCI_AUTH,
+	.ops = TASK_HW_OP_GRANT,
+};
+
+static const struct bootstrap_authority_desc bootstrap_authorities[] = {
+	{
+		.server_name = "names",
+		.kind = BOOTSTRAP_AUTHORITY_PORT,
+		.rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+		.tag = SERVER_CAP_CONS,
+		.port_name = "console",
+	},
+	{
+		.server_name = "consoled",
+		.kind = BOOTSTRAP_AUTHORITY_PORT,
+		.rights = TASK_RIGHT_SEND | TASK_RIGHT_RECV | TASK_RIGHT_DUP,
+		.tag = SERVER_CAP_CONS,
+		.port_name = "console",
+	},
+	{
+		.server_name = "consoled",
+		.kind = BOOTSTRAP_AUTHORITY_PORT,
+		.rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+		.tag = SERVER_CAP_NAME,
+		.port_name = "names",
+	},
+	{
+		.server_name = "consoled",
+		.kind = BOOTSTRAP_AUTHORITY_HW_RESOURCE,
+		.rights = TASK_RIGHT_SEND,
+		.tag = SERVER_CAP_COM1,
+		.resource = &bootstrap_com1_port,
+	},
+	{
+		.server_name = "pci",
+		.kind = BOOTSTRAP_AUTHORITY_HW_RESOURCE,
+		.rights = TASK_RIGHT_SEND,
+		.tag = SERVER_CAP_PCFG,
+		.resource = &bootstrap_pci_config_ports,
+	},
+	{
+		.server_name = "pci",
+		.kind = BOOTSTRAP_AUTHORITY_HW_RESOURCE,
+		.rights = TASK_RIGHT_SEND,
+		.tag = SERVER_CAP_PAUT,
+		.resource = &bootstrap_pci_authority,
+	},
+	{
+		.server_name = "sched",
+		.kind = BOOTSTRAP_AUTHORITY_SCHED_POLICY,
+		.rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+		.tag = SERVER_CAP_SCHD,
+	},
+	{
+		.server_name = "bootstrap",
+		.kind = BOOTSTRAP_AUTHORITY_PORT,
+		.rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+		.tag = SERVER_CAP_CONS,
+		.port_name = "console",
+	},
+	{
+		.server_name = "bootstrap",
+		.kind = BOOTSTRAP_AUTHORITY_PORT,
+		.rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+		.tag = SERVER_CAP_VM,
+		.port_name = "vm",
+	},
+	{
+		.server_name = "bootstrap",
+		.kind = BOOTSTRAP_AUTHORITY_PORT,
+		.rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+		.tag = SERVER_CAP_NAME,
+		.port_name = "names",
+	},
+	{
+		.server_name = "bootstrap",
+		.kind = BOOTSTRAP_AUTHORITY_HW_RESOURCE,
+		.rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP,
+		.tag = SERVER_CAP_POWR,
+		.resource = &bootstrap_power_authority,
+	},
+};
+
 struct task_start {
 	u64 entry;
 	u64 stack;
@@ -416,102 +534,41 @@ int server_launch_module(const char *name)
 
 static void grant_bootstrap_caps(struct task *task, const char *server_name)
 {
-	static const struct task_hw_resource com1_port = {
-		.type = TASK_HW_RESOURCE_PORT,
-		.ops = TASK_HW_OP_READ | TASK_HW_OP_WRITE,
-		.base = 0x3f8,
-		.len = 8,
-	};
-	static const struct task_hw_resource pci_config_ports = {
-		.type = TASK_HW_RESOURCE_PORT,
-		.ops = TASK_HW_OP_READ | TASK_HW_OP_WRITE,
-		.base = 0xcf8,
-		.len = 8,
-	};
-	static const struct task_hw_resource power_authority = {
-		.type = TASK_HW_RESOURCE_POWER_AUTH,
-		.ops = TASK_HW_OP_POWER,
-	};
-	static const struct task_hw_resource pci_authority = {
-		.type = TASK_HW_RESOURCE_PCI_AUTH,
-		.ops = TASK_HW_OP_GRANT,
-	};
+	const u32 count =
+		sizeof(bootstrap_authorities) / sizeof(bootstrap_authorities[0]);
 
-	if (str_eq(server_name, "names")) {
-		const u64 console =
-			task_grant_port(task, ipc_port_find("console"),
-					TASK_RIGHT_SEND | TASK_RIGHT_DUP);
+	for (u32 i = 0; i < count; i++) {
+		const struct bootstrap_authority_desc *desc =
+			&bootstrap_authorities[i];
+		u64 handle = 0;
 
-		(void)task_set_handle_tag(task, console, SERVER_CAP_CONS);
-		return;
+		if (!str_eq(server_name, desc->server_name)) {
+			continue;
+		}
+
+		switch (desc->kind) {
+		case BOOTSTRAP_AUTHORITY_PORT:
+			handle = task_grant_port(task,
+						 ipc_port_find(desc->port_name),
+						 desc->rights);
+			break;
+		case BOOTSTRAP_AUTHORITY_HW_RESOURCE:
+			handle = task_grant_hw_resource(task, desc->resource,
+							desc->rights);
+			break;
+		case BOOTSTRAP_AUTHORITY_SCHED_POLICY: {
+			struct sched_policy_cap *authority =
+				sched_policy_cap_create_system();
+
+			handle = task_grant_sched_policy(task, authority,
+							 desc->rights);
+			sched_policy_cap_release(authority);
+			break;
+		}
+		}
+
+		(void)task_set_handle_tag(task, handle, desc->tag);
 	}
-
-	if (str_eq(server_name, "consoled")) {
-		const u64 console =
-			task_grant_port(task, ipc_port_find("console"),
-					TASK_RIGHT_SEND | TASK_RIGHT_RECV |
-					TASK_RIGHT_DUP);
-		const u64 names =
-			task_grant_port(task, ipc_port_find("names"),
-					TASK_RIGHT_SEND | TASK_RIGHT_DUP);
-
-		(void)task_set_handle_tag(task, console, SERVER_CAP_CONS);
-		(void)task_set_handle_tag(task, names, SERVER_CAP_NAME);
-		const u64 com1 =
-			task_grant_hw_resource(task, &com1_port,
-					       TASK_RIGHT_SEND);
-
-		(void)task_set_handle_tag(task, com1, SERVER_CAP_COM1);
-		return;
-	}
-
-	if (str_eq(server_name, "pci")) {
-		const u64 config =
-			task_grant_hw_resource(task, &pci_config_ports,
-					       TASK_RIGHT_SEND);
-		const u64 authority =
-			task_grant_hw_resource(task, &pci_authority,
-					       TASK_RIGHT_SEND);
-
-		(void)task_set_handle_tag(task, config, SERVER_CAP_PCFG);
-		(void)task_set_handle_tag(task, authority, SERVER_CAP_PAUT);
-		return;
-	}
-
-	if (str_eq(server_name, "sched")) {
-		struct sched_policy_cap *authority =
-			sched_policy_cap_create_system();
-		const u64 policy =
-			task_grant_sched_policy(task, authority,
-						TASK_RIGHT_SEND |
-						TASK_RIGHT_DUP);
-
-		sched_policy_cap_release(authority);
-		(void)task_set_handle_tag(task, policy, SERVER_CAP_SCHD);
-		return;
-	}
-
-	if (!str_eq(server_name, "bootstrap")) {
-		return;
-	}
-
-	const u64 console =
-		task_grant_port(task, ipc_port_find("console"),
-				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
-	const u64 vm =
-		task_grant_port(task, ipc_port_find("vm"),
-				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
-	const u64 names =
-		task_grant_port(task, ipc_port_find("names"),
-				TASK_RIGHT_SEND | TASK_RIGHT_DUP);
-	const u64 power =
-		task_grant_hw_resource(task, &power_authority,
-				       TASK_RIGHT_SEND | TASK_RIGHT_DUP);
-
-	(void)task_set_handle_tag(task, console, SERVER_CAP_CONS);
-	(void)task_set_handle_tag(task, vm, SERVER_CAP_VM);
-	(void)task_set_handle_tag(task, names, SERVER_CAP_NAME);
-	(void)task_set_handle_tag(task, power, SERVER_CAP_POWR);
 }
 
 u64 server_launch_module_with_caps(const char *name, struct task *parent,

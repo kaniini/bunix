@@ -24,9 +24,9 @@ Tasks:
       structured request-buffer convention for privileged native syscalls.
 - [x] Convert PCI BAR and IRQ grant wrappers plus kernel handlers to pass
       authority handles as explicit arguments.
-- [ ] Replace overlapping task-local authority constants with a documented
+- [x] Replace overlapping task-local authority constants with a documented
       bootstrap/server authority descriptor table.
-- [ ] Move kernel bootstrap authority grants from scattered string checks into
+- [x] Move kernel bootstrap authority grants from scattered string checks into
       the descriptor table without changing which tasks receive authority.
 - [ ] Preserve the unprivileged denial regression from exploration 041.
 - [ ] Run focused privileged-native, virtio, OpenRC tests, then full
