@@ -21,7 +21,7 @@ static u32 mmio_identity_mapping_count;
 static u64 pte_phys(u64 pte);
 static int pte_table_valid(u64 pte);
 static int map_supervisor_identity_window(struct arch_vm_space *space,
-					  u64 start, u64 end);
+					  u64 start, u64 end, u32 executable);
 static int map_registered_mmio(struct arch_vm_space *space);
 
 static void zero_table(u64 *table)
@@ -200,7 +200,7 @@ int arch_vm_space_init(struct arch_vm_space *space)
 	if (boot_info != 0 && boot_info->phys_size != 0 &&
 	    map_supervisor_identity_window(
 		    space, boot_info->phys_base,
-		    boot_info->phys_base + boot_info->phys_size) != 0) {
+		    boot_info->phys_base + boot_info->phys_size, 1) != 0) {
 		arch_vm_space_destroy(space);
 		return -1;
 	}
@@ -247,13 +247,14 @@ int arch_vm_map_page(struct arch_vm_space *space, u64 vaddr, u64 phys,
 }
 
 static int map_supervisor_identity_window(struct arch_vm_space *space,
-					  u64 start, u64 end)
+					  u64 start, u64 end, u32 executable)
 {
 	start &= ~(RISCV64_PAGE_SIZE - 1);
 	end = (end + RISCV64_PAGE_SIZE - 1) & ~(RISCV64_PAGE_SIZE - 1);
 
 	for (u64 page = start; page < end; page += RISCV64_PAGE_SIZE) {
-		if (arch_vm_map_page(space, page, page, 1, 0, 0) != 0) {
+		if (arch_vm_map_page(space, page, page, 1, 0,
+				     executable) != 0) {
 			return -1;
 		}
 	}
@@ -265,7 +266,7 @@ static int map_registered_mmio(struct arch_vm_space *space)
 	for (u32 i = 0; i < mmio_identity_mapping_count; i++) {
 		if (map_supervisor_identity_window(
 			    space, mmio_identity_mappings[i].start,
-			    mmio_identity_mappings[i].end) != 0) {
+			    mmio_identity_mappings[i].end, 0) != 0) {
 			return -1;
 		}
 	}
