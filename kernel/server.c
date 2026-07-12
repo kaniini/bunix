@@ -46,6 +46,7 @@ static const struct server boot_servers[] = {
 	{ "vfs", 0 },
 	{ "ping", 0 },
 	{ "abi-smoke.user", 0 },
+	{ "sleep-smoke.user", 0 },
 	{ "/bin/rv64-syscall-smoke", 0 },
 	{ "/bin/musl-hello", 0 },
 	{ "vm", vm_server_start },

@@ -1,0 +1,12 @@
+bunixos: riscv64 early bootstrap
+bootpkg: riscv64 initrd
+cmdline: riscv64 bootpkg
+module: riscv64 registered
+module: riscv64 user elf
+bootstrap-riscv64: online
+bootstrap-riscv64: sleep-smoke launched
+native: riscv64 sleep before
+native: riscv64 sleep after
+native: riscv64 sleep ok
+machine: poweroff
+sbi: system reset poweroff

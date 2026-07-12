@@ -323,6 +323,8 @@ int main(void)
 	const char online[] = "bootstrap-riscv64: online\n";
 	const char abi_ok[] = "bootstrap-riscv64: abi-smoke launched\n";
 	const char abi_fail[] = "bootstrap-riscv64: abi-smoke failed\n";
+	const char sleep_ok[] = "bootstrap-riscv64: sleep-smoke launched\n";
+	const char sleep_fail[] = "bootstrap-riscv64: sleep-smoke failed\n";
 	const char time_ok[] = "bootstrap-riscv64: time launched\n";
 	const char time_fail[] = "bootstrap-riscv64: time failed\n";
 	const char time_ready[] = "bootstrap-riscv64: time ready\n";
@@ -359,6 +361,7 @@ int main(void)
 	const char hello_fail[] = "bootstrap-riscv64: musl-hello failed\n";
 	const char done[] = "bootstrap-riscv64: done\n";
 	const int alpine_test = bunix_cmdline_has("riscv64-alpine-test") > 0;
+	const int sleep_test = bunix_cmdline_has("riscv64-sleep-smoke") > 0;
 	const int uart_console_test =
 		bunix_cmdline_has("riscv64-uart-console") > 0;
 	const u64 user_mgmt = (u64)bunix_port_create("user-mgmt");
@@ -370,6 +373,26 @@ int main(void)
 		log_line(done, sizeof(done) - 1);
 		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 		return 0;
+	}
+	if (sleep_test) {
+		const u64 power = bunix_handle_find(BUNIX_CAP_POWR);
+		const struct bunix_launch_cap sleep_caps[] = {
+			{ power, BUNIX_RIGHT_SEND, BUNIX_CAP_POWR },
+		};
+
+		if (power != 0 &&
+		    bunix_launch_module_with_caps(
+			    "sleep-smoke.user", sleep_caps,
+			    sizeof(sleep_caps) / sizeof(sleep_caps[0])) >= 0) {
+			log_line(sleep_ok, sizeof(sleep_ok) - 1);
+		} else {
+			log_line(sleep_fail, sizeof(sleep_fail) - 1);
+			(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
+			return 1;
+		}
+		for (;;) {
+			(void)bunix_sleep_ns(1000000000ull);
+		}
 	}
 	if ((long)user_mgmt <= 0 || (long)proc_mgmt <= 0 ||
 	    (long)linux_mgmt <= 0) {

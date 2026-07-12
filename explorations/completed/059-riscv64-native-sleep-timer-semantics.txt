@@ -1,0 +1,73 @@
+Audit and fix riscv64 native sleep/timer semantics.
+
+Status:
+
+- Complete.
+- Start after the boot-test split unless a riscv64 server starts depending on
+  `bunix_sleep_ns()` for correctness before then.
+
+Problem:
+
+- Exploration 035 observed that riscv64 native `sleep_ns` did not resume the
+  bootstrap smoke reliably.
+- Exploration 037 kept sleep-dependent checks out of the early boot path and
+  used proc wait for smoke completion, but it did not prove that native
+  sleeping has the same semantics as x86_64.
+- Riscv64 server bringup will eventually need dependable timer wakeups for
+  polling fallback paths, timeouts, and low-duty-cycle service loops.
+
+Tasks:
+
+- [x] Add a tiny riscv64 native userspace sleep smoke that logs before and
+      after `bunix_sleep_ns()`.
+- [x] Run the smoke under a dedicated command-line token and require a
+      poweroff marker after the wakeup.
+- [x] Audit riscv64 timer programming, monotonic clock reporting, and
+      scheduler wakeup integration.
+- [x] Fix any riscv64-specific timer or scheduler bugs found by the smoke.
+- [x] Keep the smoke separate from normal Alpine boot so the Alpine path does
+      not depend on test-only sleeps.
+
+Verification:
+
+- [x] New riscv64 native sleep smoke target.
+- [x] `make test-boot-riscv64-early`
+- [x] `make test-boot-riscv64-alpine`
+- [x] `git diff --check`
+
+Implementation Notes:
+
+- Added `user/riscv64-sleep-smoke`, a tiny native riscv64 user module that:
+  - logs `native: riscv64 sleep before`;
+  - calls `bunix_sleep_ns(200000000)`;
+  - verifies `bunix_timer_ticks()` and `bunix_clock_monotonic_ns()` advanced;
+  - logs `native: riscv64 sleep after` and `native: riscv64 sleep ok`;
+  - powers off using an inherited `POWR` capability.
+- Added `riscv64-sleep-smoke` as a dedicated bootstrap command-line token.
+  The riscv64 bootstrap launches the smoke with only the power authority and
+  then waits for the smoke to power off, so normal early and Alpine riscv64
+  boot paths do not depend on this test-only sleep.
+- Added `build/riscv64/bootpkg-sleep.img`,
+  `tools/test-riscv64-markers-sleep.txt`, and `make
+  test-boot-riscv64-sleep`.
+- Audited the riscv64 timer path:
+  - `arch/riscv64/interrupts.c` increments architecture timer ticks on
+    supervisor timer interrupts, calls `sched_wake_sleepers(ticks)`, and
+    reprograms the SBI timer.
+  - `kernel/timer.c` derives monotonic nanoseconds from `timer_ticks()` and
+    `timer_hz()`.
+  - `kernel/sched.c` converts native `bunix_sleep_ns()` to wake ticks and
+    unblocks sleepers from the timer interrupt path.
+  The new smoke proves those pieces work together for native riscv64
+  userspace; no riscv64 timer/scheduler code fix was required.
+- `sleep-smoke.user` was added to the kernel module allowlist so boot-package
+  discovery records it instead of ignoring the module.
+
+Validation:
+
+- `make build/riscv64/modules/sleep-smoke.user build/riscv64/bootpkg-sleep.img`
+- `make test-boot-riscv64-sleep`
+- `make test-boot-riscv64-early`
+- `make test-boot-riscv64-alpine`
+- `make test-riscv64-bootpkg`
+- `git diff --check`
