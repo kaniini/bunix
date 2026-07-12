@@ -28,6 +28,14 @@ Tasks:
       bootstrap/server authority descriptor table.
 - [x] Move kernel bootstrap authority grants from scattered string checks into
       the descriptor table without changing which tasks receive authority.
-- [ ] Preserve the unprivileged denial regression from exploration 041.
+- [x] Preserve the unprivileged denial regression from exploration 041.
 - [ ] Run focused privileged-native, virtio, OpenRC tests, then full
       `make test`.
+
+Validation:
+
+- `make` passed after the native ABI and descriptor-table slices.
+- `BUNIX_TEST_SET=privileged-native-denial make test-parallel` passed.
+- `make test-boot-virtio-blk-backend` passed after refreshing stale backend
+  markers for the current `/sbin/init` boot path.
+- `BUNIX_TEST_SET=alpine-openrc-smoke make test-parallel` passed.
