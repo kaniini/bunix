@@ -173,6 +173,7 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "vfs: read file") ||
 	    str_starts_with(fmt, "vm: create space") ||
 	    str_starts_with(fmt, "vm: destroy space") ||
+	    str_starts_with(fmt, "vm: user") ||
 	    str_starts_with(fmt, "vm: selftest")) {
 		return CONSOLE_LOG_DEBUG;
 	}

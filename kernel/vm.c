@@ -1,5 +1,6 @@
 #include "console.h"
 #include "pmm.h"
+#include "sched.h"
 #include "slab.h"
 #include "spinlock.h"
 #include "tree.h"
@@ -185,11 +186,25 @@ static u64 align_up(u64 value, u64 align)
 	return align_down(value + align - 1, align);
 }
 
+static void vm_log_user_failure(const char *op, const struct vm_space *space,
+				u64 vaddr, u64 len, const char *reason)
+{
+	const struct task *current = task_current();
+	const char *owner = space != 0 && space->owner != 0 ?
+			    space->owner : "(null)";
+	const u32 space_id = space != 0 ? space->id : 0;
+
+	console_printf("vm: user op=%s reason=%s current_task=%u current_name=%s space=%u owner=%s addr=%p len=%u\n",
+		       op, reason, task_id(current), task_name(current),
+		       space_id, owner, (const void *)vaddr, (u32)len);
+}
+
 int vm_read_user(struct vm_space *space, u64 vaddr, void *dst, u64 len)
 {
 	u64 done = 0;
 
 	if (space == 0 || dst == 0 || vaddr + len < vaddr) {
+		vm_log_user_failure("read", space, vaddr, len, "invalid");
 		return -1;
 	}
 
@@ -201,6 +216,8 @@ int vm_read_user(struct vm_space *space, u64 vaddr, void *dst, u64 len)
 		const u64 chunk = min_u64(len - done, page_remaining);
 
 		if (phys == 0) {
+			vm_log_user_failure("read", space, current,
+					    len - done, "unmapped");
 			return -1;
 		}
 
@@ -216,6 +233,7 @@ int vm_write_user(struct vm_space *space, u64 vaddr, const void *src, u64 len)
 	u64 done = 0;
 
 	if (space == 0 || src == 0 || vaddr + len < vaddr) {
+		vm_log_user_failure("write", space, vaddr, len, "invalid");
 		return -1;
 	}
 
@@ -226,6 +244,8 @@ int vm_write_user(struct vm_space *space, u64 vaddr, const void *src, u64 len)
 		const u64 chunk = min_u64(len - done, page_remaining);
 
 		if (phys == 0) {
+			vm_log_user_failure("write", space, current,
+					    len - done, "unmapped-or-ro");
 			return -1;
 		}
 
@@ -295,18 +315,22 @@ int vm_protect_user_range(struct vm_space *space, u64 vaddr, u64 len,
 			  u32 writable, u32 executable)
 {
 	if (space == 0 || len == 0 || vaddr + len < vaddr) {
+		vm_log_user_failure("protect", space, vaddr, len, "invalid");
 		return -1;
 	}
 
 	const u64 start = align_down(vaddr, VM_PAGE_SIZE);
 	const u64 end = align_up(vaddr + len, VM_PAGE_SIZE);
 	if (end <= start) {
+		vm_log_user_failure("protect", space, vaddr, len, "invalid-range");
 		return -1;
 	}
 
 	for (u64 page = start; page < end; page += VM_PAGE_SIZE) {
 		if (arch_vm_protect_user_page(&space->arch, page, writable,
 					      executable) != 0) {
+			vm_log_user_failure("protect", space, page,
+					    end - page, "unmapped");
 			return -1;
 		}
 	}
