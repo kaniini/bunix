@@ -1,3 +1,0 @@
-# action	runlevel	service	target	reason
-add	boot	networking	/etc/init.d/networking	Temporary Bunix networking service; keep default boot lightweight while stock OpenRC compatibility is pending.
-replace	inittab	getty	/bin/login	Bunix login contacts the user server; BusyBox getty/login is intentionally not enabled yet.

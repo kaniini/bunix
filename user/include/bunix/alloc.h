@@ -9,9 +9,11 @@ enum {
 	BUNIX_ALLOC_ORDERS = BUNIX_ALLOC_MAX_ORDER - BUNIX_ALLOC_MIN_ORDER + 1,
 	BUNIX_ALLOC_ARENA_SIZE = 1ull << BUNIX_ALLOC_MAX_ORDER,
 	BUNIX_ALLOC_HEAP_BASE = 0x10000000ull,
+	BUNIX_ALLOC_MAGIC = 0x42554e4958414c4cull,
 };
 
 struct bunix_alloc_block {
+	u64 magic;
 	u64 order;
 	u64 free;
 	struct bunix_alloc_block *prev;
@@ -71,6 +73,7 @@ static inline void bunix_alloc_list_push(struct bunix_alloc_block *block)
 {
 	const u64 index = bunix_alloc_index(block->order);
 
+	block->magic = BUNIX_ALLOC_MAGIC;
 	block->free = 1;
 	block->prev = 0;
 	block->next = bunix_alloc_free[index];
@@ -99,6 +102,7 @@ static inline void bunix_alloc_list_remove(struct bunix_alloc_block *block)
 
 static inline void bunix_alloc_large_push(struct bunix_alloc_block *block)
 {
+	block->magic = BUNIX_ALLOC_MAGIC;
 	block->free = 1;
 	block->prev = 0;
 	block->next = bunix_alloc_large_free;
@@ -133,6 +137,7 @@ static inline int bunix_alloc_add_arena(void)
 	}
 	bunix_alloc_next += BUNIX_ALLOC_ARENA_SIZE;
 	block = (struct bunix_alloc_block *)base;
+	block->magic = BUNIX_ALLOC_MAGIC;
 	block->order = BUNIX_ALLOC_MAX_ORDER;
 	bunix_alloc_list_push(block);
 	return 0;
@@ -163,6 +168,7 @@ static inline void *bunix_alloc_large(u64 size)
 		return 0;
 	}
 	bunix_alloc_next += block_size;
+	block->magic = BUNIX_ALLOC_MAGIC;
 	block->order = order;
 	block->free = 0;
 	block->prev = 0;
@@ -201,10 +207,12 @@ static inline void *bunix_alloc(u64 size)
 		block->order--;
 		buddy = (struct bunix_alloc_block *)
 			((u64)block + (1ull << block->order));
+		buddy->magic = BUNIX_ALLOC_MAGIC;
 		buddy->order = block->order;
 		bunix_alloc_list_push(buddy);
 	}
 
+	block->magic = BUNIX_ALLOC_MAGIC;
 	block->free = 0;
 	return (void *)(block + 1);
 }
@@ -218,6 +226,9 @@ static inline void bunix_free(void *ptr)
 	}
 
 	block = ((struct bunix_alloc_block *)ptr) - 1;
+	if (block->magic != BUNIX_ALLOC_MAGIC || block->free != 0) {
+		return;
+	}
 	if (block->order > BUNIX_ALLOC_MAX_ORDER) {
 		bunix_alloc_large_push(block);
 		return;
@@ -236,7 +247,8 @@ static inline void bunix_free(void *ptr)
 		buddy = (struct bunix_alloc_block *)
 			(((u64)block & ~(BUNIX_ALLOC_ARENA_SIZE - 1)) +
 			 buddy_offset);
-		if (buddy->free == 0 || buddy->order != block->order) {
+		if (buddy->magic != BUNIX_ALLOC_MAGIC ||
+		    buddy->free == 0 || buddy->order != block->order) {
 			break;
 		}
 		bunix_alloc_list_remove(buddy);

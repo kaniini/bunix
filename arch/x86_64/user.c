@@ -197,9 +197,11 @@ enum {
 	LINUX_SYSCALL_SETRESGID = 119,
 	LINUX_SYSCALL_GETPGID = 121,
 	LINUX_SYSCALL_ARCH_PRCTL = 158,
+	LINUX_SYSCALL_SYNC = 162,
 	LINUX_SYSCALL_MOUNT = 165,
 	LINUX_SYSCALL_UMOUNT2 = 166,
 	LINUX_SYSCALL_REBOOT = 169,
+	LINUX_SYSCALL_SETHOSTNAME = 170,
 	LINUX_SYSCALL_TIME = 201,
 	LINUX_SYSCALL_FUTEX = 202,
 	LINUX_SYSCALL_SCHED_SETAFFINITY = 203,
@@ -287,6 +289,8 @@ enum {
 	LINUX_IFREQ_SIZE = 40,
 	ARCH_USER_MAX_CPUS = 8,
 	LINUX_MAX_SYSCALL_BUFFER = 65536,
+	LINUX_UTS_NAME_MAX = 64,
+	LINUX_MS_REMOUNT = 32,
 	LINUX_MAX_SHARED_BUFFER = 1024 * 1024,
 	LINUX_MAX_SOCKADDR = 128,
 	LINUX_IOV_MAX = 1024,
@@ -2287,7 +2291,8 @@ static u64 linux_forward_mount(struct ipc_port *linux,
 	u64 total_len;
 	int rc;
 
-	if (target == 0 || fstype == 0) {
+	if (target == 0 ||
+	    (fstype == 0 && (flags & LINUX_MS_REMOUNT) == 0)) {
 		return (u64)-LINUX_EFAULT;
 	}
 	copy = (char *)slab_alloc(LINUX_MAX_SYSCALL_BUFFER);
@@ -2304,16 +2309,21 @@ static u64 linux_forward_mount(struct ipc_port *linux,
 		slab_free(copy);
 		return linux_einval_u64(__func__, __LINE__);
 	}
-	rc = copy_cstr_from_user_errno(copy + target_len, fstype,
-				       LINUX_MAX_SYSCALL_BUFFER -
-				       target_len);
-	if (rc != 0) {
-		slab_free(copy);
-		return (u64)rc;
+	if (fstype != 0) {
+		rc = copy_cstr_from_user_errno(copy + target_len, fstype,
+					       LINUX_MAX_SYSCALL_BUFFER -
+					       target_len);
+		if (rc != 0) {
+			slab_free(copy);
+			return (u64)rc;
+		}
+		fstype_len = str_len(copy + target_len) + 1;
+	} else {
+		fstype_len = 0;
 	}
-	fstype_len = str_len(copy + target_len) + 1;
 	total_len = target_len + fstype_len;
-	if (fstype_len == 1 || total_len > LINUX_MAX_SYSCALL_BUFFER) {
+	if ((fstype != 0 && fstype_len == 1) ||
+	    total_len > LINUX_MAX_SYSCALL_BUFFER) {
 		slab_free(copy);
 		return linux_einval_u64(__func__, __LINE__);
 	}
@@ -3956,8 +3966,12 @@ static const char *linux_syscall_name(u64 number)
 		return "fcntl";
 	case LINUX_SYSCALL_ARCH_PRCTL:
 		return "arch_prctl";
+	case LINUX_SYSCALL_SYNC:
+		return "sync";
 	case LINUX_SYSCALL_REBOOT:
 		return "reboot";
+	case LINUX_SYSCALL_SETHOSTNAME:
+		return "sethostname";
 	case LINUX_SYSCALL_TIME:
 		return "time";
 	case LINUX_SYSCALL_FUTEX:
@@ -5459,6 +5473,8 @@ poll_again:
 	}
 
 	switch (number) {
+	case LINUX_SYSCALL_SYNC:
+		return 0;
 	case LINUX_SYSCALL_READ: {
 		return linux_read_chunked(linux, reply_port, arg0, arg1,
 					  arg2, TASK_RIGHT_SEND |
@@ -5494,6 +5510,22 @@ poll_again:
 			linux, reply_port, &request, LINUX_SYSCALL_UNAME,
 			(void *)arg0, LINUX_UTSNAME_SIZE, 1, 0,
 			0, 0, 0, 0);
+	}
+	case LINUX_SYSCALL_SETHOSTNAME: {
+		if (arg1 > LINUX_UTS_NAME_MAX) {
+			return linux_einval_u64(__func__, __LINE__);
+		}
+		if (arg0 == 0 && arg1 != 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		request.type = LINUX_SYSCALL_SETHOSTNAME;
+		request.words[0] = arg1;
+		request.words[1] = 0;
+		request.words[2] = 0;
+		request.words[3] = 0;
+		return linux_forward_input_buffer(linux, reply_port, &request,
+						  arg0, arg1,
+						  TASK_RIGHT_RECV);
 	}
 	case LINUX_SYSCALL_SYSINFO: {
 		if (arg0 == 0) {

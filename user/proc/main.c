@@ -22,15 +22,10 @@ enum {
 	EM_X86_64 = 62,
 	EM_RISCV = 243,
 	PT_LOAD = 1,
-	PT_DYNAMIC = 2,
 	PT_INTERP = 3,
 	PF_X = 1 << 0,
 	PF_W = 1 << 1,
 	PF_R = 1 << 2,
-	DT_NULL = 0,
-	DT_RELR = 0x24,
-	DT_RELRSZ = 0x23,
-	DT_RELRENT = 0x25,
 	AT_NULL = 0,
 	AT_PHDR = 3,
 	AT_PHENT = 4,
@@ -113,11 +108,6 @@ struct elf64_phdr {
 	u64 align;
 } __attribute__((packed));
 
-struct elf64_dyn {
-	long long tag;
-	u64 value;
-} __attribute__((packed));
-
 struct vfs_file {
 	u64 handle;
 	u64 size;
@@ -126,9 +116,9 @@ struct vfs_file {
 
 struct exec_info {
 	u64 entry;
-	u64 phoff;
 	u64 phent;
 	u64 phnum;
+	u64 phdr_addr;
 	const struct elf64_phdr *phdrs;
 };
 
@@ -1064,147 +1054,6 @@ static long task_write_bytes(u64 task, u64 vaddr, const unsigned char *buffer,
 	return 0;
 }
 
-static long elf_vaddr_to_offset(const struct elf64_phdr *phdrs, u64 phnum,
-				u64 vaddr, u64 len, u64 *offset)
-{
-	if (phdrs == 0 || offset == 0 || vaddr + len < vaddr) {
-		return -1;
-	}
-
-	for (u64 i = 0; i < phnum; i++) {
-		const struct elf64_phdr *phdr = &phdrs[i];
-
-		if (phdr->type != PT_LOAD ||
-		    vaddr < phdr->vaddr ||
-		    vaddr + len > phdr->vaddr + phdr->filesz) {
-			continue;
-		}
-
-		*offset = phdr->offset + (vaddr - phdr->vaddr);
-		return 0;
-	}
-
-	return -1;
-}
-
-static long read_vaddr_bytes(u64 vfs, const struct vfs_file *file,
-			     const struct elf64_phdr *phdrs, u64 phnum,
-			     u64 vaddr, unsigned char *buffer, u64 len,
-			     u64 io_buffer)
-{
-	u64 offset = 0;
-
-	if (file == 0 ||
-	    elf_vaddr_to_offset(phdrs, phnum, vaddr, len, &offset) != 0) {
-		return -1;
-	}
-
-	return vfs_read_file(vfs, file->handle, file->size, offset,
-			     buffer, len, io_buffer);
-}
-
-static long apply_relr_one(u64 task, u64 load_bias, u64 reloc_vaddr,
-			   u64 vfs, const struct vfs_file *file,
-			   const struct elf64_phdr *phdrs, u64 phnum,
-			   u64 io_buffer)
-{
-	unsigned char word[8];
-
-	if (read_vaddr_bytes(vfs, file, phdrs, phnum, reloc_vaddr,
-			     word, sizeof(word), io_buffer) != 0) {
-		return -1;
-	}
-
-	const u64 relocated = read_u64_le(word) + load_bias;
-	return bunix_task_write(task, load_bias + reloc_vaddr,
-				&relocated, sizeof(relocated));
-}
-
-static long apply_relative_relocations(u64 vfs, const struct vfs_file *file,
-				       const struct elf64_phdr *phdrs,
-				       u64 phnum, u64 task, u64 load_bias,
-				       u64 io_buffer)
-{
-	u64 relr = 0;
-	u64 relrsz = 0;
-	u64 relrent = 8;
-
-	if (load_bias == 0) {
-		return 0;
-	}
-
-	for (u64 i = 0; i < phnum; i++) {
-		const struct elf64_phdr *phdr = &phdrs[i];
-
-		if (phdr->type != PT_DYNAMIC) {
-			continue;
-		}
-		if (phdr->filesz > PROC_SEGMENT_MAX ||
-		    vfs_read_file(vfs, file->handle, file->size, phdr->offset,
-				  segment_buffer, phdr->filesz,
-				  io_buffer) != 0) {
-			return -1;
-		}
-
-		const u64 entries = phdr->filesz / sizeof(struct elf64_dyn);
-		const struct elf64_dyn *dyn =
-			(const struct elf64_dyn *)segment_buffer;
-
-		for (u64 entry = 0; entry < entries; entry++) {
-			if (dyn[entry].tag == DT_NULL) {
-				break;
-			}
-			if (dyn[entry].tag == DT_RELR) {
-				relr = dyn[entry].value;
-			} else if (dyn[entry].tag == DT_RELRSZ) {
-				relrsz = dyn[entry].value;
-			} else if (dyn[entry].tag == DT_RELRENT) {
-				relrent = dyn[entry].value;
-			}
-		}
-		break;
-	}
-
-	if (relr == 0 || relrsz == 0) {
-		return 0;
-	}
-	if (relrent != 8 || relrsz > PROC_SEGMENT_MAX ||
-	    read_vaddr_bytes(vfs, file, phdrs, phnum, relr,
-			     segment_buffer, relrsz, io_buffer) != 0) {
-		return -1;
-	}
-
-	u64 reloc_vaddr = 0;
-	const u64 entries = relrsz / relrent;
-
-	for (u64 i = 0; i < entries; i++) {
-		const u64 entry = read_u64_le(segment_buffer + i * relrent);
-
-		if ((entry & 1) == 0) {
-			reloc_vaddr = entry;
-			if (apply_relr_one(task, load_bias, reloc_vaddr,
-					   vfs, file, phdrs, phnum,
-					   io_buffer) != 0) {
-				return -1;
-			}
-			reloc_vaddr += 8;
-			continue;
-		}
-
-		for (u64 bit = 1; bit < 64; bit++) {
-			if ((entry & (1ull << bit)) != 0 &&
-			    apply_relr_one(task, load_bias, reloc_vaddr,
-					   vfs, file, phdrs, phnum,
-					   io_buffer) != 0) {
-				return -1;
-			}
-			reloc_vaddr += 8;
-		}
-	}
-
-	return 0;
-}
-
 static long read_interp_path(u64 vfs, const struct vfs_file *file,
 			     const struct elf64_phdr *phdrs, u64 phnum,
 			     char *path, u64 path_size, u64 io_buffer)
@@ -1408,6 +1257,40 @@ static int elf_phdr_table_size(const struct elf64_ehdr *ehdr, u64 file_size,
 	return 0;
 }
 
+static int elf_offset_to_vaddr(const struct elf64_phdr *phdrs, u64 phnum,
+			       u64 offset, u64 len, u64 load_bias,
+			       u64 *vaddr)
+{
+	if (phdrs == 0 || vaddr == 0 || offset + len < offset) {
+		return -1;
+	}
+
+	for (u64 i = 0; i < phnum; i++) {
+		const struct elf64_phdr *phdr = &phdrs[i];
+
+		if (phdr->type != PT_LOAD ||
+		    phdr->offset + phdr->filesz < phdr->offset ||
+		    offset < phdr->offset ||
+		    offset + len > phdr->offset + phdr->filesz) {
+			continue;
+		}
+
+		const u64 delta = offset - phdr->offset;
+		const u64 image_vaddr = phdr->vaddr + delta;
+		const u64 mapped_vaddr = load_bias + image_vaddr;
+
+		if (image_vaddr < phdr->vaddr ||
+		    mapped_vaddr < image_vaddr) {
+			return -1;
+		}
+
+		*vaddr = mapped_vaddr;
+		return 0;
+	}
+
+	return -1;
+}
+
 static long load_task_image(u64 vfs, u64 task, int clear_existing,
 			    const char *load_path,
 			    const char *execfn_path,
@@ -1497,9 +1380,12 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 		aux_phdrs[i].paddr += load_bias;
 	}
 	exec.entry = ehdr.entry + load_bias;
-	exec.phoff = ehdr.phoff;
 	exec.phent = ehdr.phentsize;
 	exec.phnum = ehdr.phnum;
+	if (elf_offset_to_vaddr(phdrs, ehdr.phnum, ehdr.phoff, phdr_bytes,
+				load_bias, &exec.phdr_addr) != 0) {
+		exec.phdr_addr = 0;
+	}
 	exec.phdrs = aux_phdrs;
 	start_entry = exec.entry;
 
@@ -1561,13 +1447,6 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 	}
 	timing_mapped = bunix_timer_ticks();
 
-	log_exec_load_stage(bunix_task_id(task), "reloc", load_path);
-	if (interp_file.handle == 0 &&
-	    apply_relative_relocations(vfs, &file, phdrs, ehdr.phnum,
-				       task, load_bias,
-				       (u64)io_buffer) != 0) {
-		goto out;
-	}
 	timing_relocated = bunix_timer_ticks();
 
 	log_exec_load_stage(bunix_task_id(task), "stack-alloc", load_path);
@@ -1580,8 +1459,8 @@ static long load_task_image(u64 vfs, u64 task, int clear_existing,
 	}
 
 	log_exec_load_stage(bunix_task_id(task), "stack-build", load_path);
-	if (build_initial_stack(task, execfn_path, &exec, load_bias,
-				interp_bias, strings, creds, handles, stack) != 0) {
+	if (build_initial_stack(task, execfn_path, &exec, interp_bias,
+				strings, creds, handles, stack) != 0) {
 		goto out;
 	}
 	timing_stacked = bunix_timer_ticks();

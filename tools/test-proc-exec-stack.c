@@ -40,9 +40,9 @@ struct elf64_phdr {
 
 struct exec_info {
 	u64 entry;
-	u64 phoff;
 	u64 phent;
 	u64 phnum;
+	u64 phdr_addr;
 	const struct elf64_phdr *phdrs;
 };
 
@@ -164,9 +164,9 @@ static int test_stack_layout(void)
 	};
 	struct exec_info exec = {
 		.entry = 0x401234,
-		.phoff = 0x40,
 		.phent = sizeof(phdrs[0]),
 		.phnum = 2,
+		.phdr_addr = 0x400040,
 		.phdrs = phdrs,
 	};
 	char *argv[] = { "/bin/hello", "arg1" };
@@ -183,7 +183,7 @@ static int test_stack_layout(void)
 	memset(captured_stack, 0, sizeof(captured_stack));
 	captured_addr = 0;
 	captured_len = 0;
-	if (build_initial_stack(99, "/bin/hello", &exec, 0x400000, 0x600000,
+	if (build_initial_stack(99, "/bin/hello", &exec, 0x600000,
 				&strings, &creds, &handles, &stack) != 0) {
 		fprintf(stderr, "build_initial_stack failed\n");
 		return 1;
@@ -240,21 +240,63 @@ static int test_stack_layout(void)
 	return failed;
 }
 
+static int test_static_pie_phdr(void)
+{
+	struct elf64_phdr phdrs[3] = {
+		{ .type = 1, .flags = 4, .offset = 0, .vaddr = 0 },
+		{ .type = 2, .flags = 6, .offset = 0x1de10,
+		  .vaddr = 0x1ee10 },
+		{ .type = 1, .flags = 5, .offset = 0x1000,
+		  .vaddr = 0x1000 },
+	};
+	struct exec_info exec = {
+		.entry = 0x40117c,
+		.phent = sizeof(phdrs[0]),
+		.phnum = 3,
+		.phdr_addr = 0x400040,
+		.phdrs = phdrs,
+	};
+	u64 stack = 0;
+	u64 *words;
+	u64 *aux;
+	int failed = 0;
+
+	memset(captured_stack, 0, sizeof(captured_stack));
+	captured_addr = 0;
+	captured_len = 0;
+	if (build_initial_stack(99, "/sbin/ifquery", &exec, 0,
+				NULL, NULL, NULL, &stack) != 0) {
+		fprintf(stderr, "static pie build_initial_stack failed\n");
+		return 1;
+	}
+	words = (u64 *)captured_stack;
+	aux = &words[4];
+	failed |= expect_u64(aux_value(aux, AT_ENTRY), 0x40117c,
+			     "static pie AT_ENTRY");
+	failed |= expect_u64(aux_value(aux, AT_BASE), 0,
+			     "static pie AT_BASE");
+	failed |= expect_u64(aux_value(aux, AT_PHDR), 0x400040,
+			     "static pie AT_PHDR");
+	failed |= expect_u64(aux_value(aux, AT_PHNUM), 3,
+			     "static pie AT_PHNUM");
+	return failed;
+}
+
 static int test_default_strings(void)
 {
 	struct elf64_phdr phdr = { .type = 1, .flags = 5 };
 	struct exec_info exec = {
 		.entry = 0x1000,
-		.phoff = 0x40,
 		.phent = sizeof(phdr),
 		.phnum = 1,
+		.phdr_addr = 0,
 		.phdrs = &phdr,
 	};
 	u64 stack = 0;
 	u64 *words;
 
 	memset(captured_stack, 0, sizeof(captured_stack));
-	if (build_initial_stack(99, "/bin/default", &exec, 0, 0, NULL, NULL,
+	if (build_initial_stack(99, "/bin/default", &exec, 0, NULL, NULL,
 				NULL, &stack) != 0) {
 		fprintf(stderr, "default build_initial_stack failed\n");
 		return 1;
@@ -272,7 +314,8 @@ static int test_default_strings(void)
 
 int main(void)
 {
-	if (test_stack_layout() != 0 || test_default_strings() != 0) {
+	if (test_stack_layout() != 0 || test_static_pie_phdr() != 0 ||
+	    test_default_strings() != 0) {
 		return 1;
 	}
 	printf("proc exec stack tests ok\n");

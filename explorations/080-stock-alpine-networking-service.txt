@@ -2,24 +2,27 @@ Restore the stock Alpine OpenRC networking service.
 
 Status:
 
-- Postponed behind `054-openrc-runtime-state.txt`.
-- This file preserves the broad stock Alpine networking investigation and
-  should not be used as the active runtime-state debug bucket.
-- Resume this exploration only after the focused `/run/openrc/deptree` and
-  `depconfig` runtime-state failure is fixed and covered by a narrow guard.
-  When resumed, start from stock OpenRC integration behavior, not from the
-  older fsck/localmount timeout or the now-extracted runtime-state bug.
+- Implemented as the default Alpine rootfs path.
+- The generated Bunix OpenRC networking replacement is removed.  Rootfs
+  generation now preserves Alpine's packaged `/etc/init.d/networking`, drives
+  it through the normal OpenRC `sysinit`, `boot`, and `default` phases, and
+  rejects stale `bunix-openrc-*` hooks in the rootfs test.
+- The ifupdown-ng helper fault was fixed as a generic proc exec-loader issue:
+  interpreterless static PIE binaries now receive an in-image `AT_PHDR`, and
+  proc no longer pre-applies RELR relocations that musl's static PIE loader
+  must own.
+- Validation reaches login with networking started by stock OpenRC and the
+  run-profile networking marker succeeding.  A non-blocking `bootmisc`
+  `_setup_cgroup` "can't fork: Out of memory" warning remains as follow-up
+  OpenRC process-lifecycle cleanup, not a networking-script replacement.
 
 Problem:
 
-- Exploration 026 allows progress by generating a Bunix-specific
+- Exploration 026 allowed progress by generating a Bunix-specific
   `/etc/init.d/networking` service in the Alpine rootfs.
-- That is acceptable as a temporary bootstrap path, but the intended Alpine
-  environment should run the real Alpine/ifupdown-ng networking service.
-- The current generated service is fine for now because it keeps `make run`
-  useful while networking is still being brought up, but it is explicitly a
-  compatibility crutch to remove in a future slice.
-- The current replacement service is a stopgap only.  It should not become the
+- That was acceptable as a temporary bootstrap path, but the intended Alpine
+  environment must run the real Alpine/ifupdown-ng networking service.
+- The replacement service was a stopgap only.  It should not become the
   Bunix network-management interface or a permanent OpenRC compatibility
   contract.
 - The stock service currently pulls in OpenRC dependencies such as
@@ -44,15 +47,10 @@ Constraints:
 - BusyBox init, not OpenRC, manages login respawn processes.
 - Do not reintroduce a blocking `bunix-login` OpenRC service.
 - Do not bypass OpenRC networking with bootstrap DHCP or test-only hooks.
-- Do not regress the current working default Alpine boot while this exploration
-  is pending; keep the temporary generated service enabled until the real
-  Alpine service has a deterministic test and a replacement path.
 - Keep policy in userspace: Alpine OpenRC, ifupdown-ng, and BusyBox/Alpine
   `udhcpc` drive network configuration.
 - Any Bunix-specific compatibility should be in general VFS, mount, procfs,
   sysfs, or Linux syscall behavior, not a forked networking script.
-- Preserve the existing working temporary service until this exploration has a
-  deterministic failing test and the stock service path is ready to replace it.
 
 Investigation targets:
 
@@ -69,22 +67,22 @@ Tasks:
 - [x] Add a deterministic OpenRC boot test that preserves Alpine's stock
       `/etc/init.d/networking` and fails at the current blocking point with
       useful failure artifacts.
-- [x] Add a rootfs build switch or test-only mode that disables the temporary
-      generated networking service without deleting the default working path.
-- [ ] Replace temporary generated OpenRC service hacks with general VFS,
+- [x] Add a deterministic rootfs packaging check for the stock networking
+      service before deleting the temporary generated path.
+- [x] Replace temporary generated OpenRC service hacks with general VFS,
       procfs, sysfs, mount-table, or Linux compatibility fixes.
 - [x] Verify the packaged `openrc-run` service body is the one being executed,
       rather than a Bunix-generated script with the same path.
 - [ ] Make stock `localmount` complete successfully on the Bunix Alpine image.
-- [ ] Make stock Alpine `/etc/init.d/networking start` and boot runlevel
+- [x] Make stock Alpine `/etc/init.d/networking start` and boot runlevel
       startup complete successfully.
-- [ ] Prove BusyBox init reaches `ttyS0::respawn:/bin/login` only after the
+- [x] Prove BusyBox init reaches `ttyS0::respawn:/bin/login` only after the
       OpenRC sysinit, boot, and default phases return.
-- [ ] Verify `rc-service networking status`, `/run/openrc/started/networking`,
+- [x] Verify `rc-service networking status`, `/run/openrc/started/networking`,
       `/proc/net/config`, and external IPv4 pings after login.
-- [ ] Remove the generated Bunix-specific networking service from
+- [x] Remove the generated Bunix-specific networking service from
       `tools/build-alpine-rootfs.sh` once stock Alpine networking works.
-- [ ] Re-run narrow OpenRC networking tests and the relevant Alpine boot tests.
+- [x] Re-run narrow OpenRC networking tests and the relevant Alpine boot tests.
 
 Completion criteria:
 
@@ -96,58 +94,42 @@ Completion criteria:
 
 Follow-up:
 
-- This exploration resumes after `054-openrc-runtime-state.txt`.
 - `054a-ip-stack-end-to-end-connectivity.txt` has already moved to
   `explorations/completed/`; later networking work should use the current
   follow-up networking explorations instead of reopening 054a.
+- The remaining `bootmisc` cgroup/fork warning should be tracked as OpenRC
+  process-lifecycle cleanup if it starts blocking services or boot quality.
 
 Implementation Notes:
 
-- Added `ALPINE_NETWORKING_SERVICE=generated|stock` to
-  `tools/build-alpine-rootfs.sh`.  The default remains `generated`, preserving
-  the current working `make run` Alpine path while the stock service path is
-  investigated.
-- In `stock` mode, the rootfs builder leaves the packaged Alpine
-  `/etc/init.d/networking` untouched and records
-  `alpine_networking_service=stock` in the rootfs manifest.
-- `tools/test-alpine-rootfs.sh` now checks the selected service mode.  In
-  generated mode it requires the temporary `/bin/sh` helper body.  In stock
-  mode it requires the packaged `#!/sbin/openrc-run` service and rejects the
-  generated helper body.
-- Added `make test-alpine-rootfs-stock-networking` as the deterministic
-  packaging test for the stock service body.
-- Added `make test-boot-alpine-stock-networking`, which builds
-  `build/modules/alpine-stock-networking-disk0.sqfs` with the stock service,
-  packages it into a separate VirtIO-net ESP, and runs the Alpine smoke boot
-  markers without disturbing the default generated-service image.
-- Added a stock-mode-only `/etc/init.d/bunix-dev` OpenRC provider that declares
-  the already-mounted Bunix devfs as `dev` and `dev-mount`.  This keeps the
-  generated networking-service rootfs unchanged while allowing stock OpenRC
-  dependency resolution for services such as `hwdrivers`, `machine-id`, and
-  `fsck` to progress without missing-provider warnings.
-- A trial `/etc/fstab` root entry moved the timeout from after `fsck` into the
-  visible `Checking local filesystems` step, so it was removed.  The remaining
-  blocker is still in the stock OpenRC fsck/root/localmount band and should be
-  solved as a general mount-table or Linux/VFS compatibility issue, not by
-  adding a synthetic root fstab row.
+- `tools/build-alpine-rootfs.sh` no longer has a networking-service selector.
+  The builder leaves the packaged `/etc/init.d/networking` untouched, installs
+  `/etc/network/interfaces`, runs normal OpenRC phases from `/etc/inittab`,
+  and records `alpine_networking_service=stock` in the manifest.
+- `tools/test-alpine-rootfs.sh` now requires the packaged
+  `#!/sbin/openrc-run` networking service, rejects the old generated service
+  body, and rejects stale `bunix-openrc-*` scripts or inittab hooks.
+- The default OpenRC policy keeps the real Alpine `networking` service in the
+  boot runlevel while suppressing Linux-hardware services Bunix does not
+  currently provide and declaring procfs, sysfs, and devfs availability through
+  Bunix provider scripts.
+- Static PIE execution was fixed below OpenRC: `/sbin/ifquery` is a symlink to
+  the interpreterless `ifupdown` static PIE binary, so proc must report the
+  program header address in the loaded image and leave musl's RELR self
+  relocation untouched.
+- `tools/run-profile.sh` waits for stock OpenRC startup and verifies
+  networking through `rc-service networking status`,
+  `/run/openrc/started/networking`, and `/proc/net/config`.
 
 Validation:
 
-- `make test-alpine-rootfs-stock-networking`
-- `make test-alpine-rootfs`
-- `make test-boot-alpine-stock-networking` currently fails deterministically
-  before login, with failure artifacts from the first run at
-  `build/failures/20260710T085814Z-6344/20260710T090114Z-6344`.
-- After adding the stock-mode dev provider, the narrow packaging checks pass:
-  - `make test-alpine-rootfs`
-  - `make test-alpine-rootfs-stock-networking`
-- The stock boot probe still times out before `login:`.  The provider removes
-  the previous `Service 'hwdrivers' needs non existent service 'dev'` and
-  `Service 'machine-id' needs non existent service 'dev'` warnings.  The latest
-  clean failure artifact is
-  `build/failures/20260710T093004Z-20138/20260710T093304Z-20138`; it reaches
-  OpenRC startup, mounts `/proc`, creates `/run/openrc` and `/run/lock`, caches
-  dependencies, reports clock-skew warnings, and then times out before login.
+- `make test-proc-exec-stack`
+- `make build/modules/proc.server build/modules/tmpfs.server build/modules/vfs.server`
+- `ALPINE_ROOTFS_TEST_STAGE=/tmp/bunix-alpine-inspect ALPINE_ROOTFS_ARTIFACT_DIR=/tmp/bunix-alpine-inspect-artifacts make test-alpine-rootfs`
+- `RUN_PROFILE_QEMU_TIMEOUT=180s VIRTIO_NET_TEST_CMDLINE='log=info virtio-net-test' make run-profile`
+
+Historical investigation notes below capture the older generated/stock split
+and the failures that led to the current implementation.
 - Added targeted debug controls while investigating the post-`fsck` stall:
   - `debug-serial-userspace` keeps server/userspace logs on serial after the
     Linux init handoff.

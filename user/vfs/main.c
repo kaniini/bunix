@@ -525,7 +525,7 @@ static void debug_readdir_forward(const struct vfs_open *open,
 		return;
 	}
 	line[pos++] = '\n';
-	bunix_console_log(line, pos);
+	bunix_early_console_write(line, pos);
 }
 
 static int resolved_cache_key(char *key, u64 task, const char *path)

@@ -7,8 +7,8 @@ add	boot	hostname	/etc/init.d/hostname	Stock networking declares need hostname.
 add	boot	bootmisc	/etc/init.d/bootmisc	Normal Alpine boot service required before networking.
 add	boot	networking	/etc/init.d/networking	Stock Alpine networking service using ifupdown-ng and udhcpc.
 replace	inittab	getty	/bin/login	Bunix login contacts the user server; BusyBox getty/login is intentionally not enabled yet.
-defer	sysinit	devfs	/etc/init.d/devfs	Device filesystem is provided by the Bunix devfs server.
-defer	sysinit	procfs	/etc/init.d/procfs	Procfs is provided by the Bunix procfs server and mounted through VFS.
-defer	sysinit	sysfs	/etc/init.d/sysfs	Sysfs is provided by the Bunix sysfs server and mounted through VFS.
+defer	sysinit	devfs	/etc/init.d/devfs	Device filesystem is provided by the Bunix devfs server before Linux init.
+defer	sysinit	procfs	/etc/init.d/procfs	Procfs is provided by the Bunix procfs server before Linux init.
+defer	sysinit	sysfs	/etc/init.d/sysfs	Sysfs is provided by the Bunix sysfs server before Linux init.
 suppress	boot	modules	/etc/init.d/modules	Bunix has no Linux module loader; stock networking only orders after this service.
 suppress	boot	hwdrivers	/etc/init.d/hwdrivers	Bunix exposes devices through native servers; stock networking only orders after this service.

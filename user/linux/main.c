@@ -448,6 +448,7 @@ static u64 tmpfs_service;
 static u64 devfs_service;
 static u64 unionfs_service;
 static u64 net_service;
+static char linux_hostname[65] = "bunix";
 
 static u64 resolve_service(u64 service, unsigned int rights);
 static void linux_process_reset(struct linux_process *process);
@@ -1108,6 +1109,17 @@ static void append_dec(char *line, u64 line_size, u64 *cursor, u64 value)
 	}
 }
 
+static void append_hex64(char *line, u64 line_size, u64 *cursor, u64 value)
+{
+	static const char digits[] = "0123456789abcdef";
+
+	append_text(line, line_size, cursor, "0x");
+	for (int shift = 60; shift >= 0; shift -= 4) {
+		append_char(line, line_size, cursor,
+			    digits[(value >> (u64)shift) & 0xf]);
+	}
+}
+
 static void append_long(char *line, u64 line_size, u64 *cursor, long value)
 {
 	if (value < 0) {
@@ -1306,6 +1318,9 @@ static void linux_debug_wait_log(const struct linux_process *parent,
 	append_text(line, sizeof(line), &cursor, " child_task=");
 	append_dec(line, sizeof(line), &cursor,
 		   child != 0 ? child->bunix_task : 0);
+	append_text(line, sizeof(line), &cursor, " status=");
+	append_dec(line, sizeof(line), &cursor,
+		   child != 0 ? child->exit_status : 0);
 	append_text(line, sizeof(line), &cursor, " result=");
 	append_long(line, sizeof(line), &cursor, result);
 	append_char(line, sizeof(line), &cursor, '\n');
@@ -1352,6 +1367,7 @@ static const char *linux_debug_message_name(u64 type)
 	case BUNIX_LINUX_GETSOCKOPT: return "getsockopt";
 	case BUNIX_LINUX_WAIT4: return "wait4";
 	case BUNIX_LINUX_UNAME: return "uname";
+	case BUNIX_LINUX_SETHOSTNAME: return "sethostname";
 	case BUNIX_LINUX_GETCWD: return "getcwd";
 	case BUNIX_LINUX_CHDIR: return "chdir";
 	case BUNIX_LINUX_MKDIR: return "mkdir";
@@ -3785,7 +3801,7 @@ static long linux_task_fault(u64 task, u64 thread, u64 trap, u64 flags,
 		.flags = flags,
 	};
 
-	if (cap != 0 && (cap_rights & BUNIX_RIGHT_SEND) != 0) {
+	if (cap != 0 && (cap_rights & BUNIX_RIGHT_RECV) != 0) {
 		if (bunix_buffer_read(cap, 0, &event, sizeof(event)) != 0) {
 			return -LINUX_EINVAL;
 		}
@@ -3820,9 +3836,26 @@ static long linux_task_fault(u64 task, u64 thread, u64 trap, u64 flags,
 	}
 
 	const u64 wait_status = signal | 0x80;
-	const char fault_log[] = "linux-server: task fault\n";
+	char fault_log[256];
+	u64 cursor = 0;
 
-	bunix_console_log(fault_log, sizeof(fault_log) - 1);
+	append_text(fault_log, sizeof(fault_log), &cursor,
+		    "linux-server: task fault pid=");
+	append_dec(fault_log, sizeof(fault_log), &cursor, process->pid);
+	append_text(fault_log, sizeof(fault_log), &cursor, " task=");
+	append_dec(fault_log, sizeof(fault_log), &cursor, event.task);
+	append_text(fault_log, sizeof(fault_log), &cursor, " signal=");
+	append_dec(fault_log, sizeof(fault_log), &cursor, signal);
+	append_text(fault_log, sizeof(fault_log), &cursor, " trap=");
+	append_dec(fault_log, sizeof(fault_log), &cursor, event.trap);
+	append_text(fault_log, sizeof(fault_log), &cursor, " error=");
+	append_hex64(fault_log, sizeof(fault_log), &cursor, event.error);
+	append_text(fault_log, sizeof(fault_log), &cursor, " ip=");
+	append_hex64(fault_log, sizeof(fault_log), &cursor, event.ip);
+	append_text(fault_log, sizeof(fault_log), &cursor, " addr=");
+	append_hex64(fault_log, sizeof(fault_log), &cursor, event.fault_addr);
+	append_text(fault_log, sizeof(fault_log), &cursor, "\n");
+	bunix_console_log(fault_log, cursor);
 	linux_process_exit_status(process, wait_status, 0);
 	return 0;
 }
@@ -5908,13 +5941,18 @@ static long linux_symlinkat(struct linux_process *process, u64 dirfd,
 	    target[0] == '\0' || path[0] == '\0') {
 		return -LINUX_ENOENT;
 	}
+	linux_debug_path_log(process, "symlinkat", path);
 	name_result = linux_check_name_max(path);
 	if (name_result != 0) {
+		linux_debug_path_result_log(process, "symlinkat", path,
+					    name_result);
 		return name_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
 	if (base_result != 0) {
+		linux_debug_path_result_log(process, "symlinkat", path,
+					    base_result);
 		return base_result;
 	}
 	if (linux_cache_path_for_dirfd(process, dirfd, path,
@@ -5923,12 +5961,18 @@ static long linux_symlinkat(struct linux_process *process, u64 dirfd,
 	}
 	if (linux_vfs_symlink_call(process, base_handle, target, path,
 				   &reply) != 0) {
+		linux_debug_path_result_log(process, "symlinkat", path,
+					    -LINUX_EIO);
 		return -LINUX_EIO;
 	}
 	if (reply.words[0] != 0) {
-		return linux_vfs_error(reply.words[0]);
+		const long result = linux_vfs_error(reply.words[0]);
+
+		linux_debug_path_result_log(process, "symlinkat", path, result);
+		return result;
 	}
 	linux_vfs_note_mutation(mutation_path[0] != '\0' ? mutation_path : 0);
+	linux_debug_path_result_log(process, "symlinkat", path, 0);
 	return 0;
 }
 
@@ -6610,13 +6654,15 @@ static long linux_vfs_unmount(const char *target)
 static long linux_mount(struct linux_process *process, u64 target_len,
 			u64 fstype_len, u64 flags, u64 buffer)
 {
+	enum {
+		LINUX_MS_REMOUNT = 32,
+	};
 	char target[LINUX_MAX_PATH];
 	char full_target[LINUX_MAX_PATH];
 	char fstype[64];
 	long normalize_result;
 	const long euid = linux_user_credential(process, BUNIX_LINUX_GETEUID);
 
-	(void)flags;
 	if (euid < 0) {
 		return euid;
 	}
@@ -6624,25 +6670,37 @@ static long linux_mount(struct linux_process *process, u64 target_len,
 		return -LINUX_EPERM;
 	}
 	if (target_len == 0 || target_len > sizeof(target) ||
-	    fstype_len == 0 || fstype_len > sizeof(fstype)) {
+	    fstype_len > sizeof(fstype)) {
 		return -LINUX_EINVAL;
 	}
 	if (buffer == 0 ||
 	    bunix_buffer_read(buffer, 0, target, target_len) != 0 ||
-	    bunix_buffer_read(buffer, target_len, fstype, fstype_len) != 0) {
+	    (fstype_len != 0 &&
+	     bunix_buffer_read(buffer, target_len, fstype, fstype_len) != 0)) {
 		return -LINUX_EFAULT;
 	}
 	if (target[target_len - 1] != '\0' ||
-	    fstype[fstype_len - 1] != '\0') {
+	    (fstype_len != 0 && fstype[fstype_len - 1] != '\0')) {
 		return -LINUX_EINVAL;
 	}
-	if (target[0] == '\0' || fstype[0] == '\0') {
+	if (target[0] == '\0' ||
+	    (fstype_len != 0 && fstype[0] == '\0')) {
 		return -LINUX_EINVAL;
+	}
+	if (fstype_len == 0) {
+		fstype[0] = '\0';
 	}
 	linux_debug_path_log(process, "mount", target);
 	normalize_result = path_normalize(process->cwd, target, full_target);
 	if (normalize_result != 0) {
 		return normalize_result;
+	}
+	if ((flags & LINUX_MS_REMOUNT) != 0) {
+		linux_vfs_note_mutation(full_target);
+		return 0;
+	}
+	if (fstype[0] == '\0') {
+		return -LINUX_EINVAL;
 	}
 	if (string_equal(fstype, "proc") || string_equal(fstype, "procfs")) {
 		return linux_mount_path_command(
@@ -9570,14 +9628,37 @@ static long linux_uname(u64 buffer)
 		return -LINUX_EFAULT;
 	}
 	zero_bytes(uts, sizeof(uts));
-	copy_field(uts, 0 * 65, 65, "Bunix");
-	copy_field(uts, 1 * 65, 65, "bunix");
+	copy_field(uts, 0 * 65, 65, "Linux");
+	copy_field(uts, 1 * 65, 65, linux_hostname);
 	copy_field(uts, 2 * 65, 65, "0.1");
-	copy_field(uts, 3 * 65, 65, "#1");
+	copy_field(uts, 3 * 65, 65, "#1 Bunix");
 	copy_field(uts, 4 * 65, 65, "x86_64");
 	copy_field(uts, 5 * 65, 65, "local");
 	return bunix_buffer_write(buffer, 0, uts, sizeof(uts)) == 0 ? 0 :
 	       -LINUX_EFAULT;
+}
+
+static long linux_sethostname(struct linux_process *process, u64 len,
+			      u64 buffer, u64 cap_rights)
+{
+	const long euid = linux_user_credential(process, BUNIX_LINUX_GETEUID);
+
+	if (euid < 0) {
+		return euid;
+	}
+	if (euid != 0) {
+		return -LINUX_EPERM;
+	}
+	if (len >= sizeof(linux_hostname)) {
+		return -LINUX_EINVAL;
+	}
+	if (len != 0 &&
+	    (buffer == 0 || (cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	     bunix_buffer_read(buffer, 0, linux_hostname, len) != 0)) {
+		return -LINUX_EFAULT;
+	}
+	linux_hostname[len] = '\0';
+	return 0;
 }
 
 static u64 linux_monotonic_ns(void)
@@ -10442,31 +10523,39 @@ int main(void)
 				bunix_handle_close(message.cap);
 			}
 			break;
-			case BUNIX_LINUX_SYSINFO:
-				reply.words[0] = (u64)linux_sysinfo(message.cap);
-				if (message.cap != 0) {
-					bunix_handle_close(message.cap);
-				}
-				break;
-			case BUNIX_LINUX_STATFS:
-				reply.words[0] = (u64)linux_statfs(process,
-								   message.words[1],
-								   message.cap);
-				if (message.cap != 0) {
-					bunix_handle_close(message.cap);
-				}
-				break;
-			case BUNIX_LINUX_FSTATFS:
-				reply.words[0] = (u64)linux_fstatfs(process,
-								    message.words[0],
-								    message.cap);
-				if (message.cap != 0) {
-					bunix_handle_close(message.cap);
-				}
-				break;
-			case BUNIX_LINUX_GETRANDOM:
-				reply.words[0] = (u64)linux_getrandom(message.words[1],
-								     message.cap);
+		case BUNIX_LINUX_SETHOSTNAME:
+			reply.words[0] = (u64)linux_sethostname(
+				process, message.words[0], message.cap,
+				message.cap_rights);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_SYSINFO:
+			reply.words[0] = (u64)linux_sysinfo(message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_STATFS:
+			reply.words[0] = (u64)linux_statfs(process,
+							   message.words[1],
+							   message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_FSTATFS:
+			reply.words[0] = (u64)linux_fstatfs(process,
+							    message.words[0],
+							    message.cap);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
+		case BUNIX_LINUX_GETRANDOM:
+			reply.words[0] = (u64)linux_getrandom(message.words[1],
+							      message.cap);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

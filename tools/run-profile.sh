@@ -396,12 +396,7 @@ if grep -aF "netcfg: configured" "$serial_log" >/dev/null 2>&1; then
 fi
 wait_fixed "bootstrap: linux init exec" linux-init-exec 120
 if [ "$rootfs" = alpine-squashfs ]; then
-	wait_fixed "bunix-openrc: sysinit start" openrc-sysinit-start 180
-	wait_fixed "bunix-openrc: sysinit end" openrc-sysinit-end 180
-	wait_fixed "bunix-openrc: boot start" openrc-boot-start 180
-	wait_fixed "bunix-openrc: boot end" openrc-boot-end 180
-	wait_fixed "bunix-openrc: default start" openrc-default-start 180
-	wait_fixed "bunix-openrc: default end" openrc-default-end 180
+	wait_fixed "OpenRC" openrc-start 180
 fi
 wait_fixed "login: " login-prompt 180
 
@@ -415,8 +410,8 @@ printf 'echo %s\n' "$shell_marker" >&3
 wait_fixed "$shell_marker" first-command 30
 
 net_marker=__BUNIX_RUN_PROFILE_NET_DONE__
-printf 'busybox grep -F "default_ipv4 1" /proc/net/config >/dev/null 2>&1; echo %s=$?\n' "$net_marker" >&3
-wait_fixed "$net_marker" network-command 30
+printf 'rc-service networking status >/dev/null 2>&1 && test -e /run/openrc/started/networking && busybox grep -F "default_ipv4 1" /proc/net/config >/dev/null 2>&1; echo %s=$?\n' "$net_marker" >&3
+wait_fixed "$net_marker=0" network-command 30
 
 printf '/bin/busybox poweroff -f\n' >&3
 event poweroff-sent

@@ -2,6 +2,7 @@
 #include <arch/io.h>
 #include <arch/smp.h>
 #include <arch/user.h>
+#include "buffer.h"
 #include "console.h"
 #include "ipc.h"
 #include "sched.h"
@@ -51,6 +52,7 @@ enum {
 	TASK_FAULT_CLASS_BUS = 3,
 
 	IPC_RIGHT_SEND = 1 << 0,
+	IPC_RIGHT_RECV = 1 << 1,
 	LINUX_SIGNAL_FRAME_MAGIC = 0x534947424e555858ull,
 	LINUX_SIGBUS = 7,
 	LINUX_SIGSEGV = 11,
@@ -666,9 +668,18 @@ static int notify_linux_task_fault(struct arch_interrupt_frame *frame, u64 cr2)
 		.arch0 = frame->cs,
 		.arch1 = frame->rflags,
 	};
+	struct shared_buffer *buffer;
 
 	if (linux == 0) {
 		console_printf("interrupts: user fault notify failed vector=%u rip=%p task=%u\n",
+			       (u32)frame->vector, (const void *)frame->rip,
+			       task_id(task_current()));
+		return 0;
+	}
+	buffer = buffer_create(sizeof(event));
+	if (buffer == 0 || buffer_write(buffer, 0, &event, sizeof(event)) != 0) {
+		buffer_release(buffer);
+		console_printf("interrupts: user fault buffer failed vector=%u rip=%p task=%u\n",
 			       (u32)frame->vector, (const void *)frame->rip,
 			       task_id(task_current()));
 		return 0;
@@ -677,10 +688,10 @@ static int notify_linux_task_fault(struct arch_interrupt_frame *frame, u64 cr2)
 		.protocol = USER_FOURCC_LINX,
 		.type = LINUX_RPC_TASK_FAULT,
 		.sender = 0,
-		.cap_rights = IPC_RIGHT_SEND,
+		.cap_rights = IPC_RIGHT_RECV,
 		.reply_port = reply_port,
-		.cap_type = IPC_CAP_NONE,
-		.cap_object = 0,
+		.cap_type = IPC_CAP_BUFFER,
+		.cap_object = buffer,
 		.words = { event.task, event.thread, event.trap, event.flags },
 	};
 	struct ipc_message reply;
@@ -688,11 +699,13 @@ static int notify_linux_task_fault(struct arch_interrupt_frame *frame, u64 cr2)
 	if (reply_port == 0 ||
 	    ipc_send(linux, &message) != 0 ||
 	    ipc_recv(reply_port, &reply) != 0) {
+		buffer_release(buffer);
 		console_printf("interrupts: user fault send failed vector=%u rip=%p task=%u\n",
 			       (u32)frame->vector, (const void *)frame->rip,
 			       task_id(task_current()));
 		return 0;
 	}
+	buffer_release(buffer);
 
 	if ((i64)reply.words[0] <= 0) {
 		return 0;

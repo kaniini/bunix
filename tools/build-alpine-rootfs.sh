@@ -16,11 +16,8 @@ apk_cache=${APK_CACHE_DIR:-$artifact_dir/apk-cache}
 repositories=${APK_REPOSITORIES_FILE:-/etc/apk/repositories}
 apk_packages=${ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc ifupdown-ng}
 apk_arch=${APK_ARCH:-}
-networking_service=${ALPINE_NETWORKING_SERVICE:-generated}
 if [ -n "${ALPINE_OPENRC_POLICY:-}" ]; then
 	runlevel_policy=$ALPINE_OPENRC_POLICY
-elif [ "$networking_service" = generated ]; then
-	runlevel_policy=tools/alpine-generated-openrc-runlevels.policy
 else
 	runlevel_policy=tools/alpine-openrc-runlevels.policy
 fi
@@ -316,11 +313,6 @@ start()
 }
 EOF_BUNIX_PROC
 	chmod 0755 "$root/etc/init.d/procfs"
-
-	mkdir -p "$root/etc/runlevels/sysinit"
-	ln -sf /etc/init.d/devfs "$root/etc/runlevels/sysinit/devfs"
-	ln -sf /etc/init.d/procfs "$root/etc/runlevels/sysinit/procfs"
-	ln -sf /etc/init.d/sysfs "$root/etc/runlevels/sysinit/sysfs"
 }
 
 apk_add_rootfs() {
@@ -400,13 +392,9 @@ if [ ! -e "$root/etc/alpine-release" ]; then
 	fi
 fi
 
-if [ "$networking_service" = generated ]; then
-	openrc_inittab_entries='::sysinit:/sbin/bunix-openrc-bringup'
-else
-	openrc_inittab_entries='::sysinit:/sbin/bunix-openrc-sysinit
-::sysinit:/sbin/bunix-openrc-step boot
-::wait:/sbin/bunix-openrc-default'
-fi
+openrc_inittab_entries='::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default'
 
 cat > "$root/etc/inittab" <<EOF_INITTAB
 $openrc_inittab_entries
@@ -415,104 +403,6 @@ ttyS0::respawn:/bin/login
 EOF_INITTAB
 sed -i "s|ttyS0::respawn:/bin/login|ttyS0::respawn:$init_command|" \
 	"$root/etc/inittab"
-
-cat > "$root/sbin/bunix-openrc-step" <<'EOF_OPENRC_STEP'
-#!/bin/sh
-
-bootmark()
-{
-	printf '%s\n' "$1" >> /proc/boot_timing 2>/dev/null || true
-}
-
-stage=$1
-shift
-
-bootmark "openrc-$stage-start"
-printf 'bunix-openrc: %s start\n' "$stage"
-/sbin/openrc "$stage" "$@"
-status=$?
-bootmark "openrc-$stage-end"
-printf 'bunix-openrc: %s end status=%s\n' "$stage" "$status"
-exit "$status"
-EOF_OPENRC_STEP
-chmod 0555 "$root/sbin/bunix-openrc-step"
-
-cat > "$root/sbin/bunix-openrc-default" <<'EOF_OPENRC_DEFAULT'
-#!/bin/sh
-
-bootmark()
-{
-	printf '%s\n' "$1" >> /proc/boot_timing 2>/dev/null || true
-}
-
-bootmark openrc-default-start
-printf 'bunix-openrc: default start\n'
-echo default >/run/openrc/softlevel
-bootmark openrc-default-end
-printf 'bunix-openrc: default end status=0\n'
-exit 0
-EOF_OPENRC_DEFAULT
-chmod 0555 "$root/sbin/bunix-openrc-default"
-
-cat > "$root/sbin/bunix-openrc-bringup" <<'EOF_OPENRC_BRINGUP'
-#!/bin/sh
-
-bootmark()
-{
-	printf '%s\n' "$1" >> /proc/boot_timing 2>/dev/null || true
-}
-
-bootmark openrc-sysinit-start
-printf 'bunix-openrc: sysinit start\n'
-mkdir -p /run/openrc /run/lock /lib/rc/init.d
-chmod 0755 /run/openrc 2>/dev/null || true
-chmod 0775 /run/lock 2>/dev/null || true
-if [ -d /var/cache/rc ]; then
-	cp -pr /var/cache/rc/. /run/openrc/ 2>/dev/null || true
-fi
-echo sysinit >/run/openrc/softlevel
-bootmark openrc-sysinit-end
-printf 'bunix-openrc: sysinit end status=0\n'
-
-bootmark openrc-boot-start
-printf 'bunix-openrc: boot start\n'
-echo boot >/run/openrc/softlevel
-/etc/init.d/networking start
-status=$?
-bootmark openrc-boot-end
-printf 'bunix-openrc: boot end status=%s\n' "$status"
-
-bootmark openrc-default-start
-printf 'bunix-openrc: default start\n'
-echo default >/run/openrc/softlevel
-bootmark openrc-default-end
-printf 'bunix-openrc: default end status=0\n'
-exit 0
-EOF_OPENRC_BRINGUP
-chmod 0555 "$root/sbin/bunix-openrc-bringup"
-
-cat > "$root/sbin/bunix-openrc-sysinit" <<'EOF_OPENRC_SYSINIT'
-#!/bin/sh
-
-bootmark()
-{
-	printf '%s\n' "$1" >> /proc/boot_timing 2>/dev/null || true
-}
-
-bootmark openrc-sysinit-start
-printf 'bunix-openrc: sysinit start\n'
-mkdir -p /run/openrc /run/lock /lib/rc/init.d
-chmod 0755 /run/openrc 2>/dev/null || true
-chmod 0775 /run/lock 2>/dev/null || true
-if [ -d /var/cache/rc ]; then
-	cp -pr /var/cache/rc/. /run/openrc/ 2>/dev/null || true
-fi
-echo sysinit >/run/openrc/softlevel
-bootmark openrc-sysinit-end
-printf 'bunix-openrc: sysinit end status=0\n'
-exit 0
-EOF_OPENRC_SYSINIT
-chmod 0555 "$root/sbin/bunix-openrc-sysinit"
 
 mkdir -p "$root/etc/network"
 cat > "$root/etc/network/interfaces" <<'EOF_INTERFACES'
@@ -524,82 +414,16 @@ auto eth0
 iface eth0 inet dhcp
 EOF_INTERFACES
 chmod 0444 "$root/etc/network/interfaces"
+: > "$root/fastboot"
+chmod 0444 "$root/fastboot"
 
-case "$networking_service" in
-generated)
-	cat > "$root/etc/init.d/networking" <<'EOF_NETWORKING'
-#!/bin/sh
-
-cfgfile=${cfgfile:-/etc/network/interfaces}
-started=/run/openrc/started/networking
-
-mark_started()
-{
-	mkdir -p /run/openrc/started
-	ln -sf /etc/init.d/networking "$started"
-}
-
-start_networking()
-{
-	echo " * Starting networking ..."
-	mark_started
-	return 0
-}
-
-stop_networking()
-{
-	echo " * Stopping networking ..."
-	rm -f "$started"
-	return 0
-}
-
-status_networking()
-{
-	if [ -e "$started" ]; then
-		echo " * status: started"
-		return 0
-	fi
-	echo " * status: stopped"
-	return 3
-}
-
-case "$1" in
-start)
-	start_networking
-	;;
-stop)
-	stop_networking
-	;;
-restart)
-	start_networking
-	;;
-status)
-	status_networking
-	;;
-*)
-	echo "usage: $0 {start|stop|restart|status}" >&2
-	exit 1
-	;;
-esac
-EOF_NETWORKING
-	chmod 0755 "$root/etc/init.d/networking"
-	;;
-stock)
-	if [ ! -f "$root/etc/init.d/networking" ]; then
-		echo "stock Alpine networking service is missing" >&2
-		exit 2
-	fi
-	;;
-*)
-	echo "unknown ALPINE_NETWORKING_SERVICE: $networking_service" >&2
+if [ ! -f "$root/etc/init.d/networking" ]; then
+	echo "stock Alpine networking service is missing" >&2
 	exit 2
-	;;
-esac
+fi
 
 materialize_openrc_policy
-if [ "$networking_service" = stock ]; then
-	install_bunix_openrc_providers
-fi
+install_bunix_openrc_providers
 generate_openrc_cache
 write_runlevel_inventory "$root" "$bunix_runlevels"
 
@@ -614,7 +438,7 @@ find "$root/var/cache/apk" -type f -delete 2>/dev/null || true
 	echo "bunix_overlay=$bunix_overlay"
 	echo "init_command=$init_command"
 	echo "extra_dir=$extra_dir"
-	echo "alpine_networking_service=$networking_service"
+	echo "alpine_networking_service=stock"
 	echo "openrc_policy=$runlevel_policy"
 	echo "openrc_reference_runlevels=$reference_runlevels"
 	echo "openrc_bunix_runlevels=$bunix_runlevels"

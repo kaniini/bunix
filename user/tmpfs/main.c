@@ -3,6 +3,9 @@
 #include <bunix/tree.h>
 
 #define TMPFS_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
+#define TMPFS_ROOT_MAGIC 0x544d5046524f4f54ull
+#define TMPFS_INODE_MAGIC 0x544d5046494e4f44ull
+#define TMPFS_FILE_MAGIC 0x544d504646494c45ull
 
 enum {
 	TMPFS_MAX_PATH = 4096,
@@ -13,10 +16,12 @@ enum {
 
 struct tmpfs_root {
 	struct bunix_tree_node node;
+	u64 magic;
 	char *path;
 };
 
 struct tmpfs_inode {
+	u64 magic;
 	char *data;
 	u64 size;
 	u64 capacity;
@@ -35,9 +40,11 @@ struct tmpfs_file {
 	struct bunix_tree_node node;
 	struct tmpfs_file *prev;
 	struct tmpfs_file *next;
+	u64 magic;
 	char *path;
 	u64 refs;
 	int deleted;
+	int path_embedded;
 	struct tmpfs_inode *inode;
 };
 
@@ -56,6 +63,7 @@ struct tmpfs_vfs_caller {
 };
 
 static struct bunix_tree roots;
+static struct bunix_tree files_by_path;
 static struct tmpfs_file *files_head;
 static struct bunix_u64_tree open_files;
 static struct bunix_u64_tree vfs_callers;
@@ -77,12 +85,18 @@ static u64 str_len(const char *text)
 
 static int str_eq(const char *left, const char *right)
 {
-	while (*left != '\0' && *right != '\0') {
-		if (*left++ != *right++) {
+	if (left == 0 || right == 0) {
+		return 0;
+	}
+	for (u64 i = 0; i < TMPFS_MAX_PATH; i++) {
+		if (left[i] != right[i]) {
 			return 0;
 		}
+		if (left[i] == '\0') {
+			return 1;
+		}
 	}
-	return *left == '\0' && *right == '\0';
+	return 0;
 }
 
 static char *str_dup(const char *text)
@@ -103,6 +117,37 @@ static char *str_dup(const char *text)
 	return copy;
 }
 
+static struct tmpfs_file *file_alloc_with_path(const char *path)
+{
+	const u64 len = str_len(path);
+	struct tmpfs_file *file;
+	char *copy;
+
+	if (path == 0 || len == TMPFS_MAX_PATH ||
+	    sizeof(*file) > ((u64)-1) - len - 1) {
+		return 0;
+	}
+	file = (struct tmpfs_file *)bunix_calloc(1, sizeof(*file) + len + 1);
+	if (file == 0) {
+		return 0;
+	}
+	copy = (char *)(file + 1);
+	for (u64 i = 0; i <= len; i++) {
+		copy[i] = path[i];
+	}
+	file->magic = TMPFS_FILE_MAGIC;
+	file->path = copy;
+	file->path_embedded = 1;
+	return file;
+}
+
+static void file_path_release(struct tmpfs_file *file)
+{
+	if (file != 0 && file->path != 0 && !file->path_embedded) {
+		bunix_free(file->path);
+	}
+}
+
 static int path_has_prefix_child(const char *path, const char *prefix)
 {
 	u64 i = 0;
@@ -121,9 +166,31 @@ static int path_is_at_or_under(const char *path, const char *prefix)
 	return str_eq(path, prefix) || path_has_prefix_child(path, prefix);
 }
 
+static int inode_is_valid(const struct tmpfs_inode *inode)
+{
+	return inode != 0 && inode->magic == TMPFS_INODE_MAGIC;
+}
+
+static int file_is_valid(const struct tmpfs_file *file)
+{
+	return file != 0 && file->magic == TMPFS_FILE_MAGIC &&
+	       inode_is_valid(file->inode);
+}
+
+static struct tmpfs_root *root_find(const char *path)
+{
+	struct tmpfs_root *root;
+
+	if (path == 0) {
+		return 0;
+	}
+	root = (struct tmpfs_root *)bunix_tree_get(&roots, path);
+	return root != 0 && root->magic == TMPFS_ROOT_MAGIC ? root : 0;
+}
+
 static int path_is_root(const char *path)
 {
-	return str_eq(path, "/") || bunix_tree_get(&roots, path) != 0;
+	return str_eq(path, "/") || root_find(path) != 0;
 }
 
 static int path_parent_path(const char *path, char *parent)
@@ -162,7 +229,7 @@ static int file_is_child_of(const struct tmpfs_file *file, const char *dir)
 	const u64 len = str_len(dir);
 	u64 pos;
 
-	if (file == 0 || file->deleted || file->path == 0 ||
+	if (!file_is_valid(file) || file->deleted || file->path == 0 ||
 	    !path_has_prefix_child(file->path, dir)) {
 		return 0;
 	}
@@ -270,11 +337,10 @@ static int read_rename_buffer(const struct bunix_msg *message, char *old_path,
 	return old_path[0] == '/' && new_path[0] == '/' ? 0 : -1;
 }
 
-static void file_list_add(struct tmpfs_file *file)
+static int file_list_add(struct tmpfs_file *file)
 {
-	if (file == 0 || file->prev != 0 || file->next != 0 ||
-	    files_head == file) {
-		return;
+	if (!file_is_valid(file) || file->next != 0 || files_head == file) {
+		return -1;
 	}
 	file->prev = 0;
 	file->next = files_head;
@@ -282,19 +348,20 @@ static void file_list_add(struct tmpfs_file *file)
 		files_head->prev = file;
 	}
 	files_head = file;
+	return 0;
 }
 
 static void file_list_remove(struct tmpfs_file *file)
 {
-	if (file == 0) {
+	if (file == 0 || file->magic != TMPFS_FILE_MAGIC) {
 		return;
 	}
-	if (file->prev != 0) {
+	if (file->prev != 0 && file->prev->next == file) {
 		file->prev->next = file->next;
 	} else if (files_head == file) {
 		files_head = file->next;
 	}
-	if (file->next != 0) {
+	if (file->next != 0 && file->next->prev == file) {
 		file->next->prev = file->prev;
 	}
 	file->prev = 0;
@@ -303,32 +370,32 @@ static void file_list_remove(struct tmpfs_file *file)
 
 static struct tmpfs_file *file_find(const char *path)
 {
+	struct tmpfs_file *file;
+
 	if (path == 0) {
 		return 0;
 	}
-	for (struct tmpfs_file *file = files_head; file != 0; file = file->next) {
-		if (!file->deleted && file->path != 0 &&
-		    str_eq(file->path, path)) {
-			return file;
-		}
-	}
-	return 0;
+	file = (struct tmpfs_file *)bunix_tree_get(&files_by_path, path);
+	return file_is_valid(file) && !file->deleted &&
+	       file->path != 0 && str_eq(file->path, path) ? file : 0;
 }
 
 static int files_insert_file(struct tmpfs_file *file)
 {
-	if (file == 0 || file->path == 0) {
+	if (!file_is_valid(file) || file->path == 0) {
 		return -1;
 	}
 	if (file_find(file->path) != 0) {
 		return -2;
 	}
-	file->node.left = 0;
-	file->node.right = 0;
-	file->node.parent = 0;
-	file->node.key = 0;
-	file->node.value = 0;
-	file_list_add(file);
+	if (bunix_tree_insert_node(&files_by_path, &file->node, file->path,
+				   (u64)file) != 0) {
+		return -1;
+	}
+	if (file_list_add(file) != 0) {
+		bunix_tree_remove_node(&files_by_path, &file->node);
+		return -1;
+	}
 	return 0;
 }
 
@@ -344,7 +411,8 @@ static int path_parent_exists(const char *path)
 		return 1;
 	}
 	file = file_find(parent);
-	return file != 0 && file->inode->type == BUNIX_VFS_TYPE_DIRECTORY;
+	return file_is_valid(file) &&
+	       file->inode->type == BUNIX_VFS_TYPE_DIRECTORY;
 }
 
 static u64 resolve_service(u64 service, unsigned int rights);
@@ -395,7 +463,7 @@ static int task_can_access(u64 task, const struct tmpfs_file *file, u64 mask)
 	struct bunix_msg reply;
 	const u64 user = service_user();
 
-	if (file == 0) {
+	if (file == 0 || !inode_is_valid(file->inode)) {
 		return 0;
 	}
 	if (task == 0 || mask == 0) {
@@ -437,6 +505,7 @@ static int task_can_chown(u64 task)
 }
 
 static struct tmpfs_inode root_inode = {
+	.magic = TMPFS_INODE_MAGIC,
 	.data = 0,
 	.size = 0,
 	.capacity = 0,
@@ -460,8 +529,8 @@ static struct tmpfs_file *parent_file_for_path(const char *path)
 	}
 	if (path_is_root(parent)) {
 		static struct tmpfs_file root = {
-			.node = { 0, 0, 0, 0, 0 },
 			.path = 0,
+			.magic = TMPFS_FILE_MAGIC,
 			.refs = 0,
 			.deleted = 0,
 			.inode = &root_inode,
@@ -474,18 +543,25 @@ static struct tmpfs_file *parent_file_for_path(const char *path)
 
 static int directory_is_empty(const char *path)
 {
-	for (struct tmpfs_file *file = files_head; file != 0; file = file->next) {
+	u64 steps = 0;
+
+	for (struct tmpfs_file *file = files_head;
+	     file != 0 && steps++ < TMPFS_TREE_WALK_LIMIT;
+	     file = file->next) {
+		if (!file_is_valid(file)) {
+			return 0;
+		}
 		if (file_is_child_of(file, path)) {
 			return 0;
 		}
 	}
-	return 1;
+	return steps < TMPFS_TREE_WALK_LIMIT;
 }
 
 static int file_in_renamed_subtree(const struct tmpfs_file *file,
 				   const char *old_path)
 {
-	return file != 0 && !file->deleted &&
+	return file_is_valid(file) && !file->deleted &&
 	       file->path != 0 &&
 	       (str_eq(file->path, old_path) ||
 		path_has_prefix_child(file->path, old_path));
@@ -531,7 +607,7 @@ static int tmpfs_renamed_subtree_path(const char *old_path,
 
 static void inode_release(struct tmpfs_inode *inode)
 {
-	if (inode == 0) {
+	if (!inode_is_valid(inode)) {
 		return;
 	}
 	if (inode->refs != 0) {
@@ -541,13 +617,14 @@ static void inode_release(struct tmpfs_inode *inode)
 		if (inode->data != 0) {
 			bunix_free(inode->data);
 		}
+		inode->magic = 0;
 		bunix_free(inode);
 	}
 }
 
 static void file_release(struct tmpfs_file *file)
 {
-	if (file == 0) {
+	if (file == 0 || file->magic != TMPFS_FILE_MAGIC) {
 		return;
 	}
 	if (file->refs != 0) {
@@ -555,15 +632,19 @@ static void file_release(struct tmpfs_file *file)
 	}
 	if (file->refs == 0 && file->deleted) {
 		inode_release(file->inode);
-		bunix_free(file->path);
+		file_path_release(file);
+		file->magic = 0;
 		bunix_free(file);
 	}
 }
 
 static void files_remove_file(struct tmpfs_file *file)
 {
-	if (file == 0) {
+	if (file == 0 || file->magic != TMPFS_FILE_MAGIC) {
 		return;
+	}
+	if (file->node.key != 0) {
+		bunix_tree_remove_node(&files_by_path, &file->node);
 	}
 	file_list_remove(file);
 }
@@ -573,7 +654,7 @@ static int file_resize(struct tmpfs_file *file, u64 size)
 	u64 capacity;
 	char *data;
 
-	if (file == 0) {
+	if (!file_is_valid(file)) {
 		return -1;
 	}
 	if (size <= file->inode->capacity) {
@@ -640,16 +721,8 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 		}
 		return 0;
 	}
-	file = (struct tmpfs_file *)bunix_calloc(1, sizeof(*file));
+	file = file_alloc_with_path(path);
 	if (file == 0) {
-		if (status != 0) {
-			*status = BUNIX_VFS_ERR_INVAL;
-		}
-		return 0;
-	}
-	file->path = str_dup(path);
-	if (file->path == 0) {
-		bunix_free(file);
 		if (status != 0) {
 			*status = BUNIX_VFS_ERR_INVAL;
 		}
@@ -657,13 +730,14 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 	}
 	file->inode = (struct tmpfs_inode *)bunix_calloc(1, sizeof(*file->inode));
 	if (file->inode == 0) {
-		bunix_free(file->path);
+		file_path_release(file);
 		bunix_free(file);
 		if (status != 0) {
 			*status = BUNIX_VFS_ERR_INVAL;
 		}
 		return 0;
 	}
+	file->inode->magic = TMPFS_INODE_MAGIC;
 	file->inode->refs = 1;
 	file->inode->ino = next_inode_id++;
 	while (file->inode->ino == 0) {
@@ -690,7 +764,7 @@ static struct tmpfs_file *file_create(const char *path, u64 mode, u64 type,
 				 BUNIX_VFS_ERR_INVAL;
 		}
 		inode_release(file->inode);
-		bunix_free(file->path);
+		file_path_release(file);
 		bunix_free(file);
 		return 0;
 	}
@@ -881,7 +955,10 @@ static void prune_root_files(const char *path)
 		for (struct tmpfs_file *file = files_head;
 		     file != 0 && steps++ < TMPFS_TREE_WALK_LIMIT;
 		     file = file->next) {
-			if (file != 0 && file->path != 0 &&
+			if (!file_is_valid(file)) {
+				return;
+			}
+			if (file->path != 0 &&
 			    path_has_prefix_child(file->path, path)) {
 				found = file;
 				break;
@@ -896,7 +973,7 @@ static void prune_root_files(const char *path)
 
 static int recycle_stale_root(const char *path)
 {
-	struct tmpfs_root *root = (struct tmpfs_root *)bunix_tree_get(&roots, path);
+	struct tmpfs_root *root = root_find(path);
 
 	if (root == 0) {
 		return 0;
@@ -906,6 +983,7 @@ static int recycle_stale_root(const char *path)
 	}
 	prune_root_files(path);
 	bunix_tree_remove_node(&roots, &root->node);
+	root->magic = 0;
 	bunix_free(root->path);
 	bunix_free(root);
 	return 0;
@@ -915,6 +993,7 @@ static int file_move_to_path(struct tmpfs_file *file, const char *new_path)
 {
 	char *old_path;
 	char *path_copy;
+	int old_embedded;
 
 	if (file == 0 || new_path == 0 || file_find(new_path) != 0) {
 		return -1;
@@ -924,13 +1003,18 @@ static int file_move_to_path(struct tmpfs_file *file, const char *new_path)
 		return -1;
 	}
 	old_path = file->path;
+	old_embedded = file->path_embedded;
 	files_remove_file(file);
 	file->path = path_copy;
+	file->path_embedded = 0;
 	if (files_insert_file(file) == 0) {
-		bunix_free(old_path);
+		if (!old_embedded) {
+			bunix_free(old_path);
+		}
 		return 0;
 	}
 	file->path = old_path;
+	file->path_embedded = old_embedded;
 	if (files_insert_file(file) != 0) {
 		file->deleted = 1;
 	}
@@ -958,6 +1042,9 @@ static int file_move_subtree_to_path(struct tmpfs_file *file,
 	for (struct tmpfs_file *candidate = files_head;
 	     candidate != 0 && steps++ < TMPFS_TREE_WALK_LIMIT;
 	     candidate = candidate->next) {
+		if (!file_is_valid(candidate)) {
+			return -1;
+		}
 
 		if (file_in_renamed_subtree(candidate, file->path)) {
 			count++;
@@ -980,6 +1067,9 @@ static int file_move_subtree_to_path(struct tmpfs_file *file,
 	for (struct tmpfs_file *candidate = files_head;
 	     candidate != 0 && steps++ < TMPFS_TREE_WALK_LIMIT;
 	     candidate = candidate->next) {
+		if (!file_is_valid(candidate)) {
+			goto out;
+		}
 
 		if (file_in_renamed_subtree(candidate, file->path)) {
 			moved[index++] = candidate;
@@ -1011,14 +1101,18 @@ static int file_move_subtree_to_path(struct tmpfs_file *file,
 	}
 	for (u64 i = 0; i < count; i++) {
 		char *old_path = moved[i]->path;
+		const int old_embedded = moved[i]->path_embedded;
 
 		moved[i]->path = new_paths[i];
+		moved[i]->path_embedded = 0;
 		new_paths[i] = 0;
 		if (files_insert_file(moved[i]) != 0) {
 			moved[i]->deleted = 1;
 			goto out;
 		}
-		bunix_free(old_path);
+		if (!old_embedded) {
+			bunix_free(old_path);
+		}
 	}
 	result = 0;
 
@@ -1043,20 +1137,15 @@ static int file_link_to_path(struct tmpfs_file *file, const char *new_path)
 	    file->inode->type == BUNIX_VFS_TYPE_DIRECTORY) {
 		return -1;
 	}
-	link = (struct tmpfs_file *)bunix_calloc(1, sizeof(*link));
+	link = file_alloc_with_path(new_path);
 	if (link == 0) {
-		return -1;
-	}
-	link->path = str_dup(new_path);
-	if (link->path == 0) {
-		bunix_free(link);
 		return -1;
 	}
 	link->inode = file->inode;
 	link->inode->refs++;
 	if (files_insert_file(link) != 0) {
 		inode_release(link->inode);
-		bunix_free(link->path);
+		file_path_release(link);
 		bunix_free(link);
 		return -1;
 	}
@@ -1264,7 +1353,7 @@ static long mount_root(u64 vfs, const char *path)
 	if (path == 0 || path[0] != '/') {
 		return -1;
 	}
-	if (bunix_tree_get(&roots, path) != 0) {
+	if (root_find(path) != 0) {
 		return mount_path(vfs, path);
 	}
 	if (recycle_stale_root(path) != 0) {
@@ -1274,6 +1363,7 @@ static long mount_root(u64 vfs, const char *path)
 	if (root == 0) {
 		return -1;
 	}
+	root->magic = TMPFS_ROOT_MAGIC;
 	root->path = str_dup(path);
 	if (root->path == 0) {
 		bunix_free(root);
@@ -1297,6 +1387,7 @@ int main(void)
 
 	bunix_console_log(online, sizeof(online) - 1);
 	bunix_tree_init(&roots);
+	bunix_tree_init(&files_by_path);
 	files_head = 0;
 	bunix_u64_tree_init(&open_files);
 	bunix_u64_tree_init(&vfs_callers);
@@ -1922,6 +2013,10 @@ int main(void)
 			for (file = files_head;
 			     file != 0 && steps++ < TMPFS_TREE_WALK_LIMIT;
 			     file = file->next) {
+				if (!file_is_valid(file)) {
+					reply.words[0] = (u64)-1;
+					break;
+				}
 				if (!file_is_child_of(file, open->path)) {
 					continue;
 				}

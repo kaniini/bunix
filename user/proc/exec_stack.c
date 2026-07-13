@@ -1,6 +1,6 @@
 static long build_initial_stack(u64 task, const char *path,
 				const struct exec_info *exec,
-				u64 load_bias, u64 interpreter_base,
+				u64 interpreter_base,
 				const struct exec_strings *strings,
 				const struct exec_credentials *creds,
 				const struct exec_handles *handles,
@@ -95,8 +95,8 @@ static long build_initial_stack(u64 task, const char *path,
 	const u64 copied_phdr_addr = stack_base + sp;
 	mem_copy(init_stack + sp, (const unsigned char *)exec->phdrs,
 		 phdr_size);
-	const u64 phdr_addr = interpreter_base != 0 ?
-			       load_bias + exec->phoff :
+	const u64 phdr_addr = exec->phdr_addr != 0 ?
+			       exec->phdr_addr :
 			       copied_phdr_addr;
 
 	sp = align_down(sp, 16);
