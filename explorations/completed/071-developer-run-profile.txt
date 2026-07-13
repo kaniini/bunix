@@ -183,3 +183,15 @@ Validation:
     - `build/test-runs/20260713T141841Z-1962`
   - `BUNIX_TEST_SET='procfs-self-pipe,tmpfs-basic-linux-tests' make test-parallel`
     - `build/test-runs/20260713T142048Z-3701`
+- Completion validation:
+  - Default `make test` still shows the parallel timeout instability tracked by
+    `079-test-parallel-timeout-instability.txt`:
+    - `build/test-runs/20260713T142617Z-8484` failed only
+      `root-login-union`; the same shard passed alone in
+      `build/test-runs/20260713T143835Z-18492`.
+    - `build/test-runs/20260713T143916Z-19429` passed `root-login-union` but
+      failed `exec-argv-pipe`, `long-login`, and `procfs-cmdline`; those three
+      shards passed together in `build/test-runs/20260713T145311Z-31275`.
+  - `BUNIX_TEST_JOBS=4 make test`
+    - `build/test-runs/20260713T145527Z-581`
+    - all 29 shards passed.
