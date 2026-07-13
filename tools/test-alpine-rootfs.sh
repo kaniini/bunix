@@ -87,6 +87,10 @@ reject_grep "bunix-udhcpc" "$root/usr/share/udhcpc/default.script"
 
 require_grep "add	boot	networking	/etc/init.d/networking" \
 	"$artifact_dir/openrc-policy.tsv"
+require_grep "add	boot	localmount	/etc/init.d/localmount" \
+	"$artifact_dir/openrc-policy.tsv"
+require_grep "boot/localmount	/etc/init.d/localmount" \
+	"$artifact_dir/openrc-bunix-runlevels.tsv"
 require_grep "suppress	boot	modules	/etc/init.d/modules" \
 	"$artifact_dir/openrc-policy.tsv"
 require_grep "suppress	boot	hwdrivers	/etc/init.d/hwdrivers" \

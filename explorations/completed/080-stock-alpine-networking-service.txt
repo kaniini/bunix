@@ -33,6 +33,9 @@ Status:
   resolver state, BusyBox `nslookup`, BusyBox `wget http://example.com`, and a
   non-empty fetched output file.  No Bunix-generated networking service or
   DHCP helper is used.
+- The stock-networking boot gate now also verifies stock `localmount`
+  directly by requiring `/run/openrc/started/localmount` and
+  `rc-service localmount status` before accepting the networking result.
 - `make run` now selects the same Alpine VirtIO-net profile as
   `make run-alpine-net`, so the default interactive boot uses Alpine's
   packaged `/etc/init.d/networking` instead of the synthetic rootfs path.
@@ -94,7 +97,7 @@ Tasks:
       procfs, sysfs, mount-table, or Linux compatibility fixes.
 - [x] Verify the packaged `openrc-run` service body is the one being executed,
       rather than a Bunix-generated script with the same path.
-- [ ] Make stock `localmount` complete successfully on the Bunix Alpine image.
+- [x] Make stock `localmount` complete successfully on the Bunix Alpine image.
 - [x] Make stock Alpine `/etc/init.d/networking start` and boot runlevel
       startup complete successfully.
 - [x] Prove BusyBox init reaches `ttyS0::respawn:/bin/login` only after the
@@ -184,6 +187,13 @@ Validation:
 - Latest byte-for-byte stock networking-script validation:
   - `make test-alpine-rootfs`
   - `make test-boot-virtio-net-networking`
+- Latest direct `localmount` validation:
+  - `make test-alpine-rootfs`
+  - `make test-boot-virtio-net-networking`
+- Completion validation:
+  - `make test`
+  - `20260713T231058Z-21833`
+  - `jobs=8`, `retries=0`, `launched=29`, all shards passed.
 
 Historical investigation notes below capture the older generated/stock split
 and the failures that led to the current implementation.
