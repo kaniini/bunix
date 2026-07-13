@@ -240,6 +240,14 @@ Progress:
   `root-shell` at 3259 ms, completed the network probe at 3467 ms, and exited
   QEMU at 3522 ms.  Log volume stayed inside budget with 184 serial lines and
   9161 bytes.
+- Later stock-networking cleanup removed the remaining pre-OpenRC `netcfg`
+  DHCP fallback.  The default Alpine profile now reaches login with the real
+  Alpine `/etc/init.d/networking` service bringing up `eth0` through
+  ifupdown-ng and `udhcpc`; `netcfg` only configures loopback before Linux
+  userspace.  Latest profile
+  `build/run-profile/20260713T074132Z-29238` reached `login:` at 13064 ms,
+  `root-shell` at 13168 ms, and completed the post-login networking marker at
+  13784 ms.
 - Validation:
   - `make test-alpine-rootfs`
   - `make test-alpine-rootfs-stock-networking`
@@ -274,3 +282,7 @@ Progress:
   - `make test-boot`
   - `make run-profile`
   - `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T034312Z-805`
+  - `make test-alpine-rootfs`
+  - `make test-boot-virtio-net-networking`
+  - `make test-boot-virtio-net`
+  - `make run-profile`

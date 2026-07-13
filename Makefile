@@ -1615,7 +1615,7 @@ test-boot-virtio-net: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/check-markers.sh too
 	grep -aF "virtio-net: attached iface=" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: rx ready" $(BUILD_DIR)/serial.log >/dev/null
 	grep -aF "virtio-net: tx ready" $(BUILD_DIR)/serial.log >/dev/null
-	grep -aF "netcfg: dhcp fallback lease installed" $(BUILD_DIR)/serial.log >/dev/null
+	! grep -aF "netcfg: dhcp fallback" $(BUILD_DIR)/serial.log >/dev/null
 
 test-boot-virtio-net-dhcp: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/test-lib.sh tools/test-command.sh
 	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
