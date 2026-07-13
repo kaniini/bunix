@@ -291,3 +291,12 @@ Progress:
   - `make test-boot-virtio-net`
   - `make run-profile`
   - `make test-alpine-rootfs`
+  - Latest completion validation after the stock Alpine `udhcpc` script
+    compatibility work:
+    - `make run-profile`
+      - `build/run-profile/20260713T091145Z-11530`
+      - login prompt at 13142 ms, network marker at 13865 ms, total 13937 ms
+    - `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T091145Z-11530`
+    - `make test-boot`
+    - `make test-smoke`
+    - `make test-boot-virtio-net-networking`
