@@ -42,7 +42,7 @@ Tasks:
       race with Linux init/login startup.
 - [x] Use exploration 068 phase data to identify the slowest guest-side boot
       phases and the server responsible for each delay.
-- [ ] Replace fixed sleeps and polling loops on the interactive path with
+- [x] Replace fixed sleeps and polling loops on the interactive path with
       explicit readiness RPCs or event notifications where practical.
 - [ ] Audit bootstrap server launch ordering for unnecessary serialization;
       allow independent servers to start in parallel when capability and mount
@@ -206,6 +206,24 @@ Progress:
   strings such as `bootstrap: fs ready`, so it times out when those info
   markers are intentionally hidden even though the login-oriented smoke test
   can drive the guest successfully.
+- The interactive path no longer depends on 1 ms service polling in its normal
+  configuration.  Names registration uses an explicit claim-ready nudge, the
+  proc/user/Linux server loops block on `ipc_recv_any`, and the console server
+  now receives serial input through a userspace-bound COM1 IRQ4 event port.
+  Bootstrap grants the console server both the COM1 I/O port resource and a
+  `CIRQ` IRQ resource; the driver enables receive interrupts and waits on
+  either console RPC or IRQ messages.  The old console polling loop remains
+  only as a fallback when IRQ binding is unavailable.
+- Remaining `bunix_sleep_ns(1000000ull)` sites are device-driver discovery or
+  probe loops in virtio/xHCI/USB paths, plus the console fallback.  They are
+  outside the normal login/input service loop and should be handled as
+  driver-specific eventing work in later explorations rather than hidden under
+  this boot-critical-path task.
+- Latest generated Alpine networking profile after console IRQ eventing
+  `build/run-profile/20260713T033953Z-29870` reached `login:` at 3690 ms,
+  `root-shell` at 3795 ms, completed the network probe at 4003 ms, and exited
+  QEMU at 4041 ms.  Log volume stayed inside budget with 184 serial lines and
+  9162 bytes.
 - Validation:
   - `make test-alpine-rootfs`
   - `make test-alpine-rootfs-stock-networking`
@@ -227,3 +245,10 @@ Progress:
   - `make test-boot-virtio-net-networking`
   - `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T032407Z-15933`
   - `make VIRTIO_NET_TEST_CMDLINE='log=error virtio-net-test' test-boot-virtio-net-networking`
+  - `git diff --check`
+  - `make build/esp/EFI/BOOT/BOOTX64.EFI`
+  - `make ARCH=riscv64 build/riscv64/bunixos.kernel`
+  - `make test-boot`
+  - `make test-smoke`
+  - `make run-profile`
+  - `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T033953Z-29870`

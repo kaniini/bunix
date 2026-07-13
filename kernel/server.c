@@ -86,6 +86,7 @@ enum {
 	SERVER_CAP_PCFG = SERVER_FOURCC('P', 'C', 'F', 'G'),
 	SERVER_CAP_PAUT = SERVER_FOURCC('P', 'A', 'U', 'T'),
 	SERVER_CAP_COM1 = SERVER_FOURCC('C', 'O', 'M', '1'),
+	SERVER_CAP_CIRQ = SERVER_FOURCC('C', 'I', 'R', 'Q'),
 	SERVER_CAP_SCHD = SERVER_FOURCC('S', 'C', 'H', 'D'),
 };
 
@@ -109,6 +110,13 @@ static const struct task_hw_resource bootstrap_com1_port = {
 	.ops = TASK_HW_OP_READ | TASK_HW_OP_WRITE,
 	.base = 0x3f8,
 	.len = 8,
+};
+
+static const struct task_hw_resource bootstrap_com1_irq = {
+	.type = TASK_HW_RESOURCE_IRQ,
+	.ops = TASK_HW_OP_BIND_IRQ | TASK_HW_OP_ACK_IRQ | TASK_HW_OP_MASK_IRQ,
+	.base = 4,
+	.len = 1,
 };
 
 static const struct task_hw_resource bootstrap_pci_config_ports = {
@@ -156,6 +164,13 @@ static const struct bootstrap_authority_desc bootstrap_authorities[] = {
 		.rights = TASK_RIGHT_SEND,
 		.tag = SERVER_CAP_COM1,
 		.resource = &bootstrap_com1_port,
+	},
+	{
+		.server_name = "consoled",
+		.kind = BOOTSTRAP_AUTHORITY_HW_RESOURCE,
+		.rights = TASK_RIGHT_SEND,
+		.tag = SERVER_CAP_CIRQ,
+		.resource = &bootstrap_com1_irq,
 	},
 	{
 		.server_name = "pci",

@@ -680,6 +680,7 @@ enum {
 	BUNIX_CAP_USB = BUNIX_FOURCC('U', 'S', 'B', ' '),
 	BUNIX_CAP_INP0 = BUNIX_FOURCC('I', 'N', 'P', '0'),
 	BUNIX_CAP_COM1 = BUNIX_FOURCC('C', 'O', 'M', '1'),
+	BUNIX_CAP_CIRQ = BUNIX_FOURCC('C', 'I', 'R', 'Q'),
 	BUNIX_CAP_USRM = BUNIX_FOURCC('U', 'S', 'R', 'M'),
 	BUNIX_CAP_PRMG = BUNIX_FOURCC('P', 'R', 'M', 'G'),
 	BUNIX_CAP_LNXM = BUNIX_FOURCC('L', 'N', 'X', 'M'),
