@@ -26,9 +26,12 @@ netcfg: loopback configured
 netcfg: configured
 bootstrap: netcfg ready
 bootstrap: linux init exec
-OpenRC
-Mounting /proc
-Caching service dependencies ... [ ok ]
+bunix-openrc: sysinit start
+bunix-openrc: sysinit end status=0
+bunix-openrc: boot start
+bunix-openrc: boot end status=0
+bunix-openrc: default start
+bunix-openrc: default end status=0
 login:
 login: shell exec
 BUNIX_ALPINE_ID_OK
