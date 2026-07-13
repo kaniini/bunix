@@ -26,6 +26,7 @@ bunix_runlevels=$artifact_dir/openrc-bunix-runlevels.tsv
 initd_manifest=$artifact_dir/openrc-initd.tsv
 confd_manifest=$artifact_dir/openrc-confd.tsv
 policy_manifest=$artifact_dir/openrc-policy.tsv
+networking_stock_script=$artifact_dir/openrc-networking.stock
 rootfs_format=${ROOTFS_IMAGE_FORMAT:-squashfs}
 login=${LOGIN_MODULE:-build/modules/login.user}
 statidtest=${STATIDTEST_MODULE:-build/modules/statidtest.user}
@@ -293,6 +294,12 @@ if ! apk_add_rootfs \
 	fi
 fi
 
+if [ ! -f "$root/etc/init.d/networking" ]; then
+	echo "stock Alpine networking service is missing" >&2
+	exit 2
+fi
+cp "$root/etc/init.d/networking" "$networking_stock_script"
+
 write_runlevel_inventory "$root" "$reference_runlevels"
 write_file_inventory "$root/etc/init.d" "$initd_manifest"
 write_file_inventory "$root/etc/conf.d" "$confd_manifest"
@@ -362,6 +369,10 @@ if [ ! -f "$root/etc/init.d/networking" ]; then
 	echo "stock Alpine networking service is missing" >&2
 	exit 2
 fi
+if ! cmp -s "$networking_stock_script" "$root/etc/init.d/networking"; then
+	echo "Alpine networking service was modified by rootfs generation" >&2
+	exit 2
+fi
 
 materialize_openrc_policy
 generate_openrc_cache
@@ -379,6 +390,7 @@ find "$root/var/cache/apk" -type f -delete 2>/dev/null || true
 	echo "init_command=$init_command"
 	echo "extra_dir=$extra_dir"
 	echo "alpine_networking_service=stock"
+	echo "openrc_networking_stock_script=$networking_stock_script"
 	echo "openrc_policy=$runlevel_policy"
 	echo "openrc_reference_runlevels=$reference_runlevels"
 	echo "openrc_bunix_runlevels=$bunix_runlevels"

@@ -362,7 +362,6 @@ static void make_login_env(const char *name, u64 uid,
 	static char shell[] = "SHELL=/bin/sh";
 	static char path[] = "PATH=/bin:/sbin:/usr/bin:/usr/sbin";
 	static char term[] = "TERM=bunix";
-	static char histfile[] = "HISTFILE=/dev/null";
 
 	if (uid == 0) {
 		copy_text(home, home_size, "HOME=/root");
@@ -380,8 +379,7 @@ static void make_login_env(const char *name, u64 uid,
 	envp[3] = shell;
 	envp[4] = path;
 	envp[5] = term;
-	envp[6] = histfile;
-	envp[7] = 0;
+	envp[6] = 0;
 }
 
 static void make_home_path(const char *name, u64 uid, char *home,
@@ -403,7 +401,7 @@ static long exec_shell(const char *name, u64 uid)
 	char home_path[LOGIN_NAME_MAX + 8];
 	char user[LOGIN_NAME_MAX + 8];
 	char logname[LOGIN_NAME_MAX + 12];
-	char *shell_env[8];
+	char *shell_env[7];
 
 	make_login_env(name, uid, home, sizeof(home), user, sizeof(user),
 		       logname, sizeof(logname), shell_env);

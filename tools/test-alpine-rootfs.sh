@@ -60,6 +60,7 @@ require_file "$artifact_dir/openrc-bunix-runlevels.tsv"
 require_file "$artifact_dir/openrc-initd.tsv"
 require_file "$artifact_dir/openrc-confd.tsv"
 require_file "$artifact_dir/openrc-policy.tsv"
+require_file "$artifact_dir/openrc-networking.stock"
 require_file "$root/var/cache/rc/deptree"
 require_file "$root/fastboot"
 
@@ -94,7 +95,11 @@ require_grep "defer	sysinit	devfs	/etc/init.d/devfs" \
 	"$artifact_dir/openrc-policy.tsv"
 require_grep "openrc_policy=tools/alpine-openrc-runlevels.policy" \
 	"$artifact_dir/manifest.txt"
+require_grep "openrc_networking_stock_script=$artifact_dir/openrc-networking.stock" \
+	"$artifact_dir/manifest.txt"
 require_grep "#!/sbin/openrc-run" "$root/etc/init.d/networking"
+cmp -s "$artifact_dir/openrc-networking.stock" "$root/etc/init.d/networking" ||
+	fail "Alpine networking service was modified by rootfs generation"
 reject_grep "start_networking()" "$root/etc/init.d/networking"
 reject_grep "boot/modules	/etc/init.d/modules" \
 	"$artifact_dir/openrc-bunix-runlevels.tsv"

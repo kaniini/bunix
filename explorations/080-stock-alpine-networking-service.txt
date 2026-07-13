@@ -129,6 +129,10 @@ Implementation Notes:
   The builder leaves the packaged `/etc/init.d/networking` untouched, installs
   `/etc/network/interfaces`, runs normal OpenRC phases from `/etc/inittab`,
   and records `alpine_networking_service=stock` in the manifest.
+- The builder now snapshots Alpine's packaged `/etc/init.d/networking`
+  immediately after `apk add` and refuses to build if any overlay or later
+  rootfs-generation step changes it.  `tools/test-alpine-rootfs.sh` compares
+  the final rootfs script byte-for-byte against that captured stock script.
 - The old separate stock-networking SquashFS artifact is gone.  Stock Alpine
   networking is the normal `alpine-squashfs` rootfs path, and compatibility
   `test-*-stock-networking` targets exercise that same image.
@@ -177,6 +181,9 @@ Validation:
 - Latest faithful DNS/HTTP validation:
   - `make test-boot-virtio-net-dns-wget`
   - `make test-boot-virtio-net-external-ping-strict`
+- Latest byte-for-byte stock networking-script validation:
+  - `make test-alpine-rootfs`
+  - `make test-boot-virtio-net-networking`
 
 Historical investigation notes below capture the older generated/stock split
 and the failures that led to the current implementation.

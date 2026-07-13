@@ -10,10 +10,18 @@ busybox uname -r
 busybox stty -a
 busybox id
 env
+env | busybox grep '^HISTFILE=' || echo HISTFILE_UNSET_OK
 /usr/bin/env >/dev/null && echo USR_ENV_OK
 busybox test -x /bin/sh && echo ACCESS_X_OK
 busybox test -r /hello.txt && echo ACCESS_R_OK
 busybox test ! -r /secret.txt && echo ACCESS_DENY_OK
+busybox stat -c "%u:%g %a" "$HOME"
+busybox test -w "$HOME" && echo HOME_WRITABLE_OK
+printf 'HOME_WRITE_ONE\n' > "$HOME/.bunix-home-test"
+printf 'HOME_WRITE_TWO\n' >> "$HOME/.bunix-home-test"
+busybox cat "$HOME/.bunix-home-test"
+busybox rm "$HOME/.bunix-home-test"
+busybox test ! -e "$HOME/.bunix-home-test" && echo HOME_REMOVE_OK
 cd ~
 pwd
 cd /
@@ -53,8 +61,12 @@ check_login_smoke() {
 	wait_for_each_fixed "$log" "login environment missing" 45 160 \
 		"HOME=/home/kaniini" "USER=kaniini" "LOGNAME=kaniini" \
 		"SHELL=/bin/sh" "PATH=/bin:/sbin:/usr/bin:/usr/sbin" \
-		"TERM=bunix" "HISTFILE=/dev/null"
+		"TERM=bunix"
+	wait_for_fixed "$log" "HISTFILE_UNSET_OK" "login still exports shell history workaround" 45 160
 	wait_for_exact_line "$log" "/home/kaniini" "shell did not cd to login home directory" 45 160
+	wait_for_fixed "$log" "1000:1000 750" "login home ownership/mode is wrong" 45 160
+	wait_for_each_fixed "$log" "non-root login home write regression missing" 45 160 \
+		HOME_WRITABLE_OK HOME_WRITE_ONE HOME_WRITE_TWO HOME_REMOVE_OK
 	wait_for_fixed "$log" "USR_ENV_OK" "/usr/bin/env symlink did not execute" 45 160
 	wait_for_each_fixed "$log" "linux access/faccessat regression missing" 45 160 \
 		ACCESS_X_OK ACCESS_R_OK ACCESS_DENY_OK

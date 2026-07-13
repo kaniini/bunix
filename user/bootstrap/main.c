@@ -983,6 +983,197 @@ static long vfs_stat_path(u64 vfs, const char *path, u64 *size, u64 *ino,
 	return 0;
 }
 
+static int parse_decimal_field(const char *begin, const char *end, u64 *out)
+{
+	u64 value = 0;
+
+	if (begin == end || out == 0) {
+		return -1;
+	}
+	for (const char *scan = begin; scan < end; scan++) {
+		if (*scan < '0' || *scan > '9') {
+			return -1;
+		}
+		value = value * 10 + (u64)(*scan - '0');
+	}
+	*out = value;
+	return 0;
+}
+
+static int copy_field_text(const char *begin, const char *end,
+			   char *out, u64 out_size)
+{
+	u64 len;
+
+	if (begin == 0 || end < begin || out == 0 || out_size == 0) {
+		return -1;
+	}
+	len = (u64)(end - begin);
+	if (len + 1 > out_size) {
+		return -1;
+	}
+	for (u64 i = 0; i < len; i++) {
+		out[i] = begin[i];
+	}
+	out[len] = '\0';
+	return 0;
+}
+
+static int home_path_should_provision(const char *path)
+{
+	const char prefix[] = "/home/";
+	u64 i;
+
+	if (path == 0) {
+		return 0;
+	}
+	if (str_eq(path, "/root")) {
+		return 1;
+	}
+	for (i = 0; prefix[i] != '\0'; i++) {
+		if (path[i] != prefix[i]) {
+			return 0;
+		}
+	}
+	return path[i] != '\0';
+}
+
+static int compose_upper_home_path(const char *path, char *upper,
+				   u64 upper_size)
+{
+	const char prefix[] = "/.upper";
+	u64 pos = 0;
+
+	if (path == 0 || path[0] != '/' || upper == 0 || upper_size == 0) {
+		return -1;
+	}
+	for (u64 i = 0; prefix[i] != '\0'; i++) {
+		if (pos + 1 >= upper_size) {
+			return -1;
+		}
+		upper[pos++] = prefix[i];
+	}
+	for (u64 i = 0; path[i] != '\0'; i++) {
+		if (pos + 1 >= upper_size) {
+			return -1;
+		}
+		upper[pos++] = path[i];
+	}
+	upper[pos] = '\0';
+	return 0;
+}
+
+static long tmpfs_mkdir_p(u64 tmpfs, const char *path, u64 mode)
+{
+	struct bunix_msg reply;
+
+	if (tmpfs == 0 ||
+	    bunix_ipc_call_path(tmpfs, BUNIX_PROTO_TMPFS,
+				BUNIX_TMPFS_MKDIR_P_BUFFER, path, mode,
+				0, 0, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static long provision_home_directory(u64 tmpfs, u64 vfs, const char *path,
+				     u64 uid, u64 gid, u64 mode)
+{
+	char upper[BOOT_TOKEN_MAX];
+	u64 type = 0;
+	u64 actual_mode = 0;
+	u64 actual_uid = 0;
+	u64 actual_gid = 0;
+
+	if (compose_upper_home_path(path, upper, sizeof(upper)) != 0 ||
+	    tmpfs_mkdir_p(tmpfs, upper, mode) != 0 ||
+	    vfs_chown_path_buffer(vfs, upper, uid, gid) != 0 ||
+	    vfs_chmod_path_buffer(vfs, upper, mode) != 0) {
+		return -1;
+	}
+	if (vfs_stat_path(vfs, path, 0, 0, 0, &type, &actual_mode,
+			  &actual_uid, &actual_gid, 0) != 0) {
+		return -1;
+	}
+	if (type != BUNIX_VFS_TYPE_DIRECTORY ||
+	    actual_mode != mode || actual_uid != uid || actual_gid != gid) {
+		return -1;
+	}
+	return 0;
+}
+
+static long provision_login_homes(u64 tmpfs, u64 vfs)
+{
+	char *text = (char *)bunix_alloc(BOOT_CONFIG_MAX);
+	const char *line;
+
+	if (text == 0) {
+		return -1;
+	}
+	if (vfs_read_text(vfs, "/etc/passwd", text, BOOT_CONFIG_MAX) != 0 ||
+	    tmpfs_mkdir_p(tmpfs, "/.upper/home", 0777) != 0) {
+		bunix_free(text);
+		return -1;
+	}
+	line = text;
+	while (*line != '\0') {
+		const char *line_end = line;
+		const char *fields[7];
+		const char *field_ends[7];
+		const char *cursor;
+		u64 uid = 0;
+		u64 gid = 0;
+		u64 mode;
+		char home[BOOT_TOKEN_MAX];
+
+		while (*line_end != '\0' && *line_end != '\n') {
+			line_end++;
+		}
+		if (line == line_end || *line == '#') {
+			line = *line_end == '\n' ? line_end + 1 : line_end;
+			continue;
+		}
+		cursor = line;
+		for (u64 field = 0; field < 7; field++) {
+			fields[field] = cursor;
+			while (cursor < line_end && *cursor != ':') {
+				cursor++;
+			}
+			field_ends[field] = cursor;
+			if (field < 6) {
+				if (cursor >= line_end || *cursor != ':') {
+					bunix_free(text);
+					return -1;
+				}
+				cursor++;
+			}
+		}
+		if (parse_decimal_field(fields[2], field_ends[2], &uid) != 0 ||
+		    parse_decimal_field(fields[3], field_ends[3], &gid) != 0 ||
+		    copy_field_text(fields[5], field_ends[5], home,
+				    sizeof(home)) != 0) {
+			bunix_free(text);
+			return -1;
+		}
+		if (home_path_should_provision(home)) {
+			mode = uid == 0 ? 0700 : 0750;
+			if (provision_home_directory(tmpfs, vfs, home, uid, gid,
+						     mode) != 0) {
+				bunix_free(text);
+				return -1;
+			}
+		}
+		line = *line_end == '\n' ? line_end + 1 : line_end;
+	}
+	if (provision_home_directory(tmpfs, vfs, "/home", 0, 0, 0755) != 0) {
+		bunix_free(text);
+		return -1;
+	}
+	bunix_free(text);
+	return 0;
+}
+
 static long vfs_open_path(u64 vfs, const char *path, u64 *handle, u64 *type)
 {
 	const char cwd[] = "/";
@@ -4249,6 +4440,9 @@ int main(void)
 				      BUNIX_UNIONFS_MOUNT_PATH, "/") != 0) {
 			return 1;
 		}
+	}
+	if (provision_login_homes(tmpfs, vfs) != 0) {
+		return 1;
 	}
 	const long netcfg_task = launch_claimed_module_task_id(
 		"netcfg", BUNIX_NAMES_ROOT, BUNIX_SERVICE_NETCFG,

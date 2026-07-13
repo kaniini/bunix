@@ -1814,7 +1814,7 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
-			if (!task_can_chown(message.words[3])) {
+			if (!task_can_chown(message.words[3] & 0xffffffff)) {
 				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
 				break;
 			}

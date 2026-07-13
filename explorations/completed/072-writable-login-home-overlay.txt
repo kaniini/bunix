@@ -1,0 +1,88 @@
+Provide writable login homes on read-only root filesystems.
+
+Parent exploration: `043-user-address-space-identity-map-escape.txt`
+
+Problem:
+
+- The synthetic squashfs rootfs is mounted read-only and built with
+  `mksquashfs -all-root`, so `/home/kaniini` is not a writable user home in
+  the guest.
+- BusyBox ash tries to use history under `$HOME` for interactive non-root
+  shells.  Until the filesystem gives the user a writable home, login disables
+  history with `HISTFILE=/dev/null` to avoid wedging the interactive shell.
+- That login workaround is acceptable for the low-memory isolation gate, but
+  it is not the long-term multiuser model.
+
+Why this is a refactor:
+
+- The current slice should stay focused on proving user/kernel VM isolation.
+- Writable home directories belong in the rootfs/VFS/unionfs/tmpfs design, not
+  as shell-specific policy in the login program.
+
+Plan:
+
+- Decide whether synthetic and Alpine roots should create homes through tmpfs,
+  unionfs copy-up, a dedicated homefs server, or early boot provisioning.
+- Ensure `/home/$user` has the correct uid, gid, mode, and write behavior for
+  normal users even when the lower rootfs is squashfs.
+- Move shell history policy out of login once writable homes work.
+- Add regression coverage that a non-root login can create, read, append, and
+  remove a file in `$HOME`.
+- Keep Alpine/OpenRC behavior aligned with a normal Alpine image.
+
+Tasks:
+
+- [x] Choose the writable-home mechanism for synthetic and Alpine roots.
+- [x] Implement per-user home provisioning with correct ownership/mode.
+- [x] Remove the login-level `HISTFILE=/dev/null` workaround when safe.
+- [x] Add non-root `$HOME` write/read/append/remove regression coverage.
+- [x] Run login smoke, OpenRC, shell, and full `make test` gates.
+
+Implementation Notes:
+
+- Bootstrap now provisions login homes from `/etc/passwd` after the unionfs
+  root is mounted.  It creates the upper backing paths under `/.upper` through
+  tmpfs' private `mkdir -p` control RPC, then applies and verifies ownership
+  and mode through VFS metadata calls on the visible union path.
+- `/root` is provisioned as `0700`; `/home/$user` entries are provisioned as
+  `0750`; the visible `/home` directory is locked to `0:0 0755` after child
+  homes are created.
+- Login no longer exports `HISTFILE=/dev/null`; interactive shells get normal
+  history behavior because their home directories are writable.
+- Tmpfs `BUNIX_VFS_CHOWN_BUFFER` now masks the subject task id out of the
+  packed gid/task word before checking chown authority.  Without that, nonzero
+  gids made privileged chown look like it came from the wrong task.
+- The Alpine rootfs builder now snapshots Alpine's packaged
+  `/etc/init.d/networking` immediately after `apk add` and fails if rootfs
+  generation changes it.  This keeps the Alpine networking path tied to the
+  real packaged OpenRC script rather than a Bunix replacement.
+
+Validation:
+
+- `make build/modules/bootstrap.server build/modules/tmpfs.server build/modules/login.user`
+- `BUNIX_TEST_SET=login-smoke make test-parallel`
+  - run `20260713T154015Z-30538`
+- `BUNIX_TEST_SET=root-tmpfs-chown make test-parallel`
+  - run `20260713T154117Z-32416`
+- `BUNIX_TEST_SET=root-login-union make test-parallel`
+  - run `20260713T154117Z-32373`
+- `BUNIX_TEST_SET=alpine-openrc-smoke,alpine-openrc-full make test-parallel`
+  - run `20260713T154329Z-1957`
+- `make test-alpine-rootfs`
+- `make test-boot-virtio-net-networking`
+- `BUNIX_TEST_SET=tmpfs-basic-linux-tests make test-parallel`
+  - isolated rerun `20260713T155534Z-14462` after a parallel prompt timeout.
+- `BUNIX_TEST_JOBS=1 BUNIX_TEST_SET=tmpfs-extended,rootfs-vfs-paths,path-limits-statfs,network-loopback-ping make test-parallel`
+  - serial rerun `20260713T161702Z-28961` after parallel boot/prompt timeouts.
+- `BUNIX_TEST_SET=smoke-up BUNIX_TEST_JOBS=1 make test-parallel`
+  - isolated rerun `20260713T164451Z-13668` after a serial prompt timeout.
+- `BUNIX_TEST_SET=alpine-openrc-smoke,smoke-up BUNIX_TEST_JOBS=1 make test-parallel`
+  - run `20260713T171113Z-29432`; Alpine smoke passed, smoke-up hit the known
+    early boot prompt flake.
+- `BUNIX_TEST_SET=smoke-up BUNIX_TEST_JOBS=1 BUNIX_QEMU_TIMEOUT_OVERRIDE=180 make test-parallel`
+  - run `20260713T171521Z-32094`
+- `BUNIX_TEST_SET=union-root-user BUNIX_TEST_JOBS=1 make test-parallel`
+  - run `20260713T174237Z-16955` after a full-suite TTY/command transport
+    flake in `union-root-user`.
+- `BUNIX_TEST_JOBS=1 BUNIX_TEST_RETRIES=3 BUNIX_QEMU_TIMEOUT_OVERRIDE=240 make test`
+  - run `20260713T174447Z-18412`; all 29 shards passed.
