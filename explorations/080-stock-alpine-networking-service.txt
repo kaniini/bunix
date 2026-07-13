@@ -7,6 +7,13 @@ Status:
   generation now preserves Alpine's packaged `/etc/init.d/networking`, drives
   it through the normal OpenRC `sysinit`, `boot`, and `default` phases, and
   rejects stale `bunix-openrc-*` hooks in the rootfs test.
+- Rootfs generation also preserves Alpine's packaged
+  `/usr/share/udhcpc/default.script`; the Alpine image no longer installs
+  `bunix-udhcpc-script` as a DHCP helper.
+- The Linux server now implements the rtnetlink subset that Alpine's stock
+  `default.script` reaches through BusyBox `ip`: link/address/route dumps,
+  IPv4 address add/delete, default route add/delete, link up/down, netlink
+  port IDs, and the `SIOCGIFTXQLEN` formatting ioctl.
 - The ifupdown-ng helper fault was fixed as a generic proc exec-loader issue:
   interpreterless static PIE binaries now receive an in-image `AT_PHDR`, and
   proc no longer pre-applies RELR relocations that musl's static PIE loader
@@ -130,6 +137,9 @@ Implementation Notes:
 - `netcfg` still reads `/etc/network/interfaces` so loopback is available
   before Linux userspace, but it deliberately ignores `eth0`; DHCP and route
   installation now happen only when the real Alpine service runs `udhcpc`.
+- The Alpine image preserves the packaged `/usr/share/udhcpc/default.script`
+  and rootfs tests reject `/sbin/bunix-udhcpc-script` or a `default.script`
+  symlink back to that helper.
 - The virtio-net device smoke now rejects any `netcfg: dhcp fallback` log line
   and treats driver/link readiness as separate from network configuration.
 - `tools/run-profile.sh` waits for stock OpenRC startup and verifies
@@ -146,6 +156,10 @@ Validation:
 - `make test-boot-virtio-net-networking`
 - `make test-boot-virtio-net`
 - `make run-profile`
+- Latest stock `udhcpc/default.script` validation:
+  - `make test-alpine-rootfs`
+  - `make test-boot-virtio-net-networking`
+  - `git diff --check`
 
 Historical investigation notes below capture the older generated/stock split
 and the failures that led to the current implementation.

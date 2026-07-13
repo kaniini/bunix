@@ -51,7 +51,6 @@ ALPINE_ROOTFS_ARTIFACT_DIR="$artifact_dir" \
 ROOTFS_IMAGE_FORMAT=squashfs \
 LOGIN_MODULE=${LOGIN_MODULE:-build/modules/login.user} \
 STATIDTEST_MODULE=${STATIDTEST_MODULE:-build/modules/statidtest.user} \
-NETDHCP_MODULE=${NETDHCP_MODULE:-build/modules/bunix-udhcpc-script.user} \
 	sh tools/build-alpine-rootfs.sh "$out" >/dev/null
 
 require_file "$out"
@@ -77,6 +76,13 @@ require_grep "networking" "$artifact_dir/openrc-initd.tsv"
 require_grep "ifupdown-ng" "$artifact_dir/manifest.txt"
 require_grep "alpine_networking_service=stock" \
 	"$artifact_dir/manifest.txt"
+require_file "$root/usr/share/udhcpc/default.script"
+reject_file "$root/sbin/bunix-udhcpc-script"
+if [ "$(readlink "$root/usr/share/udhcpc/default.script" 2>/dev/null || true)" = \
+     "/sbin/bunix-udhcpc-script" ]; then
+	fail "Alpine udhcpc default.script points at Bunix helper"
+fi
+reject_grep "bunix-udhcpc" "$root/usr/share/udhcpc/default.script"
 
 require_grep "add	boot	networking	/etc/init.d/networking" \
 	"$artifact_dir/openrc-policy.tsv"

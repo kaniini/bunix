@@ -71,6 +71,7 @@ enum {
 	LINUX_SIOCGIFHWADDR = 0x8927,
 	LINUX_SIOCGIFMTU = 0x8921,
 	LINUX_SIOCGIFINDEX = 0x8933,
+	LINUX_SIOCGIFTXQLEN = 0x8942,
 	LINUX_IFNAMSIZ = 16,
 	LINUX_IFREQ_SIZE = 40,
 	LINUX_ARPHRD_ETHER = 1,
@@ -223,8 +224,38 @@ enum {
 	LINUX_FD_NETLINK_ACK_PENDING = 2,
 	LINUX_FD_NETLINK_DONE_PENDING = 4,
 	LINUX_NETLINK_ROUTE = 0,
+	LINUX_NLM_F_REQUEST = 0x1,
+	LINUX_NLM_F_MULTI = 0x2,
+	LINUX_NLM_F_ACK = 0x4,
+	LINUX_NLM_F_DUMP = 0x300,
 	LINUX_NLMSG_ERROR = 2,
 	LINUX_NLMSG_DONE = 3,
+	LINUX_RTM_NEWLINK = 16,
+	LINUX_RTM_DELLINK = 17,
+	LINUX_RTM_GETLINK = 18,
+	LINUX_RTM_SETLINK = 19,
+	LINUX_RTM_NEWADDR = 20,
+	LINUX_RTM_DELADDR = 21,
+	LINUX_RTM_GETADDR = 22,
+	LINUX_RTM_NEWROUTE = 24,
+	LINUX_RTM_DELROUTE = 25,
+	LINUX_RTM_GETROUTE = 26,
+	LINUX_IFLA_ADDRESS = 1,
+	LINUX_IFLA_IFNAME = 3,
+	LINUX_IFLA_MTU = 4,
+	LINUX_IFA_ADDRESS = 1,
+	LINUX_IFA_LOCAL = 2,
+	LINUX_IFA_LABEL = 3,
+	LINUX_RTA_DST = 1,
+	LINUX_RTA_OIF = 4,
+	LINUX_RTA_GATEWAY = 5,
+	LINUX_RTA_PRIORITY = 6,
+	LINUX_RT_TABLE_MAIN = 254,
+	LINUX_RTPROT_BOOT = 3,
+	LINUX_RTPROT_DHCP = 16,
+	LINUX_RT_SCOPE_UNIVERSE = 0,
+	LINUX_RT_SCOPE_LINK = 253,
+	LINUX_RTN_UNICAST = 1,
 	LINUX_IPPROTO_ICMP = 1,
 	LINUX_IPPROTO_TCP = 6,
 	LINUX_IPPROTO_UDP = 17,
@@ -928,6 +959,18 @@ static void store_u16(char *buffer, u64 offset, unsigned int value)
 	}
 }
 
+static unsigned int load_u16(const char *buffer, u64 offset)
+{
+	unsigned int value = 0;
+
+	for (u64 i = 0; i < 2; i++) {
+		value |= ((unsigned int)(unsigned char)buffer[offset + i]) <<
+			 (i * 8);
+	}
+
+	return value;
+}
+
 static unsigned int load_u32(const char *buffer, u64 offset)
 {
 	unsigned int value = 0;
@@ -1323,6 +1366,103 @@ static void linux_debug_wait_log(const struct linux_process *parent,
 		   child != 0 ? child->exit_status : 0);
 	append_text(line, sizeof(line), &cursor, " result=");
 	append_long(line, sizeof(line), &cursor, result);
+	append_char(line, sizeof(line), &cursor, '\n');
+	bunix_console_log(line, cursor);
+}
+
+static int linux_debug_pipe_enabled(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0) {
+		enabled = bunix_cmdline_has("debug-linux-pipe") > 0;
+	}
+	return enabled;
+}
+
+static void linux_debug_pipe_log(const char *action,
+				 const struct linux_process *process,
+				 u64 fd, const struct linux_pipe *pipe,
+				 long result)
+{
+	char line[240];
+	u64 cursor = 0;
+
+	if (!linux_debug_pipe_enabled()) {
+		return;
+	}
+
+	append_text(line, sizeof(line), &cursor, "linux-pipe: ");
+	append_text(line, sizeof(line), &cursor, action);
+	append_text(line, sizeof(line), &cursor, " pid=");
+	append_dec(line, sizeof(line), &cursor, process != 0 ? process->pid : 0);
+	append_text(line, sizeof(line), &cursor, " task=");
+	append_dec(line, sizeof(line), &cursor,
+		   process != 0 ? process->bunix_task : 0);
+	append_text(line, sizeof(line), &cursor, " fd=");
+	append_dec(line, sizeof(line), &cursor, fd);
+	append_text(line, sizeof(line), &cursor, " pipe=");
+	append_dec(line, sizeof(line), &cursor, pipe != 0 ? pipe->id : 0);
+	append_text(line, sizeof(line), &cursor, " rrefs=");
+	append_dec(line, sizeof(line), &cursor, pipe != 0 ? pipe->read_refs : 0);
+	append_text(line, sizeof(line), &cursor, " wrefs=");
+	append_dec(line, sizeof(line), &cursor, pipe != 0 ? pipe->write_refs : 0);
+	append_text(line, sizeof(line), &cursor, " len=");
+	append_dec(line, sizeof(line), &cursor, pipe != 0 ? pipe->len : 0);
+	append_text(line, sizeof(line), &cursor, " rr=");
+	append_dec(line, sizeof(line), &cursor,
+		   pipe != 0 ? pipe->reader_reply : 0);
+	append_text(line, sizeof(line), &cursor, " wr=");
+	append_dec(line, sizeof(line), &cursor,
+		   pipe != 0 ? pipe->writer_reply : 0);
+	append_text(line, sizeof(line), &cursor, " result=");
+	append_long(line, sizeof(line), &cursor, result);
+	append_char(line, sizeof(line), &cursor, '\n');
+	bunix_console_log(line, cursor);
+}
+
+static int linux_debug_netlink_enabled(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0) {
+		enabled = bunix_cmdline_has("debug-linux-netlink") > 0;
+	}
+	return enabled;
+}
+
+static void linux_debug_netlink_log(const char *action,
+				    const struct linux_process *process,
+				    u64 fd, u64 type, u64 flags, u64 seq,
+				    u64 len, long result, u64 queued)
+{
+	char line[220];
+	u64 cursor = 0;
+
+	if (!linux_debug_netlink_enabled()) {
+		return;
+	}
+	append_text(line, sizeof(line), &cursor, "linux-netlink: ");
+	append_text(line, sizeof(line), &cursor, action);
+	append_text(line, sizeof(line), &cursor, " pid=");
+	append_dec(line, sizeof(line), &cursor, process != 0 ? process->pid : 0);
+	append_text(line, sizeof(line), &cursor, " task=");
+	append_dec(line, sizeof(line), &cursor,
+		   process != 0 ? process->bunix_task : 0);
+	append_text(line, sizeof(line), &cursor, " fd=");
+	append_dec(line, sizeof(line), &cursor, fd);
+	append_text(line, sizeof(line), &cursor, " type=");
+	append_dec(line, sizeof(line), &cursor, type);
+	append_text(line, sizeof(line), &cursor, " flags=");
+	append_dec(line, sizeof(line), &cursor, flags);
+	append_text(line, sizeof(line), &cursor, " seq=");
+	append_dec(line, sizeof(line), &cursor, seq);
+	append_text(line, sizeof(line), &cursor, " len=");
+	append_dec(line, sizeof(line), &cursor, len);
+	append_text(line, sizeof(line), &cursor, " result=");
+	append_long(line, sizeof(line), &cursor, result);
+	append_text(line, sizeof(line), &cursor, " queued=");
+	append_dec(line, sizeof(line), &cursor, queued);
 	append_char(line, sizeof(line), &cursor, '\n');
 	bunix_console_log(line, cursor);
 }
@@ -2753,8 +2893,10 @@ static void linux_pipe_ref_add(const struct linux_fd *fd)
 	}
 	if (fd->kind == LINUX_FD_PIPE_READ) {
 		pipe->read_refs++;
+		linux_debug_pipe_log("ref-add-read", 0, 0, pipe, 0);
 	} else if (fd->kind == LINUX_FD_PIPE_WRITE) {
 		pipe->write_refs++;
+		linux_debug_pipe_log("ref-add-write", 0, 0, pipe, 0);
 	}
 }
 
@@ -2771,8 +2913,10 @@ static void linux_pipe_ref_drop(const struct linux_fd *fd)
 	}
 	if (fd->kind == LINUX_FD_PIPE_READ && pipe->read_refs != 0) {
 		pipe->read_refs--;
+		linux_debug_pipe_log("ref-drop-read", 0, 0, pipe, 0);
 	} else if (fd->kind == LINUX_FD_PIPE_WRITE && pipe->write_refs != 0) {
 		pipe->write_refs--;
+		linux_debug_pipe_log("ref-drop-write", 0, 0, pipe, 0);
 	}
 }
 
@@ -2853,6 +2997,8 @@ static long linux_pipe_create(struct linux_process *process, u64 flags,
 		process->fds[left].status_flags |= LINUX_O_NONBLOCK;
 		process->fds[right].status_flags |= LINUX_O_NONBLOCK;
 	}
+	linux_debug_pipe_log("create-read", process, (u64)left, pipe,
+			     (long)right);
 	*read_fd = (u64)left;
 	*write_fd = (u64)right;
 	return 0;
@@ -2940,6 +3086,7 @@ static void linux_pipe_wake_reader(struct linux_pipe *pipe)
 	pipe->reader_buffer = 0;
 	nread = linux_pipe_read_available(pipe, pipe->reader_len, buffer);
 	pipe->reader_len = 0;
+	linux_debug_pipe_log("wake-reader", 0, 0, pipe, nread);
 	reply.words[0] = (u64)nread;
 	(void)bunix_ipc_send(reply_handle, &reply);
 	if (buffer != 0) {
@@ -2973,6 +3120,7 @@ static void linux_pipe_wake_writer(struct linux_pipe *pipe)
 	pipe->writer_buffer = 0;
 	nwritten = linux_pipe_write_available(pipe, pipe->writer_len, buffer);
 	pipe->writer_len = 0;
+	linux_debug_pipe_log("wake-writer", 0, 0, pipe, nwritten);
 	reply.words[0] = (u64)nwritten;
 	(void)bunix_ipc_send(reply_handle, &reply);
 	if (buffer != 0) {
@@ -3564,6 +3712,8 @@ static void linux_wake_parent(struct linux_process *child)
 {
 	struct linux_process *parent = linux_process_find_pid(child->ppid);
 	const char wait4_ok[] = "linux-server: wait4\n";
+	u64 waiter;
+	u64 wait_buffer;
 
 	if (parent == 0) {
 		linux_debug_wait_log(0, child, "wake-no-parent", 0, 0);
@@ -3579,6 +3729,8 @@ static void linux_wake_parent(struct linux_process *child)
 				     (long)parent->wait_pid, 0);
 		return;
 	}
+	waiter = parent->waiter;
+	wait_buffer = parent->wait_buffer;
 
 	struct bunix_msg reply = {
 		.protocol = BUNIX_PROTO_LINUX,
@@ -3590,28 +3742,33 @@ static void linux_wake_parent(struct linux_process *child)
 		.words = { child->pid, 0, 0, 0 },
 	};
 
-	if (linux_store_wait_status(parent->wait_buffer,
-				    child->exit_status) == 0) {
+	if (linux_store_wait_status(wait_buffer, child->exit_status) == 0) {
 		child->waited = 1;
 		linux_debug_wait_log(parent, child, "wake",
 				     (long)parent->wait_pid,
 				     (long)child->pid);
 		linux_debug_rpc_log(wait4_ok, sizeof(wait4_ok) - 1);
-		bunix_ipc_send(parent->waiter, &reply);
+		parent->waiter = 0;
+		parent->wait_buffer = 0;
+		parent->wait_pid = 0;
+		if (wait_buffer != 0) {
+			bunix_handle_close(wait_buffer);
+		}
 		linux_process_reset(child);
+		bunix_ipc_send(waiter, &reply);
 	} else {
 		reply.words[0] = (u64)-LINUX_EFAULT;
 		linux_debug_wait_log(parent, child, "wake-fault",
 				     (long)parent->wait_pid,
 				     -LINUX_EFAULT);
-		bunix_ipc_send(parent->waiter, &reply);
+		parent->waiter = 0;
+		parent->wait_buffer = 0;
+		parent->wait_pid = 0;
+		if (wait_buffer != 0) {
+			bunix_handle_close(wait_buffer);
+		}
+		bunix_ipc_send(waiter, &reply);
 	}
-	if (parent->wait_buffer != 0) {
-		bunix_handle_close(parent->wait_buffer);
-	}
-	parent->waiter = 0;
-	parent->wait_buffer = 0;
-	parent->wait_pid = 0;
 }
 
 static void linux_process_exit_status(struct linux_process *process, u64 status,
@@ -4916,6 +5073,52 @@ static void linux_store_ether_mac(unsigned char *out, u64 mac_hi)
 	}
 }
 
+static void linux_net_interface_name(u64 iface, char *name, u64 size)
+{
+	u64 eth_index = 0;
+	struct bunix_msg reply;
+	u64 count;
+
+	if (name == 0 || size == 0) {
+		return;
+	}
+	zero_bytes(name, size);
+	if (iface == 1) {
+		copy_field(name, 0, size, "lo");
+		return;
+	}
+	if (linux_net_request(BUNIX_NET_INTERFACE_COUNT, 0, 0, 0, 0, 0, 0,
+			      &reply) != 0) {
+		return;
+	}
+	count = reply.words[1];
+	for (u64 i = 0; i < count; i++) {
+		if (linux_net_request(BUNIX_NET_INTERFACE_AT, 0, 0, i, 0, 0, 0,
+				      &reply) != 0) {
+			return;
+		}
+		if (reply.words[1] == 1) {
+			continue;
+		}
+		if (reply.words[1] == iface) {
+			u64 divisor = 1;
+			u64 cursor = 3;
+
+			copy_field(name, 0, size, "eth");
+			while (eth_index / divisor >= 10) {
+				divisor *= 10;
+			}
+			while (divisor != 0 && cursor + 1 < size) {
+				name[cursor++] =
+					(char)('0' + (eth_index / divisor) % 10);
+				divisor /= 10;
+			}
+			return;
+		}
+		eth_index++;
+	}
+}
+
 static long linux_net_ioctl(u64 request, u64 buffer)
 {
 	char ifreq[LINUX_IFREQ_SIZE];
@@ -4951,6 +5154,9 @@ static long linux_net_ioctl(u64 request, u64 buffer)
 		store_u16(ifreq, 16, info.id == 1 ? LINUX_ARPHRD_LOOPBACK :
 			  LINUX_ARPHRD_ETHER);
 		linux_store_mac(ifreq, info.mac_hi);
+		break;
+	case LINUX_SIOCGIFTXQLEN:
+		store_u32(ifreq, 16, 1000);
 		break;
 	default:
 		return -LINUX_EINVAL;
@@ -8072,6 +8278,10 @@ static long linux_socket_addr(struct linux_process *process, u64 fd, u64 max_len
 		}
 		raw[0] = (unsigned char)(LINUX_AF_NETLINK & 0xff);
 		raw[1] = (unsigned char)((LINUX_AF_NETLINK >> 8) & 0xff);
+		raw[4] = (unsigned char)(process->pid & 0xff);
+		raw[5] = (unsigned char)((process->pid >> 8) & 0xff);
+		raw[6] = (unsigned char)((process->pid >> 16) & 0xff);
+		raw[7] = (unsigned char)((process->pid >> 24) & 0xff);
 		copy = sizeof(raw) < max_len ? sizeof(raw) : max_len;
 		if (copy != 0 && bunix_buffer_write(buffer, 0, raw, copy) != 0) {
 			return -LINUX_EFAULT;
@@ -8105,66 +8315,794 @@ static long linux_socket_addr(struct linux_process *process, u64 fd, u64 max_len
 	return 0;
 }
 
+static u64 linux_nl_align(u64 len)
+{
+	return (len + 3) & ~3ull;
+}
+
+static int linux_netlink_queue_bytes(struct linux_fd *fd, const char *data,
+				     u64 len)
+{
+	if (fd == 0 || data == 0 || len > sizeof(fd->path) - fd->size) {
+		return -1;
+	}
+	for (u64 i = 0; i < len; i++) {
+		fd->path[fd->size + i] = data[i];
+	}
+	fd->size += len;
+	return 0;
+}
+
+static int linux_netlink_queue_msg(struct linux_fd *fd, u64 type, u64 flags,
+				   u64 seq, const char *payload,
+				   u64 payload_len)
+{
+	char header[16];
+	char pad[4] = { 0, 0, 0, 0 };
+	const u64 msg_len = 16 + payload_len;
+	const u64 aligned = linux_nl_align(msg_len);
+
+	if (aligned > sizeof(fd->path) - fd->size) {
+		return -1;
+	}
+	zero_bytes(header, sizeof(header));
+	store_u32(header, 0, (unsigned int)msg_len);
+	store_u16(header, 4, (unsigned int)type);
+	store_u16(header, 6, (unsigned int)flags);
+	store_u32(header, 8, (unsigned int)seq);
+	if (linux_netlink_queue_bytes(fd, header, sizeof(header)) != 0) {
+		return -1;
+	}
+	if (payload_len != 0 &&
+	    linux_netlink_queue_bytes(fd, payload, payload_len) != 0) {
+		return -1;
+	}
+	if (aligned != msg_len &&
+	    linux_netlink_queue_bytes(fd, pad, aligned - msg_len) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static void linux_netlink_queue_stamp_pid(struct linux_fd *fd, u64 pid)
+{
+	u64 off = 0;
+
+	if (fd == 0) {
+		return;
+	}
+	while (off + 16 <= fd->size) {
+		const u64 msg_len = load_u32(fd->path, off);
+		const u64 aligned = linux_nl_align(msg_len);
+
+		if (msg_len < 16 || aligned == 0 || off + aligned > fd->size) {
+			return;
+		}
+		store_u32(fd->path, off + 12, (unsigned int)pid);
+		off += aligned;
+	}
+}
+
+static int linux_netlink_queue_error(struct linux_fd *fd, u64 seq, long error,
+				     const char *request)
+{
+	char payload[20];
+
+	zero_bytes(payload, sizeof(payload));
+	store_u32(payload, 0, (unsigned int)error);
+	if (request != 0) {
+		for (u64 i = 0; i < 16; i++) {
+			payload[4 + i] = request[i];
+		}
+	}
+	return linux_netlink_queue_msg(fd, LINUX_NLMSG_ERROR, 0, seq, payload,
+				       sizeof(payload));
+}
+
+static int linux_netlink_queue_done(struct linux_fd *fd, u64 seq)
+{
+	char payload[4] = { 0, 0, 0, 0 };
+
+	return linux_netlink_queue_msg(fd, LINUX_NLMSG_DONE, LINUX_NLM_F_MULTI,
+				       seq, payload, sizeof(payload));
+}
+
+static int linux_nl_attr_put(char *payload, u64 *len, u64 max, u64 type,
+			     const void *data, u64 data_len)
+{
+	char pad[4] = { 0, 0, 0, 0 };
+	const u64 attr_len = 4 + data_len;
+	const u64 aligned = linux_nl_align(attr_len);
+
+	if (payload == 0 || len == 0 || data == 0 || aligned > max - *len) {
+		return -1;
+	}
+	store_u16(payload, *len, (unsigned int)attr_len);
+	store_u16(payload, *len + 2, (unsigned int)type);
+	for (u64 i = 0; i < data_len; i++) {
+		payload[*len + 4 + i] = ((const char *)data)[i];
+	}
+	for (u64 i = 0; i < aligned - attr_len; i++) {
+		payload[*len + attr_len + i] = pad[i];
+	}
+	*len += aligned;
+	return 0;
+}
+
+static int linux_nl_attr_put_u32(char *payload, u64 *len, u64 max, u64 type,
+				 u64 value)
+{
+	char data[4];
+
+	store_u32(data, 0, (unsigned int)value);
+	return linux_nl_attr_put(payload, len, max, type, data, sizeof(data));
+}
+
+static int linux_nl_attr_put_ipv4(char *payload, u64 *len, u64 max, u64 type,
+				  u64 value)
+{
+	unsigned char data[4];
+
+	data[0] = (unsigned char)((value >> 24) & 0xff);
+	data[1] = (unsigned char)((value >> 16) & 0xff);
+	data[2] = (unsigned char)((value >> 8) & 0xff);
+	data[3] = (unsigned char)(value & 0xff);
+	return linux_nl_attr_put(payload, len, max, type, data, sizeof(data));
+}
+
+static int linux_nl_attr_find(const char *attrs, u64 len, u64 type,
+			      const char **data, u64 *data_len)
+{
+	u64 off = 0;
+
+	while (off + 4 <= len) {
+		const u64 attr_len = load_u16(attrs, off);
+		const u64 attr_type = load_u16(attrs, off + 2);
+
+		if (attr_len < 4 || off + attr_len > len) {
+			return 0;
+		}
+		if (attr_type == type) {
+			if (data != 0) {
+				*data = attrs + off + 4;
+			}
+			if (data_len != 0) {
+				*data_len = attr_len - 4;
+			}
+			return 1;
+		}
+		off += linux_nl_align(attr_len);
+	}
+	return 0;
+}
+
+static int linux_nl_attr_read_u32(const char *attrs, u64 len, u64 type,
+				  u64 *out)
+{
+	const char *data;
+	u64 data_len;
+
+	if (!linux_nl_attr_find(attrs, len, type, &data, &data_len) ||
+	    data_len < 4 || out == 0) {
+		return 0;
+	}
+	*out = load_u32(data, 0);
+	return 1;
+}
+
+static int linux_nl_attr_read_ipv4(const char *attrs, u64 len, u64 type,
+				   u64 *out)
+{
+	const char *data;
+	u64 data_len;
+
+	if (!linux_nl_attr_find(attrs, len, type, &data, &data_len) ||
+	    data_len < 4 || out == 0) {
+		return 0;
+	}
+	*out = ((u64)(unsigned char)data[0] << 24) |
+	       ((u64)(unsigned char)data[1] << 16) |
+	       ((u64)(unsigned char)data[2] << 8) |
+	       (u64)(unsigned char)data[3];
+	return 1;
+}
+
+static int linux_nl_attr_read_name(const char *attrs, u64 len, u64 type,
+				   char *out, u64 out_len)
+{
+	const char *data;
+	u64 data_len;
+	u64 copy;
+
+	if (!linux_nl_attr_find(attrs, len, type, &data, &data_len) ||
+	    out == 0 || out_len == 0) {
+		return 0;
+	}
+	zero_bytes(out, out_len);
+	copy = data_len < out_len - 1 ? data_len : out_len - 1;
+	for (u64 i = 0; i < copy && data[i] != '\0'; i++) {
+		out[i] = data[i];
+	}
+	return out[0] != '\0';
+}
+
+static long linux_netlink_iface_from_name_or_index(const char *name, u64 index)
+{
+	char ifreq[LINUX_IFNAMSIZ];
+
+	if (index != 0) {
+		struct bunix_net_packet_interface_info info;
+
+		if (linux_net_interface_details(index, &info) == 0) {
+			return (long)index;
+		}
+		return -LINUX_ENODEV;
+	}
+	if (name == 0 || name[0] == '\0') {
+		return -LINUX_ENODEV;
+	}
+	zero_bytes(ifreq, sizeof(ifreq));
+	copy_field(ifreq, 0, sizeof(ifreq), name);
+	return linux_net_interface_id_by_name(ifreq);
+}
+
+static int linux_netlink_addr_rpc(u64 op,
+				  const struct bunix_net_addr_info *addr)
+{
+	long buffer;
+	struct bunix_msg reply;
+	int ok;
+
+	if (addr == 0) {
+		return -1;
+	}
+	buffer = bunix_buffer_create(sizeof(*addr));
+	if (buffer <= 0) {
+		return -1;
+	}
+	ok = bunix_buffer_write((u64)buffer, 0, addr, sizeof(*addr)) == 0 &&
+	     linux_net_request(op, (u64)buffer, BUNIX_RIGHT_RECV, 0, 0, 0,
+			       0, &reply) == 0;
+	bunix_handle_close((u64)buffer);
+	return ok ? 0 : -1;
+}
+
+static int linux_netlink_route_rpc(u64 op,
+				   const struct bunix_net_route_info *route)
+{
+	long buffer;
+	struct bunix_msg reply;
+	int ok;
+
+	if (route == 0) {
+		return -1;
+	}
+	buffer = bunix_buffer_create(sizeof(*route));
+	if (buffer <= 0) {
+		return -1;
+	}
+	ok = bunix_buffer_write((u64)buffer, 0, route, sizeof(*route)) == 0 &&
+	     linux_net_request(op, (u64)buffer, BUNIX_RIGHT_RECV, 0, 0, 0,
+			       0, &reply) == 0;
+	bunix_handle_close((u64)buffer);
+	return ok ? 0 : -1;
+}
+
+static int linux_netlink_queue_link(struct linux_fd *fd, u64 seq, u64 iface)
+{
+	struct bunix_net_packet_interface_info info;
+	char payload[160];
+	char name[LINUX_IFNAMSIZ];
+	unsigned char mac[6];
+	u64 len = 16;
+
+	if (linux_net_interface_details(iface, &info) != 0) {
+		return 0;
+	}
+	zero_bytes(payload, sizeof(payload));
+	payload[0] = 0;
+	store_u16(payload, 2, info.id == 1 ? LINUX_ARPHRD_LOOPBACK :
+		  LINUX_ARPHRD_ETHER);
+	store_u32(payload, 4, (unsigned int)info.id);
+	store_u32(payload, 8, linux_ifflags_from_net(info.flags));
+	store_u32(payload, 12, 0xffffffffu);
+	linux_net_interface_name(info.id, name, sizeof(name));
+	linux_store_ether_mac(mac, info.mac_hi);
+	if (linux_nl_attr_put(payload, &len, sizeof(payload),
+			      LINUX_IFLA_IFNAME, name,
+			      string_len(name) + 1) != 0 ||
+	    linux_nl_attr_put(payload, &len, sizeof(payload),
+			      LINUX_IFLA_ADDRESS, mac, sizeof(mac)) != 0 ||
+	    linux_nl_attr_put_u32(payload, &len, sizeof(payload),
+				  LINUX_IFLA_MTU, info.mtu) != 0) {
+		return -1;
+	}
+	return linux_netlink_queue_msg(fd, LINUX_RTM_NEWLINK,
+				       LINUX_NLM_F_MULTI, seq, payload, len);
+}
+
+static int linux_netlink_queue_links(struct linux_fd *fd, u64 seq,
+				     const char *filter_name, u64 filter_index)
+{
+	struct bunix_msg reply;
+	u64 count;
+
+	if (linux_net_request(BUNIX_NET_INTERFACE_COUNT, 0, 0, 0, 0, 0, 0,
+			      &reply) != 0) {
+		return -1;
+	}
+	count = reply.words[1];
+	for (u64 i = 0; i < count; i++) {
+		char name[LINUX_IFNAMSIZ];
+		u64 iface;
+
+		if (linux_net_request(BUNIX_NET_INTERFACE_AT, 0, 0, i, 0, 0,
+				      0, &reply) != 0) {
+			return -1;
+		}
+		iface = reply.words[1];
+		linux_net_interface_name(iface, name, sizeof(name));
+		if (filter_index != 0 && iface != filter_index) {
+			continue;
+		}
+		if (filter_name != 0 && filter_name[0] != '\0' &&
+		    !string_equal(name, filter_name)) {
+			continue;
+		}
+		if (linux_netlink_queue_link(fd, seq, iface) != 0) {
+			return -1;
+		}
+	}
+	return linux_netlink_queue_done(fd, seq);
+}
+
+static int linux_netlink_queue_addr(struct linux_fd *fd, u64 seq,
+				    const struct bunix_net_addr_info *addr)
+{
+	char payload[128];
+	char name[LINUX_IFNAMSIZ];
+	u64 len = 8;
+
+	if (addr == 0 || addr->family != BUNIX_NET_ADDR_FAMILY_IPV4) {
+		return 0;
+	}
+	zero_bytes(payload, sizeof(payload));
+	payload[0] = LINUX_AF_INET;
+	payload[1] = (char)addr->prefix_len;
+	payload[2] = 0x80;
+	payload[3] = 0;
+	store_u32(payload, 4, (unsigned int)addr->iface);
+	linux_net_interface_name(addr->iface, name, sizeof(name));
+	if (linux_nl_attr_put_ipv4(payload, &len, sizeof(payload),
+				   LINUX_IFA_ADDRESS, addr->addr_lo) != 0 ||
+	    linux_nl_attr_put_ipv4(payload, &len, sizeof(payload),
+				   LINUX_IFA_LOCAL, addr->addr_lo) != 0 ||
+	    linux_nl_attr_put(payload, &len, sizeof(payload),
+			      LINUX_IFA_LABEL, name,
+			      string_len(name) + 1) != 0) {
+		return -1;
+	}
+	return linux_netlink_queue_msg(fd, LINUX_RTM_NEWADDR,
+				       LINUX_NLM_F_MULTI, seq, payload, len);
+}
+
+static int linux_netlink_queue_addrs(struct linux_fd *fd, u64 seq,
+				     u64 filter_index)
+{
+	struct bunix_msg reply;
+	u64 count;
+
+	if (linux_net_request(BUNIX_NET_ADDR_COUNT, 0, 0, 0, 0, 0, 0,
+			      &reply) != 0) {
+		return -1;
+	}
+	count = reply.words[1];
+	for (u64 i = 0; i < count; i++) {
+		struct bunix_net_addr_info addr;
+		long buffer = bunix_buffer_create(sizeof(addr));
+		int ok;
+
+		if (buffer <= 0) {
+			return -1;
+		}
+		ok = linux_net_request(BUNIX_NET_ADDR_AT, (u64)buffer,
+				       BUNIX_RIGHT_SEND, i, 0, 0, 0,
+				       &reply) == 0 &&
+		     bunix_buffer_read((u64)buffer, 0, &addr, sizeof(addr)) == 0;
+		bunix_handle_close((u64)buffer);
+		if (!ok || addr.family != BUNIX_NET_ADDR_FAMILY_IPV4 ||
+		    (filter_index != 0 && addr.iface != filter_index)) {
+			continue;
+		}
+		if (linux_netlink_queue_addr(fd, seq, &addr) != 0) {
+			return -1;
+		}
+	}
+	return linux_netlink_queue_done(fd, seq);
+}
+
+static int linux_netlink_queue_route(struct linux_fd *fd, u64 seq,
+				     const struct bunix_net_route_info *route)
+{
+	char payload[128];
+	u64 len = 12;
+
+	if (route == 0 || route->family != BUNIX_NET_ADDR_FAMILY_IPV4) {
+		return 0;
+	}
+	zero_bytes(payload, sizeof(payload));
+	payload[0] = LINUX_AF_INET;
+	payload[1] = (char)route->prefix_len;
+	payload[2] = 0;
+	payload[3] = 0;
+	payload[4] = LINUX_RT_TABLE_MAIN;
+	payload[5] = LINUX_RTPROT_DHCP;
+	payload[6] = route->gateway_lo != 0 ? LINUX_RT_SCOPE_UNIVERSE :
+		     LINUX_RT_SCOPE_LINK;
+	payload[7] = LINUX_RTN_UNICAST;
+	store_u32(payload, 8, 0);
+	if (route->prefix_len != 0 &&
+	    linux_nl_attr_put_ipv4(payload, &len, sizeof(payload),
+				   LINUX_RTA_DST, route->prefix_lo) != 0) {
+		return -1;
+	}
+	if (route->gateway_lo != 0 &&
+	    linux_nl_attr_put_ipv4(payload, &len, sizeof(payload),
+				   LINUX_RTA_GATEWAY,
+				   route->gateway_lo) != 0) {
+		return -1;
+	}
+	if (linux_nl_attr_put_u32(payload, &len, sizeof(payload),
+				  LINUX_RTA_OIF, route->iface) != 0 ||
+	    linux_nl_attr_put_u32(payload, &len, sizeof(payload),
+				  LINUX_RTA_PRIORITY, route->metric) != 0) {
+		return -1;
+	}
+	return linux_netlink_queue_msg(fd, LINUX_RTM_NEWROUTE,
+				       LINUX_NLM_F_MULTI, seq, payload, len);
+}
+
+static int linux_netlink_queue_routes(struct linux_fd *fd, u64 seq)
+{
+	struct bunix_msg reply;
+	u64 count;
+
+	if (linux_net_request(BUNIX_NET_ROUTE_COUNT, 0, 0, 0, 0, 0, 0,
+			      &reply) != 0) {
+		return -1;
+	}
+	count = reply.words[1];
+	for (u64 i = 0; i < count; i++) {
+		struct bunix_net_route_info route;
+		long buffer = bunix_buffer_create(sizeof(route));
+		int ok;
+
+		if (buffer <= 0) {
+			return -1;
+		}
+		ok = linux_net_request(BUNIX_NET_ROUTE_AT, (u64)buffer,
+				       BUNIX_RIGHT_SEND, i, 0, 0, 0,
+				       &reply) == 0 &&
+		     bunix_buffer_read((u64)buffer, 0, &route,
+				       sizeof(route)) == 0;
+		bunix_handle_close((u64)buffer);
+		if (!ok || route.family != BUNIX_NET_ADDR_FAMILY_IPV4) {
+			continue;
+		}
+		if (linux_netlink_queue_route(fd, seq, &route) != 0) {
+			return -1;
+		}
+	}
+	return linux_netlink_queue_done(fd, seq);
+}
+
 static long linux_netlink_route_send(struct linux_process *process, u64 fd,
 				     u64 len, u64 addr_len, u64 buffer)
 {
 	unsigned char header[16];
-	u64 nlmsg_len;
-	u64 nlmsg_seq;
+	char body[512];
+	struct linux_fd *linux_fd = &process->fds[fd];
+	u64 off = 0;
 
-	if (len < sizeof(header) || buffer == 0 ||
-	    bunix_buffer_read(buffer, addr_len, header, sizeof(header)) != 0) {
+	(void)process;
+	if (buffer == 0) {
 		return -LINUX_EFAULT;
 	}
-	nlmsg_len = ((u64)header[0]) | ((u64)header[1] << 8) |
-		    ((u64)header[2] << 16) | ((u64)header[3] << 24);
-	if (nlmsg_len < sizeof(header) || nlmsg_len > len) {
-		return -LINUX_EINVAL;
+	linux_fd->offset = 0;
+	linux_fd->size = 0;
+	while (off + sizeof(header) <= len) {
+		u64 nlmsg_len;
+		u64 nlmsg_type;
+		u64 nlmsg_flags;
+		u64 nlmsg_seq;
+		u64 body_len;
+		u64 copy_len;
+		long result = 0;
+
+		if (bunix_buffer_read(buffer, addr_len + off, header,
+				      sizeof(header)) != 0) {
+			return -LINUX_EFAULT;
+		}
+		nlmsg_len = load_u32((const char *)header, 0);
+		nlmsg_type = load_u16((const char *)header, 4);
+		nlmsg_flags = load_u16((const char *)header, 6);
+		nlmsg_seq = load_u32((const char *)header, 8);
+		if (nlmsg_len < sizeof(header) || off + nlmsg_len > len) {
+			return -LINUX_EINVAL;
+		}
+		body_len = nlmsg_len - sizeof(header);
+		if (body_len > sizeof(body)) {
+			return -LINUX_E2BIG;
+		}
+		copy_len = body_len;
+		zero_bytes(body, sizeof(body));
+		if (copy_len != 0 &&
+		    bunix_buffer_read(buffer, addr_len + off + sizeof(header),
+				      body, copy_len) != 0) {
+			return -LINUX_EFAULT;
+		}
+
+		switch (nlmsg_type) {
+		case LINUX_RTM_GETLINK: {
+			char name[LINUX_IFNAMSIZ];
+			u64 index = body_len >= 8 ? load_u32(body, 4) : 0;
+			const char *attrs = body_len > 16 ? body + 16 : 0;
+			const u64 attrs_len = body_len > 16 ? body_len - 16 : 0;
+
+			zero_bytes(name, sizeof(name));
+			if (attrs != 0) {
+				(void)linux_nl_attr_read_name(
+					attrs, attrs_len, LINUX_IFLA_IFNAME,
+					name, sizeof(name));
+			}
+			result = linux_netlink_queue_links(linux_fd, nlmsg_seq,
+							   name, index) == 0 ?
+				 0 : -LINUX_ENOMEM;
+			break;
+		}
+		case LINUX_RTM_GETADDR: {
+			u64 index = body_len >= 8 ? load_u32(body, 4) : 0;
+
+			result = linux_netlink_queue_addrs(linux_fd, nlmsg_seq,
+							   index) == 0 ?
+				 0 : -LINUX_ENOMEM;
+			break;
+		}
+		case LINUX_RTM_GETROUTE:
+			result = linux_netlink_queue_routes(linux_fd,
+							    nlmsg_seq) == 0 ?
+				 0 : -LINUX_ENOMEM;
+			break;
+		case LINUX_RTM_NEWLINK:
+		case LINUX_RTM_SETLINK: {
+			char name[LINUX_IFNAMSIZ];
+			u64 index = body_len >= 8 ? load_u32(body, 4) : 0;
+			u64 flags = body_len >= 12 ? load_u32(body, 8) : 0;
+			u64 change = body_len >= 16 ? load_u32(body, 12) : 0;
+			const char *attrs = body_len > 16 ? body + 16 : 0;
+			const u64 attrs_len = body_len > 16 ? body_len - 16 : 0;
+			long iface;
+			u64 set = 0;
+			u64 clear = 0;
+			struct bunix_msg reply;
+
+			zero_bytes(name, sizeof(name));
+			if (attrs != 0) {
+				(void)linux_nl_attr_read_name(
+					attrs, attrs_len, LINUX_IFLA_IFNAME,
+					name, sizeof(name));
+			}
+			iface = linux_netlink_iface_from_name_or_index(name,
+								       index);
+			if (iface < 0) {
+				result = iface;
+				break;
+			}
+			if ((change == 0 || (change & LINUX_IFF_UP) != 0) &&
+			    (flags & LINUX_IFF_UP) != 0) {
+				set |= BUNIX_NET_IFACE_FLAG_UP;
+			} else if ((change & LINUX_IFF_UP) != 0) {
+				clear |= BUNIX_NET_IFACE_FLAG_UP;
+			}
+			result = iface == 1 ||
+					 linux_net_request(
+						 BUNIX_NET_INTERFACE_SET_FLAGS,
+						 0, 0, (u64)iface, set, clear,
+						 0, &reply) == 0 ?
+				 0 : -LINUX_EINVAL;
+			break;
+		}
+		case LINUX_RTM_NEWADDR:
+		case LINUX_RTM_DELADDR: {
+			const char *attrs = body_len > 8 ? body + 8 : 0;
+			const u64 attrs_len = body_len > 8 ? body_len - 8 : 0;
+			struct bunix_net_addr_info addr = { 0 };
+			u64 ipv4 = 0;
+
+			if (body_len < 8 || body[0] != LINUX_AF_INET ||
+			    attrs == 0 ||
+			    (!linux_nl_attr_read_ipv4(attrs, attrs_len,
+						      LINUX_IFA_LOCAL,
+						      &ipv4) &&
+			     !linux_nl_attr_read_ipv4(attrs, attrs_len,
+						      LINUX_IFA_ADDRESS,
+						      &ipv4))) {
+				result = -LINUX_EINVAL;
+				break;
+			}
+			addr.family = BUNIX_NET_ADDR_FAMILY_IPV4;
+			addr.addr_hi = 0;
+			addr.addr_lo = ipv4;
+			addr.prefix_len = (u64)(unsigned char)body[1];
+			addr.iface = load_u32(body, 4);
+			addr.flags = 1;
+			addr.preferred_lifetime = 0xffffffffull;
+			addr.valid_lifetime = 0xffffffffull;
+			result = linux_netlink_addr_rpc(
+					 nlmsg_type == LINUX_RTM_NEWADDR ?
+					 BUNIX_NET_ADDR_ADD :
+					 BUNIX_NET_ADDR_DELETE,
+					 &addr) == 0 ?
+				 0 : -LINUX_EINVAL;
+			break;
+		}
+		case LINUX_RTM_NEWROUTE:
+		case LINUX_RTM_DELROUTE: {
+			const char *attrs = body_len > 12 ? body + 12 : 0;
+			const u64 attrs_len = body_len > 12 ? body_len - 12 : 0;
+			struct bunix_net_route_info route = { 0 };
+
+			if (body_len < 12 || body[0] != LINUX_AF_INET ||
+			    attrs == 0) {
+				result = -LINUX_EINVAL;
+				break;
+			}
+			route.family = BUNIX_NET_ADDR_FAMILY_IPV4;
+			route.prefix_hi = 0;
+			route.prefix_lo = 0;
+			route.prefix_len = (u64)(unsigned char)body[1];
+			(void)linux_nl_attr_read_ipv4(attrs, attrs_len,
+						      LINUX_RTA_DST,
+						      &route.prefix_lo);
+			(void)linux_nl_attr_read_ipv4(attrs, attrs_len,
+						      LINUX_RTA_GATEWAY,
+						      &route.gateway_lo);
+			(void)linux_nl_attr_read_u32(attrs, attrs_len,
+						     LINUX_RTA_OIF,
+						     &route.iface);
+			(void)linux_nl_attr_read_u32(attrs, attrs_len,
+						     LINUX_RTA_PRIORITY,
+						     &route.metric);
+			if (route.iface == 0) {
+				const long iface =
+					linux_net_default_packet_interface();
+
+				if (iface > 0) {
+					route.iface = (u64)iface;
+				}
+			}
+			if (route.metric == 0) {
+				route.metric = 100;
+			}
+			route.flags = BUNIX_NET_ROUTE_FLAG_UP |
+				      (route.gateway_lo != 0 ?
+				       BUNIX_NET_ROUTE_FLAG_GATEWAY : 0);
+			result = linux_netlink_route_rpc(
+					 nlmsg_type == LINUX_RTM_NEWROUTE ?
+					 BUNIX_NET_ROUTE_ADD :
+					 BUNIX_NET_ROUTE_DELETE,
+					 &route) == 0 ?
+				 0 : -LINUX_ENOENT;
+			break;
+		}
+		default:
+			result = -LINUX_EINVAL;
+			break;
+		}
+
+		if (result != 0 ||
+		    (nlmsg_flags & LINUX_NLM_F_ACK) != 0 ||
+		    (nlmsg_type != LINUX_RTM_GETLINK &&
+		     nlmsg_type != LINUX_RTM_GETADDR &&
+		     nlmsg_type != LINUX_RTM_GETROUTE)) {
+			if (linux_netlink_queue_error(linux_fd, nlmsg_seq,
+						      result, (const char *)header) != 0) {
+				return -LINUX_ENOMEM;
+			}
+		}
+		linux_debug_netlink_log("send", process, fd, nlmsg_type,
+					nlmsg_flags, nlmsg_seq, nlmsg_len,
+					result, linux_fd->size);
+		off += linux_nl_align(nlmsg_len);
 	}
-	nlmsg_seq = ((u64)header[8]) | ((u64)header[9] << 8) |
-		    ((u64)header[10] << 16) | ((u64)header[11] << 24);
-	process->fds[fd].offset = nlmsg_seq;
-	process->fds[fd].flags |= LINUX_FD_NETLINK_ACK_PENDING |
-				  LINUX_FD_NETLINK_DONE_PENDING;
+	if (off == 0) {
+		linux_debug_netlink_log("send-empty", process, fd, 0, 0, 0,
+					len, -LINUX_EINVAL, linux_fd->size);
+	}
+	linux_netlink_queue_stamp_pid(linux_fd, process->pid);
 	return (long)len;
 }
 
-static long linux_netlink_route_recv(struct linux_process *process, u64 fd,
-				     u64 len, u64 buffer)
+static int linux_netlink_write_sockaddr(u64 buffer, u64 payload_len,
+					u64 result_len, u64 addr_len,
+					u64 *actual_addr_len)
 {
-	unsigned char ack[36];
-	const u64 seq = process->fds[fd].offset;
-	u64 msg_len = sizeof(ack);
-	u64 msg_type = LINUX_NLMSG_ERROR;
+	char raw[12];
 	u64 copy;
 
-	zero_bytes((char *)ack, sizeof(ack));
-	if ((process->fds[fd].flags & LINUX_FD_NETLINK_ACK_PENDING) != 0) {
-		process->fds[fd].flags &= ~LINUX_FD_NETLINK_ACK_PENDING;
-	} else if ((process->fds[fd].flags &
-		    LINUX_FD_NETLINK_DONE_PENDING) != 0) {
-		msg_len = 16;
-		msg_type = LINUX_NLMSG_DONE;
-		process->fds[fd].flags &= ~LINUX_FD_NETLINK_DONE_PENDING;
-	} else {
+	if (actual_addr_len != 0) {
+		*actual_addr_len = 0;
+	}
+	if (addr_len == 0) {
 		return 0;
 	}
-	copy = len < msg_len ? len : msg_len;
+	zero_bytes(raw, sizeof(raw));
+	store_u16(raw, 0, LINUX_AF_NETLINK);
+	copy = sizeof(raw) < addr_len ? sizeof(raw) : addr_len;
+	if ((copy != 0 &&
+	     bunix_buffer_write(buffer, payload_len, raw, copy) != 0) ||
+	    (result_len != payload_len && copy != 0 &&
+	     bunix_buffer_write(buffer, result_len, raw, copy) != 0)) {
+		return -1;
+	}
+	if (actual_addr_len != 0) {
+		*actual_addr_len = sizeof(raw);
+	}
+	return 0;
+}
+
+static long linux_netlink_route_recv(struct linux_process *process, u64 fd,
+				     u64 len, u64 buffer, u64 addr_len,
+				     u64 *actual_addr_len)
+{
+	struct linux_fd *linux_fd = &process->fds[fd];
+	u64 remaining;
+	u64 copy;
+
+	if (linux_fd->offset >= linux_fd->size) {
+		linux_debug_netlink_log("recv-empty", process, fd, 0, 0, 0,
+					len, 0, linux_fd->size);
+		linux_fd->offset = 0;
+		linux_fd->size = 0;
+		return 0;
+	}
+	remaining = linux_fd->size - linux_fd->offset;
+	if (remaining >= 16) {
+		const u64 msg_len = load_u32(linux_fd->path, linux_fd->offset);
+		const u64 aligned = linux_nl_align(msg_len);
+		const u64 msg_type = load_u16(linux_fd->path,
+					      linux_fd->offset + 4);
+		const u64 msg_flags = load_u16(linux_fd->path,
+					       linux_fd->offset + 6);
+		const u64 msg_seq = load_u32(linux_fd->path,
+					     linux_fd->offset + 8);
+
+		if (msg_len >= 16 && aligned <= remaining) {
+			remaining = aligned;
+		}
+		linux_debug_netlink_log("recv-head", process, fd, msg_type,
+					msg_flags, msg_seq, msg_len, 0,
+					linux_fd->size);
+	}
+	copy = len < remaining ? len : remaining;
 	if (buffer == 0 && copy != 0) {
 		return -LINUX_EFAULT;
 	}
-	ack[0] = (unsigned char)(msg_len & 0xff);
-	ack[1] = (unsigned char)((msg_len >> 8) & 0xff);
-	ack[2] = (unsigned char)((msg_len >> 16) & 0xff);
-	ack[3] = (unsigned char)((msg_len >> 24) & 0xff);
-	ack[4] = (unsigned char)(msg_type & 0xff);
-	ack[5] = (unsigned char)((msg_type >> 8) & 0xff);
-	ack[8] = (unsigned char)(seq & 0xff);
-	ack[9] = (unsigned char)((seq >> 8) & 0xff);
-	ack[10] = (unsigned char)((seq >> 16) & 0xff);
-	ack[11] = (unsigned char)((seq >> 24) & 0xff);
-	if (copy != 0 && bunix_buffer_write(buffer, 0, ack, copy) != 0) {
+	if (copy != 0 &&
+	    bunix_buffer_write(buffer, 0, linux_fd->path + linux_fd->offset,
+			       copy) != 0) {
 		return -LINUX_EFAULT;
+	}
+	if (linux_netlink_write_sockaddr(buffer, len, copy, addr_len,
+					 actual_addr_len) != 0) {
+		return -LINUX_EFAULT;
+	}
+	linux_fd->offset += remaining;
+	linux_debug_netlink_log("recv", process, fd, 0, 0, 0, len,
+				(long)copy, linux_fd->size);
+	if (linux_fd->offset >= linux_fd->size) {
+		linux_fd->offset = 0;
+		linux_fd->size = 0;
 	}
 	return (long)copy;
 }
@@ -8805,7 +9743,8 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 		return linux_net_raw_ipv4_recv(buffer, len);
 	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NETLINK_ROUTE) {
-		return linux_netlink_route_recv(process, fd, len, buffer);
+		return linux_netlink_route_recv(process, fd, len, buffer,
+						addr_len, actual_addr_len);
 	}
 	return utmps_recv_response(&process->fds[fd], len, buffer);
 }
@@ -9035,13 +9974,20 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 		}
 		if (pipe->len == 0) {
 			if (pipe->write_refs == 0) {
+				linux_debug_pipe_log("read-eof", process, fd,
+						     pipe, 0);
 				return 0;
 			}
 			if ((process->fds[fd].status_flags &
 			     LINUX_O_NONBLOCK) != 0) {
+				linux_debug_pipe_log("read-eagain", process,
+						     fd, pipe,
+						     -LINUX_EAGAIN);
 				return -LINUX_EAGAIN;
 			}
 			if (reply_handle == 0 || pipe->reader_reply != 0) {
+				linux_debug_pipe_log("read-busy", process, fd,
+						     pipe, -LINUX_EAGAIN);
 				return -LINUX_EAGAIN;
 			}
 			pipe->reader_reply = reply_handle;
@@ -9050,9 +9996,13 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 			if (blocked != 0) {
 				*blocked = 1;
 			}
+			linux_debug_pipe_log("read-block", process, fd, pipe,
+					     0);
 			return 0;
 		}
-		return linux_pipe_read_available(pipe, len, buffer);
+		const long nread = linux_pipe_read_available(pipe, len, buffer);
+		linux_debug_pipe_log("read-data", process, fd, pipe, nread);
+		return nread;
 	}
 	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
 	    (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
@@ -9211,12 +10161,16 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 			return -LINUX_EBADF;
 		}
 		if (pipe->read_refs == 0) {
+			linux_debug_pipe_log("write-epipe", process, fd, pipe,
+					     -LINUX_EPIPE);
 			return -LINUX_EPIPE;
 		}
 		nwritten = linux_pipe_write_available(pipe, len, buffer);
 		if (nwritten == (long)-LINUX_EAGAIN &&
 		    (process->fds[fd].status_flags & LINUX_O_NONBLOCK) == 0) {
 			if (reply_handle == 0 || pipe->writer_reply != 0) {
+				linux_debug_pipe_log("write-busy", process, fd,
+						     pipe, -LINUX_EAGAIN);
 				return -LINUX_EAGAIN;
 			}
 			pipe->writer_reply = reply_handle;
@@ -9225,12 +10179,18 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 			if (blocked != 0) {
 				*blocked = 1;
 			}
+			linux_debug_pipe_log("write-block", process, fd, pipe,
+					     0);
 			return 0;
 		}
 		if (nwritten < 0) {
+			linux_debug_pipe_log("write-error", process, fd, pipe,
+					     nwritten);
 			return nwritten;
 		}
 		linux_pipe_wake_reader(pipe);
+		linux_debug_pipe_log("write-data", process, fd, pipe,
+				     nwritten);
 		return nwritten;
 	}
 	if (process->fds[fd].kind == LINUX_FD_SOCKET &&
@@ -9397,8 +10357,12 @@ static long linux_close(struct linux_process *process, u64 fd)
 	    process->fds[fd].kind == LINUX_FD_PIPE_WRITE) {
 		const u64 pipe_id = process->fds[fd].handle;
 		struct linux_pipe *pipe = linux_pipe_find(pipe_id);
+		const char *action =
+			process->fds[fd].kind == LINUX_FD_PIPE_READ ?
+			"close-read" : "close-write";
 
 		linux_pipe_ref_drop(&process->fds[fd]);
+		linux_debug_pipe_log(action, process, fd, pipe, 0);
 		linux_pipe_wake_reader(pipe);
 		linux_pipe_wake_writer(pipe);
 		linux_pipe_destroy_if_unused(pipe);
@@ -9517,6 +10481,12 @@ static long linux_dup_to(struct linux_process *process, u64 old_fd,
 	process->fds[new_fd].flags = (flags & LINUX_DUP_CLOEXEC) != 0 ?
 				     LINUX_FD_CLOEXEC : 0;
 	linux_fd_ref_add(&process->fds[new_fd]);
+	if (process->fds[new_fd].kind == LINUX_FD_PIPE_READ ||
+	    process->fds[new_fd].kind == LINUX_FD_PIPE_WRITE) {
+		linux_debug_pipe_log("dup", process, new_fd,
+				     linux_pipe_find(process->fds[new_fd].handle),
+				     (long)old_fd);
+	}
 	return (long)new_fd;
 }
 
@@ -9564,6 +10534,17 @@ static long linux_fcntl(struct linux_process *process, u64 fd, u64 cmd, u64 arg)
 							~LINUX_FD_CLOEXEC;
 					}
 					linux_fd_ref_add(&process->fds[new_fd]);
+					if (process->fds[new_fd].kind ==
+					    LINUX_FD_PIPE_READ ||
+					    process->fds[new_fd].kind ==
+					    LINUX_FD_PIPE_WRITE) {
+						linux_debug_pipe_log(
+							"fcntl-dup", process,
+							new_fd,
+							linux_pipe_find(
+								process->fds[new_fd].handle),
+							(long)fd);
+					}
 					return (long)new_fd;
 				}
 			}
@@ -9609,6 +10590,13 @@ static long linux_exec_process(struct linux_process *process)
 	for (u64 fd = 0; fd < process->fd_capacity; fd++) {
 		if (process->fds[fd].kind != 0 &&
 		    (process->fds[fd].flags & LINUX_FD_CLOEXEC) != 0) {
+			if (process->fds[fd].kind == LINUX_FD_PIPE_READ ||
+			    process->fds[fd].kind == LINUX_FD_PIPE_WRITE) {
+				linux_debug_pipe_log(
+					"exec-close", process, fd,
+					linux_pipe_find(process->fds[fd].handle),
+					0);
+			}
 			const long closed = linux_close(process, fd);
 
 			if (closed != 0) {

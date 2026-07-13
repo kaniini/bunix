@@ -30,6 +30,14 @@ require_grep() {
 		fail "missing pattern '$pattern' in $file"
 }
 
+reject_grep() {
+	pattern=$1
+	file=$2
+	if grep -F "$pattern" "$file" >/dev/null; then
+		fail "unexpected pattern '$pattern' in $file"
+	fi
+}
+
 reject_file() {
 	[ ! -e "$1" ] || fail "unexpected file: $1"
 }
@@ -61,7 +69,13 @@ require_grep "busybox" "$artifact_dir/manifest.txt"
 require_grep "openrc" "$artifact_dir/manifest.txt"
 require_grep "ttyS0::respawn:/bin/sh" "$root/etc/inittab"
 reject_file "$root/bin/statidtest"
+require_file "$root/usr/share/udhcpc/default.script"
 reject_file "$root/sbin/bunix-udhcpc-script"
+if [ "$(readlink "$root/usr/share/udhcpc/default.script" 2>/dev/null || true)" = \
+     "/sbin/bunix-udhcpc-script" ]; then
+	fail "Alpine udhcpc default.script points at Bunix helper"
+fi
+reject_grep "bunix-udhcpc" "$root/usr/share/udhcpc/default.script"
 if [ -n "${RISCV64_DYN_HELLO_MODULE:-}" ] ||
    [ -n "${RISCV64_MUSL_LDSO:-}" ]; then
 	require_file "$root/bin/dyn-hello"

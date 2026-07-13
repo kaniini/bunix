@@ -30,7 +30,6 @@ rootfs_format=${ROOTFS_IMAGE_FORMAT:-squashfs}
 login=${LOGIN_MODULE:-build/modules/login.user}
 statidtest=${STATIDTEST_MODULE:-build/modules/statidtest.user}
 ldsopathtest=${LDSOPATHTEST_MODULE:-build/modules/ldsopathtest.user}
-netdhcp=${NETDHCP_MODULE:-build/modules/bunix-udhcpc-script.user}
 bunix_overlay=${BUNIX_ALPINE_OVERLAY:-1}
 init_command=${BUNIX_ALPINE_INIT_COMMAND:-/bin/login}
 extra_dir=${BUNIX_ALPINE_EXTRA_DIR:-}
@@ -365,10 +364,6 @@ if [ "$bunix_overlay" = 1 ]; then
 	chmod 0555 "$root/bin/statidtest"
 	cp "$ldsopathtest" "$root/bin/ldsopathtest"
 	chmod 0555 "$root/bin/ldsopathtest"
-	mkdir -p "$root/usr/share/udhcpc" "$root/sbin"
-	cp "$netdhcp" "$root/sbin/bunix-udhcpc-script"
-	chmod 0555 "$root/sbin/bunix-udhcpc-script"
-	ln -sf /sbin/bunix-udhcpc-script "$root/usr/share/udhcpc/default.script"
 
 	merge_account_file "$root/etc/passwd" modules/passwd
 	merge_account_file "$root/etc/shadow" modules/shadow

@@ -973,8 +973,8 @@ $(SYNTHETIC_SQUASHFS_IMAGE): tools/build-synthetic-squashfs-rootfs.sh $(ROOTFS_H
 $(RISCV64_SMOKE_SQUASHFS_IMAGE): tools/build-riscv64-smoke-rootfs.sh $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO) $(RISCV64_SYSCALL_SMOKE_MODULE) $(RISCV64_USERMEMTEST_MODULE) $(RISCV64_MUSL_HELLO_MODULE)
 	RISCV64_DYN_HELLO_MODULE=$(RISCV64_DYN_HELLO_MODULE) RISCV64_MUSL_LDSO=$(RISCV64_MUSL_LDSO) RISCV64_SYSCALL_SMOKE_MODULE=$(RISCV64_SYSCALL_SMOKE_MODULE) RISCV64_USERMEMTEST_MODULE=$(RISCV64_USERMEMTEST_MODULE) RISCV64_MUSL_HELLO_MODULE=$(RISCV64_MUSL_HELLO_MODULE) sh tools/build-riscv64-smoke-rootfs.sh $@
 
-$(ALPINE_SQUASHFS_IMAGE): $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(LDSOPATHTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy modules/passwd modules/shadow modules/group
-	ROOTFS_IMAGE_FORMAT=squashfs LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) LDSOPATHTEST_MODULE=$(LDSOPATHTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/build-alpine-rootfs.sh $@
+$(ALPINE_SQUASHFS_IMAGE): $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(LDSOPATHTEST_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy modules/passwd modules/shadow modules/group
+	ROOTFS_IMAGE_FORMAT=squashfs LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) LDSOPATHTEST_MODULE=$(LDSOPATHTEST_MODULE) sh tools/build-alpine-rootfs.sh $@
 
 $(RISCV64_ALPINE_SQUASHFS_IMAGE): tools/build-riscv64-alpine-rootfs.sh tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO)
 	RISCV64_DYN_HELLO_MODULE=$(RISCV64_DYN_HELLO_MODULE) RISCV64_MUSL_LDSO=$(RISCV64_MUSL_LDSO) sh tools/build-riscv64-alpine-rootfs.sh $@
@@ -1366,8 +1366,8 @@ run-riscv64-alpine: $(RISCV64_ALPINE_BOOTPKG)
 
 test: test-parallel
 
-test-alpine-rootfs: $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(LDSOPATHTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy tools/test-alpine-rootfs.sh modules/passwd modules/shadow modules/group
-	LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) LDSOPATHTEST_MODULE=$(LDSOPATHTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/test-alpine-rootfs.sh
+test-alpine-rootfs: $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(LDSOPATHTEST_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy tools/test-alpine-rootfs.sh modules/passwd modules/shadow modules/group
+	LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) LDSOPATHTEST_MODULE=$(LDSOPATHTEST_MODULE) sh tools/test-alpine-rootfs.sh
 
 test-alpine-rootfs-stock-networking: test-alpine-rootfs
 

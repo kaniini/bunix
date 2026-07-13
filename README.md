@@ -484,8 +484,8 @@ make run
 These targets build a standalone GRUB `BOOTX64.EFI`, expose `build/esp` as an EFI
 System Partition, boot through OVMF with KVM, and print to the serial console.
 The default `make run` path uses the generated Alpine rootfs, preserves
-Alpine's packaged `/etc/init.d/networking`, and starts networking through
-OpenRC, ifupdown-ng, and BusyBox/Alpine `udhcpc`.
+Alpine's packaged `/etc/init.d/networking` and udhcpc helper script, and
+starts networking through OpenRC, ifupdown-ng, and BusyBox/Alpine `udhcpc`.
 
 The default VirtIO-net QEMU backend uses restricted user networking for
 deterministic DHCP and service tests.  External ICMP smoke testing uses the
