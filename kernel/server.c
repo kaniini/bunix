@@ -1267,6 +1267,5 @@ void server_start_initial_boot_modules(void)
 	sched_run();
 	server_launch_module("names");
 	server_launch_module("consoled");
-	sched_run();
 	server_launch_module("bootstrap");
 }

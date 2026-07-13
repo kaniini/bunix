@@ -44,7 +44,7 @@ Tasks:
       phases and the server responsible for each delay.
 - [x] Replace fixed sleeps and polling loops on the interactive path with
       explicit readiness RPCs or event notifications where practical.
-- [ ] Audit bootstrap server launch ordering for unnecessary serialization;
+- [x] Audit bootstrap server launch ordering for unnecessary serialization;
       allow independent servers to start in parallel when capability and mount
       dependencies permit.
 - [x] Separate critical-path services needed for login from deferred services
@@ -224,6 +224,22 @@ Progress:
   `root-shell` at 3795 ms, completed the network probe at 4003 ms, and exited
   QEMU at 4041 ms.  Log volume stayed inside budget with 184 serial lines and
   9162 bytes.
+- Bootstrap launch ordering now has explicit readiness where it previously
+  relied on scheduler pacing.  The kernel still launches the VM server first
+  and runs the scheduler once so bootstrap address spaces exist, but it no
+  longer forces a second scheduler pass between launching names/console and
+  launching bootstrap.  Bootstrap now waits for the console service through
+  names instead of assuming it registered during that kernel scheduler pass.
+- Within bootstrap, independent `time` and `sched` server launches are issued
+  back-to-back before waiting for either service.  Later launch waits remain
+  serialized where they carry real capabilities or setup dependencies: proc
+  needs time/user management, virtio-bus needs PCI, filesystem translators need
+  VFS authority, and Linux init waits until the filesystem namespace is ready.
+- Latest generated Alpine networking profile after the launch-order cleanup
+  `build/run-profile/20260713T034312Z-805` reached `login:` at 3155 ms,
+  `root-shell` at 3259 ms, completed the network probe at 3467 ms, and exited
+  QEMU at 3522 ms.  Log volume stayed inside budget with 184 serial lines and
+  9161 bytes.
 - Validation:
   - `make test-alpine-rootfs`
   - `make test-alpine-rootfs-stock-networking`
@@ -252,3 +268,9 @@ Progress:
   - `make test-smoke`
   - `make run-profile`
   - `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T033953Z-29870`
+  - `git diff --check`
+  - `make build/esp/EFI/BOOT/BOOTX64.EFI`
+  - `make ARCH=riscv64 build/riscv64/bunixos.kernel`
+  - `make test-boot`
+  - `make run-profile`
+  - `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T034312Z-805`

@@ -3763,8 +3763,9 @@ int main(void)
 		return 1;
 	}
 	register_service(BUNIX_SERVICE_VM, BUNIX_HANDLE_VM);
-	console = resolve_service(BUNIX_SERVICE_CONSOLE,
-				  BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
+	console = wait_service_in_namespace(BUNIX_NAMES_ROOT,
+					    BUNIX_SERVICE_CONSOLE,
+					    BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	vm = resolve_service(BUNIX_SERVICE_VM,
 			     BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	if (console == 0 || vm == 0) {
@@ -3787,11 +3788,6 @@ int main(void)
 
 	launch_claimed_module("time", BUNIX_NAMES_ROOT, BUNIX_SERVICE_TIME,
 			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
-	time = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_TIME,
-					 BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
-	if (time == 0) {
-		return 1;
-	}
 	const struct bunix_launch_cap sched_caps[] = {
 		{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
 		{ BUNIX_HANDLE_NAMES, BUNIX_RIGHT_SEND, BUNIX_CAP_NAME },
@@ -3800,6 +3796,11 @@ int main(void)
 	launch_claimed_module("sched", BUNIX_NAMES_ROOT, BUNIX_SERVICE_SCHED,
 			      sched_caps,
 			      sizeof(sched_caps) / sizeof(sched_caps[0]));
+	time = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_TIME,
+					 BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
+	if (time == 0) {
+		return 1;
+	}
 	sched = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_SCHED,
 					  BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
 	if (sched == 0) {
