@@ -168,10 +168,12 @@ Progress:
     under exploration 070 by registering native proc-spawned tasks with the
     user server before their VFS executable opens.
 
-Remaining in this exploration:
+Completion:
 
-- Run the full-test completion gate before moving this exploration to
-  `explorations/completed/`.
+- Full-test completion gate passed with `make test`, run
+  `build/test-runs/20260713T022430Z-12425`.
+- All 29 shards passed, including the previously failing Alpine OpenRC marker
+  shards, `root-login-union`, `scheduler-migration`, and `login-smoke`.
 
 High-priority slowdown series:
 
