@@ -178,6 +178,7 @@ static struct bunix_map pending_exec_replaces;
 static struct bunix_tree exec_registry;
 static u64 next_pid = 1;
 static u64 first_linux_pid;
+static u64 procfs_handle;
 static u64 next_exec_replace_token = 1;
 static unsigned char segment_buffer[PROC_SEGMENT_MAX];
 static const char proc_online[] = "proc: online\n";
@@ -273,6 +274,116 @@ static u64 resolve_service(u64 service, unsigned int rights)
 	}
 
 	return reply.cap;
+}
+
+static u64 resolve_service_nowait(u64 service, unsigned int rights)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_RESOLVE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { BUNIX_NAMES_ROOT, service, rights, 0 },
+	};
+	struct bunix_msg reply;
+
+	if (PROC_HANDLE_NAMES == 0 ||
+	    bunix_ipc_call(PROC_HANDLE_NAMES, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return 0;
+	}
+	return reply.cap;
+}
+
+static u64 procfs_notify_handle(void)
+{
+	if (procfs_handle == 0) {
+		procfs_handle = resolve_service_nowait(BUNIX_SERVICE_PROCFS,
+						       BUNIX_RIGHT_SEND);
+	}
+	return procfs_handle;
+}
+
+static void notify_procfs_process_upsert(const struct process *process)
+{
+	const u64 procfs = procfs_notify_handle();
+	struct bunix_msg message = {
+		.protocol = BUNIX_PROTO_PROCFS,
+		.type = BUNIX_PROCFS_PROCESS_UPSERT,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = {
+			process != 0 ? process->pid : 0,
+			process != 0 ? process->task_id : 0,
+			process != 0 ? process->linux_pid : 0,
+			process != 0 ? process->ppid : 0,
+		},
+	};
+
+	if (procfs != 0 && process != 0 && process->pid != 0 &&
+	    bunix_ipc_send(procfs, &message) != 0) {
+		procfs_handle = 0;
+	}
+}
+
+static void notify_procfs_process_remove(const struct process *process)
+{
+	const u64 procfs = procfs_notify_handle();
+	struct bunix_msg message = {
+		.protocol = BUNIX_PROTO_PROCFS,
+		.type = BUNIX_PROCFS_PROCESS_REMOVE,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { process != 0 ? process->pid : 0, 0, 0, 0 },
+	};
+
+	if (procfs != 0 && process != 0 && process->pid != 0 &&
+	    bunix_ipc_send(procfs, &message) != 0) {
+		procfs_handle = 0;
+	}
+}
+
+static void notify_procfs_process_cmdline(const struct process *process)
+{
+	const u64 procfs = procfs_notify_handle();
+	u64 len;
+	long buffer;
+	struct bunix_msg message = {
+		.protocol = BUNIX_PROTO_PROCFS,
+		.type = BUNIX_PROCFS_PROCESS_CMDLINE_BUFFER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_RECV,
+		.reply = 0,
+		.cap = 0,
+		.words = { process != 0 ? process->pid : 0, 0, 0, 0 },
+	};
+
+	if (procfs == 0 || process == 0 || process->pid == 0 ||
+	    process->cmdline == 0) {
+		return;
+	}
+	len = process->cmd_len + 1;
+	if (len == 0 || len > PROC_EXEC_PATH_MAX) {
+		return;
+	}
+	buffer = bunix_buffer_create(len);
+	if (buffer <= 0) {
+		return;
+	}
+	if (bunix_buffer_write((u64)buffer, 0, process->cmdline, len) == 0) {
+		message.cap = (u64)buffer;
+		message.words[1] = len;
+		if (bunix_ipc_send(procfs, &message) != 0) {
+			procfs_handle = 0;
+		}
+	}
+	bunix_handle_close((u64)buffer);
 }
 
 static char *string_dup_len(const char *text, u64 len)
@@ -1586,6 +1697,7 @@ static void process_reset(struct process *process)
 		return;
 	}
 
+	notify_procfs_process_remove(process);
 	if (process->task_handle != 0) {
 		bunix_handle_close(process->task_handle);
 	}
@@ -1756,6 +1868,8 @@ static long spawn_process(const char *path, u64 login_uid, int set_login,
 	if (linux_pid != 0 && first_linux_pid == 0) {
 		first_linux_pid = linux_pid;
 	}
+	notify_procfs_process_upsert(process);
+	notify_procfs_process_cmdline(process);
 	exec_strings_free(&default_strings);
 	return 0;
 }
@@ -1805,6 +1919,8 @@ static long register_linux_child_process(u64 linux_pid, u64 task_id, u64 ppid,
 		return -1;
 	}
 	*pid = process->pid;
+	notify_procfs_process_upsert(process);
+	notify_procfs_process_cmdline(process);
 	return 0;
 }
 
@@ -2304,6 +2420,10 @@ int main(void)
 				reply.words[0] = 0;
 			} else {
 				reply.words[0] = (u64)-1;
+			}
+			if (reply.words[0] == 0 && process != 0) {
+				notify_procfs_process_upsert(process);
+				notify_procfs_process_cmdline(process);
 			}
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);

@@ -147,7 +147,7 @@ enum {
 	LINUX_STATFS_FREE_BLOCKS = 16384,
 	LINUX_INITIAL_FDS = 16,
 	LINUX_PIPE_CAPACITY = 65536,
-	LINUX_ACCESS_CACHE_SIZE = 64,
+	LINUX_ACCESS_CACHE_SIZE = 8,
 	LINUX_GLOBAL_PATH_CACHE_SIZE = 512,
 	LINUX_FILE_READ_CACHE_SIZE = 128,
 	LINUX_FILE_READ_CACHE_MAX = 4096,
@@ -394,6 +394,7 @@ struct linux_process {
 	struct linux_process *first_child;
 	struct linux_process *next_sibling;
 	u64 bunix_task;
+	u64 bunix_proc_pid;
 	u64 bunix_thread;
 	u64 exited;
 	u64 exit_status;
@@ -853,7 +854,8 @@ static void notify_proc_exit(u64 linux_pid, u64 status, u64 kill_task)
 }
 
 static long notify_proc_register_linux(u64 linux_pid, u64 bunix_task,
-				       u64 parent_linux_pid)
+				       u64 parent_linux_pid,
+				       u64 *bunix_proc_pid)
 {
 	const u64 proc = LINUX_HANDLE_PROC_MGMT;
 	struct bunix_msg request = {
@@ -866,11 +868,31 @@ static long notify_proc_register_linux(u64 linux_pid, u64 bunix_task,
 		.words = { linux_pid, bunix_task, parent_linux_pid, 0 },
 	};
 	struct bunix_msg reply;
+	long call_result;
 
-	if (proc == 0 ||
-	    bunix_ipc_call(proc, &request, &reply) != 0 ||
-	    reply.words[0] != 0) {
+	if (proc == 0) {
+		bunix_console_log("linux-server: fork proc missing\n",
+				  sizeof("linux-server: fork proc missing\n") - 1);
 		return -LINUX_ESRCH;
+	}
+	call_result = bunix_ipc_call(proc, &request, &reply);
+	if (call_result != 0) {
+		bunix_console_log("linux-server: fork proc call failed\n",
+				  sizeof("linux-server: fork proc call failed\n") - 1);
+		return -LINUX_ESRCH;
+	}
+	if (reply.words[0] != 0) {
+		bunix_console_log("linux-server: fork proc denied\n",
+				  sizeof("linux-server: fork proc denied\n") - 1);
+		return -LINUX_ESRCH;
+	}
+	if (reply.words[1] == 0) {
+		bunix_console_log("linux-server: fork proc pid zero\n",
+				  sizeof("linux-server: fork proc pid zero\n") - 1);
+		return -LINUX_ESRCH;
+	}
+	if (bunix_proc_pid != 0) {
+		*bunix_proc_pid = reply.words[1];
 	}
 	return 0;
 }
@@ -3391,6 +3413,7 @@ static long linux_register_process(u64 bunix_task, u64 ppid, u64 session_id,
 	process->umask = 022;
 	linux_process_init_links(process);
 	process->bunix_task = bunix_task;
+	process->bunix_proc_pid = requested_pid != 0 ? requested_pid : pid;
 	process->session_id = session_id;
 	if (linux_process_init_fds(process) != 0) {
 		bunix_console_log("linux-server: register fds failed\n",
@@ -3439,6 +3462,7 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 
 	struct linux_process *process = (struct linux_process *)
 		bunix_calloc(1, sizeof(*process));
+	u64 bunix_proc_pid = 0;
 	if (process == 0) {
 		bunix_console_log("linux-server: fork alloc failed\n",
 				  sizeof("linux-server: fork alloc failed\n") - 1);
@@ -3508,12 +3532,14 @@ static long linux_fork_process(u64 parent_task, u64 child_task)
 		linux_process_reset(process);
 		return -LINUX_ESRCH;
 	}
-	if (notify_proc_register_linux(pid, child_task, parent->pid) != 0) {
+	if (notify_proc_register_linux(pid, child_task, parent->pid,
+				       &bunix_proc_pid) != 0) {
 		bunix_console_log("linux-server: fork proc failed\n",
 				  sizeof("linux-server: fork proc failed\n") - 1);
 		linux_process_reset(process);
 		return -LINUX_ESRCH;
 	}
+	process->bunix_proc_pid = bunix_proc_pid;
 	return (long)pid;
 }
 
@@ -5326,7 +5352,7 @@ static long linux_vfs_path_call(struct linux_process *process, u64 type,
 	u64 word3 = process->bunix_task;
 
 	if (type == BUNIX_VFS_OPEN_BUFFER) {
-		word3 |= process->pid << 32;
+		word3 |= (process->bunix_proc_pid & 0xffffffff) << 32;
 	}
 	return linux_vfs_path_call_word3(process, type, base_handle, path,
 					 word3, reply);
@@ -10679,7 +10705,7 @@ static long linux_uname(u64 buffer)
 		return -LINUX_EFAULT;
 	}
 	zero_bytes(uts, sizeof(uts));
-	copy_field(uts, 0 * 65, 65, "Linux");
+	copy_field(uts, 0 * 65, 65, "Bunix");
 	copy_field(uts, 1 * 65, 65, linux_hostname);
 	copy_field(uts, 2 * 65, 65, "0.1");
 	copy_field(uts, 3 * 65, 65, "#1 Bunix");
@@ -10853,6 +10879,7 @@ static void linux_process_reset(struct linux_process *process)
 	process->sid = 0;
 	linux_process_init_links(process);
 	process->bunix_task = 0;
+	process->bunix_proc_pid = 0;
 	process->bunix_thread = 0;
 	process->exited = 0;
 	process->exit_status = 0;

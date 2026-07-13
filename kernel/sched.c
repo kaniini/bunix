@@ -2989,6 +2989,25 @@ int task_kill(struct task *task)
 	return 0;
 }
 
+int task_discard_unstarted(struct task *task)
+{
+	if (task == 0 || task == &kernel_task) {
+		return -1;
+	}
+
+	const u64 flags = spin_lock_irqsave(&task->lock);
+	if (task->dead || task->thread_count != 0) {
+		spin_unlock_irqrestore(&task->lock, flags);
+		return -1;
+	}
+	task->killing = 1;
+	task->dead = 1;
+	spin_unlock_irqrestore(&task->lock, flags);
+
+	task_release(task);
+	return 0;
+}
+
 int task_is_killing(const struct task *task)
 {
 	return task != 0 && task->killing;

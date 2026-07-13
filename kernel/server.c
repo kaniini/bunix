@@ -1016,13 +1016,14 @@ struct task *server_task_fork_current_stopped(
 	if (child == 0) {
 		console_printf("kernel: fork failed parent=%u reason=task\n",
 			       task_id(parent));
+		vm_rpc_destroy_space(space);
 		return 0;
 	}
 	task_inherit_sched_policy(child, parent);
 	if (task_clone_handles(child, parent) != 0) {
 		console_printf("kernel: fork failed parent=%u child=%u reason=handles\n",
 			       task_id(parent), task_id(child));
-		(void)task_kill(child);
+		(void)task_discard_unstarted(child);
 		return 0;
 	}
 
@@ -1073,7 +1074,7 @@ struct task *server_task_fork_current_stopped(
 				       region != 0 ?
 				       (const void *)region->base : 0,
 				       region != 0 ? (u32)region->len : 0);
-			(void)task_kill(child);
+			(void)task_discard_unstarted(child);
 			return 0;
 		}
 	}
@@ -1129,13 +1130,13 @@ struct task *server_task_vfork_current_stopped(
 	if (task_clone_handles(child, parent) != 0) {
 		console_printf("kernel: vfork failed parent=%u child=%u reason=handles\n",
 			       task_id(parent), task_id(child));
-		(void)task_kill(child);
+		(void)task_discard_unstarted(child);
 		return 0;
 	}
 	if (server_task_clone_vm_metadata(child, parent) != 0) {
 		console_printf("kernel: vfork failed parent=%u child=%u reason=vm-metadata\n",
 			       task_id(parent), task_id(child));
-		(void)task_kill(child);
+		(void)task_discard_unstarted(child);
 		return 0;
 	}
 
@@ -1159,6 +1160,9 @@ int server_task_start_fork(struct task *child,
 
 	struct fork_start *start = slab_alloc(sizeof(*start));
 	if (start == 0) {
+		console_printf("kernel: fork failed parent=%u child=%u reason=start free=%u\n",
+			       task_id(parent), task_id(child),
+			       (u32)vm_rpc_free_frames());
 		return -1;
 	}
 	start->frame = *frame;
@@ -1169,6 +1173,9 @@ int server_task_start_fork(struct task *child,
 		       (const void *)arch_syscall_frame_sp(frame));
 	if (thread_create_on_cpu(child, task_name(child), fork_entry_thread,
 				 start, sched_current_cpu_id()) == 0) {
+		console_printf("kernel: fork failed parent=%u child=%u reason=thread free=%u\n",
+			       task_id(parent), task_id(child),
+			       (u32)vm_rpc_free_frames());
 		slab_free(start);
 		return -1;
 	}
@@ -1183,7 +1190,7 @@ struct task *server_task_fork_current(const struct arch_syscall_frame *frame)
 	}
 
 	if (server_task_start_fork(child, frame) != 0) {
-		(void)task_kill(child);
+		(void)task_discard_unstarted(child);
 		return 0;
 	}
 

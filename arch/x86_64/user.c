@@ -4834,25 +4834,38 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 			server_task_vfork_current_stopped(&child_frame) :
 			server_task_fork_current_stopped(&child_frame);
 		if (child == 0) {
+			console_printf("linux: fork syscall failed task=%u stage=task free=%u\n",
+				       task_id(task),
+				       (u32)vm_rpc_free_frames());
 			return (u64)-LINUX_ENOMEM;
 		}
 		if (is_vfork) {
 			vfork_waiter = linux_vfork_begin(task_id(child));
 			if (vfork_waiter == 0) {
-				(void)task_kill(child);
+				console_printf("linux: fork syscall failed task=%u child=%u stage=vfork-waiter free=%u\n",
+					       task_id(task), task_id(child),
+					       (u32)vm_rpc_free_frames());
+				(void)task_discard_unstarted(child);
 				return (u64)-LINUX_ENOMEM;
 			}
 		}
 
 		pid = linux_fork_process(task, child);
 		if ((i64)pid < 0) {
+			console_printf("linux: fork syscall failed task=%u child=%u stage=linux ret=%p free=%u\n",
+				       task_id(task), task_id(child),
+				       (const void *)pid,
+				       (u32)vm_rpc_free_frames());
 			linux_vfork_cancel(vfork_waiter);
-			(void)task_kill(child);
+			(void)task_discard_unstarted(child);
 			return pid;
 		}
 		if (server_task_start_fork(child, &child_frame) != 0) {
+			console_printf("linux: fork syscall failed task=%u child=%u stage=start free=%u\n",
+				       task_id(task), task_id(child),
+				       (u32)vm_rpc_free_frames());
 			linux_vfork_cancel(vfork_waiter);
-			(void)task_kill(child);
+			(void)task_discard_unstarted(child);
 			return (u64)-LINUX_ENOMEM;
 		}
 		if (is_vfork) {

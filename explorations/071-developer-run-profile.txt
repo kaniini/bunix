@@ -110,6 +110,22 @@ Progress:
   scripts.  The image now preserves Alpine's stock `devfs`, `procfs`, `sysfs`,
   and `networking` init scripts; Bunix policy only controls which runlevel
   links are active.
+- The procfs server now keeps an asynchronous process snapshot from the proc
+  server for `/proc` enumeration and common PID lookups.  This avoids a
+  synchronous proc-server RPC from procfs while proc is blocked waiting for a
+  Linux process operation, which fixed the `procfs-self-pipe` deadlock.
+- Linux processes now track their Bunix proc-server PID separately from their
+  Linux PID, and VFS open messages pass that Bunix PID for `/proc/self`
+  resolution.  This keeps `/proc/self` correct while preserving the eventual
+  Linux PID model.
+- Fork failure cleanup now has an explicit unstarted-task discard path so
+  kernel-side task/VM metadata created before the first child thread exists is
+  released through normal task teardown.
+- The Linux server keeps `PATH_MAX` at 4096 but reduced the per-process access
+  cache from 64 entries to 8 entries.  With 4096-byte paths, the old inline
+  cache made every Linux process record roughly a 512 KiB heap allocation; the
+  `tmpfs-basic-linux-tests` shard exhausted the Linux-server heap before
+  `/bin/vforkstress`.  The larger global path cache remains in place.
 
 Needs:
 
@@ -161,3 +177,9 @@ Validation:
   - `sh -n tools/test-alpine-rootfs.sh`
   - `make test-alpine-rootfs`
   - `make test-boot-virtio-net-networking`
+- After fixing procfs self-pipe and Linux-server fork allocation pressure:
+  - `make build/x86_64/bunixos.kernel build/modules/linux.server`
+  - `BUNIX_TEST_SET='tmpfs-basic-linux-tests' make test-parallel`
+    - `build/test-runs/20260713T141841Z-1962`
+  - `BUNIX_TEST_SET='procfs-self-pipe,tmpfs-basic-linux-tests' make test-parallel`
+    - `build/test-runs/20260713T142048Z-3701`

@@ -252,6 +252,7 @@ struct thread *thread_create_on_cpu(struct task *task, const char *name,
 struct task *task_current(void);
 struct thread *thread_current(void);
 int task_kill(struct task *task);
+int task_discard_unstarted(struct task *task);
 int task_is_killing(const struct task *task);
 enum sched_class task_sched_class(const struct task *task);
 u64 task_grant_port(struct task *task, struct ipc_port *port, u32 rights);

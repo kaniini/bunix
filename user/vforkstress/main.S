@@ -11,7 +11,7 @@ fork_loop:
 	movq $57, %rax
 	syscall
 	testq %rax, %rax
-	js fail
+	js fork_fail
 	jz worker_child
 
 	incq %r12
@@ -39,6 +39,12 @@ vfork_child:
 	syscall
 
 child_fail:
+	movq $1, %rax
+	movq $2, %rdi
+	leaq child_fail_message(%rip), %rsi
+	movq $child_fail_message_end - child_fail_message, %rdx
+	syscall
+
 	movq $231, %rax
 	movq $2, %rdi
 	syscall
@@ -57,9 +63,9 @@ wait_one:
 	xorq %r10, %r10
 	syscall
 	testq %rax, %rax
-	jle fail
+	jle wait_fail
 	cmpl $0, wait_status(%rip)
-	jne fail
+	jne status_fail
 
 	incq %r13
 	jmp wait_one
@@ -76,6 +82,30 @@ ok:
 	movq $231, %rax
 	xorq %rdi, %rdi
 	syscall
+
+fork_fail:
+	movq $1, %rax
+	movq $2, %rdi
+	leaq fork_fail_message(%rip), %rsi
+	movq $fork_fail_message_end - fork_fail_message, %rdx
+	syscall
+	jmp fail
+
+wait_fail:
+	movq $1, %rax
+	movq $2, %rdi
+	leaq wait_fail_message(%rip), %rsi
+	movq $wait_fail_message_end - wait_fail_message, %rdx
+	syscall
+	jmp fail
+
+status_fail:
+	movq $1, %rax
+	movq $2, %rdi
+	leaq status_fail_message(%rip), %rsi
+	movq $status_fail_message_end - status_fail_message, %rdx
+	syscall
+	jmp fail
 
 fail:
 	movq $1, %rax
@@ -98,6 +128,18 @@ ok_message_end:
 fail_message:
 	.ascii "linux vforkstress failed\n"
 fail_message_end:
+fork_fail_message:
+	.ascii "linux vforkstress fork failed\n"
+fork_fail_message_end:
+child_fail_message:
+	.ascii "linux vforkstress child vfork failed\n"
+child_fail_message_end:
+wait_fail_message:
+	.ascii "linux vforkstress wait failed\n"
+wait_fail_message_end:
+status_fail_message:
+	.ascii "linux vforkstress child status failed\n"
+status_fail_message_end:
 sleep_time:
 	.quad 0
 	.quad 200000000
