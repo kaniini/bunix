@@ -1322,6 +1322,48 @@ static long register_linux_process(u64 task, u64 requested_pid,
 	return 0;
 }
 
+static long register_user_process(u64 task)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_REGISTER_PROCESS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { task, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = PROC_HANDLE_USER_MGMT;
+
+	if (user == 0 ||
+	    bunix_ipc_call(user, &request, &reply) != 0 ||
+	    reply.words[0] != 0) {
+		return -1;
+	}
+
+	return 0;
+}
+
+static void unregister_user_process(u64 task)
+{
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_USER,
+		.type = BUNIX_USER_EXIT_PROCESS,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { task, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+	const u64 user = PROC_HANDLE_USER_MGMT;
+
+	if (user != 0) {
+		(void)bunix_ipc_call(user, &request, &reply);
+	}
+}
+
 static long apply_login_to_task(u64 task, u64 login_uid)
 {
 	struct bunix_msg request = {
@@ -1595,6 +1637,9 @@ static long exec_path(u64 vfs, struct process *process,
 	}
 	process->task_id = (u64)bunix_id;
 	process->task_handle = (u64)task;
+	if (!linux_personality && register_user_process((u64)bunix_id) != 0) {
+		return -1;
+	}
 
 	if (path_is_login(path) || path_is_login(task_name)) {
 		caps[cap_count].handle = PROC_HANDLE_USER_MGMT;
@@ -1611,12 +1656,10 @@ static long exec_path(u64 vfs, struct process *process,
 		if (bunix_task_grant_tagged((u64)task, caps[i].handle,
 					    caps[i].rights, caps[i].tag) <=
 		    0) {
-			bunix_handle_close((u64)task);
 			return -1;
 		}
 	}
 	if (exec_handles_from_task((u64)task, &handles) != 0) {
-		bunix_handle_close((u64)task);
 		return -1;
 	}
 	if (linux_personality) {
@@ -1632,7 +1675,6 @@ static long exec_path(u64 vfs, struct process *process,
 	}
 	if (load_task_image(vfs, (u64)task, 0, path, path, strings, 0,
 			    &handles, &start_entry, &stack) != 0) {
-		bunix_handle_close((u64)task);
 		return -1;
 	}
 	const long started = bunix_task_start_at((u64)task, start_entry, stack);
@@ -1666,6 +1708,7 @@ static void process_reset(struct process *process)
 	}
 	(void)bunix_map_remove(&processes_by_pid, process->pid);
 	if (process->task_id != 0) {
+		unregister_user_process(process->task_id);
 		(void)bunix_map_remove(&processes_by_task_id,
 				       process->task_id);
 	}

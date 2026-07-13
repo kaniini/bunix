@@ -36,7 +36,7 @@ Tasks:
 - [ ] Identify the exact launch-order or wakeup dependency that makes module
       start logs observable in control flow; replace it with explicit
       readiness RPCs, notifications, or scheduler wakeups.
-- [ ] Debug the synthetic `run_boot_spawns()` failure where proc cannot open
+- [x] Debug the synthetic `run_boot_spawns()` failure where proc cannot open
       `/bin/first` after `bootstrap: fs ready`; determine whether this is VFS
       namespace resolution, proc exec registry state, subject authority, or a
       race with Linux init/login startup.
@@ -109,3 +109,18 @@ Priority order:
 4. Defer nonessential services until after login where the full Alpine
    environment permits it, and keep full networking/OpenRC validation in a
    named faithful profile.
+
+Progress:
+
+- The clean-HEAD synthetic boot-spawn failure was a subject-authority problem
+  in the proc server, not a missing squashfs entry.  Native proc-spawned tasks
+  were being used as the VFS subject for executable opens without first being
+  registered with the user server, so permission checks could deny readable
+  files such as `/bin/first`.
+- The proc server now registers non-Linux spawned tasks with the user server
+  immediately after task creation and unregisters them during process reset.
+  Linux-personality tasks still follow the Linux server registration path so
+  PID/user-session state is not duplicated.
+- `make test-boot` passes with the synthetic `/bin/first`,
+  `/bin/longpath-first`, alloctest, phdrstress, and Linux init markers
+  restored.

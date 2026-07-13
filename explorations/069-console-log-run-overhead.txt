@@ -107,6 +107,14 @@ Progress:
     the Linux-init-to-login interval.
   - This confirms the remaining user-visible delay is the silent
     Alpine/OpenRC/login path, not serial output.
+- Latest validation profile `build/run-profile/20260713T002648Z-19685`:
+  - Reached `bootstrap: fs ready` at 5084 ms and `bootstrap: linux init exec`
+    at 5086 ms.
+  - Reached `login:` at 50159 ms, `~ #` at 51163 ms, and poweroff at 53620 ms.
+  - Emitted 297 lines / 12433 bytes, with only 18 lines during the
+    Linux-init-to-login interval.
+  - This repeats the same diagnosis: normal `make run` is now dominated by
+    silent Alpine/OpenRC/login startup after Linux init starts.
 - Important boot-order finding:
   - A broad raw-log filter that suppressed routine server text, and a separate
     attempt to demote `kernel: launching module server` /
@@ -127,11 +135,14 @@ Progress:
     passed with `serial_lines=297`, `serial_bytes=12432`, `kernel_prefix=53`,
     `vm_server_prefix=1`, `user_syscall_prefix=0`, and
     `kernel_server_phase_lines=257`.
-  - `make test-boot` currently fails because the synthetic boot-spawn phase
-    reports `proc: exec open failed` before `/bin/first` markers appear.
-    A detached clean `HEAD` archive in `/tmp/bunix-head-check` fails the same
-    way, so this is not caused by the 069 console changes.  Track it under
-    exploration 070 as a boot/proc/VFS critical-path defect.
+  - `make run-profile` passed for
+    `build/run-profile/20260713T002648Z-19685`, and the log-volume checker
+    passed with `serial_lines=297`, `serial_bytes=12433`,
+    `kernel_prefix=53`, `vm_server_prefix=1`, `user_syscall_prefix=0`, and
+    `kernel_server_phase_lines=257`.
+  - `make test-boot` now passes after the synthetic proc-spawn path was fixed
+    under exploration 070 by registering native proc-spawned tasks with the
+    user server before their VFS executable opens.
 
 Remaining in this exploration:
 
