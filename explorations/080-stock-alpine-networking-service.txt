@@ -113,6 +113,9 @@ Implementation Notes:
   The builder leaves the packaged `/etc/init.d/networking` untouched, installs
   `/etc/network/interfaces`, runs normal OpenRC phases from `/etc/inittab`,
   and records `alpine_networking_service=stock` in the manifest.
+- The old separate stock-networking SquashFS artifact is gone.  Stock Alpine
+  networking is the normal `alpine-squashfs` rootfs path, and compatibility
+  `test-*-stock-networking` targets exercise that same image.
 - `tools/test-alpine-rootfs.sh` now requires the packaged
   `#!/sbin/openrc-run` networking service, rejects the old generated service
   body, and rejects stale `bunix-openrc-*` scripts or inittab hooks.
@@ -885,7 +888,7 @@ and the failures that led to the current implementation.
     race rather than a guest regression.
   - `BUNIX_CMD="busybox sh -c ': >/tmp/bunix-redir && echo REDIR_OK'" make
     test-command` passed, so basic tmpfs create/truncate shell redirection
-    still works in the normal generated-service image.
+    still worked in the old generated-service image.
 - The stock-networking boot still does not meet the exploration goal.  A quiet
   probe with `QEMU_TIMEOUT=320s BUNIX_BOOT_LOGIN_WAIT=260
   BUNIX_BOOT_LOGIN_CAPTURE=420 make test-boot-alpine-stock-networking` failed
@@ -937,33 +940,28 @@ and the failures that led to the current implementation.
   and a later `Bad file descriptor` report.  This confirms that the remaining
   blocker is deeper in Linux/VFS/tmpfs file descriptor or runtime-state
   behavior, not only directory write-open semantics.
-- This exploration can be postponed without losing the working default Alpine
-  boot path, because the generated Bunix networking service remains the
-  default while `ALPINE_NETWORKING_SERVICE=stock` isolates the failing stock
-  OpenRC path.  If postponed, keep this file open as the authoritative stock
-  OpenRC failure record and resume from the latest `deptree`/`depconfig`
-  runtime-state failure rather than restarting the investigation from the
-  older fsck/localmount timeout.
-- A follow-up attempt to run 054a against the generated-service image proved
-  that the postponement assumption is currently invalid.  The generated image
-  did not reach login before the network test command; with Bunix OpenRC
-  provider scripts installed for both generated and stock networking modes, it
-  still failed in dependency-cache regeneration with `fopen
+- Obsolete note: at this point in the investigation, generated-service and
+  stock-service rootfs modes still existed.  That split has since been removed;
+  the normal Alpine image now uses the real packaged networking service.
+- A follow-up attempt to run 054a against the old generated-service image
+  proved that the postponement assumption was invalid.  The generated image did
+  not reach login before the network test command; with Bunix OpenRC provider
+  scripts installed for both generated and stock networking modes, it still
+  failed in dependency-cache regeneration with `fopen
   '/run/openrc/deptree': Invalid argument` and `fopen
   '/run/openrc/depconfig': No such file or directory`.  Artifact:
   `build/failures/20260711T091603Z-13124/20260711T091904Z-13124`.
-  The 054a test targets are useful once Alpine reaches login again, but 054
-  must remain active until this OpenRC runtime-state blocker is fixed.
-- The shared OpenRC provider rootfs change keeps both packaging modes valid:
+  The 054a test targets were useful once Alpine reached login again, but 054
+  had to remain active until this OpenRC runtime-state blocker was fixed.
+- The shared OpenRC provider rootfs change kept both packaging modes valid at
+  the time:
   - `make test-alpine-rootfs`
   - `make test-alpine-rootfs-stock-networking`
-- Generated-service rootfs generation now uses
-  `tools/alpine-generated-openrc-runlevels.policy`, which only enables the
-  temporary generated networking service and the Bunix login replacement.
-  Stock mode continues to use `tools/alpine-openrc-runlevels.policy` and the
-  Bunix pseudo-filesystem OpenRC provider stubs.  This restores generated mode
-  as the lightweight default path while preserving the stock OpenRC failure
-  record for later.
+- Obsolete generated-service rootfs generation used
+  `tools/alpine-generated-openrc-runlevels.policy`, which only enabled the
+  temporary generated networking service and the Bunix login replacement.  The
+  current builder uses `tools/alpine-openrc-runlevels.policy` for the normal
+  Alpine path and leaves `/etc/init.d/networking` packaged by Alpine.
 - Validation for the generated/stock policy split:
   - `make test-alpine-rootfs` passed when rerun serially.
   - `make test-alpine-rootfs-stock-networking` passed.

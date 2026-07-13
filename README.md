@@ -184,7 +184,7 @@ ROOTFS_FLAVOR=alpine-squashfs make esp
 `tools/build-alpine-rootfs.sh` stages Alpine packages with `apk --root ... --initdb`
 and falls back to `--usermode` for non-root development builds. By default it
 uses `/etc/apk/repositories`, `/etc/apk/cache`, and the package set
-`alpine-baselayout busybox musl openrc`; override those with
+`alpine-baselayout busybox musl openrc ifupdown-ng`; override those with
 `APK_REPOSITORIES_FILE`, `APK_CACHE_DIR`, or `ALPINE_ROOTFS_PACKAGES`. The build
 overlays Bunix's native `/bin/login` plus the project passwd/shadow/group files,
 because Bunix login must contact the user server. It writes the resolved package
@@ -475,7 +475,7 @@ The static PIE BusyBox path remains available as a compatibility regression:
 make test-shell-static
 ```
 
-For an interactive serial console:
+For an interactive Alpine serial console with VirtIO-net attached:
 
 ```sh
 make run
@@ -483,12 +483,9 @@ make run
 
 These targets build a standalone GRUB `BOOTX64.EFI`, expose `build/esp` as an EFI
 System Partition, boot through OVMF with KVM, and print to the serial console.
-The plain `make run` target is intentionally minimal.  For an Alpine-style boot
-with the VirtIO network device attached, use:
-
-```sh
-ROOTFS_FLAVOR=alpine-squashfs make run-virtio-net
-```
+The default `make run` path uses the generated Alpine rootfs, preserves
+Alpine's packaged `/etc/init.d/networking`, and starts networking through
+OpenRC, ifupdown-ng, and BusyBox/Alpine `udhcpc`.
 
 The default VirtIO-net QEMU backend uses restricted user networking for
 deterministic DHCP and service tests.  External ICMP smoke testing uses the

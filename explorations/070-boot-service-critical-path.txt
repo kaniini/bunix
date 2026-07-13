@@ -124,21 +124,21 @@ Progress:
 - `make test-boot` passes with the synthetic `/bin/first`,
   `/bin/longpath-first`, alloctest, phdrstress, and Linux init markers
   restored.
-- Default generated Alpine networking profiles showed the main remaining
-  interactive delay was OpenRC sysinit:
+- Earlier generated-networking Alpine profiles showed the main remaining
+  interactive delay was OpenRC sysinit before the stock-service path became
+  the default:
   - `build/run-profile/20260713T011353Z-16473` measured
     `openrc-sysinit-start` at 3447 ms and `openrc-sysinit-end` at 41506 ms;
     boot/default were much smaller.
   - A generated `/var/cache/rc/deptree` avoids the expensive OpenRC dependency
     regeneration path, while a Bunix-specific sysinit avoids generic
     `/proc`/`/run` mount probing that Bunix already handles through servers.
-  - The generated-networking flavor now runs one `bunix-openrc-bringup`
-    sysinit action, starts the generated `networking` service, advances the
-    OpenRC softlevel to default, and then lets init spawn login.  This removes
-    BusyBox init's one-second gaps between separate sysinit/wait entries on
-    the default `make run-alpine-net` path.
-  - The stock-networking flavor keeps the fuller OpenRC boot path for the
-    future stock-service exploration.
+  - The old generated-networking flavor ran one `bunix-openrc-bringup`
+    sysinit action, started a generated `networking` service, advanced the
+    OpenRC softlevel to default, and then let init spawn login.  That shortcut
+    has since been removed from the normal Alpine image.
+  - The current Alpine rootfs keeps the fuller OpenRC boot path and runs the
+    packaged `/etc/init.d/networking` service.
 - `tools/run-profile.sh` now uses short polling with real deadlines, so
   marker attribution no longer adds up to one second per waited marker.
 - Latest generated Alpine networking profile
@@ -168,10 +168,10 @@ Progress:
   and accepts writes to `/proc/boot_timing` as additional markers.  Bootstrap
   records critical-path milestones including names readiness, input readiness,
   network readiness, rootfs selection, netcfg readiness, filesystem namespace
-  readiness, filesystem readiness, and Linux init handoff.  Generated Alpine
-  OpenRC wrappers append sysinit/boot/default start/end markers to the same
-  file, so the Linux-init-to-login interval is diagnosable without serial log
-  scraping.
+  readiness, filesystem readiness, and Linux init handoff.  The Alpine profile
+  records login, root shell, and post-login networking probes around the real
+  OpenRC path, so the Linux-init-to-login interval is diagnosable without
+  serial log scraping.
 - The early boot log-pacing dependency was a timer-polled IPC readiness path:
   the names server only noticed private claim ports while polling, and the
   proc, user, and Linux servers slept for 1 ms whenever neither their
@@ -248,6 +248,10 @@ Progress:
   `build/run-profile/20260713T074132Z-29238` reached `login:` at 13064 ms,
   `root-shell` at 13168 ms, and completed the post-login networking marker at
   13784 ms.
+- The separate stock-networking rootfs artifact was removed after the real
+  Alpine networking service became the normal Alpine rootfs path.  The
+  compatibility `test-*-stock-networking` targets now exercise the same
+  generated Alpine image instead of a second image flavor.
 - Validation:
   - `make test-alpine-rootfs`
   - `make test-alpine-rootfs-stock-networking`
@@ -286,3 +290,4 @@ Progress:
   - `make test-boot-virtio-net-networking`
   - `make test-boot-virtio-net`
   - `make run-profile`
+  - `make test-alpine-rootfs`

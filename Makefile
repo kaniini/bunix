@@ -282,7 +282,6 @@ X86_USER_LD_MODULES := \
 	PING_MODULE
 SYNTHETIC_SQUASHFS_IMAGE := $(BUILD_DIR)/modules/disk0.sqfs
 ALPINE_SQUASHFS_IMAGE := $(BUILD_DIR)/modules/alpine-disk0.sqfs
-ALPINE_STOCK_NETWORKING_SQUASHFS_IMAGE := $(BUILD_DIR)/modules/alpine-stock-networking-disk0.sqfs
 ROOTFS_FLAVOR ?= squashfs
 BLOCK_IMAGE := $(if $(filter alpine-squashfs,$(ROOTFS_FLAVOR)),$(ALPINE_SQUASHFS_IMAGE),$(SYNTHETIC_SQUASHFS_IMAGE))
 VIRTIO_BLOCK_IMAGE ?= $(BLOCK_IMAGE)
@@ -977,9 +976,6 @@ $(RISCV64_SMOKE_SQUASHFS_IMAGE): tools/build-riscv64-smoke-rootfs.sh $(RISCV64_D
 $(ALPINE_SQUASHFS_IMAGE): $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(LDSOPATHTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy modules/passwd modules/shadow modules/group
 	ROOTFS_IMAGE_FORMAT=squashfs LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) LDSOPATHTEST_MODULE=$(LDSOPATHTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/build-alpine-rootfs.sh $@
 
-$(ALPINE_STOCK_NETWORKING_SQUASHFS_IMAGE): $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(LDSOPATHTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy modules/passwd modules/shadow modules/group
-	ALPINE_ROOTFS_ARTIFACT_DIR=$(BUILD_DIR)/alpine-rootfs-stock-networking ROOTFS_IMAGE_FORMAT=squashfs LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) LDSOPATHTEST_MODULE=$(LDSOPATHTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/build-alpine-rootfs.sh $@
-
 $(RISCV64_ALPINE_SQUASHFS_IMAGE): tools/build-riscv64-alpine-rootfs.sh tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO)
 	RISCV64_DYN_HELLO_MODULE=$(RISCV64_DYN_HELLO_MODULE) RISCV64_MUSL_LDSO=$(RISCV64_MUSL_LDSO) sh tools/build-riscv64-alpine-rootfs.sh $@
 
@@ -1373,8 +1369,7 @@ test: test-parallel
 test-alpine-rootfs: $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(LDSOPATHTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy tools/test-alpine-rootfs.sh modules/passwd modules/shadow modules/group
 	LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) LDSOPATHTEST_MODULE=$(LDSOPATHTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/test-alpine-rootfs.sh
 
-test-alpine-rootfs-stock-networking: $(LOGIN_MODULE) $(STATIDTEST_MODULE) $(LDSOPATHTEST_MODULE) $(NETDHCP_MODULE) tools/build-alpine-rootfs.sh tools/alpine-openrc-runlevels.policy tools/test-alpine-rootfs.sh modules/passwd modules/shadow modules/group
-	LOGIN_MODULE=$(LOGIN_MODULE) STATIDTEST_MODULE=$(STATIDTEST_MODULE) LDSOPATHTEST_MODULE=$(LDSOPATHTEST_MODULE) NETDHCP_MODULE=$(NETDHCP_MODULE) sh tools/test-alpine-rootfs.sh
+test-alpine-rootfs-stock-networking: test-alpine-rootfs
 
 test-riscv64-dynamic-linker-artifacts: $(RISCV64_DYN_HELLO_MODULE) $(RISCV64_MUSL_LDSO)
 	test -s $(RISCV64_DYN_HELLO_MODULE)
@@ -1413,8 +1408,8 @@ test-boot: $(EFI_BOOT_APP) tools/check-markers.sh tools/test-lib.sh tools/test-b
 		ROOTFS_FLAVOR=$(ROOTFS_FLAVOR) SERIAL_LOG=$(BUILD_DIR)/serial.log sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log $(TEST_BOOT_MARKERS)
 
-test-boot-alpine-stock-networking: $(ALPINE_STOCK_NETWORKING_SQUASHFS_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-alpine-smoke.txt
-	$(MAKE) ROOTFS_FLAVOR=alpine-squashfs BLOCK_IMAGE=$(ALPINE_STOCK_NETWORKING_SQUASHFS_IMAGE) VIRTIO_NET_TEST_ESP_DIR=$(BUILD_DIR)/esp-virtio-net-alpine-stock-networking $(BUILD_DIR)/esp-virtio-net-alpine-stock-networking/EFI/BOOT/BOOTX64.EFI
+test-boot-alpine-stock-networking: $(ALPINE_SQUASHFS_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-alpine-smoke.txt
+	$(MAKE) ROOTFS_FLAVOR=alpine-squashfs VIRTIO_NET_TEST_ESP_DIR=$(BUILD_DIR)/esp-virtio-net-alpine-stock-networking $(BUILD_DIR)/esp-virtio-net-alpine-stock-networking/EFI/BOOT/BOOTX64.EFI
 	ESP_DIR=$(BUILD_DIR)/esp-virtio-net-alpine-stock-networking OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) QEMU_TIMEOUT=$(if $(filter command\ line environment,$(origin QEMU_TIMEOUT)),$(QEMU_TIMEOUT),180s) \
 		ROOTFS_FLAVOR=alpine-squashfs SERIAL_LOG=$(BUILD_DIR)/serial.log QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" sh tools/test-boot.sh
 	sh tools/check-markers.sh $(BUILD_DIR)/serial.log tools/test-boot-markers-alpine-smoke.txt
