@@ -1703,7 +1703,7 @@ test-boot-virtio-net-external-ping-strict-run: $(VIRTIO_NET_TEST_EFI_BOOT_APP) t
 		BUNIX_COMMAND_TIMEOUT=240 \
 		BUNIX_FAILURE_GUEST_PROBES=0 \
 		BUNIX_MARKER=BUNIX_NET_EXT_PING_OK \
-		BUNIX_CMD='busybox ping -c 4 -W 4 4.2.2.1 | busybox tee /tmp/p; busybox grep -F "4 packets transmitted, 4 packets received" /tmp/p; test "$$(busybox grep -c "64 bytes from 4.2.2.1:.*ttl=255" /tmp/p)" = 4' \
+		BUNIX_CMD='test -e /run/openrc/started/networking; rc-service networking status; busybox ping -c 4 -W 4 4.2.2.1 | busybox tee /tmp/p; busybox grep -F "4 packets transmitted, 4 packets received" /tmp/p; test "$$(busybox grep -c "64 bytes from 4.2.2.1:.*ttl=255" /tmp/p)" = 4' \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" sh tools/test-command.sh
 
 test-boot-virtio-net-dns-wget:

@@ -61,6 +61,17 @@ Investigation targets:
 - Verify TCP connect/send/recv/close behavior against an external HTTP server
   after name resolution succeeds.
 
+Findings:
+
+- A debug probe reproduced `busybox wget -O /tmp/w http://example.com` failing
+  with `wget: bad address 'example.com'` after the real Alpine OpenRC
+  networking service started `lo` and `eth0` and BusyBox/Alpine `udhcpc`
+  obtained `10.0.2.15` from QEMU user networking.  The current evidence keeps
+  this focused on the `wget` resolver/socket path rather than replacing
+  `/etc/init.d/networking`.
+- The latest debug artifact is
+  `build/failures/20260713T095339Z-1732/20260713T095645Z-1732`.
+
 Tasks:
 
 - [ ] Add or repair a focused guest validation for `busybox wget

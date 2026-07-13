@@ -94,6 +94,10 @@ Progress:
   produced by the boot runlevel.  They require `/run/openrc/started/networking`
   and `rc-service networking status`, but do not restart networking or rerun
   `udhcpc` by hand.
+- Tightened the remaining external-network guest checks so the strict ping and
+  DNS/wget gates also require `/run/openrc/started/networking` before passing.
+  This keeps the faithful Alpine networking profile tied to the packaged
+  OpenRC `/etc/init.d/networking` service instead of direct DHCP probes.
 
 Needs:
 
@@ -127,6 +131,13 @@ Validation:
   - `make test-alpine-rootfs`
   - `make test-boot-virtio-net-networking`
   - `make test-boot-virtio-net-external-ping`
+- After enforcing the OpenRC service marker in the remaining network gates:
+  - `sh -n tools/guest-network-dns-wget.sh`
+  - `sh -n tools/guest-network-external-ping.sh`
+  - `make -n test-boot-virtio-net-external-ping-strict`
+  - `make test-alpine-rootfs`
+  - `make test-boot-virtio-net-networking`
+  - `make test-boot-virtio-net-external-ping-strict`
 - Known failing gate:
   - `make test-boot-virtio-net-dns-wget`
   - Artifact: `build/failures/20260713T092016Z-20043/20260713T092540Z-20043`

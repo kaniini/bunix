@@ -6,6 +6,7 @@ WGET=/tmp/bunix-wget.out
 failed=0
 
 echo "BUNIX_NET_DNS_WGET_BEGIN"
+test -e /run/openrc/started/networking || failed=1
 rc-service networking status || failed=1
 cat "$C" || failed=1
 busybox grep -F "iface eth0" "$C" || failed=1
