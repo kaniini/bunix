@@ -107,9 +107,13 @@ static void udp_test(void)
 	unsigned char control[32];
 	struct sockaddr_in addr;
 	struct sockaddr_in check;
+	struct sockaddr_in client_addr;
+	struct sockaddr_in source;
 	struct msghdr msg;
 	struct iovec iov[2];
 	socklen_t check_len;
+	socklen_t client_len;
+	socklen_t source_len;
 	int reuse = 1;
 	int server = socket(AF_INET, SOCK_DGRAM, 0);
 	int client = socket(AF_INET, SOCK_DGRAM, 0);
@@ -155,10 +159,25 @@ static void udp_test(void)
 	    (ssize_t)sizeof(payload)) {
 		die("nettest: udp sendto failed\n");
 	}
+	memset(&client_addr, 0, sizeof(client_addr));
+	client_len = sizeof(client_addr);
+	if (getsockname(client, (struct sockaddr *)&client_addr,
+			&client_len) != 0 ||
+	    client_len != sizeof(client_addr) ||
+	    client_addr.sin_family != AF_INET ||
+	    client_addr.sin_port == 0) {
+		die("nettest: udp client getsockname failed\n");
+	}
 	expect_pollin(server, "nettest: udp poll failed\n");
-	nread = recvfrom(server, buffer, sizeof(buffer), 0, 0, 0);
+	memset(&source, 0, sizeof(source));
+	source_len = sizeof(source);
+	nread = recvfrom(server, buffer, sizeof(buffer), 0,
+			 (struct sockaddr *)&source, &source_len);
 	if (nread != (ssize_t)sizeof(payload) ||
-	    memcmp(buffer, payload, sizeof(payload)) != 0) {
+	    memcmp(buffer, payload, sizeof(payload)) != 0 ||
+	    source_len != sizeof(source) ||
+	    source.sin_family != AF_INET ||
+	    source.sin_port != client_addr.sin_port) {
 		die("nettest: udp recv failed\n");
 	}
 	memset(&msg, 0, sizeof(msg));
@@ -186,11 +205,17 @@ static void udp_test(void)
 	msg.msg_iovlen = 2;
 	msg.msg_control = control;
 	msg.msg_controllen = sizeof(control);
+	memset(&source, 0, sizeof(source));
+	msg.msg_name = &source;
+	msg.msg_namelen = sizeof(source);
 	if (recvmsg(server, &msg, 0) !=
 	    (ssize_t)(sizeof(msg_a) - 1 + sizeof(msg_b)) ||
 	    memcmp(msg_buffer_a, msg_a, sizeof(msg_a) - 1) != 0 ||
 	    memcmp(msg_buffer_b, msg_b, sizeof(msg_b)) != 0 ||
-	    msg.msg_controllen != 0) {
+	    msg.msg_controllen != 0 ||
+	    msg.msg_namelen != sizeof(source) ||
+	    source.sin_family != AF_INET ||
+	    source.sin_port != client_addr.sin_port) {
 		die("nettest: udp recvmsg failed\n");
 	}
 	say("nettest: udp msg ok\n");

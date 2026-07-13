@@ -31,7 +31,7 @@ Tasks:
       measured 34-40s login path as the deciding data point.
 - [x] Add a fast profile that boots to an interactive shell with minimal
       blocking services, quiet logs, and clean poweroff behavior.
-- [ ] Keep a faithful Alpine networking profile that starts OpenRC/networking
+- [x] Keep a faithful Alpine networking profile that starts OpenRC/networking
       and validates DHCP, DNS, ping, and login behavior.
 - [x] Ensure both profiles use the same kernel/server artifacts so performance
       differences come from policy, not hidden build skew.
@@ -98,18 +98,21 @@ Progress:
   DNS/wget gates also require `/run/openrc/started/networking` before passing.
   This keeps the faithful Alpine networking profile tied to the packaged
   OpenRC `/etc/init.d/networking` service instead of direct DHCP probes.
+- The faithful Alpine networking profile now passes through the packaged
+  Alpine OpenRC networking service.  `make test-boot-virtio-net-dns-wget`
+  validates `/run/openrc/started/networking`, `rc-service networking status`,
+  DHCP-provided resolver state, BusyBox `nslookup`, BusyBox `wget
+  http://example.com`, and a non-empty fetched output file.  The fix was in
+  the Linux/net compatibility path below the stock service: UDP receives now
+  report source sockaddr data for musl resolver callers, and the net server has
+  a minimal outbound IPv4 TCP client data path.
 
 Needs:
 
-- Full DNS/wget coverage for the faithful networking profile is still not
-  complete.  `make test-boot-virtio-net-dns-wget` still fails at
-  `busybox wget -O /tmp/bunix-wget.out http://example.com` with
-  `wget: bad address 'example.com'` even though `busybox nslookup example.com`
-  succeeds through `/etc/resolv.conf`.  Exploration
-  `078-wget-resolver-http-compatibility.txt` owns that resolver/TCP
-  compatibility work; this exploration should not be moved to completed until
-  the faithful profile either incorporates a passing DNS/wget gate or that
-  requirement is explicitly moved.
+- No remaining profile-policy work for the stock Alpine networking path.  The
+  remaining OpenRC quality issues, such as the `bootmisc` cgroup/fork warning,
+  belong to follow-up OpenRC/process-lifecycle explorations rather than a
+  replacement networking script.
 
 Validation:
 
@@ -138,6 +141,14 @@ Validation:
   - `make test-alpine-rootfs`
   - `make test-boot-virtio-net-networking`
   - `make test-boot-virtio-net-external-ping-strict`
-- Known failing gate:
+- Previous failing gate before the resolver/TCP compatibility fix:
   - `make test-boot-virtio-net-dns-wget`
   - Artifact: `build/failures/20260713T092016Z-20043/20260713T092540Z-20043`
+- Resolver/TCP compatibility fix for the faithful profile:
+  - `make build/modules/net.server`
+  - `make build/modules/linux.server`
+  - `make build/modules/nettest.user`
+  - `make build/x86_64/bunixos.kernel`
+  - `BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' BUNIX_CMD='/bin/nettest' BUNIX_MARKER=NETTEST_OK make test-command`
+  - `make test-boot-virtio-net-dns-wget`
+  - `make test-boot-virtio-net-external-ping-strict`

@@ -27,6 +27,12 @@ Status:
   starts.  It now only applies loopback from `/etc/network/interfaces` and
   registers readiness; `eth0` addressing and default-route setup must come
   from Alpine's `networking` service through ifupdown-ng and `udhcpc`.
+- The faithful DNS/wget gate now passes through the same stock service path.
+  `make test-boot-virtio-net-dns-wget` requires
+  `/run/openrc/started/networking`, `rc-service networking status`, DHCP
+  resolver state, BusyBox `nslookup`, BusyBox `wget http://example.com`, and a
+  non-empty fetched output file.  No Bunix-generated networking service or
+  DHCP helper is used.
 
 Problem:
 
@@ -160,6 +166,9 @@ Validation:
   - `make test-alpine-rootfs`
   - `make test-boot-virtio-net-networking`
   - `git diff --check`
+- Latest faithful DNS/HTTP validation:
+  - `make test-boot-virtio-net-dns-wget`
+  - `make test-boot-virtio-net-external-ping-strict`
 
 Historical investigation notes below capture the older generated/stock split
 and the failures that led to the current implementation.

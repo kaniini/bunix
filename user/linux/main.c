@@ -8115,6 +8115,30 @@ static long linux_write_sockaddr_at(u64 buffer, u64 offset, u64 max_len,
 	return (long)actual;
 }
 
+static long linux_sockaddr_from_bunix_net(
+	const struct bunix_net_endpoint_addr *source,
+	struct linux_sockaddr *addr)
+{
+	if (source == 0 || addr == 0) {
+		return -LINUX_EFAULT;
+	}
+	if (source->family == BUNIX_NET_ADDR_FAMILY_IPV4) {
+		addr->family = LINUX_AF_INET;
+		addr->hi = 0;
+		addr->lo = source->addr_lo;
+		addr->port = source->port;
+		return 0;
+	}
+	if (source->family == BUNIX_NET_ADDR_FAMILY_IPV6) {
+		addr->family = LINUX_AF_INET6;
+		addr->hi = source->addr_hi;
+		addr->lo = source->addr_lo;
+		addr->port = source->port;
+		return 0;
+	}
+	return -LINUX_EAFNOSUPPORT;
+}
+
 static void linux_net_write_be16(unsigned char *data, u64 value)
 {
 	data[0] = (unsigned char)((value >> 8) & 0xff);
@@ -9690,9 +9714,48 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 		     process->fds[fd].handle == LINUX_SOCKET_NET_TCP ?
 		     BUNIX_NET_TCP_READ : BUNIX_NET_ICMP_RECV;
 		for (u64 retry = 0;; retry++) {
+			const u64 native_addr_len =
+				process->fds[fd].handle == LINUX_SOCKET_NET_UDP &&
+				addr_len != 0 ?
+				sizeof(struct bunix_net_endpoint_addr) : 0;
+			const u64 native_addr_offset = native_addr_len != 0 ?
+						       len + addr_len : 0;
+
 			if (linux_net_call(op, buffer, BUNIX_RIGHT_SEND,
-					   process->fds[fd].offset, len, 0, 0,
+					   process->fds[fd].offset, len,
+					   native_addr_offset, native_addr_len,
 					   &reply) == 0) {
+				const long received = (long)reply.words[1];
+
+				if (addr_len != 0 &&
+				    process->fds[fd].handle ==
+				    LINUX_SOCKET_NET_UDP) {
+					struct bunix_net_endpoint_addr source;
+					struct linux_sockaddr addr;
+					long actual;
+
+					if (received < 0 ||
+					    bunix_buffer_read(buffer,
+							      native_addr_offset,
+							      &source,
+							      sizeof(source)) != 0) {
+						return -LINUX_EFAULT;
+					}
+					actual = linux_sockaddr_from_bunix_net(
+						&source, &addr);
+					if (actual != 0) {
+						return actual;
+					}
+					actual = linux_write_sockaddr_at(
+						buffer, (u64)received,
+						addr_len, &addr);
+					if (actual < 0) {
+						return actual;
+					}
+					if (actual_addr_len != 0) {
+						*actual_addr_len = (u64)actual;
+					}
+				}
 				if (addr_len != 0 &&
 				    process->fds[fd].handle ==
 				    LINUX_SOCKET_NET_ICMP) {
@@ -9714,7 +9777,7 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 						*actual_addr_len = (u64)actual;
 					}
 				}
-				return (long)reply.words[1];
+				return received;
 			}
 			if (!nonblock && linux_alarm_expire_if_ready(process)) {
 				return -LINUX_EINTR;

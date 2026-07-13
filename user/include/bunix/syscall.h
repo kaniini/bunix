@@ -852,6 +852,13 @@ struct bunix_net_addr_info {
 	u64 valid_lifetime;
 };
 
+struct bunix_net_endpoint_addr {
+	u64 family;
+	u64 addr_hi;
+	u64 addr_lo;
+	u64 port;
+};
+
 struct bunix_net_neighbor_info {
 	u64 family;
 	u64 addr_hi;

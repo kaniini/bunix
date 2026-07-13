@@ -71,24 +71,56 @@ Findings:
   `/etc/init.d/networking`.
 - The latest debug artifact is
   `build/failures/20260713T095339Z-1732/20260713T095645Z-1732`.
+- The resolver failure was not a DHCP, `/etc/resolv.conf`, or OpenRC service
+  problem.  Musl's `getaddrinfo()` path used UDP receive calls that expected a
+  source sockaddr.  The old Bunix path could return the DNS payload but did not
+  preserve the native source endpoint for Linux `recvfrom()`/`recvmsg()`
+  callers.
+- After UDP source sockaddr reporting was fixed, `wget` resolved
+  `example.com` and reached `Connecting to example.com (...:80)`, then failed
+  while waiting for the HTTP response.  That exposed the next bug: outbound TCP
+  connect sent SYN and marked the socket established, but the net server did
+  not process external SYN-ACK/data/FIN/RST packets and `TCP_WRITE` only knew
+  how to deliver to local peer sockets.
+- The net server now has an initial outbound IPv4 TCP client path: per-socket
+  sequence/ack tracking, queued writes until SYN-ACK, ACK processing, payload
+  receive queues, FIN/RST handling, and correct would-block behavior for TCP
+  reads before data arrives.
+- The normal Alpine DNS/wget gate now passes through the real Alpine OpenRC
+  networking service.  `make test-boot-virtio-net-dns-wget` validates
+  `/run/openrc/started/networking`, `rc-service networking status`, resolver
+  state from DHCP, BusyBox `nslookup`, BusyBox `wget http://example.com`, and a
+  non-empty fetched output file.
 
 Tasks:
 
-- [ ] Add or repair a focused guest validation for `busybox wget
+- [x] Add or repair a focused guest validation for `busybox wget
       http://example.com` that is not vulnerable to serial command-file
       corruption.
-- [ ] Capture a structured Linux syscall trace for the failing `wget` path.
-- [ ] Identify the first incorrect syscall result or unsupported API on the
+- [x] Attempt structured Linux syscall tracing for the failing `wget` path and
+      fall back to focused syscall/API isolation when the serial/ring-buffer
+      trace did not capture useful networking calls.
+- [x] Identify the first incorrect syscall result or unsupported API on the
       failing path.
-- [ ] Fix the resolver or socket compatibility issue that causes
+- [x] Fix the resolver or socket compatibility issue that causes
       `wget: bad address 'example.com'`.
-- [ ] If resolution succeeds but HTTP still fails, fix the next TCP
+- [x] If resolution succeeds but HTTP still fails, fix the next TCP
       connect/send/recv compatibility issue exposed by `wget`.
-- [ ] Validate `busybox wget -O /tmp/w http://example.com` end to end with DNS
+- [x] Validate `busybox wget -O /tmp/w http://example.com` end to end with DNS
       enabled and `test -s /tmp/w`.
-- [ ] Re-run the external ping and DNS validations from exploration 054a to
+- [x] Re-run the external ping and DNS validations from exploration 054a to
       prove no regression.
-- [ ] Update notes with any remaining networking limits.
+- [x] Update notes with any remaining networking limits.
+
+Remaining limits:
+
+- The TCP work here is an MVP outbound IPv4 client path for simple HTTP-style
+  flows.  It does not yet implement retransmit timers, congestion control,
+  out-of-order reassembly, PMTU/MSS negotiation, window scaling, or a complete
+  close state machine.
+- IPv6 external TCP connect still only covers the older SYN emission smoke;
+  IPv6 data receive/send parity should be a separate networking-stack
+  exploration.
 
 Completion criteria:
 
@@ -98,3 +130,13 @@ Completion criteria:
 - Existing external ping and BusyBox `nslookup` validations still pass.
 - The focused HTTP validation is automated enough to be run without relying on
   fragile long serial command-file injection.
+
+Validation:
+
+- `make build/modules/net.server`
+- `make build/modules/linux.server`
+- `make build/modules/nettest.user`
+- `make build/x86_64/bunixos.kernel`
+- `BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' BUNIX_CMD='/bin/nettest' BUNIX_MARKER=NETTEST_OK make test-command`
+- `make test-boot-virtio-net-dns-wget`
+- `make test-boot-virtio-net-external-ping-strict`

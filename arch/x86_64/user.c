@@ -293,6 +293,7 @@ enum {
 	LINUX_MS_REMOUNT = 32,
 	LINUX_MAX_SHARED_BUFFER = 1024 * 1024,
 	LINUX_MAX_SOCKADDR = 128,
+	LINUX_NATIVE_NET_ENDPOINT_ADDR_SIZE = 32,
 	LINUX_IOV_MAX = 1024,
 	LINUX_FDSET_BITS = 1024,
 	LINUX_FDSET_BYTES = LINUX_FDSET_BITS / 8,
@@ -1517,6 +1518,7 @@ static u64 linux_forward_recvmsg(struct ipc_port *linux,
 	struct ipc_message reply;
 	u64 total = 0;
 	u64 copied = 0;
+	u64 buffer_size;
 	u64 irq_flags;
 	int rc;
 
@@ -1537,8 +1539,10 @@ static u64 linux_forward_recvmsg(struct ipc_port *linux,
 		}
 		total += iov.len;
 	}
-	buffer = buffer_create(total + msg.namelen == 0 ? 1 :
-			       total + msg.namelen);
+	buffer_size = total + msg.namelen +
+		      (msg.namelen != 0 ? LINUX_NATIVE_NET_ENDPOINT_ADDR_SIZE :
+		       0);
+	buffer = buffer_create(buffer_size == 0 ? 1 : buffer_size);
 	if (buffer == 0) {
 		return (u64)-LINUX_ENOMEM;
 	}
@@ -1548,7 +1552,8 @@ static u64 linux_forward_recvmsg(struct ipc_port *linux,
 	request->words[2] = flags;
 	request->words[3] = msg.namelen;
 	request->cap_type = IPC_CAP_BUFFER;
-	request->cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP;
+	request->cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+			      TASK_RIGHT_DUP;
 	request->cap_object = buffer;
 	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
 		buffer_release(buffer);
@@ -1594,7 +1599,9 @@ static u64 linux_forward_recvmsg(struct ipc_port *linux,
 
 		irq_flags = spin_lock_irqsave(&syscall_copy_lock);
 		if ((copy != 0 &&
-		     (buffer_read(buffer, total, syscall_copy_buffer, copy) != 0 ||
+		     (reply.words[0] + copy > buffer_size ||
+		      buffer_read(buffer, reply.words[0], syscall_copy_buffer,
+				  copy) != 0 ||
 		      write_current_user(msg.name, syscall_copy_buffer,
 					 copy) != 0)) ||
 		    write_current_user(user_msghdr + LINUX_MSGHDR_NAMELEN_OFF,
@@ -2437,6 +2444,7 @@ static u64 linux_forward_recvfrom(struct ipc_port *linux,
 	struct ipc_message reply;
 	u32 in_addr_len = 0;
 	u64 addr_len = 0;
+	u64 native_addr_len = 0;
 	u64 buffer_size;
 
 	if (user_payload == 0 && payload_len != 0) {
@@ -2450,8 +2458,9 @@ static u64 linux_forward_recvfrom(struct ipc_port *linux,
 		}
 		addr_len = in_addr_len > LINUX_MAX_SOCKADDR ?
 			   LINUX_MAX_SOCKADDR : in_addr_len;
+		native_addr_len = LINUX_NATIVE_NET_ENDPOINT_ADDR_SIZE;
 	}
-	buffer_size = payload_len + addr_len;
+	buffer_size = payload_len + addr_len + native_addr_len;
 	buffer = buffer_create(buffer_size == 0 ? 1 : buffer_size);
 	if (buffer == 0) {
 		return (u64)-LINUX_ENOMEM;
@@ -2462,7 +2471,8 @@ static u64 linux_forward_recvfrom(struct ipc_port *linux,
 	request->words[2] = flags;
 	request->words[3] = addr_len;
 	request->cap_type = IPC_CAP_BUFFER;
-	request->cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_DUP;
+	request->cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+			      TASK_RIGHT_DUP;
 	request->cap_object = buffer;
 	if (linux_forward_message(linux, reply_port, request, &reply) != 0) {
 		buffer_release(buffer);
