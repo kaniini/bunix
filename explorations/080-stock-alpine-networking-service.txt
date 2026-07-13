@@ -33,6 +33,9 @@ Status:
   resolver state, BusyBox `nslookup`, BusyBox `wget http://example.com`, and a
   non-empty fetched output file.  No Bunix-generated networking service or
   DHCP helper is used.
+- `make run` now selects the same Alpine VirtIO-net profile as
+  `make run-alpine-net`, so the default interactive boot uses Alpine's
+  packaged `/etc/init.d/networking` instead of the synthetic rootfs path.
 
 Problem:
 
@@ -153,6 +156,9 @@ Implementation Notes:
 - `tools/run-profile.sh` waits for stock OpenRC startup and verifies
   networking through `rc-service networking status`,
   `/run/openrc/started/networking`, and `/proc/net/config`.
+- The interactive default is no longer the synthetic fast profile:
+  `make run` recurses into `make run-alpine-net`, while `make run-fast`
+  remains available for the synthetic SquashFS development loop.
 
 Validation:
 

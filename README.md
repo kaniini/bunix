@@ -475,16 +475,25 @@ The static PIE BusyBox path remains available as a compatibility regression:
 make test-shell-static
 ```
 
-For the fast interactive development profile:
+For the default Alpine networking profile:
 
 ```sh
 make run
 ```
 
-`make run` is an alias for `make run-fast`.  It builds the synthetic SquashFS
-rootfs, boots through OVMF/KVM, and prints the serial console on stdio.  This is
-the everyday kernel/server loop; current warm profiles reach the login prompt in
-about 5 seconds.
+`make run` boots the generated Alpine rootfs with VirtIO-net attached.  The
+image preserves Alpine's packaged `/etc/init.d/networking` and udhcpc helper
+script, then starts networking through BusyBox init, OpenRC, ifupdown-ng, and
+BusyBox/Alpine `udhcpc`.
+
+For the fast synthetic development profile:
+
+```sh
+make run-fast
+```
+
+`make run-fast` builds the synthetic SquashFS rootfs, boots through OVMF/KVM,
+and prints the serial console on stdio.
 
 For fuller Alpine bringup:
 

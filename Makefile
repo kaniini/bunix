@@ -1301,7 +1301,7 @@ RUN_PROFILE_ESP_DIR ?= $(if $(filter alpine-squashfs,$(RUN_ROOTFS_FLAVOR)),$(VIR
 RUN_PROFILE_BUILD_TARGET ?= $(if $(filter alpine-squashfs,$(RUN_ROOTFS_FLAVOR)),$(VIRTIO_NET_TEST_EFI_BOOT_APP),$(EFI_BOOT_APP))
 RUN_PROFILE_NETWORK_CHECK ?= auto
 
-run: run-fast
+run: run-alpine-net
 
 run-fast:
 	$(MAKE) ROOTFS_FLAVOR=squashfs RUN_QEMU_NET_ARGS= run-fast-qemu
