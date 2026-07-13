@@ -30,7 +30,7 @@ Goal:
 
 Tasks:
 
-- [ ] Reproduce the `log=info` hang from exploration 069 with broad raw-log
+- [x] Reproduce the `log=info` hang from exploration 069 with broad raw-log
       filtering, capture the last successful server readiness point, and prove
       whether `log=debug` succeeds only because of extra serial pacing.
 - [x] Identify the exact launch-order or wakeup dependency that makes module
@@ -53,7 +53,7 @@ Tasks:
       and decide which services must block login.
 - [x] Add boot timing markers to dmesg or `/proc` so future regressions can be
       diagnosed from inside the guest.
-- [ ] Re-run `make run-profile`, shell smoke, networking smoke, and full test
+- [x] Re-run `make run-profile`, shell smoke, networking smoke, and full test
       shards affected by boot ordering.
 
 Baseline from exploration 068:
@@ -193,6 +193,19 @@ Progress:
   profile start, `root-shell` at 3755 ms, completed the network probe at
   3961 ms, and exited QEMU at 4019 ms.  The profile stayed inside the log
   volume gates with 183 serial lines and 9103 bytes.
+- The historical quiet-log failure is preserved by exploration 069 profiles:
+  `build/run-profile/20260713T000028Z-3709` stopped after `console: driver
+  online`, before `bootstrap: fs ready`, while `log=debug` completed.  After
+  replacing the polling dependency, a stronger `log=error` generated Alpine
+  networking smoke reaches login, restarts OpenRC networking, validates
+  `/proc/net/config`, and pings the host gateway plus external IPv4
+  addresses.  That proves normal info-level server output is no longer
+  required for early boot progress.
+- `make VIRTIO_NET_TEST_CMDLINE='log=error virtio-net-test' run-profile` is
+  not a valid quiet-log gate yet: `tools/run-profile.sh` waits for serial
+  strings such as `bootstrap: fs ready`, so it times out when those info
+  markers are intentionally hidden even though the login-oriented smoke test
+  can drive the guest successfully.
 - Validation:
   - `make test-alpine-rootfs`
   - `make test-alpine-rootfs-stock-networking`
@@ -213,3 +226,4 @@ Progress:
   - `make test-smoke`
   - `make test-boot-virtio-net-networking`
   - `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T032407Z-15933`
+  - `make VIRTIO_NET_TEST_CMDLINE='log=error virtio-net-test' test-boot-virtio-net-networking`
