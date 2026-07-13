@@ -20,6 +20,18 @@ static void die(const char *text)
 	_exit(1);
 }
 
+static void expect_pollin(int fd, const char *label)
+{
+	struct pollfd pfd;
+
+	pfd.fd = fd;
+	pfd.events = POLLIN;
+	pfd.revents = 0;
+	if (poll(&pfd, 1, 4000) != 1 || (pfd.revents & POLLIN) == 0) {
+		die(label);
+	}
+}
+
 static void expect_inet_port(const char *label, const struct sockaddr_in *addr,
 			     unsigned short port)
 {
@@ -143,6 +155,7 @@ static void udp_test(void)
 	    (ssize_t)sizeof(payload)) {
 		die("nettest: udp sendto failed\n");
 	}
+	expect_pollin(server, "nettest: udp poll failed\n");
 	nread = recvfrom(server, buffer, sizeof(buffer), 0, 0, 0);
 	if (nread != (ssize_t)sizeof(payload) ||
 	    memcmp(buffer, payload, sizeof(payload)) != 0) {
@@ -161,6 +174,7 @@ static void udp_test(void)
 	    (ssize_t)(sizeof(msg_a) - 1 + sizeof(msg_b))) {
 		die("nettest: udp sendmsg failed\n");
 	}
+	expect_pollin(server, "nettest: udp msg poll failed\n");
 	memset(msg_buffer_a, 0, sizeof(msg_buffer_a));
 	memset(msg_buffer_b, 0, sizeof(msg_buffer_b));
 	memset(&msg, 0, sizeof(msg));
@@ -222,6 +236,7 @@ static void udp6_test(void)
 	    (ssize_t)sizeof(payload)) {
 		die("nettest: udp6 sendto failed\n");
 	}
+	expect_pollin(server, "nettest: udp6 poll failed\n");
 	nread = recvfrom(server, buffer, sizeof(buffer), 0, 0, 0);
 	if (nread != (ssize_t)sizeof(payload) ||
 	    memcmp(buffer, payload, sizeof(payload)) != 0) {
@@ -354,6 +369,7 @@ static void tcp_test(void)
 	    (ssize_t)sizeof(client_payload)) {
 		die("nettest: tcp client write failed\n");
 	}
+	expect_pollin(accepted, "nettest: tcp server poll failed\n");
 	nread = read(accepted, buffer, sizeof(buffer));
 	if (nread != (ssize_t)sizeof(client_payload) ||
 	    memcmp(buffer, client_payload, sizeof(client_payload)) != 0) {
@@ -363,6 +379,7 @@ static void tcp_test(void)
 	    (ssize_t)sizeof(server_payload)) {
 		die("nettest: tcp server write failed\n");
 	}
+	expect_pollin(client, "nettest: tcp client poll failed\n");
 	nread = read(client, buffer, sizeof(buffer));
 	if (nread != (ssize_t)sizeof(server_payload) ||
 	    memcmp(buffer, server_payload, sizeof(server_payload)) != 0) {
@@ -439,6 +456,7 @@ static void tcp6_test(void)
 	    (ssize_t)sizeof(client_payload)) {
 		die("nettest: tcp6 client write failed\n");
 	}
+	expect_pollin(accepted, "nettest: tcp6 server poll failed\n");
 	nread = read(accepted, buffer, sizeof(buffer));
 	if (nread != (ssize_t)sizeof(client_payload) ||
 	    memcmp(buffer, client_payload, sizeof(client_payload)) != 0) {
@@ -448,6 +466,7 @@ static void tcp6_test(void)
 	    (ssize_t)sizeof(server_payload)) {
 		die("nettest: tcp6 server write failed\n");
 	}
+	expect_pollin(client, "nettest: tcp6 client poll failed\n");
 	nread = read(client, buffer, sizeof(buffer));
 	if (nread != (ssize_t)sizeof(server_payload) ||
 	    memcmp(buffer, server_payload, sizeof(server_payload)) != 0) {
