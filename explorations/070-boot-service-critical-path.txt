@@ -10,6 +10,14 @@ Problem:
 - Several boot paths still use broad waits, fixed sleeps, or serialized
   readiness checks that were reasonable during bringup but are expensive for
   everyday interactive runs.
+- Exploration 069 found that some visible log output is accidentally pacing
+  early boot: broad raw-log filtering, or demoting module launch/start lines,
+  can make default `make run-profile` hang before `bootstrap: fs ready` while
+  `log=debug` still succeeds.
+- During exploration 069 validation, `make test-boot` failed on both the dirty
+  tree and a clean `HEAD` archive because the synthetic boot-spawn phase
+  reported `proc: exec open failed` before `/bin/first` markers appeared,
+  even though `/bin/first` exists in the generated squashfs image.
 - The default run target starts a feature-rich environment.  That is valuable,
   but routine development needs boot phases to be explicit and measurable.
 
@@ -17,9 +25,21 @@ Goal:
 
 - Reduce time from kernel entry to usable login shell without weakening the
   multi-server architecture or hiding readiness failures.
+- Replace accidental console/serial pacing with explicit ordering,
+  readiness, and wakeup behavior.
 
 Tasks:
 
+- [ ] Reproduce the `log=info` hang from exploration 069 with broad raw-log
+      filtering, capture the last successful server readiness point, and prove
+      whether `log=debug` succeeds only because of extra serial pacing.
+- [ ] Identify the exact launch-order or wakeup dependency that makes module
+      start logs observable in control flow; replace it with explicit
+      readiness RPCs, notifications, or scheduler wakeups.
+- [ ] Debug the synthetic `run_boot_spawns()` failure where proc cannot open
+      `/bin/first` after `bootstrap: fs ready`; determine whether this is VFS
+      namespace resolution, proc exec registry state, subject authority, or a
+      race with Linux init/login startup.
 - [ ] Use exploration 068 phase data to identify the slowest guest-side boot
       phases and the server responsible for each delay.
 - [ ] Replace fixed sleeps and polling loops on the interactive path with
@@ -57,3 +77,35 @@ Baseline from exploration 068:
   investigation should therefore prioritize silent blocking work: OpenRC
   dependency evaluation, clock skew handling, VFS metadata/read behavior,
   Linux syscall compatibility waits, login spawn timing, and readiness polling.
+- Safe log-reduction profile from exploration 069
+  `build/run-profile/20260713T000744Z-7395` reached `bootstrap: fs ready` at
+  5360 ms and login at 34410 ms with only 12433 bytes of serial output.  This
+  confirms that the remaining slowdown is not primarily console bandwidth.
+- Failed log-filtering profile from exploration 069
+  `build/run-profile/20260713T000028Z-3709` stopped after `console: driver
+  online` and before `bootstrap: fs ready`; a comparable `log=debug` run
+  `build/run-profile/20260713T000319Z-5138` completed.  Treat this as a
+  high-priority boot ordering race before further console demotion work.
+- Clean-HEAD synthetic boot check from exploration 069:
+  - `make test-boot` fails at `tools/test-boot-markers-squashfs.txt` because
+    `proc: exec /bin/first` never appears.
+  - The guest log shows `bootstrap: fs ready`, then `bootstrap: linux init
+    exec`, then `proc: exec /sbin/init`, then `proc: exec open failed` /
+    `proc: spawn failed`.
+  - `unsquashfs -ll build/modules/disk0.sqfs` confirms `/bin/first`,
+    `/etc/execs`, and `/etc/spawns` are present in the image, so the first
+    suspect is runtime VFS/proc authority or namespace state rather than
+    rootfs construction.
+
+Priority order:
+
+1. Fix the boot ordering/log-pacing dependency so quiet logs cannot change
+   whether servers reach filesystem readiness.
+2. Fix the clean-HEAD synthetic proc-spawn failure so the boot marker gate is
+   trustworthy again.
+3. Instrument the silent Linux-init-to-login interval from inside the guest,
+   including OpenRC service timing, networking startup, VFS calls, and Linux
+   syscall wait sites.
+4. Defer nonessential services until after login where the full Alpine
+   environment permits it, and keep full networking/OpenRC validation in a
+   named faithful profile.

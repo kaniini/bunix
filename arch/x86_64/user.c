@@ -4539,6 +4539,9 @@ static void linux_negative_syscall_dump(struct arch_syscall_frame *frame)
 	}
 	dumps++;
 
+	console_printf("linux: negative native syscall task=%u name=%s number=%d rip=%p\n",
+		       task_id(task), task_name(task), (i32)frame->number,
+		       (const void *)frame->user_rip);
 	console_printf("user-syscall: negative linux task=%u name=%s number=%d rip=%p rsp=%p rbp=%p rflags=%p\n",
 		       task_id(task), task_name(task), (i32)frame->number,
 		       (const void *)frame->user_rip,

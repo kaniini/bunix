@@ -10,18 +10,25 @@ Problem:
   often more useful than the most complete environment.
 - For integration debugging, the faithful profile must remain available and
   should be explicitly named so slow behavior is expected.
+- Exploration 068 and 069 show that the current default profile reaches Linux
+  init in roughly 5-7s but often does not reach login until roughly 34-40s.
+  That makes normal `make run` feel slow even when the kernel/server bringup
+  is already mostly done.
 
 Goal:
 
 - Provide clear run targets for fast iteration and full-system validation,
   with documented differences and stable timing expectations.
+- Make the default interactive command serve the common developer loop unless
+  the user explicitly requests the full Alpine/OpenRC/networking path.
 
 Tasks:
 
 - [ ] Define the intended semantics for `make run`, `make run-fast`,
       `make run-alpine`, and networking-enabled run targets.
 - [ ] Decide whether default `make run` should prioritize fast interactive
-      development or faithful Alpine/OpenRC/networking bringup.
+      development or faithful Alpine/OpenRC/networking bringup, using the
+      measured 34-40s login path as the deciding data point.
 - [ ] Add a fast profile that boots to an interactive shell with minimal
       blocking services, quiet logs, and clean poweroff behavior.
 - [ ] Keep a faithful Alpine networking profile that starts OpenRC/networking
@@ -43,3 +50,23 @@ Baseline from exploration 068:
   meant to prove the full Alpine/OpenRC/networking environment, that slower
   behavior should move behind a name like `make run-alpine` or
   `make run-alpine-net`.
+
+Inputs from exploration 069:
+
+- Default output can be reduced to about 12.4 KB without fixing the login
+  delay, so target design should not pretend quiet logs alone make `make run`
+  fast.
+- Any `make run-fast` profile must still use the same boot ordering semantics
+  fixed in exploration 070; it must not rely on skipping enough services to
+  hide a scheduler/readiness race.
+
+Expected profile policy:
+
+- `make run`: fast interactive development profile once 070 proves quiet
+  launch ordering is reliable.
+- `make run-alpine`: faithful Alpine/OpenRC login without external networking
+  unless explicitly requested.
+- `make run-alpine-net`: faithful Alpine/OpenRC/networking profile with DHCP,
+  DNS, ping, and wget coverage.
+- `make run-profile`: measurement harness that can target either fast or
+  faithful policy and records comparable phase data.

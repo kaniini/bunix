@@ -112,6 +112,7 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "sched: task handle denied") ||
 	    str_starts_with(fmt, "sched: buffer handle denied") ||
 	    str_starts_with(fmt, "sched: vma overlap") ||
+	    str_starts_with(fmt, "linux: negative native syscall") ||
 	    str_starts_with(fmt, "names: table full") ||
 	    str_starts_with(fmt, "ipc: message alloc failed") ||
 	    str_starts_with(fmt, "buffer: alloc failed")) {
@@ -122,6 +123,11 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "pmm: reserve") ||
 	    str_starts_with(fmt, "timer: tick") ||
 	    str_starts_with(fmt, "vm-server: ipc event") ||
+	    str_starts_with(fmt, "vm-server: grant_space") ||
+	    str_starts_with(fmt, "vm-server: spaces granted") ||
+	    str_starts_with(fmt, "vm-server: rpc alloc_frame") ||
+	    str_starts_with(fmt, "vm-server: rpc free_frame") ||
+	    str_starts_with(fmt, "user-syscall:") ||
 	    str_starts_with(fmt, "sched: ipi") ||
 	    str_starts_with(fmt, "sched: enqueue") ||
 	    str_starts_with(fmt, "sched: switch") ||
@@ -157,6 +163,7 @@ static u32 log_level_for_format(const char *fmt)
 	if (str_starts_with(fmt, "arch-vm: create space") ||
 	    str_starts_with(fmt, "elf: entry") ||
 	    str_starts_with(fmt, "ipc: port") ||
+	    str_starts_with(fmt, "kernel: copied") ||
 	    str_starts_with(fmt, "kernel: recorded") ||
 	    str_starts_with(fmt, "linux: arch_prctl") ||
 	    str_starts_with(fmt, "linux: mmap") ||

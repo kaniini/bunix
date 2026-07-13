@@ -11,9 +11,7 @@ names: init dynamic
 slab: init caches=
 buffer: init max=2097152
 ipc: init slab ports messages
-vm-server: grant_space owner=vm id=1
 vm-server: memory authority online
-vm-server: rpc free_frame
 sched: inherit denied task=
 handle=2 requested=0x3 rights=0x5
 kernel: invalid inherited cap handle=2 rights=0x3 for ping

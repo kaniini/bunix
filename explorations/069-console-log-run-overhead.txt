@@ -23,20 +23,20 @@ Goal:
 
 Tasks:
 
-- [ ] Use the baseline from exploration 068 to identify all high-volume log
+- [x] Use the baseline from exploration 068 to identify all high-volume log
       prefixes emitted before and after Linux userspace starts.
-- [ ] Move `user-syscall:` negative syscall backtrace dumps behind an explicit
+- [x] Move `user-syscall:` negative syscall backtrace dumps behind an explicit
       debug/trace flag or `log=debug`, and keep a compact single-line warning
       only when needed.
 - [ ] Audit info-level server logs and demote routine readiness/chatter to
       trace while keeping boot-critical milestones and errors visible.
-- [ ] Ensure scheduler, IPC, buffer, VM, and VFS diagnostic prefixes are
+- [x] Ensure scheduler, IPC, buffer, VM, and VFS diagnostic prefixes are
       consistently classified by `kernel/console.c`.
-- [ ] Keep `log=debug` and Linux server strace behavior available for focused
+- [x] Keep `log=debug` and Linux server strace behavior available for focused
       debugging without changing default `make run`.
-- [ ] Add a regression or smoke check that default run logs do not contain
+- [x] Add a regression or smoke check that default run logs do not contain
       repeated high-volume diagnostic prefixes before login.
-- [ ] Re-profile `make run` and record the latency/output delta.
+- [x] Re-profile `make run` and record the latency/output delta.
 
 Baseline from exploration 068:
 
@@ -79,3 +79,73 @@ Baseline from exploration 068:
     `user-syscall:` dumps, because they dominate the serial volume.
   - It should not be expected to remove the entire 31-34s default login delay
     by itself: the measured slow path is mostly silent.
+
+Progress:
+
+- `arch/x86_64/user.c` now emits only a compact default warning for negative
+  native/Linux syscall misuse and leaves the detailed `user-syscall:` byte,
+  stack, frame, and argument dump behind console verbosity classification.
+- `kernel/console.c` classifies additional VM grant/allocation chatter,
+  `user-syscall:` dumps, and copied-module accounting below default
+  `log=info`, while preserving boot-critical module launch/start milestones.
+- `tools/check-run-profile-log-volume.sh` and `make
+  test-run-profile-log-volume` enforce the current default run-output budget.
+- Safe reduction profile `build/run-profile/20260713T000744Z-7395`:
+  - Serial output fell from 360 lines / 17693 bytes to 297 lines / 12433
+    bytes.
+  - Kernel/server phase fell from 319 lines / 15671 bytes to 257 lines /
+    10538 bytes.
+  - `vm-server` dropped from 35 prefix lines to 1; `user-syscall` remained 0
+    in the default Alpine run.
+  - Login prompt still appeared late, at 34410 ms, so console output was not
+    the primary cause of the slow default run.
+- Fresh validation profile `build/run-profile/20260713T001856Z-15158`:
+  - Reached `bootstrap: fs ready` at 5761 ms and `bootstrap: linux init exec`
+    at 5765 ms.
+  - Reached `login:` at 37819 ms, `~ #` at 39825 ms, and poweroff at 42320 ms.
+  - Emitted 297 lines / 12432 bytes, with only 18 lines / 576 bytes during
+    the Linux-init-to-login interval.
+  - This confirms the remaining user-visible delay is the silent
+    Alpine/OpenRC/login path, not serial output.
+- Important boot-order finding:
+  - A broad raw-log filter that suppressed routine server text, and a separate
+    attempt to demote `kernel: launching module server` /
+    `kernel: starting module server`, both made default `make run-profile`
+    hang before `bootstrap: fs ready`.
+  - The same broad filter succeeded with `log=debug`.  That points to an
+    accidental serial/log pacing dependency in early server launch ordering,
+    not a legitimate requirement for visible console output.
+- Validation/probe notes:
+  - `sh -n tools/check-run-profile-log-volume.sh` passed.
+  - `sh tools/check-run-profile-log-volume.sh
+    build/run-profile/20260713T000744Z-7395` passed with
+    `serial_lines=297`, `serial_bytes=12433`, `kernel_prefix=53`,
+    `vm_server_prefix=1`, `user_syscall_prefix=0`, and
+    `kernel_server_phase_lines=257`.
+  - `make run-profile` passed for
+    `build/run-profile/20260713T001856Z-15158`, and the log-volume checker
+    passed with `serial_lines=297`, `serial_bytes=12432`, `kernel_prefix=53`,
+    `vm_server_prefix=1`, `user_syscall_prefix=0`, and
+    `kernel_server_phase_lines=257`.
+  - `make test-boot` currently fails because the synthetic boot-spawn phase
+    reports `proc: exec open failed` before `/bin/first` markers appear.
+    A detached clean `HEAD` archive in `/tmp/bunix-head-check` fails the same
+    way, so this is not caused by the 069 console changes.  Track it under
+    exploration 070 as a boot/proc/VFS critical-path defect.
+
+Remaining in this exploration:
+
+- Finish server-log auditing without relying on raw-console filtering as a
+  timing mechanism.
+- Keep any further demotions behind explicit readiness fixes from exploration
+  070 when boot depends on log pacing.
+
+High-priority slowdown series:
+
+1. `069-console-log-run-overhead`: reduce default serial volume and add a
+   regression budget so console noise does not keep creeping back.
+2. `070-boot-service-critical-path`: remove the accidental log-pacing race and
+   replace silent waits/polling with explicit readiness and timing attribution.
+3. `071-developer-run-profile`: split fast development runs from faithful
+   Alpine/OpenRC/networking validation so `make run` can become quick without
+   losing the full-system profile.
