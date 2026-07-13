@@ -183,6 +183,8 @@ if [ "$rootfs_flavor" = alpine-squashfs ] && [ "$boot_phase" = full ]; then
 	wait_for_fixed_boot "BUNIX_ALPINE_ID_OK" "alpine id smoke command did not finish" 60 180
 	printf 'busybox cat /proc/self/stat | busybox cat >/dev/null && printf "BUNIX_ALPINE_PROC_PIPE_%%s\\n" OK\n' >&3
 	wait_for_fixed_boot "BUNIX_ALPINE_PROC_PIPE_OK" "alpine procfs pipeline smoke command did not finish" 120 180
+	printf 'busybox grep "bootstrap-linux-init-exec" /proc/boot_timing >/dev/null && busybox grep "openrc-default-end" /proc/boot_timing >/dev/null && printf "BUNIX_ALPINE_BOOT_TIMING_%%s\\n" OK\n' >&3
+	wait_for_fixed_boot "BUNIX_ALPINE_BOOT_TIMING_OK" "alpine boot timing smoke command did not finish" 60 180
 	printf 'busybox dmesg | busybox grep -q . && printf "BUNIX_ALPINE_DMESG_%%s\\n" OK\n' >&3
 	wait_for_fixed_boot "BUNIX_ALPINE_DMESG_OK" "alpine dmesg smoke command did not finish" 60 180
 	printf '/bin/statidtest && printf "BUNIX_ALPINE_STATID_%%s\\n" OK\n' >&3

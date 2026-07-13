@@ -67,9 +67,11 @@ enum {
 	BUNIX_SYSCALL_SCHED_POLICY_GRANT = -118,
 	BUNIX_SYSCALL_SCHED_POLICY_GET = -120,
 	BUNIX_SYSCALL_SCHED_POLICY_SET = -122,
+	BUNIX_SYSCALL_BOOT_EVENT = -124,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_SCHED_STATS_CPUS = 8,
+	BUNIX_BOOT_EVENT_NAME_BYTES = 64,
 	BUNIX_IPC_DATA_BYTES = (BUNIX_IPC_WORDS - 2) * 8,
 	BUNIX_RIGHT_SEND = 1 << 0,
 	BUNIX_RIGHT_RECV = 1 << 1,
@@ -310,6 +312,8 @@ enum {
 	BUNIX_LINUX_EXIT_GROUP = 231,
 	BUNIX_TIME_NOW_MONOTONIC = 1,
 	BUNIX_TIME_SLEEP_NS = 2,
+	BUNIX_BOOT_EVENT_RECORD = 1,
+	BUNIX_BOOT_EVENT_READ = 2,
 	BUNIX_PROC_WAIT = 2,
 	BUNIX_PROC_EXIT = 3,
 	BUNIX_PROC_SELF = 4,
@@ -777,6 +781,12 @@ struct bunix_sched_policy_state {
 struct bunix_vm_stats {
 	u64 total_frames;
 	u64 free_frames;
+};
+
+struct bunix_boot_event {
+	u64 index;
+	u64 time_ns;
+	char name[BUNIX_BOOT_EVENT_NAME_BYTES];
 };
 
 struct bunix_net_socket_info {
@@ -1592,6 +1602,19 @@ static inline long bunix_sched_policy_set(
 static inline long bunix_vm_stats(struct bunix_vm_stats *stats)
 {
 	return bunix_syscall1(BUNIX_SYSCALL_VM_STATS, (u64)stats);
+}
+
+static inline long bunix_boot_event_record(const char *name)
+{
+	return bunix_syscall2(BUNIX_SYSCALL_BOOT_EVENT,
+			      BUNIX_BOOT_EVENT_RECORD, (u64)name);
+}
+
+static inline long bunix_boot_event_read(u64 index,
+					 struct bunix_boot_event *event)
+{
+	return bunix_syscall3(BUNIX_SYSCALL_BOOT_EVENT,
+			      BUNIX_BOOT_EVENT_READ, index, (u64)event);
 }
 
 static inline long bunix_machine_poweroff(u64 authority)

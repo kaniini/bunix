@@ -51,7 +51,7 @@ Tasks:
       that can start after the prompt.
 - [x] Profile OpenRC and networking startup under the default Alpine run path,
       and decide which services must block login.
-- [ ] Add boot timing markers to dmesg or `/proc` so future regressions can be
+- [x] Add boot timing markers to dmesg or `/proc` so future regressions can be
       diagnosed from inside the guest.
 - [ ] Re-run `make run-profile`, shell smoke, networking smoke, and full test
       shards affected by boot ordering.
@@ -162,6 +162,16 @@ Progress:
   `login:` at 8393 ms from profile start and 7697 ms from QEMU start.  A warm
   direct `timeout 10s make run-alpine-net` smoke saw `login:` before the
   cutoff, including Make wrapper overhead.
+- `/proc/boot_timing` now exposes structured boot milestones from inside the
+  guest.  The kernel stores bounded monotonic boot events and exposes a native
+  record/read syscall; procfs renders those events as `index ms delta_ms name`
+  and accepts writes to `/proc/boot_timing` as additional markers.  Bootstrap
+  records critical-path milestones including names readiness, input readiness,
+  network readiness, rootfs selection, netcfg readiness, filesystem namespace
+  readiness, filesystem readiness, and Linux init handoff.  Generated Alpine
+  OpenRC wrappers append sysinit/boot/default start/end markers to the same
+  file, so the Linux-init-to-login interval is diagnosable without serial log
+  scraping.
 - Validation:
   - `make test-alpine-rootfs`
   - `make test-alpine-rootfs-stock-networking`
@@ -169,3 +179,8 @@ Progress:
   - `make test-boot-virtio-net-networking`
   - `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T015610Z-21128`
   - `timeout 10s make run-alpine-net`
+  - `make build/esp/EFI/BOOT/BOOTX64.EFI`
+  - `make test-alpine-rootfs`
+  - `make BUNIX_SHELL_PART=procfs-sysfs-surface test-shell-part`
+  - `make ROOTFS_FLAVOR=alpine-squashfs test-boot`
+  - `make ARCH=riscv64 build/riscv64/bunixos.kernel`

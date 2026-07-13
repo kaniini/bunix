@@ -4,6 +4,7 @@
 #include <arch/power.h>
 #include <arch/smp.h>
 #include <arch/thread.h>
+#include "boot_timing.h"
 #include "buffer.h"
 #include "cmdline.h"
 #include "console.h"
@@ -93,6 +94,9 @@ enum {
 	SYSCALL_SCHED_POLICY_GRANT = -118,
 	SYSCALL_SCHED_POLICY_GET = -120,
 	SYSCALL_SCHED_POLICY_SET = -122,
+	SYSCALL_BOOT_EVENT = -124,
+	BOOT_EVENT_RECORD = 1,
+	BOOT_EVENT_READ = 2,
 	LINUX_SYSCALL_READ = 0,
 	LINUX_SYSCALL_WRITE = 1,
 	LINUX_SYSCALL_OPEN = 2,
@@ -6554,6 +6558,31 @@ static u64 native_sys_cmdline_has(const struct native_syscall_args *args)
 	return kernel_cmdline_has(token) != 0 ? 1 : 0;
 }
 
+static u64 native_sys_boot_event(const struct native_syscall_args *args)
+{
+	if (args->arg0 == BOOT_EVENT_RECORD) {
+		char name[BOOT_TIMING_NAME_BYTES];
+
+		if (copy_cstr_from_user(name, (const char *)args->arg1,
+					sizeof(name)) != 0) {
+			return (u64)-1;
+		}
+		return boot_timing_record(name) == 0 ? 0 : (u64)-1;
+	}
+	if (args->arg0 == BOOT_EVENT_READ) {
+		struct boot_timing_event event;
+
+		if (args->arg2 == 0 ||
+		    boot_timing_read(args->arg1, &event) != 0 ||
+		    write_current_user(args->arg2, &event,
+				       sizeof(event)) != 0) {
+			return (u64)-1;
+		}
+		return 0;
+	}
+	return (u64)-1;
+}
+
 static u64 native_sys_launch_module(const struct native_syscall_args *args)
 {
 	char name[LINUX_EXEC_MAX_PATH];
@@ -7760,6 +7789,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	  native_sys_clock_monotonic_ns },
 	{ SYSCALL_SLEEP_NS, "sleep_ns", native_sys_sleep_ns },
 	{ SYSCALL_CMDLINE_HAS, "cmdline_has", native_sys_cmdline_has },
+	{ SYSCALL_BOOT_EVENT, "boot_event", native_sys_boot_event },
 	{ SYSCALL_TASK_CREATE, "task_create", native_sys_task_create },
 	{ SYSCALL_TASK_MAP, "task_map", native_sys_task_map },
 	{ SYSCALL_TASK_GRANT, "task_grant", native_sys_task_grant },

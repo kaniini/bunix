@@ -3758,6 +3758,7 @@ int main(void)
 	};
 
 	bunix_console_log(launching, sizeof(launching) - 1);
+	bunix_boot_event_record("bootstrap-launching-servers");
 	if (claim_names_admin() != 0) {
 		return 1;
 	}
@@ -3777,6 +3778,7 @@ int main(void)
 		return 1;
 	}
 	bunix_console_log(names_ready, sizeof(names_ready) - 1);
+	bunix_boot_event_record("bootstrap-names-ready");
 
 	const struct bunix_launch_cap fs_caps[] = {
 		{ console, BUNIX_RIGHT_SEND, BUNIX_CAP_CONS },
@@ -3990,6 +3992,7 @@ int main(void)
 		return 1;
 	}
 	bunix_console_log(input_ready, sizeof(input_ready) - 1);
+	bunix_boot_event_record("bootstrap-input-ready");
 	launch_claimed_module("net", BUNIX_NAMES_ROOT, BUNIX_SERVICE_NET,
 			      fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
 	net = wait_service_in_namespace(BUNIX_NAMES_ROOT, BUNIX_SERVICE_NET,
@@ -4007,6 +4010,7 @@ int main(void)
 	bunix_console_log(net_tcp_ok, sizeof(net_tcp_ok) - 1);
 	bunix_console_log(net_packet_ok, sizeof(net_packet_ok) - 1);
 	bunix_console_log(net_route_ok, sizeof(net_route_ok) - 1);
+	bunix_boot_event_record("bootstrap-net-ready");
 	if (bunix_cmdline_has("virtio-blk-block-test") <= 0) {
 		launch_claimed_module("block", BUNIX_NAMES_ROOT,
 				      BUNIX_SERVICE_BLOCK, fs_caps,
@@ -4191,11 +4195,13 @@ int main(void)
 			return 1;
 		}
 		bunix_console_log(ext2_root_ok, sizeof(ext2_root_ok) - 1);
+		bunix_boot_event_record("bootstrap-ext2-root");
 		(void)bunix_machine_poweroff(BUNIX_HANDLE_POWER_AUTH);
 		for (;;) {
 		}
 	} else {
 		bunix_console_log(squashfs_root, sizeof(squashfs_root) - 1);
+		bunix_boot_event_record("bootstrap-squashfs-root");
 		const long squashfs_task = launch_claimed_module_task_id(
 			"squashfs", BUNIX_NAMES_ROOT, BUNIX_SERVICE_SQUASHFS,
 			fs_caps, sizeof(fs_caps) / sizeof(fs_caps[0]));
@@ -4253,6 +4259,7 @@ int main(void)
 		return 1;
 	}
 	bunix_console_log(netcfg_ready, sizeof(netcfg_ready) - 1);
+	bunix_boot_event_record("bootstrap-netcfg-ready");
 	if ((bunix_cmdline_has("ext2-test") > 0 ||
 	     bunix_cmdline_has("ext2-subject-auth-test") > 0) &&
 	    bunix_cmdline_has("ext2-fsck-test") <= 0) {
@@ -4291,12 +4298,14 @@ int main(void)
 	}
 	bunix_console_log(fs_namespace_ready,
 			    sizeof(fs_namespace_ready) - 1);
+	bunix_boot_event_record("bootstrap-fs-namespace");
 	vfs = resolve_service_in_namespace(fs_namespace, BUNIX_SERVICE_VFS,
 					   BUNIX_RIGHT_SEND);
 	if (vfs == 0) {
 		return 1;
 	}
 	bunix_console_log(fs_ready, sizeof(fs_ready) - 1);
+	bunix_boot_event_record("bootstrap-fs-ready");
 	if (register_proc_execs(proc_mgmt, vfs) != 0) {
 		return 1;
 	}
@@ -4513,6 +4522,7 @@ int main(void)
 		return 1;
 	}
 	bunix_console_log(linux_init_exec, sizeof(linux_init_exec) - 1);
+	bunix_boot_event_record("bootstrap-linux-init-exec");
 	if (bunix_cmdline_has("shell-test") > 0 &&
 	    bunix_cmdline_has("debug-serial-shell") <= 0) {
 		bunix_console_logs_to_ring();

@@ -1,4 +1,5 @@
 #include "buffer.h"
+#include "boot_timing.h"
 #include "cmdline.h"
 #include "console.h"
 #include "ipc.h"
@@ -20,6 +21,7 @@
 void kernel_main(u32 magic, u64 multiboot_info)
 {
 	console_init();
+	boot_timing_init();
 
 	console_printf("bunixos: x86_64 microkernel bootstrap\n");
 	console_printf("bunixos: multiboot2 magic=0x%x info=%p\n",
@@ -39,10 +41,14 @@ void kernel_main(u32 magic, u64 multiboot_info)
 	vm_self_test();
 	arch_power_init(multiboot_info);
 	arch_interrupts_init();
+	boot_timing_record("kernel-interrupts-ready");
 	arch_smp_init(multiboot_info);
+	boot_timing_record("kernel-smp-ready");
 	kernel_runtime_services_init();
+	boot_timing_record("kernel-services-ready");
 	kernel_runtime_boot_modules_init();
 	kernel_runtime_scheduler_init();
+	boot_timing_record("kernel-scheduler-ready");
 	if (kernel_cmdline_has("handle-race-selftest") &&
 	    task_handle_lifetime_selftest() != 0) {
 		console_printf("sched: handle lifetime selftest failed\n");
@@ -52,6 +58,7 @@ void kernel_main(u32 magic, u64 multiboot_info)
 	}
 	arch_smp_release_aps();
 	server_start_boot_modules(multiboot_info);
+	boot_timing_record("kernel-boot-modules-started");
 	sched_enable_preemption();
 
 	console_printf("kernel: idle\n");

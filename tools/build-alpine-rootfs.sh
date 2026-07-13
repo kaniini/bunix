@@ -419,12 +419,19 @@ sed -i "s|ttyS0::respawn:/bin/login|ttyS0::respawn:$init_command|" \
 cat > "$root/sbin/bunix-openrc-step" <<'EOF_OPENRC_STEP'
 #!/bin/sh
 
+bootmark()
+{
+	printf '%s\n' "$1" >> /proc/boot_timing 2>/dev/null || true
+}
+
 stage=$1
 shift
 
+bootmark "openrc-$stage-start"
 printf 'bunix-openrc: %s start\n' "$stage"
 /sbin/openrc "$stage" "$@"
 status=$?
+bootmark "openrc-$stage-end"
 printf 'bunix-openrc: %s end status=%s\n' "$stage" "$status"
 exit "$status"
 EOF_OPENRC_STEP
@@ -433,8 +440,15 @@ chmod 0555 "$root/sbin/bunix-openrc-step"
 cat > "$root/sbin/bunix-openrc-default" <<'EOF_OPENRC_DEFAULT'
 #!/bin/sh
 
+bootmark()
+{
+	printf '%s\n' "$1" >> /proc/boot_timing 2>/dev/null || true
+}
+
+bootmark openrc-default-start
 printf 'bunix-openrc: default start\n'
 echo default >/run/openrc/softlevel
+bootmark openrc-default-end
 printf 'bunix-openrc: default end status=0\n'
 exit 0
 EOF_OPENRC_DEFAULT
@@ -443,6 +457,12 @@ chmod 0555 "$root/sbin/bunix-openrc-default"
 cat > "$root/sbin/bunix-openrc-bringup" <<'EOF_OPENRC_BRINGUP'
 #!/bin/sh
 
+bootmark()
+{
+	printf '%s\n' "$1" >> /proc/boot_timing 2>/dev/null || true
+}
+
+bootmark openrc-sysinit-start
 printf 'bunix-openrc: sysinit start\n'
 mkdir -p /run/openrc /run/lock /lib/rc/init.d
 chmod 0755 /run/openrc 2>/dev/null || true
@@ -451,16 +471,21 @@ if [ -d /var/cache/rc ]; then
 	cp -pr /var/cache/rc/. /run/openrc/ 2>/dev/null || true
 fi
 echo sysinit >/run/openrc/softlevel
+bootmark openrc-sysinit-end
 printf 'bunix-openrc: sysinit end status=0\n'
 
+bootmark openrc-boot-start
 printf 'bunix-openrc: boot start\n'
 echo boot >/run/openrc/softlevel
 /etc/init.d/networking start
 status=$?
+bootmark openrc-boot-end
 printf 'bunix-openrc: boot end status=%s\n' "$status"
 
+bootmark openrc-default-start
 printf 'bunix-openrc: default start\n'
 echo default >/run/openrc/softlevel
+bootmark openrc-default-end
 printf 'bunix-openrc: default end status=0\n'
 exit 0
 EOF_OPENRC_BRINGUP
@@ -469,6 +494,12 @@ chmod 0555 "$root/sbin/bunix-openrc-bringup"
 cat > "$root/sbin/bunix-openrc-sysinit" <<'EOF_OPENRC_SYSINIT'
 #!/bin/sh
 
+bootmark()
+{
+	printf '%s\n' "$1" >> /proc/boot_timing 2>/dev/null || true
+}
+
+bootmark openrc-sysinit-start
 printf 'bunix-openrc: sysinit start\n'
 mkdir -p /run/openrc /run/lock /lib/rc/init.d
 chmod 0755 /run/openrc 2>/dev/null || true
@@ -477,6 +508,7 @@ if [ -d /var/cache/rc ]; then
 	cp -pr /var/cache/rc/. /run/openrc/ 2>/dev/null || true
 fi
 echo sysinit >/run/openrc/softlevel
+bootmark openrc-sysinit-end
 printf 'bunix-openrc: sysinit end status=0\n'
 exit 0
 EOF_OPENRC_SYSINIT

@@ -3,6 +3,7 @@
 #include <arch/layout.h>
 #include <arch/power.h>
 #include <arch/sbi.h>
+#include "boot_timing.h"
 #include "buffer.h"
 #include "cmdline.h"
 #include "console.h"
@@ -51,6 +52,9 @@ enum {
 	SYSCALL_HANDLE_FIND = -112,
 	SYSCALL_TASK_GRANT_TAGGED = -114,
 	SYSCALL_TASK_HANDLE_FIND = -116,
+	SYSCALL_BOOT_EVENT = -124,
+	BOOT_EVENT_RECORD = 1,
+	BOOT_EVENT_READ = 2,
 	LINUX_RISCV64_OPENAT = 56,
 	LINUX_RISCV64_CLOSE = 57,
 	LINUX_RISCV64_READ = 63,
@@ -891,6 +895,31 @@ static u64 native_sys_cmdline_has(const struct native_syscall_args *args)
 	return kernel_cmdline_has(token) != 0 ? 1 : 0;
 }
 
+static u64 native_sys_boot_event(const struct native_syscall_args *args)
+{
+	if (args->arg0 == BOOT_EVENT_RECORD) {
+		char name[BOOT_TIMING_NAME_BYTES];
+
+		if (copy_cstr_from_user(name, args->arg1,
+					sizeof(name)) != 0) {
+			return (u64)-1;
+		}
+		return boot_timing_record(name) == 0 ? 0 : (u64)-1;
+	}
+	if (args->arg0 == BOOT_EVENT_READ) {
+		struct boot_timing_event event;
+
+		if (args->arg2 == 0 ||
+		    boot_timing_read(args->arg1, &event) != 0 ||
+		    arch_user_copy_to(args->arg2, &event,
+				      sizeof(event)) != 0) {
+			return (u64)-1;
+		}
+		return 0;
+	}
+	return (u64)-1;
+}
+
 static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_EXIT, "exit", native_sys_exit },
 	{ SYSCALL_TIMER_TICKS, "timer_ticks", native_sys_timer_ticks },
@@ -933,6 +962,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	  native_sys_early_console_log },
 	{ SYSCALL_MACHINE_POWER, "machine_power", native_sys_machine_power },
 	{ SYSCALL_CMDLINE_HAS, "cmdline_has", native_sys_cmdline_has },
+	{ SYSCALL_BOOT_EVENT, "boot_event", native_sys_boot_event },
 };
 
 static const struct native_syscall_entry *native_syscall_lookup(i64 number)

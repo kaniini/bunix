@@ -81,6 +81,8 @@ busybox cat /proc/self/status && echo PROC_STATUS_OK
 busybox ls /proc/self/fd && echo PROC_FD_OK
 busybox readlink /proc/self/exe && echo PROC_EXE_OK
 busybox cat /proc/stat && echo PROC_STAT_OK
+busybox cat /proc/boot_timing > /tmp/proc-boot-timing
+busybox grep bootstrap-fs-ready /tmp/proc-boot-timing && echo PROC_BOOT_TIMING_OK
 busybox cat /proc/ipc && echo PROC_IPC_OK
 busybox cat /proc/sched && echo PROC_SCHED_OK
 busybox cat /proc/sched_threads && echo PROC_SCHED_THREADS_OK
@@ -135,7 +137,7 @@ EOF_PROCFS_SYSFS_SURFACE
 check_procfs_sysfs_surface() {
 	wait_for_each_fixed "$log" "procfs/sysfs exact marker missing" 75 220 \
 		PROC_STATUS_OK PROC_FD_OK PROC_EXE_OK PROC_STAT_OK \
-		PROC_IPC_OK PROC_SCHED_THREADS_OK PROC_FILESYSTEMS_OK \
+		PROC_BOOT_TIMING_OK PROC_IPC_OK PROC_SCHED_THREADS_OK PROC_FILESYSTEMS_OK \
 		PROC_CPUINFO_OK PROC_CMDLINE_GLOBAL_OK PROC_DEVICES_OK \
 		PROC_MODULES_OK PROC_SELF_MOUNTS_OK PROC_PID_MOUNTINFO_OK \
 		PROC_PID_CGROUP_OK SYS_DIR_OK SYS_CLASS_OK SYS_CLASS_TTY_OK \

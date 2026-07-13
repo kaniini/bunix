@@ -46,6 +46,7 @@ enum {
 	PROCFS_KIND_SCHED_THREADS = 37,
 	PROCFS_KIND_PID_SMAPS = 38,
 	PROCFS_KIND_NET_NDISC = 39,
+	PROCFS_KIND_BOOT_TIMING = 40,
 };
 
 static struct bunix_id_table open_files;
@@ -526,6 +527,9 @@ static u64 file_for_path(const char *path, u64 caller_task,
 	}
 	if (str_eq(path, "/proc/stat")) {
 		return make_file(PROCFS_KIND_STAT, 0);
+	}
+	if (str_eq(path, "/proc/boot_timing")) {
+		return make_file(PROCFS_KIND_BOOT_TIMING, 0);
 	}
 	if (str_eq(path, "/proc/ipc")) {
 		return make_file(PROCFS_KIND_IPC, 0);
@@ -1008,6 +1012,50 @@ static u64 build_uptime(void)
 	append_fixed2(&len, seconds);
 	append_char(&len, ' ');
 	append_fixed2(&len, seconds);
+	append_char(&len, '\n');
+	return len;
+}
+
+static void append_boot_event_name(u64 *len, const char *name)
+{
+	for (u64 i = 0; i < BUNIX_BOOT_EVENT_NAME_BYTES; i++) {
+		const char c = name[i];
+
+		if (c == '\0') {
+			break;
+		}
+		append_char(len, c);
+	}
+}
+
+static u64 build_boot_timing(void)
+{
+	u64 len = 0;
+	u64 previous_ns = 0;
+
+	append_str(&len, "index ms delta_ms name\n");
+	for (u64 index = 0;; index++) {
+		struct bunix_boot_event event;
+		const u64 ms_divisor = 1000000ull;
+		u64 delta_ns;
+
+		if (bunix_boot_event_read(index, &event) != 0) {
+			break;
+		}
+		delta_ns = event.index == 0 || event.time_ns < previous_ns ?
+			   0 : event.time_ns - previous_ns;
+		append_u64(&len, event.index);
+		append_char(&len, ' ');
+		append_u64(&len, event.time_ns / ms_divisor);
+		append_char(&len, ' ');
+		append_u64(&len, delta_ns / ms_divisor);
+		append_char(&len, ' ');
+		append_boot_event_name(&len, event.name);
+		append_char(&len, '\n');
+		previous_ns = event.time_ns;
+	}
+	append_str(&len, "now ");
+	append_u64(&len, bunix_clock_monotonic_ns() / 1000000ull);
 	append_char(&len, '\n');
 	return len;
 }
@@ -2097,6 +2145,9 @@ static u64 build_file_text(u64 file)
 	case PROCFS_KIND_UPTIME:
 		len = build_uptime();
 		break;
+	case PROCFS_KIND_BOOT_TIMING:
+		len = build_boot_timing();
+		break;
 	case PROCFS_KIND_STAT:
 		len = build_proc_stat();
 		break;
@@ -2194,6 +2245,43 @@ static u64 build_file_text(u64 file)
 	return text_failed ? 0 : len;
 }
 
+static int record_boot_timing_buffer(u64 buffer, u64 len)
+{
+	char name[BUNIX_BOOT_EVENT_NAME_BYTES];
+	u64 start = 0;
+	u64 end;
+
+	if (buffer == 0) {
+		return -1;
+	}
+	if (len == 0) {
+		return 0;
+	}
+	if (len >= sizeof(name)) {
+		len = sizeof(name) - 1;
+	}
+	if (bunix_buffer_read(buffer, 0, name, len) != 0) {
+		return -1;
+	}
+	name[len] = '\0';
+	end = len;
+	while (start < end &&
+	       (name[start] == ' ' || name[start] == '\t' ||
+		name[start] == '\n' || name[start] == '\r')) {
+		start++;
+	}
+	while (end > start &&
+	       (name[end - 1] == ' ' || name[end - 1] == '\t' ||
+		name[end - 1] == '\n' || name[end - 1] == '\r')) {
+		end--;
+	}
+	if (end == start) {
+		return 0;
+	}
+	name[end] = '\0';
+	return bunix_boot_event_record(name + start) == 0 ? 0 : -1;
+}
+
 static u64 open_file(u64 owner, u64 file)
 {
 	struct procfs_open *open;
@@ -2284,15 +2372,17 @@ static const char *proc_dir_entry(u64 index, u64 *type)
 	static const char *names[] = {
 		"kthreads", "uptime", "stat", "ipc", "sched", "sched_threads",
 		"loadavg", "meminfo", "filesystems", "cpuinfo", "cmdline",
-		"devices", "modules", "mounts", "net", "self"
+		"devices", "modules", "mounts", "boot_timing", "net", "self"
 	};
 	static char pid_name_buf[20];
 	struct proc_info info;
 	const u64 static_count = sizeof(names) / sizeof(names[0]);
 
 	if (index < static_count) {
-		*type = index == 14 || index == 15 ? BUNIX_VFS_TYPE_DIRECTORY :
-				     BUNIX_VFS_TYPE_REGULAR;
+		*type = str_eq(names[index], "net") ||
+				 str_eq(names[index], "self") ?
+				BUNIX_VFS_TYPE_DIRECTORY :
+				BUNIX_VFS_TYPE_REGULAR;
 		return names[index];
 	}
 	if (proc_at(index - static_count, &info) != 0) {
@@ -2570,6 +2660,30 @@ int main(void)
 			}
 			reply.words[1] = reply.words[0] == 0 ? len : 0;
 			text_release();
+			break;
+		}
+		case BUNIX_VFS_WRITE_FILE_BUFFER: {
+			const u64 file =
+				file_from_message(message.words[0], &message);
+
+			if (file_kind(file) != PROCFS_KIND_BOOT_TIMING ||
+			    message.cap == 0 ||
+			    (message.cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+			    record_boot_timing_buffer(message.cap,
+						      message.words[2]) != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
+				break;
+			}
+			reply.words[0] = 0;
+			reply.words[1] = message.words[2];
+			break;
+		}
+		case BUNIX_VFS_TRUNCATE: {
+			const u64 file =
+				file_from_message(message.words[0], &message);
+
+			reply.words[0] = file_kind(file) == PROCFS_KIND_BOOT_TIMING ?
+					 0 : BUNIX_VFS_ERR_ACCESS;
 			break;
 		}
 		case BUNIX_VFS_READDIR_BUFFER: {
