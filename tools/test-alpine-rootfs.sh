@@ -59,6 +59,7 @@ require_file "$artifact_dir/openrc-bunix-runlevels.tsv"
 require_file "$artifact_dir/openrc-initd.tsv"
 require_file "$artifact_dir/openrc-confd.tsv"
 require_file "$artifact_dir/openrc-policy.tsv"
+require_file "$root/var/cache/rc/deptree"
 
 for runlevel in sysinit boot default nonetwork shutdown; do
 	require_dir "$root/etc/runlevels/$runlevel"
@@ -76,13 +77,18 @@ require_grep "alpine_networking_service=$networking_service" \
 
 case "$networking_service" in
 generated)
+	require_grep "::sysinit:/sbin/bunix-openrc-bringup" "$root/etc/inittab"
+	reject_grep "::sysinit:/sbin/bunix-openrc-boot" "$root/etc/inittab"
+	reject_grep "::wait:/sbin/bunix-openrc-default" "$root/etc/inittab"
 	require_grep "add	boot	networking	/etc/init.d/networking" \
 		"$artifact_dir/openrc-policy.tsv"
 	require_grep "openrc_policy=tools/alpine-generated-openrc-runlevels.policy" \
 		"$artifact_dir/manifest.txt"
 	require_grep "#!/bin/sh" "$root/etc/init.d/networking"
 	require_grep "start_networking()" "$root/etc/init.d/networking"
-	require_grep 'ifup -i "$cfgfile" eth0' "$root/etc/init.d/networking"
+	require_grep "mark_started" "$root/etc/init.d/networking"
+	reject_grep 'ifup -i "$cfgfile" eth0' "$root/etc/init.d/networking"
+	require_grep "/etc/init.d/networking start" "$root/sbin/bunix-openrc-bringup"
 	reject_grep "sysinit/devfs	/etc/init.d/devfs" \
 		"$artifact_dir/openrc-bunix-runlevels.tsv"
 	reject_grep "sysinit/procfs	/etc/init.d/procfs" \
@@ -91,6 +97,9 @@ generated)
 		"$artifact_dir/openrc-bunix-runlevels.tsv"
 	;;
 stock)
+	require_grep "::sysinit:/sbin/bunix-openrc-sysinit" "$root/etc/inittab"
+	require_grep "::sysinit:/sbin/bunix-openrc-step boot" "$root/etc/inittab"
+	require_grep "::wait:/sbin/bunix-openrc-default" "$root/etc/inittab"
 	require_grep "add	boot	networking	/etc/init.d/networking" \
 		"$artifact_dir/openrc-policy.tsv"
 	require_grep "suppress	boot	modules	/etc/init.d/modules" \
@@ -122,11 +131,14 @@ stock)
 	;;
 esac
 
-require_grep "::sysinit:/sbin/openrc sysinit" "$root/etc/inittab"
-require_grep "::sysinit:/sbin/openrc boot" "$root/etc/inittab"
-require_grep "::wait:/sbin/openrc default" "$root/etc/inittab"
 require_grep "ttyS0::respawn:/bin/login" "$root/etc/inittab"
 require_grep "::shutdown:/sbin/openrc shutdown" "$root/etc/inittab"
+require_grep "/sbin/openrc" "$root/sbin/bunix-openrc-step"
+require_grep "default >/run/openrc/softlevel" "$root/sbin/bunix-openrc-default"
+require_grep "/var/cache/rc" "$root/sbin/bunix-openrc-sysinit"
+require_grep "/var/cache/rc" "$root/sbin/bunix-openrc-bringup"
+require_grep "depinfo_0_service=" "$root/var/cache/rc/deptree"
+require_grep "_ineed_" "$root/var/cache/rc/deptree"
 reject_grep "::wait:/sbin/rc-service networking start" "$root/etc/inittab"
 if grep -E '^[^#].*getty' "$root/etc/inittab" >/dev/null; then
 	fail "active getty entry found in Bunix Alpine inittab"

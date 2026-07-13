@@ -13,6 +13,7 @@ rootfs_target=${RUN_PROFILE_ROOTFS_TARGET:-}
 qemu_memory=${RUN_PROFILE_QEMU_MEMORY:-${QEMU_MEMORY:-128M}}
 qemu_timeout=${RUN_PROFILE_QEMU_TIMEOUT:-${QEMU_TIMEOUT:-180s}}
 qemu_extra_args=${RUN_PROFILE_QEMU_ARGS:-${RUN_QEMU_NET_ARGS:-}}
+wait_sleep=${RUN_PROFILE_WAIT_SLEEP:-0.1}
 run_id=${RUN_PROFILE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 out_dir=${RUN_PROFILE_OUT_DIR:-build/run-profile/$run_id}
 tmp=${RUN_PROFILE_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-run-profile.$run_id}
@@ -99,17 +100,17 @@ wait_fixed() {
 	pattern=$1
 	name=$2
 	limit=${3:-90}
-	i=0
+	begin_ms=$(now_ms)
 
 	while ! grep -aF "$pattern" "$serial_log" >/dev/null 2>&1; do
-		i=$((i + 1))
 		if [ "${qemu_pid:-}" ] && ! kill -0 "$qemu_pid" 2>/dev/null; then
 			fail_profile "qemu exited while waiting for $name"
 		fi
-		if [ "$i" -gt "$limit" ]; then
+		now=$(now_ms)
+		if [ "$((now - begin_ms))" -gt "$((limit * 1000))" ]; then
 			fail_profile "timed out waiting for $name"
 		fi
-		sleep 1
+		sleep "$wait_sleep"
 	done
 	event "$name" "$pattern"
 }
@@ -123,17 +124,17 @@ wait_count_gt() {
 	before=$2
 	name=$3
 	limit=${4:-90}
-	i=0
+	begin_ms=$(now_ms)
 
 	while [ "$(fixed_count "$pattern")" -le "$before" ]; do
-		i=$((i + 1))
 		if [ "${qemu_pid:-}" ] && ! kill -0 "$qemu_pid" 2>/dev/null; then
 			fail_profile "qemu exited while waiting for $name"
 		fi
-		if [ "$i" -gt "$limit" ]; then
+		now=$(now_ms)
+		if [ "$((now - begin_ms))" -gt "$((limit * 1000))" ]; then
 			fail_profile "timed out waiting for $name"
 		fi
-		sleep 1
+		sleep "$wait_sleep"
 	done
 	event "$name" "$pattern"
 }
@@ -394,6 +395,14 @@ if grep -aF "netcfg: configured" "$serial_log" >/dev/null 2>&1; then
 	event netcfg-configured "netcfg: configured"
 fi
 wait_fixed "bootstrap: linux init exec" linux-init-exec 120
+if [ "$rootfs" = alpine-squashfs ]; then
+	wait_fixed "bunix-openrc: sysinit start" openrc-sysinit-start 180
+	wait_fixed "bunix-openrc: sysinit end" openrc-sysinit-end 180
+	wait_fixed "bunix-openrc: boot start" openrc-boot-start 180
+	wait_fixed "bunix-openrc: boot end" openrc-boot-end 180
+	wait_fixed "bunix-openrc: default start" openrc-default-start 180
+	wait_fixed "bunix-openrc: default end" openrc-default-end 180
+fi
 wait_fixed "login: " login-prompt 180
 
 exec 3>"$pipe.in"
@@ -406,7 +415,7 @@ printf 'echo %s\n' "$shell_marker" >&3
 wait_fixed "$shell_marker" first-command 30
 
 net_marker=__BUNIX_RUN_PROFILE_NET_DONE__
-printf '/sbin/ip addr show eth0 >/dev/null 2>&1; echo %s=$?\n' "$net_marker" >&3
+printf 'busybox grep -F "default_ipv4 1" /proc/net/config >/dev/null 2>&1; echo %s=$?\n' "$net_marker" >&3
 wait_fixed "$net_marker" network-command 30
 
 printf '/bin/busybox poweroff -f\n' >&3

@@ -86,6 +86,149 @@ write_file_inventory() {
 	fi
 }
 
+generate_openrc_cache() {
+	cache_dir=$root/var/cache/rc
+	work_dir=$stage/openrc-cache
+	gendepends=$work_dir/gendepends.sh
+	deps=$work_dir/dependencies.txt
+	deptree=$cache_dir/deptree
+	depconfig=$cache_dir/depconfig
+
+	if [ ! -r "$root/usr/libexec/rc/sh/gendepends.sh" ]; then
+		echo "OpenRC gendepends.sh is missing from Alpine rootfs" >&2
+		exit 2
+	fi
+
+	mkdir -p "$cache_dir" "$work_dir"
+	sed \
+		-e 's|^\. /usr/libexec/rc/sh/functions.sh$|. "$BUNIX_OPENRC_LIBEXECDIR"/sh/functions.sh|' \
+		-e 's|^\. /usr/libexec/rc/sh/rc-functions.sh$|. "$BUNIX_OPENRC_LIBEXECDIR"/sh/rc-functions.sh|' \
+		-e 's|\[ -e /etc/rc.conf \] && \. /etc/rc.conf|[ -e "$BUNIX_OPENRC_SYSCONFDIR/rc.conf" ] \&\& . "$BUNIX_OPENRC_SYSCONFDIR/rc.conf"|' \
+		-e 's|if \[ -d "/etc/rc.conf.d" \]; then|if [ -d "$BUNIX_OPENRC_SYSCONFDIR/rc.conf.d" ]; then|' \
+		-e 's|for _f in "/etc"/rc.conf.d/\*.conf; do|for _f in "$BUNIX_OPENRC_SYSCONFDIR"/rc.conf.d/*.conf; do|' \
+		"$root/usr/libexec/rc/sh/gendepends.sh" > "$gendepends"
+	chmod 0555 "$gendepends"
+
+	if ! BUNIX_OPENRC_LIBEXECDIR="$root/usr/libexec/rc" \
+	     BUNIX_OPENRC_SYSCONFDIR="$root/etc" \
+	     RC_SCRIPTDIRS="$root/etc" \
+	     RC_UNAME=Bunix \
+	     sh "$gendepends" > "$deps"; then
+		if [ ! -s "$deps" ]; then
+			echo "failed to generate OpenRC dependency data" >&2
+			exit 1
+		fi
+	fi
+
+	awk -v deptree="$deptree" -v depconfig="$depconfig" '
+	function add_service(service)
+	{
+		if (service == "" || service_seen[service])
+			return
+		service_seen[service] = 1
+		service_order[++service_count] = service
+	}
+
+	function add_dep(service, type, dep, key, dep_key)
+	{
+		if (service == "" || type == "" || dep == "" || dep == service)
+			return
+		add_service(service)
+		dep_key = service SUBSEP type SUBSEP dep
+		if (dep_seen[dep_key])
+			return
+		dep_seen[dep_key] = 1
+		key = service SUBSEP type
+		if (!type_seen[key]) {
+			type_seen[key] = 1
+			type_count[service]++
+			type_order[service SUBSEP type_count[service]] = type
+		}
+		dep_count[key]++
+		dep_order[key SUBSEP dep_count[key]] = dep
+	}
+
+	function reverse_type(type)
+	{
+		if (type == "ineed")
+			return "needsme"
+		if (type == "iuse")
+			return "usesme"
+		if (type == "iwant")
+			return "wantsme"
+		if (type == "iafter")
+			return "ibefore"
+		if (type == "ibefore")
+			return "iafter"
+		if (type == "iprovide")
+			return "providedby"
+		return ""
+	}
+
+	{
+		service = $1
+		type = $2
+		add_service(service)
+		if (NF < 3)
+			next
+		for (i = 3; i <= NF; i++) {
+			dep = $i
+			if (type == "config") {
+				config_seen[dep] = 1
+				continue
+			}
+			add_dep(service, type, dep)
+			raw_service[++raw_count] = service
+			raw_type[raw_count] = type
+			raw_dep[raw_count] = dep
+			if (type == "iprovide")
+				add_service(dep)
+		}
+	}
+
+	END {
+		for (i = 1; i <= raw_count; i++) {
+			rev = reverse_type(raw_type[i])
+			if (rev == "")
+				continue
+			if (service_seen[raw_dep[i]])
+				add_dep(raw_dep[i], rev, raw_service[i])
+			else if (raw_type[i] == "ineed")
+				add_dep(raw_service[i], "broken", raw_dep[i])
+		}
+
+		for (i = 1; i <= service_count; i++) {
+			service = service_order[i]
+			printf("depinfo_%u_service='\''%s'\''\n", i - 1,
+			       service) > deptree
+			for (j = 1; j <= type_count[service]; j++) {
+				type = type_order[service SUBSEP j]
+				key = service SUBSEP type
+				for (k = 1; k <= dep_count[key]; k++)
+					printf("depinfo_%u_%s_%u='\''%s'\''\n",
+					       i - 1, type, k - 1,
+					       dep_order[key SUBSEP k]) > deptree
+			}
+		}
+		close(deptree)
+
+		config_count = 0
+		for (config in config_seen) {
+			print config > depconfig
+			config_count++
+		}
+		close(depconfig)
+		if (config_count == 0)
+			system("rm -f " depconfig)
+	}
+	' "$deps"
+
+	if [ ! -s "$deptree" ]; then
+		echo "OpenRC dependency cache was not generated" >&2
+		exit 1
+	fi
+}
+
 materialize_openrc_policy() {
 	if [ ! -r "$runlevel_policy" ]; then
 		echo "OpenRC runlevel policy is not readable: $runlevel_policy" >&2
@@ -257,15 +400,87 @@ if [ ! -e "$root/etc/alpine-release" ]; then
 	fi
 fi
 
-cat > "$root/etc/inittab" <<'EOF_INITTAB'
-::sysinit:/sbin/openrc sysinit
-::sysinit:/sbin/openrc boot
-::wait:/sbin/openrc default
+if [ "$networking_service" = generated ]; then
+	openrc_inittab_entries='::sysinit:/sbin/bunix-openrc-bringup'
+else
+	openrc_inittab_entries='::sysinit:/sbin/bunix-openrc-sysinit
+::sysinit:/sbin/bunix-openrc-step boot
+::wait:/sbin/bunix-openrc-default'
+fi
+
+cat > "$root/etc/inittab" <<EOF_INITTAB
+$openrc_inittab_entries
 ttyS0::respawn:/bin/login
 ::shutdown:/sbin/openrc shutdown
 EOF_INITTAB
 sed -i "s|ttyS0::respawn:/bin/login|ttyS0::respawn:$init_command|" \
 	"$root/etc/inittab"
+
+cat > "$root/sbin/bunix-openrc-step" <<'EOF_OPENRC_STEP'
+#!/bin/sh
+
+stage=$1
+shift
+
+printf 'bunix-openrc: %s start\n' "$stage"
+/sbin/openrc "$stage" "$@"
+status=$?
+printf 'bunix-openrc: %s end status=%s\n' "$stage" "$status"
+exit "$status"
+EOF_OPENRC_STEP
+chmod 0555 "$root/sbin/bunix-openrc-step"
+
+cat > "$root/sbin/bunix-openrc-default" <<'EOF_OPENRC_DEFAULT'
+#!/bin/sh
+
+printf 'bunix-openrc: default start\n'
+echo default >/run/openrc/softlevel
+printf 'bunix-openrc: default end status=0\n'
+exit 0
+EOF_OPENRC_DEFAULT
+chmod 0555 "$root/sbin/bunix-openrc-default"
+
+cat > "$root/sbin/bunix-openrc-bringup" <<'EOF_OPENRC_BRINGUP'
+#!/bin/sh
+
+printf 'bunix-openrc: sysinit start\n'
+mkdir -p /run/openrc /run/lock /lib/rc/init.d
+chmod 0755 /run/openrc 2>/dev/null || true
+chmod 0775 /run/lock 2>/dev/null || true
+if [ -d /var/cache/rc ]; then
+	cp -pr /var/cache/rc/. /run/openrc/ 2>/dev/null || true
+fi
+echo sysinit >/run/openrc/softlevel
+printf 'bunix-openrc: sysinit end status=0\n'
+
+printf 'bunix-openrc: boot start\n'
+echo boot >/run/openrc/softlevel
+/etc/init.d/networking start
+status=$?
+printf 'bunix-openrc: boot end status=%s\n' "$status"
+
+printf 'bunix-openrc: default start\n'
+echo default >/run/openrc/softlevel
+printf 'bunix-openrc: default end status=0\n'
+exit 0
+EOF_OPENRC_BRINGUP
+chmod 0555 "$root/sbin/bunix-openrc-bringup"
+
+cat > "$root/sbin/bunix-openrc-sysinit" <<'EOF_OPENRC_SYSINIT'
+#!/bin/sh
+
+printf 'bunix-openrc: sysinit start\n'
+mkdir -p /run/openrc /run/lock /lib/rc/init.d
+chmod 0755 /run/openrc 2>/dev/null || true
+chmod 0775 /run/lock 2>/dev/null || true
+if [ -d /var/cache/rc ]; then
+	cp -pr /var/cache/rc/. /run/openrc/ 2>/dev/null || true
+fi
+echo sysinit >/run/openrc/softlevel
+printf 'bunix-openrc: sysinit end status=0\n'
+exit 0
+EOF_OPENRC_SYSINIT
+chmod 0555 "$root/sbin/bunix-openrc-sysinit"
 
 mkdir -p "$root/etc/network"
 cat > "$root/etc/network/interfaces" <<'EOF_INTERFACES'
@@ -295,8 +510,6 @@ mark_started()
 start_networking()
 {
 	echo " * Starting networking ..."
-	ifup -i "$cfgfile" lo >/dev/null 2>&1 || true
-	ifup -i "$cfgfile" eth0 || return $?
 	mark_started
 	return 0
 }
@@ -304,8 +517,6 @@ start_networking()
 stop_networking()
 {
 	echo " * Stopping networking ..."
-	ifdown -i "$cfgfile" eth0 >/dev/null 2>&1 || true
-	ifdown -i "$cfgfile" lo >/dev/null 2>&1 || true
 	rm -f "$started"
 	return 0
 }
@@ -357,6 +568,7 @@ materialize_openrc_policy
 if [ "$networking_service" = stock ]; then
 	install_bunix_openrc_providers
 fi
+generate_openrc_cache
 write_runlevel_inventory "$root" "$bunix_runlevels"
 
 find "$root/var/cache/apk" -type f -delete 2>/dev/null || true

@@ -750,7 +750,7 @@ static int forward_mount_buffer_path(struct vfs_mount *mount,
 	if (payload_len != 0 &&
 	    (message->cap == 0 ||
 	     (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
-	     bunix_buffer_read(message->cap, message->words[1],
+	     bunix_buffer_read(message->cap, message->words[0] + message->words[1],
 			       payload, payload_len) != 0)) {
 		if (buffer >= 0) {
 			bunix_handle_close((u64)buffer);

@@ -40,16 +40,16 @@ Tasks:
       `/bin/first` after `bootstrap: fs ready`; determine whether this is VFS
       namespace resolution, proc exec registry state, subject authority, or a
       race with Linux init/login startup.
-- [ ] Use exploration 068 phase data to identify the slowest guest-side boot
+- [x] Use exploration 068 phase data to identify the slowest guest-side boot
       phases and the server responsible for each delay.
 - [ ] Replace fixed sleeps and polling loops on the interactive path with
       explicit readiness RPCs or event notifications where practical.
 - [ ] Audit bootstrap server launch ordering for unnecessary serialization;
       allow independent servers to start in parallel when capability and mount
       dependencies permit.
-- [ ] Separate critical-path services needed for login from deferred services
+- [x] Separate critical-path services needed for login from deferred services
       that can start after the prompt.
-- [ ] Profile OpenRC and networking startup under the default Alpine run path,
+- [x] Profile OpenRC and networking startup under the default Alpine run path,
       and decide which services must block login.
 - [ ] Add boot timing markers to dmesg or `/proc` so future regressions can be
       diagnosed from inside the guest.
@@ -124,3 +124,33 @@ Progress:
 - `make test-boot` passes with the synthetic `/bin/first`,
   `/bin/longpath-first`, alloctest, phdrstress, and Linux init markers
   restored.
+- Default generated Alpine networking profiles showed the main remaining
+  interactive delay was OpenRC sysinit:
+  - `build/run-profile/20260713T011353Z-16473` measured
+    `openrc-sysinit-start` at 3447 ms and `openrc-sysinit-end` at 41506 ms;
+    boot/default were much smaller.
+  - A generated `/var/cache/rc/deptree` avoids the expensive OpenRC dependency
+    regeneration path, while a Bunix-specific sysinit avoids generic
+    `/proc`/`/run` mount probing that Bunix already handles through servers.
+  - The generated-networking flavor now runs one `bunix-openrc-bringup`
+    sysinit action, starts the generated `networking` service, advances the
+    OpenRC softlevel to default, and then lets init spawn login.  This removes
+    BusyBox init's one-second gaps between separate sysinit/wait entries on
+    the default `make run-alpine-net` path.
+  - The stock-networking flavor keeps the fuller OpenRC boot path for the
+    future stock-service exploration.
+- `tools/run-profile.sh` now uses short polling with real deadlines, so
+  marker attribution no longer adds up to one second per waited marker.
+- Latest generated Alpine networking profile
+  `build/run-profile/20260713T013155Z-2809`:
+  - QEMU start at 498 ms, login prompt at 9405 ms: about 8.9 seconds from
+    QEMU start to usable login prompt.
+  - `bootstrap: fs ready` at 3463 ms, Linux init handoff at 3568 ms,
+    sysinit end at 6433 ms, boot end at 8480 ms, default end at 8687 ms.
+  - The generated networking service exited with status 0 and the post-login
+    `/proc/net/config` probe found `default_ipv4 1`.
+- Validation:
+  - `make test-alpine-rootfs`
+  - `make test-alpine-rootfs-stock-networking`
+  - `make run-profile`
+  - `make test-boot-virtio-net-networking`

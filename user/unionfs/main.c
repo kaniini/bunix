@@ -465,7 +465,7 @@ static int service_path_call(u64 service, u64 type, const char *path, u64 word3,
 	if (payload_len != 0 &&
 	    (source == 0 || source->cap == 0 ||
 	     (source->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
-	     bunix_buffer_read(source->cap, source->words[1],
+	     bunix_buffer_read(source->cap, source->words[0] + source->words[1],
 			       payload, payload_len) != 0)) {
 		if (buffer >= 0) {
 			bunix_handle_close((u64)buffer);
