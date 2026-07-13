@@ -28,7 +28,7 @@ Tasks:
 - [x] Move `user-syscall:` negative syscall backtrace dumps behind an explicit
       debug/trace flag or `log=debug`, and keep a compact single-line warning
       only when needed.
-- [ ] Audit info-level server logs and demote routine readiness/chatter to
+- [x] Audit info-level server logs and demote routine readiness/chatter to
       trace while keeping boot-critical milestones and errors visible.
 - [x] Ensure scheduler, IPC, buffer, VM, and VFS diagnostic prefixes are
       consistently classified by `kernel/console.c`.
@@ -115,6 +115,23 @@ Progress:
     Linux-init-to-login interval.
   - This repeats the same diagnosis: normal `make run` is now dominated by
     silent Alpine/OpenRC/login startup after Linux init starts.
+- Server-log audit profile `build/run-profile/20260713T003404Z-24673`:
+  - User-space server log lines now go through line-level verbosity
+    classification in the console sink.  Demoted lines still enter the dmesg
+    ring, but routine `names:` resolver chatter and translator mount chatter
+    no longer print to serial at default `log=info`.
+  - Serial output fell from 297 lines / 12433 bytes to 191 lines / 9364 bytes.
+  - Kernel/server phase output fell from 257 lines / 10538 bytes to 151 lines
+    / 7575 bytes.
+  - `names:` fell from 86 prefix lines to 3, while `vfs:` fell from 13 to 2
+    and single-line `tmpfs`, `devfs`, `sysfs`, `utmpfs`, and `unionfs`
+    online markers remained visible.
+  - Reached `bootstrap: fs ready` at 3077 ms, `bootstrap: linux init exec` at
+    3079 ms, `login:` at 47148 ms, `~ #` at 48153 ms, and poweroff at
+    50688 ms.
+  - This confirms the remaining delay is still the silent
+    Alpine/OpenRC/login path, while the default serial path is now much
+    quieter.
 - Important boot-order finding:
   - A broad raw-log filter that suppressed routine server text, and a separate
     attempt to demote `kernel: launching module server` /
@@ -140,16 +157,21 @@ Progress:
     passed with `serial_lines=297`, `serial_bytes=12433`,
     `kernel_prefix=53`, `vm_server_prefix=1`, `user_syscall_prefix=0`, and
     `kernel_server_phase_lines=257`.
+  - `make test-boot` passed after demoting routine server log lines and
+    updating marker files to assert boot milestones rather than debug chatter.
+  - `make run-profile` passed for
+    `build/run-profile/20260713T003404Z-24673`, and the log-volume checker
+    passed with `serial_lines=191`, `serial_bytes=9364`,
+    `kernel_prefix=53`, `names_prefix=3`, `vm_server_prefix=1`,
+    `user_syscall_prefix=0`, and `kernel_server_phase_lines=151`.
   - `make test-boot` now passes after the synthetic proc-spawn path was fixed
     under exploration 070 by registering native proc-spawned tasks with the
     user server before their VFS executable opens.
 
 Remaining in this exploration:
 
-- Finish server-log auditing without relying on raw-console filtering as a
-  timing mechanism.
-- Keep any further demotions behind explicit readiness fixes from exploration
-  070 when boot depends on log pacing.
+- Run the full-test completion gate before moving this exploration to
+  `explorations/completed/`.
 
 High-priority slowdown series:
 

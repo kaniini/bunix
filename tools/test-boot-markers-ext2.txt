@@ -25,7 +25,6 @@ devfs: online
 utmpfs: online
 ext2: online
 ext2: super ok
-vfs: mounted translator
 bootstrap: ext2 readonly ok
 bootstrap: fs ready
 bootstrap: linux init exec

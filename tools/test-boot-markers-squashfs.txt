@@ -23,9 +23,6 @@ kernel: invalid inherited cap handle=2 rights=0x3 for ping
 names: online
 console: driver online
 names: namespace
-names: wait
-names: registered
-names: resolved
 time: online
 time: ready
 user: online
@@ -35,7 +32,6 @@ user: forked
 proc: online
 proc: ready
 unionfs: online
-unionfs: mounted
 proc: exec /sbin/init
 proc: exec /bin/first
 proc: exec /bin/alloctest
@@ -90,13 +86,9 @@ squashfs: super ok block_size=131072
 vfs: online
 procfs: online
 tmpfs: online
-tmpfs: mounted
 devfs: online
-devfs: mounted
 utmpfs: online
-utmpfs: mounted
 vfs: ready
-vfs: mounted translator
 bootstrap: launching servers
 bootstrap: names ready
 bootstrap: squashfs root

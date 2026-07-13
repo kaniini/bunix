@@ -62,6 +62,21 @@ static int str_starts_with(const char *text, const char *prefix)
 	return 1;
 }
 
+static int text_starts_with_len(const char *text, u64 len,
+				const char *prefix)
+{
+	u64 i = 0;
+
+	while (prefix[i] != '\0') {
+		if (i >= len || text[i] != prefix[i]) {
+			return 0;
+		}
+		i++;
+	}
+
+	return 1;
+}
+
 static u32 log_level_from_name(const char *level)
 {
 	if (level == 0) {
@@ -166,6 +181,7 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "kernel: copied") ||
 	    str_starts_with(fmt, "kernel: recorded") ||
 	    str_starts_with(fmt, "linux: arch_prctl") ||
+	    str_starts_with(fmt, "linux: exit_group") ||
 	    str_starts_with(fmt, "linux: mmap") ||
 	    str_starts_with(fmt, "linux: mprotect") ||
 	    str_starts_with(fmt, "linux: munmap") ||
@@ -188,9 +204,31 @@ static u32 log_level_for_format(const char *fmt)
 	return CONSOLE_LOG_INFO;
 }
 
+static u32 log_level_for_text(const char *text, u64 len)
+{
+	if (text_starts_with_len(text, len, "names: registered") ||
+	    text_starts_with_len(text, len, "names: resolved") ||
+	    text_starts_with_len(text, len, "names: wait") ||
+	    text_starts_with_len(text, len, "vfs: mounted translator") ||
+	    text_starts_with_len(text, len, "tmpfs: mounted") ||
+	    text_starts_with_len(text, len, "devfs: mounted") ||
+	    text_starts_with_len(text, len, "sysfs: mounted") ||
+	    text_starts_with_len(text, len, "utmpfs: mounted") ||
+	    text_starts_with_len(text, len, "unionfs: mounted")) {
+		return CONSOLE_LOG_DEBUG;
+	}
+
+	return CONSOLE_LOG_INFO;
+}
+
 static int console_should_print(const char *fmt)
 {
 	return log_level_for_format(fmt) <= console_verbosity;
+}
+
+static int console_should_print_text(const char *text, u64 len)
+{
+	return log_level_for_text(text, len) <= console_verbosity;
 }
 
 static void serial_init(void)
@@ -432,21 +470,21 @@ static void console_log_putc_raw(char c)
 	}
 }
 
-static void console_log_emit_raw(char c)
+static void console_log_emit_raw(char c, int visible)
 {
 	console_log_putc_raw(c);
-	if (!console_log_ring_only) {
+	if (visible && !console_log_ring_only) {
 		console_putc_raw(c);
 	}
 }
 
-static void console_log_write_decimal_raw(u64 value)
+static void console_log_write_decimal_raw(u64 value, int visible)
 {
 	char buffer[32];
 	u32 cursor = 0;
 
 	if (value == 0) {
-		console_log_emit_raw('0');
+		console_log_emit_raw('0', visible);
 		return;
 	}
 
@@ -456,11 +494,12 @@ static void console_log_write_decimal_raw(u64 value)
 	}
 
 	while (cursor > 0) {
-		console_log_emit_raw(buffer[--cursor]);
+		console_log_emit_raw(buffer[--cursor], visible);
 	}
 }
 
-static void console_log_write_decimal_padded_raw(u64 value, u32 width)
+static void console_log_write_decimal_padded_raw(u64 value, u32 width,
+						 int visible)
 {
 	u64 divisor = 1;
 
@@ -468,12 +507,13 @@ static void console_log_write_decimal_padded_raw(u64 value, u32 width)
 		divisor *= 10;
 	}
 	while (divisor != 0) {
-		console_log_emit_raw((char)('0' + ((value / divisor) % 10)));
+		console_log_emit_raw((char)('0' + ((value / divisor) % 10)),
+				     visible);
 		divisor /= 10;
 	}
 }
 
-static void console_log_prefix_raw(void)
+static void console_log_prefix_raw(int visible)
 {
 	enum {
 		NSEC_PER_SEC = 1000000000ULL,
@@ -483,24 +523,29 @@ static void console_log_prefix_raw(void)
 	const u64 seconds = now / NSEC_PER_SEC;
 	const u64 useconds = (now % NSEC_PER_SEC) / NSEC_PER_USEC;
 
-	console_log_emit_raw('[');
-	console_log_write_decimal_raw(seconds);
-	console_log_emit_raw('.');
-	console_log_write_decimal_padded_raw(useconds, 6);
-	console_log_emit_raw(']');
-	console_log_emit_raw(' ');
+	console_log_emit_raw('[', visible);
+	console_log_write_decimal_raw(seconds, visible);
+	console_log_emit_raw('.', visible);
+	console_log_write_decimal_padded_raw(useconds, 6, visible);
+	console_log_emit_raw(']', visible);
+	console_log_emit_raw(' ', visible);
+}
+
+static void console_log_emit_visible(char c, int visible)
+{
+	if (console_log_line_start) {
+		console_log_prefix_raw(visible);
+		console_log_line_start = 0;
+	}
+	console_log_emit_raw(c, visible);
+	if (c == '\n') {
+		console_log_line_start = 1;
+	}
 }
 
 static void console_log_emit(char c)
 {
-	if (console_log_line_start) {
-		console_log_prefix_raw();
-		console_log_line_start = 0;
-	}
-	console_log_emit_raw(c);
-	if (c == '\n') {
-		console_log_line_start = 1;
-	}
+	console_log_emit_visible(c, 1);
 }
 
 static void console_log_emit_text(const char *text)
@@ -569,9 +614,10 @@ void console_write_len(const char *text, u64 len)
 void console_log_write_len(const char *text, u64 len)
 {
 	const u64 flags = spin_lock_irqsave(&console_lock);
+	const int visible = console_should_print_text(text, len);
 
 	for (u64 i = 0; i < len; i++) {
-		console_log_emit(text[i]);
+		console_log_emit_visible(text[i], visible);
 	}
 
 	spin_unlock_irqrestore(&console_lock, flags);

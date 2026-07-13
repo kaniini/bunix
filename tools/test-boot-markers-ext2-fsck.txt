@@ -24,6 +24,5 @@ sysfs: online
 utmpfs: online
 ext2: online
 ext2: super ok
-vfs: mounted translator
 bootstrap: ext2 step link unlink
 machine: poweroff

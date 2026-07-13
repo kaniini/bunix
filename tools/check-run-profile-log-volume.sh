@@ -46,6 +46,7 @@ check_le() {
 serial_lines=$(summary_value serial_lines)
 serial_bytes=$(summary_value serial_bytes)
 kernel_count=$(prefix_count kernel)
+names_count=$(prefix_count names)
 vm_count=$(prefix_count vm-server)
 user_syscall_count=$(prefix_count user-syscall)
 kernel_server_lines=$(phase_lines kernel-servers)
@@ -53,6 +54,7 @@ kernel_server_lines=$(phase_lines kernel-servers)
 check_le serial_lines "$serial_lines" 320
 check_le serial_bytes "$serial_bytes" 14000
 check_le kernel_prefix "$kernel_count" 60
+check_le names_prefix "$names_count" 5
 check_le vm_server_prefix "$vm_count" 5
 check_le user_syscall_prefix "$user_syscall_count" 0
 check_le kernel_server_phase_lines "$kernel_server_lines" 275
