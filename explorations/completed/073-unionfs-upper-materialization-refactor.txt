@@ -1,0 +1,76 @@
+Refactor unionfs upper materialization and copy-up contracts.
+
+Parent exploration: `043-user-address-space-identity-map-escape.txt`
+
+Problem:
+
+- Unionfs currently materializes upper-layer directories and copy-up state
+  while serving VFS requests from another task.
+- The low-memory isolation work exposed that nested VFS-style calls from
+  unionfs into the upper filesystem are easy to wedge and hard to reason
+  about.
+- The immediate fix uses a tmpfs-private mkdir-p control operation so the
+  current exploration can keep moving, but unionfs should not be permanently
+  coupled to tmpfs internals.
+
+Why this is a refactor:
+
+- The behavior we need is clear: writable union roots must create parent
+  directories, copy lower files up before mutation, preserve metadata, and
+  return failures promptly.
+- The durable design should make those operations explicit rather than relying
+  on ad hoc nested calls through the public VFS request path.
+
+Plan:
+
+- Define a filesystem-private operation model for upper-layer preparation that
+  avoids recursive waits through the public VFS dispatcher.
+- Replace the tmpfs-specific mkdir-p coupling with either a generic VFS
+  transaction, a translator-private filesystem API, or a documented per-server
+  control protocol.
+- Make unionfs copy-up preserve mode, ownership, timestamps where available,
+  size, and file type.
+- Add clear timeout/error handling for materialization and copy-up failures so
+  shells receive `errno` instead of hanging.
+- Add regression coverage for creating nested upper files, appending lower
+  files, truncating copied-up files, chmod/chown after copy-up, and concurrent
+  copy-up attempts.
+
+Tasks:
+
+- [x] Design the upper materialization/copy-up operation contract.
+- [x] Remove tmpfs-specific unionfs coupling or document it as a generic
+      server-private protocol.
+- [x] Preserve lower metadata during copy-up.
+- [x] Add bounded failure handling and diagnostics for upper materialization.
+- [x] Add nested create, append, truncate, chmod/chown, and concurrent copy-up
+      regression tests.
+- [x] Run unionfs, VFS, login, Alpine rootfs, and full `make test` gates.
+
+Implementation Notes:
+
+- Added a generic filesystem-private `FSRV` protocol for server-to-server
+  materialization operations.  Tmpfs implements the current mkdir-p and
+  metadata replay operations, while preserving the old tmpfs-private mkdir-p
+  opcode for compatibility.
+- Unionfs now prepares upper directories through `FSRV` instead of directly
+  depending on `TMPF`.
+- Unionfs copy-up now collects full lower stat metadata, copies regular-file
+  bytes, and replays mode, owner, group, and timestamps onto the upper file.
+- Upper materialization and copy-up failures now return promptly with focused
+  diagnostics instead of relying on nested public VFS calls that can wedge.
+- Regression coverage now exercises nested upper creation, lower append
+  copy-up, truncation after copy-up, chmod/chown after copy-up, hardlink
+  metadata preservation, and concurrent copy-up attempts.
+
+Validation:
+
+- `make build/modules/tmpfs.server build/modules/unionfs.server`
+- `BUNIX_SHELL_PART=union-root-user make test-shell-part`
+- `BUNIX_SHELL_PART=root-login-union make test-shell-part`
+- `BUNIX_TEST_SET=rootfs-vfs-paths,login-smoke,tmpfs-extended make test-parallel`
+- `BUNIX_SHELL_PART=rootfs-vfs-paths make test-shell-part`
+- `make test-alpine-rootfs`
+- `BUNIX_TEST_JOBS=1 BUNIX_TEST_RETRIES=3 make test`
+  - run id: `20260713T191738Z-9608`
+  - result: 29/29 shards passed

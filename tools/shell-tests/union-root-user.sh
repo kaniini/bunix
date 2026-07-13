@@ -16,12 +16,21 @@ EOF_UNION_RENAME
 	wait_for_fixed "$log" "UNION_LOWER_RENAME_UPPER_OK" "unionfs lower rename commands did not drain" 45 220
 
 	send_script_sync <<'EOF_UNION_ROOT'
+busybox mkdir -p /var/lib/union/nested/deep
+echo UNION_NESTED_CREATE_PAYLOAD > /var/lib/union/nested/deep/file.txt
+busybox cat /var/lib/union/nested/deep/file.txt
+[ "$?" -eq 0 ] && echo UNION_NESTED_CREATE_OK
+busybox cat /.upper/var/lib/union/nested/deep/file.txt
+[ "$?" -eq 0 ] && echo UNION_NESTED_CREATE_UPPER_OK
+UNION_HELLO_META="$(busybox stat -c '%u:%g %a %s %Y' /hello.txt)"
 busybox ln /hello.txt /hello-hard.txt
 [ "$?" -eq 0 ] && echo UNION_LOWER_HARDLINK_CREATE_OK
 busybox cat /hello-hard.txt | busybox grep "rootfs: module"
 [ "$?" -eq 0 ] && echo UNION_LOWER_HARDLINK_READ_OK
 busybox test -e /.upper/hello.txt && busybox test -e /.upper/hello-hard.txt
 [ "$?" -eq 0 ] && echo UNION_LOWER_HARDLINK_COPYUP_OK
+busybox test "$(busybox stat -c '%u:%g %a %s %Y' /.upper/hello.txt)" = "$UNION_HELLO_META"
+[ "$?" -eq 0 ] && echo UNION_LOWER_HARDLINK_META_OK
 echo UNION_ROOT_BASE_PAYLOAD > /created.txt
 echo UNION_ROOT_APPEND_PAYLOAD >> /created.txt
 busybox cat /created.txt
@@ -60,8 +69,10 @@ check_union_root_user() {
 	wait_for_each_fixed "$log" "unionfs user-root regression missing" 45 220 \
 		UNION_ROOT_LOWER_OK UNION_LOWER_RENAME_CREATE_OK \
 		UNION_LOWER_RENAME_READ_OK UNION_LOWER_RENAME_OLD_GONE_OK \
-		UNION_LOWER_RENAME_UPPER_OK UNION_LOWER_HARDLINK_CREATE_OK \
+		UNION_LOWER_RENAME_UPPER_OK UNION_NESTED_CREATE_OK \
+		UNION_NESTED_CREATE_UPPER_OK UNION_LOWER_HARDLINK_CREATE_OK \
 		UNION_LOWER_HARDLINK_READ_OK UNION_LOWER_HARDLINK_COPYUP_OK \
+		UNION_LOWER_HARDLINK_META_OK \
 		UNION_ROOT_APPEND_CAT_OK UNION_ROOT_UPPER_BACKING_OK \
 		UNION_ROOT_LONG_READDIR_OK UNION_ROOT_LONG_CAT_OK \
 		UNION_NAME_MAX_READDIR_OK UNION_NAME_MAX_CAT_OK \
@@ -69,6 +80,7 @@ check_union_root_user() {
 		UNION_ROOT_UNLINK_UPPER_OK UNION_ROOT_UNLINK_UPPER_GONE_OK \
 		UNION_ROOT_LOWER_STILL_OK
 	wait_for_each_fixed_count "$log" 2 "union root payload missing from file output" 45 220 \
-		UNION_ROOT_BASE_PAYLOAD UNION_ROOT_APPEND_PAYLOAD \
+		UNION_NESTED_CREATE_PAYLOAD UNION_ROOT_BASE_PAYLOAD \
+		UNION_ROOT_APPEND_PAYLOAD \
 		UNION_ROOT_LONG_PAYLOAD UNION_NAME_MAX_PAYLOAD
 }

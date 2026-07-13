@@ -1237,6 +1237,43 @@ static void reply_utimens(const struct bunix_msg *message,
 	reply->words[0] = 0;
 }
 
+static void reply_set_meta(const struct bunix_msg *message,
+			   struct bunix_msg *reply, const char *path)
+{
+	unsigned char payload[BUNIX_FS_META_BYTES];
+	struct tmpfs_file *file;
+	u64 mode_type;
+	u64 owner;
+
+	if (message == 0 || path == 0 ||
+	    message->words[1] != BUNIX_FS_META_BYTES ||
+	    message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    bunix_buffer_read(message->cap, message->words[0], payload,
+			      sizeof(payload)) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	file = file_find(path);
+	if (file == 0) {
+		reply->words[0] = BUNIX_VFS_ERR_NOENT;
+		return;
+	}
+	mode_type = bunix_load_u64_le(payload, BUNIX_FS_META_MODE_TYPE);
+	owner = bunix_load_u64_le(payload, BUNIX_FS_META_OWNER);
+	if ((mode_type >> 32) != file->inode->type) {
+		reply->words[0] = BUNIX_VFS_ERR_INVAL;
+		return;
+	}
+	file->inode->mode = (unsigned int)(mode_type & 0777);
+	file->inode->uid = (unsigned int)(owner & 0xffffffff);
+	file->inode->gid = (unsigned int)(owner >> 32);
+	file->inode->atime = bunix_load_u64_le(payload, BUNIX_FS_META_ATIME);
+	file->inode->mtime = bunix_load_u64_le(payload, BUNIX_FS_META_MTIME);
+	file->inode->ctime = bunix_load_u64_le(payload, BUNIX_FS_META_CTIME);
+	reply->words[0] = 0;
+}
+
 static void reply_readlink(const struct bunix_msg *message,
 			   struct bunix_msg *reply,
 			   const struct tmpfs_file *file)
@@ -1416,35 +1453,46 @@ int main(void)
 			continue;
 		}
 
-		if (message.protocol == BUNIX_PROTO_TMPFS) {
-			reply.protocol = BUNIX_PROTO_TMPFS;
+		if (message.protocol == BUNIX_PROTO_TMPFS ||
+		    message.protocol == BUNIX_PROTO_FS) {
+			reply.protocol = message.protocol;
 			reply.type = message.type;
-			switch (message.type) {
-			case BUNIX_TMPFS_MOUNT_ROOT:
+			if (message.protocol == BUNIX_PROTO_TMPFS &&
+			    message.type == BUNIX_TMPFS_MOUNT_ROOT) {
 				if (bunix_read_path_cap(&message, path,
 							sizeof(path)) != 0) {
 					reply.words[0] = (u64)-1;
-					break;
+				} else {
+					reply.words[0] =
+						(u64)mount_root(vfs_service, path);
+					if (reply.words[0] == 0) {
+						bunix_console_log(
+							mounted,
+							sizeof(mounted) - 1);
+					}
 				}
-				reply.words[0] = (u64)mount_root(vfs_service, path);
-				if (reply.words[0] == 0) {
-					bunix_console_log(mounted,
-							  sizeof(mounted) - 1);
-				}
-				break;
-			case BUNIX_TMPFS_MKDIR_P_BUFFER:
+			} else if ((message.protocol == BUNIX_PROTO_TMPFS &&
+				    message.type == BUNIX_TMPFS_MKDIR_P_BUFFER) ||
+				   (message.protocol == BUNIX_PROTO_FS &&
+				    message.type == BUNIX_FS_MKDIR_P_BUFFER)) {
 				if (bunix_read_path_cap(&message, path,
 							sizeof(path)) != 0) {
 					reply.words[0] = (u64)-1;
-					break;
+				} else {
+					reply.words[0] = (u64)mkdir_p_path(
+						path, message.words[1],
+						message.words[2]);
 				}
-				reply.words[0] =
-					(u64)mkdir_p_path(path, message.words[1],
-							  message.words[2]);
-				break;
-			default:
+			} else if (message.protocol == BUNIX_PROTO_FS &&
+				   message.type == BUNIX_FS_SET_META_BUFFER) {
+				if (bunix_read_path_cap(&message, path,
+							sizeof(path)) != 0) {
+					reply.words[0] = (u64)-1;
+				} else {
+					reply_set_meta(&message, &reply, path);
+				}
+			} else {
 				reply.words[0] = (u64)-1;
-				break;
 			}
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
