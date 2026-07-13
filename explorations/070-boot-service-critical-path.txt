@@ -149,8 +149,23 @@ Progress:
     sysinit end at 6433 ms, boot end at 8480 ms, default end at 8687 ms.
   - The generated networking service exited with status 0 and the post-login
     `/proc/net/config` probe found `default_ipv4 1`.
+- Direct `make run-alpine-net` was still slow/misleading because invoking the
+  target directly used the global default `ROOTFS_FLAVOR=squashfs`; the
+  `BLOCK_IMAGE := ...` assignment is expanded during Makefile parsing, so the
+  target embedded the synthetic rootfs unless `make run` wrapped it with an
+  explicit `ROOTFS_FLAVOR=alpine-squashfs`.
+- `run-alpine-net` now recurses as the Alpine networking wrapper, while
+  `run-alpine-net-qemu` is the internal QEMU launch target.  This keeps
+  `make run` configurable through `RUN_ROOTFS_FLAVOR` and makes direct
+  `make run-alpine-net` match its name.
+- Warm validation profile `build/run-profile/20260713T015610Z-21128` reached
+  `login:` at 8393 ms from profile start and 7697 ms from QEMU start.  A warm
+  direct `timeout 10s make run-alpine-net` smoke saw `login:` before the
+  cutoff, including Make wrapper overhead.
 - Validation:
   - `make test-alpine-rootfs`
   - `make test-alpine-rootfs-stock-networking`
   - `make run-profile`
   - `make test-boot-virtio-net-networking`
+  - `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T015610Z-21128`
+  - `timeout 10s make run-alpine-net`
