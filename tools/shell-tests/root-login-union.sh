@@ -4,7 +4,7 @@ run_root_login_union() {
 	root_prompts_before_root=$(current_prompt_count "~ # ")
 	login_user root root "~ # " "$root_prompts_before_root"
 
-	send_script <<'EOF_ROOT'
+	send_script_sync <<'EOF_ROOT'
 busybox id
 env
 busybox cat /secret.txt && echo ROOT_SECRET_OK

@@ -15,6 +15,8 @@ sidecar_ready_timeout=${BUNIX_TEST_SIDECAR_READY_TIMEOUT:-20}
 guest_poweroff=${BUNIX_GUEST_POWEROFF:-1}
 send_line_delay=${BUNIX_SEND_LINE_DELAY:-0.35}
 send_sync_line_delay=${BUNIX_SEND_SYNC_LINE_DELAY:-0.75}
+send_chunk_size=${BUNIX_SEND_CHUNK_SIZE:-16}
+send_chunk_delay=${BUNIX_SEND_CHUNK_DELAY:-0.01}
 run_id=${BUNIX_TEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 tmp=${BUNIX_TEST_RUNTIME_DIR:-${TMPDIR:-/tmp}/bunix-shell-test.$run_id}
 log=$tmp/serial.log
@@ -62,7 +64,8 @@ export BUNIX_COLLECT_FAILURES BUNIX_FAILURE_DIR BUNIX_QEMU_LOG BUNIX_TEST_SIDECA
 qemu_pid=
 cat_pid=
 sidecar_pid=
-sync_counter=0
+prompt_probe='__BUNIX_PROMPT__ '
+cpr_probe=$(printf '\033[6n')
 
 cleanup() {
 	if [ "${qemu_pid:-}" ]; then
@@ -95,18 +98,28 @@ fail_with_qemu_log() {
 
 send_script() {
 	while IFS= read -r line || [ -n "$line" ]; do
-		printf '%s\n' "$line" >&3
+		send_line "$line"
 		sleep "$send_line_delay"
 	done
 }
 
-send_script_sync() {
-	prompt_probe=$(printf '\033[6n')
+send_line() {
+	line=$1
 
+	printf '%s' "$line" | fold -w "$send_chunk_size" |
+	while IFS= read -r chunk || [ -n "$chunk" ]; do
+		printf '%s' "$chunk" >&3
+		sleep "$send_chunk_delay"
+	done
+	printf '\n' >&3
+}
+
+send_script_sync() {
 	while IFS= read -r line || [ -n "$line" ]; do
-		before=$(grep -aF -c "$prompt_probe" "$log" 2>/dev/null || true)
-		printf '%s\n' "$line" >&3
-		wait_for_prompt_count_gt "$prompt_probe" "$before" \
+		before=$(current_prompt_count "$prompt_probe")
+		cpr_before=$(current_prompt_count "$cpr_probe")
+		send_line "$line"
+		wait_for_shell_prompt_count_gt "$before" "$cpr_before" \
 			"shell prompt did not return after: $line" 90 220
 		sleep "$send_sync_line_delay"
 	done
@@ -114,12 +127,11 @@ send_script_sync() {
 
 send_script_marker_sync() {
 	while IFS= read -r line || [ -n "$line" ]; do
-		sync_counter=$((sync_counter + 1))
-		sync_marker="__BUNIX_SYNC_$$_${sync_counter}__"
-		printf '%s\n' "$line" >&3
-		printf 'printf "%s\\n"\n' "$sync_marker" >&3
-		wait_for_fixed "$log" "$sync_marker" \
-			"shell sync marker did not appear after: $line" 90 220
+		before=$(current_prompt_count "$prompt_probe")
+		cpr_before=$(current_prompt_count "$cpr_probe")
+		send_line "$line"
+		wait_for_shell_prompt_count_gt "$before" "$cpr_before" \
+			"shell prompt did not return after: $line" 90 220
 		sleep "$send_sync_line_delay"
 	done
 }
@@ -156,6 +168,24 @@ wait_for_prompt_count_gt() {
 	i=0
 
 	while [ "$(grep -aF -c "$prompt" "$log" 2>/dev/null || true)" -le "$before" ]; do
+		i=$((i + 1))
+		if [ "$i" -gt "$limit" ]; then
+			fail_with_log "$label" "$log" "$tail_lines"
+		fi
+		sleep 1
+	done
+}
+
+wait_for_shell_prompt_count_gt() {
+	before=$1
+	cpr_before=$2
+	label=$3
+	limit=${4:-45}
+	tail_lines=${5:-180}
+	i=0
+
+	while [ "$(current_prompt_count "$prompt_probe")" -le "$before" ] ||
+	      [ "$(current_prompt_count "$cpr_probe")" -le "$cpr_before" ]; do
 		i=$((i + 1))
 		if [ "$i" -gt "$limit" ]; then
 			fail_with_log "$label" "$log" "$tail_lines"
@@ -226,19 +256,32 @@ login_user() {
 	before=${4:-}
 
 	if [ -n "$before" ]; then
-		printf '%s\n%s\n' "$user" "$password" >&3
+		send_line "$user"
+		send_line "$password"
 		wait_for_prompt_count_gt "$prompt" "$before" "shell prompt did not appear for $user" 45 180
+		configure_shell_prompt
 		return
 	fi
 
-	printf '%s\n%s\n' "$user" "$password" >&3
+	send_line "$user"
+	send_line "$password"
 	wait_for_fixed "$log" "$prompt" "shell prompt did not appear for $user" 150 120
+	configure_shell_prompt
 }
 
 current_prompt_count() {
 	prompt=$1
 
-	grep -F -c "$prompt" "$log" 2>/dev/null || true
+	grep -aF -c "$prompt" "$log" 2>/dev/null || true
+}
+
+configure_shell_prompt() {
+	before=$(current_prompt_count "$prompt_probe")
+	cpr_before=$(current_prompt_count "$cpr_probe")
+	send_line 'P=__BUNIX_; PS1="${P}PROMPT__ "'
+	wait_for_shell_prompt_count_gt "$before" "$cpr_before" \
+		"test shell prompt did not arm" 45 180
+	sleep "$send_sync_line_delay"
 }
 
 begin_shard() {
@@ -387,7 +430,13 @@ start_qemu
 wait_for_qemu_fixed "login: " "login prompt did not appear" 80 80
 require_supported_parts
 
-sleep 3
+wait_for_fixed "$log" "phdrstress: ok" \
+	"phdrstress boot spawn did not complete before shell login" 80 120
+wait_for_fixed "$log" "nettest: ok" \
+	"nettest boot spawn did not complete before shell login" 80 120
+wait_for_fixed "$log" "first: argv120=x120-abcdefghijklmnopqrstuvwxyz0123456789" \
+	"long argv boot spawn did not complete before shell login" 80 120
+sleep 1
 exec 3>"$pipe.in"
 login_user kaniini bunix "~ $ "
 user_shell_active=1

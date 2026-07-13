@@ -112,6 +112,8 @@ enum {
 	LINUX_ECHO = 0000010,
 	LINUX_ECHOE = 0000020,
 	LINUX_ECHOK = 0000040,
+	LINUX_TTY_CANON_MAX = 4096,
+	LINUX_TTY_READ_QUEUE_MAX = 8192,
 	LINUX_MAX_WRITE = 65536,
 	LINUX_MAX_MMAP_BUFFER = 1024 * 1024,
 	LINUX_MMAP_PAGE_SIZE = 4096,
@@ -443,9 +445,9 @@ struct linux_tty {
 	u64 owner_pid;
 	u64 foreground_pgid;
 	char termios[LINUX_TERM_SIZE];
-	char line[256];
+	char line[LINUX_TTY_CANON_MAX];
 	u64 line_len;
-	char read_queue[512];
+	char read_queue[LINUX_TTY_READ_QUEUE_MAX];
 	u64 read_queue_start;
 	u64 read_queue_len;
 	u64 reader_pid;
@@ -492,6 +494,7 @@ static int linux_signal_process(struct linux_process *process, u64 signal);
 static u64 linux_fd_offset(const struct linux_fd *fd);
 static u64 linux_fd_size(const struct linux_fd *fd);
 static int linux_tty_read_queue_push(struct linux_tty *tty, char c);
+static int linux_tty_read_queue_push_front(struct linux_tty *tty, char c);
 static void linux_tty_wake_reader(struct linux_tty *tty);
 static void linux_tty_cancel_reader(struct linux_tty *tty,
 				    struct linux_process *process);
@@ -4587,8 +4590,8 @@ static void linux_tty_queue_cursor_position_report(struct linux_tty *tty)
 {
 	static const char report[] = "\033[1;1R";
 
-	for (u64 i = 0; i < sizeof(report) - 1; i++) {
-		(void)linux_tty_read_queue_push(tty, report[i]);
+	for (u64 i = sizeof(report) - 1; i != 0; i--) {
+		(void)linux_tty_read_queue_push_front(tty, report[i - 1]);
 	}
 	linux_tty_wake_reader(tty);
 }
@@ -4619,6 +4622,19 @@ static int linux_tty_read_queue_push(struct linux_tty *tty, char c)
 	}
 	tty->read_queue[(tty->read_queue_start + tty->read_queue_len) %
 			sizeof(tty->read_queue)] = c;
+	tty->read_queue_len++;
+	return 1;
+}
+
+static int linux_tty_read_queue_push_front(struct linux_tty *tty, char c)
+{
+	if (tty == 0 || tty->read_queue_len >= sizeof(tty->read_queue)) {
+		return 0;
+	}
+	tty->read_queue_start =
+		(tty->read_queue_start + sizeof(tty->read_queue) - 1) %
+		sizeof(tty->read_queue);
+	tty->read_queue[tty->read_queue_start] = c;
 	tty->read_queue_len++;
 	return 1;
 }
@@ -4810,15 +4826,20 @@ static void linux_tty_input_event(struct linux_tty *tty, char c)
 		return;
 	}
 	if (c != tty->termios[LINUX_TERM_CC + LINUX_VEOF]) {
-		if (tty->line_len < sizeof(tty->line)) {
+		if (c == '\n' && tty->line_len < sizeof(tty->line)) {
 			tty->line[tty->line_len++] = c;
-		}
-		if ((lflag & LINUX_ECHO) != 0) {
-			tty_echo(&c, 1);
+			if ((lflag & LINUX_ECHO) != 0) {
+				tty_echo(&c, 1);
+			}
+		} else if (c != '\n' &&
+			   tty->line_len + 1 < sizeof(tty->line)) {
+			tty->line[tty->line_len++] = c;
+			if ((lflag & LINUX_ECHO) != 0) {
+				tty_echo(&c, 1);
+			}
 		}
 	}
-	if (c != '\n' && c != tty->termios[LINUX_TERM_CC + LINUX_VEOF] &&
-	    tty->line_len < sizeof(tty->line)) {
+	if (c != '\n' && c != tty->termios[LINUX_TERM_CC + LINUX_VEOF]) {
 		return;
 	}
 

@@ -26,5 +26,5 @@ root-login-union	root	2	128M	180	4	no	Root login identity/env, secret access, ro
 root-tmpfs-chown	root	2	128M	360	3	no	Privileged chown of /tmp/bunix-write.txt and root logout; depends on tmpfs-basic-linux-tests creating the file.
 long-login	root	2	128M	120	1	no	Long username/password login regression and final shell regression marker.
 root-mount-soak	root	2	128M	420	5	yes	Root-only mount/umount race soaking; clean boot preferred once implemented.
-alpine-openrc-smoke	openrc	1	128M	120	1	yes	Fast one-vCPU Alpine OpenRC boot to login and guest poweroff.	boot	alpine-squashfs	smoke	tools/test-boot-markers-alpine-smoke.txt
+alpine-openrc-smoke	openrc	2	128M	120	1	yes	Fast Alpine OpenRC boot to login and guest poweroff; one-vCPU coverage lives in smoke-up.	boot	alpine-squashfs	smoke	tools/test-boot-markers-alpine-smoke.txt
 alpine-openrc-full	openrc	2	128M	300	3	yes	Two-vCPU Alpine OpenRC boot through login, root shell, dmesg, and guest poweroff.	boot	alpine-squashfs	full	tools/test-boot-markers-alpine-squashfs.txt

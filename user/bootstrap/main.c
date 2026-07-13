@@ -194,11 +194,6 @@ static u64 wait_service_in_namespace(u64 namespace, u64 service,
 	return reply.cap;
 }
 
-static u64 resolve_service(u64 service, unsigned int rights)
-{
-	return resolve_service_in_namespace(BUNIX_NAMES_ROOT, service, rights);
-}
-
 static u64 str_len(const char *text)
 {
 	u64 len = 0;
@@ -3954,11 +3949,8 @@ int main(void)
 		return 1;
 	}
 	register_service(BUNIX_SERVICE_VM, BUNIX_HANDLE_VM);
-	console = wait_service_in_namespace(BUNIX_NAMES_ROOT,
-					    BUNIX_SERVICE_CONSOLE,
-					    BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
-	vm = resolve_service(BUNIX_SERVICE_VM,
-			     BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP);
+	console = BUNIX_HANDLE_CONSOLE;
+	vm = BUNIX_HANDLE_VM;
 	if (console == 0 || vm == 0) {
 		return 1;
 	}

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 run_tty_foreground() {
-	send_script <<'EOF_TTY_FOREGROUND'
+	send_script_sync <<'EOF_TTY_FOREGROUND'
 /bin/ttytest
 EOF_TTY_FOREGROUND
 }

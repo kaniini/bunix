@@ -1,7 +1,7 @@
 #!/bin/sh
 
 run_login_smoke() {
-	send_script <<'EOF_LOGIN_SMOKE'
+	send_script_sync <<'EOF_LOGIN_SMOKE'
 uptime
 busybox uptime
 /bin/uptimetest
@@ -37,14 +37,14 @@ EOF_LOGIN_SMOKE
 	wait_for_fixed "$log" "BUSYBOX_SLEEP_OK" "busybox sleep did not complete" 45 160
 	wait_for_fixed "$log" "DIRECT_SLEEP_OK" "/bin/sleep did not complete" 45 160
 	send_script <<'EOF_LOGIN_SMOKE_SLEEP'
-busybox sleep 5
+	busybox sleep 5
 EOF_LOGIN_SMOKE_SLEEP
 	wait_for_fixed "$log" "sleep 5" "foreground sleep command was not submitted" 45 180
-	prompts_before_sleep_interrupt=$(current_prompt_count "/ $ ")
+	prompts_before_sleep_interrupt=$(current_prompt_count "$prompt_probe")
 	sleep 1
 	send_bytes '\003'
-	wait_for_prompt_count_gt "/ $ " "$prompts_before_sleep_interrupt" "foreground Ctrl-C did not return to shell" 45 180
-	send_script <<'EOF_LOGIN_SMOKE_INTERRUPT'
+	wait_for_prompt_count_gt "$prompt_probe" "$prompts_before_sleep_interrupt" "foreground Ctrl-C did not return to shell" 45 180
+	send_script_sync <<'EOF_LOGIN_SMOKE_INTERRUPT'
 echo SLEEP_CTRL_C_OK
 EOF_LOGIN_SMOKE_INTERRUPT
 }

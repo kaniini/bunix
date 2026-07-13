@@ -1,0 +1,54 @@
+Debug the early bootstrap stall.
+
+Parent exploration: `079-test-parallel-timeout-instability.txt`
+
+Problem:
+
+- Plain one-vCPU synthetic smoke (`smoke-up`) reaches login and powers off.
+- Two-vCPU Alpine OpenRC smoke reaches login and powers off.
+- One-vCPU Alpine OpenRC has stalled before `bootstrap: names ready`, after:
+  - `names: online`
+  - `bootstrap: launching servers`
+  - `console: driver online irq`
+- This happens before OpenRC, Linux init, VFS, or the Alpine networking script.
+- During exploration 079 validation, the same early boot signature was also
+  observed once in the synthetic two-vCPU `devfs-console-surface` shard, so the
+  investigation should not assume the trigger is Alpine-only or strictly UP.
+- Exploration 079 reduced the critical path by using inherited console and VM
+  handles in bootstrap instead of immediately re-resolving those services
+  through names.  That was enough for the default full test gate to pass, but
+  it does not prove the underlying scheduler/IPC/names race is fully understood.
+
+Why this is separate:
+
+- The default parallel gate should not duplicate one-vCPU coverage in every
+  rootfs profile.  `smoke-up` is the dedicated UP boot shard.
+- The Alpine smoke shard now uses two vCPUs so default `make test` can validate
+  the Alpine/OpenRC surface deterministically while this lower-level startup
+  stall is investigated in isolation.
+
+Investigation targets:
+
+- Instrument the earliest bootstrap calls around `claim_names_admin()`,
+  `register_service(BUNIX_SERVICE_VM)`, and the first
+  `wait_service_in_namespace()` for the console server.
+- Determine whether bootstrap is blocked in names RPC send, names reply
+  delivery, scheduler handoff, or console registration.
+- Compare one-vCPU synthetic and one-vCPU Alpine module layout, boot package
+  size, kernel command line, and initial task scheduling order.
+- Verify whether the stall is sensitive to module count, module ordering,
+  Alpine ESP size, rootfs image size, or the absence of `shell-test`.
+
+Tasks:
+
+- [ ] Add early, low-noise diagnostics that identify the exact bootstrap wait
+      point without perturbing the normal full test logs.
+- [ ] Reproduce with `BUNIX_TEST_SET=alpine-openrc-smoke
+      BUNIX_VM_SMP_OVERRIDE=1 make test-parallel`.
+- [ ] Build a smaller synthetic reproducer if the trigger is module layout or
+      boot package size rather than Alpine userspace.
+- [ ] Fix the underlying one-vCPU bootstrap/scheduler/IPC bug.
+- [ ] Restore a one-vCPU Alpine smoke variant if it provides coverage distinct
+      from `smoke-up`.
+- [ ] Validate synthetic `smoke-up`, Alpine smoke, Alpine full, and plain
+      default `make test`.

@@ -5,11 +5,13 @@ run_long_login() {
 	login_user administrator_with_long_name password_longer_than_sixteen "~ # " "$long_root_prompts_before"
 
 	login_prompts_before_exit=$(current_prompt_count "login: ")
-	send_script <<'EOF_LONG_LOGIN'
+	send_script_sync <<'EOF_LONG_LOGIN'
 busybox id
 env
-exit
 EOF_LONG_LOGIN
+	send_script <<'EOF_LONG_LOGIN_EXIT'
+exit
+EOF_LONG_LOGIN_EXIT
 	wait_for_prompt_count_gt "login: " "$login_prompts_before_exit" "login prompt did not return after long-name root login" 45 180
 }
 

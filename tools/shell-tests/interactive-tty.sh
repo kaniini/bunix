@@ -17,9 +17,9 @@ EOF_SECRET_DENIED
 cat
 EOF_CAT_INTERRUPT
 	sleep 1
-	prompts_before_cat_interrupt=$(current_prompt_count "~ $ ")
+	prompts_before_cat_interrupt=$(current_prompt_count "$prompt_probe")
 	send_bytes '\003'
-	wait_for_prompt_count_gt "~ $ " "$prompts_before_cat_interrupt" "foreground Ctrl-C did not return to shell" 45 180
+	wait_for_prompt_count_gt "$prompt_probe" "$prompts_before_cat_interrupt" "foreground Ctrl-C did not return to shell" 45 180
 	send_script <<'EOF_CAT_INTERRUPT_DONE'
 echo CTRL_C_OK
 EOF_CAT_INTERRUPT_DONE

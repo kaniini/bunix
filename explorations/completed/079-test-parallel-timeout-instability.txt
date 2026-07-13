@@ -1,0 +1,90 @@
+Make the default full parallel test gate deterministic.
+
+Parent exploration: `063-native-authority-abi-refactor.txt`
+
+Problem:
+
+- Exploration 063 passed all focused authority, virtio, and OpenRC validation.
+- Two default `make test` runs selected all shards but failed on different long
+  shell shards:
+  - `20260712T163144Z-25954`: `procfs-self-pipe` and `exec-argv-pipe`.
+  - `20260712T165937Z-10819`: `tmpfs-extended`.
+- Each failing shard passed when rerun in a focused `make test-parallel`
+  invocation.
+- `BUNIX_TEST_RETRIES=1 make test` passed all 29 shards in run
+  `20260712T171910Z-24048`, so the issue is full-suite scheduling or timeout
+  instability rather than a deterministic regression in those shards.
+- During exploration 071 completion, two more default `make test` runs selected
+  all shards and failed different prompt-driven shell shards:
+  - `20260713T142617Z-8484`: only `root-login-union` timed out while appending
+    to a lower unionfs file; `root-login-union` passed alone in
+    `20260713T143835Z-18492`.
+  - `20260713T143916Z-19429`: `exec-argv-pipe`, `long-login`, and
+    `procfs-cmdline` timed out; those three shards passed together in
+    `20260713T145311Z-31275`.
+- `BUNIX_TEST_JOBS=4 make test` passed all 29 shards in
+  `20260713T145527Z-581`, which reinforces that the default job-count path is
+  the unstable surface.
+
+Goal:
+
+- Make plain default `make test` complete reliably without manual retry
+  overrides.
+- Preserve the parallel test scheduler's throughput while improving failure
+  signal quality.
+
+Tasks:
+
+- [x] Compare failed full-run artifacts against focused-pass artifacts for
+      `procfs-self-pipe`, `exec-argv-pipe`, `tmpfs-extended`,
+      `root-login-union`, `long-login`, and `procfs-cmdline`.
+- [x] Determine whether the instability is guest-side starvation, shell harness
+      prompt accounting, per-command timeout sizing, QEMU lifecycle handling, or
+      host-side shard scheduling.
+- [x] Add instrumentation or harness accounting that distinguishes a guest hang
+      from a slow command drain.
+- [x] Fix the underlying scheduler/harness/timeout issue without masking real
+      deterministic failures.
+- [x] Run the previously failing focused shards repeatedly.
+- [x] Run plain default `make test` with no retry override and require it to
+      pass.
+
+Findings:
+
+- The primary instability was in the shell harness and TTY prompt accounting,
+  not in the guest filesystem tests themselves.  Short lines sent through
+  `send_line()` were being lost because the final unterminated `fold` chunk was
+  ignored; this turned login credentials and short commands into blank lines.
+- Prompt-driven shell scripts also queued follow-up commands before foreground
+  commands and ash's terminal status probes had drained, which made full-suite
+  concurrency look like guest hangs.  Normal command batches now use prompt and
+  cursor-position-response synchronization; deliberately interactive tests keep
+  their asynchronous foreground control.
+- Shell prompt setup was split across two lines and could race with ash prompt
+  emission under full-suite load.  It is now one atomic shell line that does not
+  depend on a partially updated prompt prefix variable.
+- The Linux TTY path now has larger canonical/read queues, only publishes
+  canonical input on newline/EOF, and prioritizes cursor-position responses so
+  ash consumes the response before already queued harness input.
+- One full-suite run exposed a separate early bootstrap stall before
+  `bootstrap: names ready`.  Bootstrap now uses inherited console and VM
+  handles instead of re-resolving them through names during that critical
+  startup path.  The broader early-bootstrap root cause remains tracked in
+  `083-alpine-up-early-boot-stall.txt`.
+
+Validation:
+
+- `make test-parallel BUNIX_TEST_SET=login-smoke`
+  - `20260713T220950Z-24233`
+- `make test-parallel BUNIX_TEST_SET=root-login-union,login-smoke`
+  - `20260713T222105Z-9718`
+- Broad focused pack:
+  - `BUNIX_TEST_SET=procfs-self-pipe,exec-argv-pipe,tmpfs-extended,root-login-union,long-login,procfs-cmdline,root-tmpfs-chown,rootfs-vfs-paths,procfs-sysfs-surface,union-root-user,interactive-tty,login-smoke,relogin-session,large-io-mount,tty-foreground`
+  - `20260713T222230Z-25543`
+- Bootstrap-stall reproduction wave after the critical-path reduction:
+  - `BUNIX_TEST_SET=large-io-mount,path-limits-statfs,devfs-console-surface,linux-signaltest,exec-argv-pipe,alpine-openrc-smoke`
+  - `20260713T225055Z-17749`
+- Plain default full gate with no retry override:
+  - `make test`
+  - `20260713T225343Z-22022`
+  - `jobs=8`, `retries=0`, `launched=29`, all shards passed.

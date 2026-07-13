@@ -1,7 +1,7 @@
 #!/bin/sh
 
 run_large_io_mount() {
-	send_script <<'EOF_LARGE_IO'
+	send_script_sync <<'EOF_LARGE_IO'
 busybox head -c 8192 /dev/zero > /tmp/linux-big-write.bin
 busybox test "$(busybox stat -c "%s" /tmp/linux-big-write.bin)" = "8192" && echo LINUX_BIG_WRITE_OK
 /bin/mmapbig && echo MMAPBIG_OK
@@ -10,7 +10,7 @@ busybox test "$(busybox stat -c "%s" /tmp/linux-big-write.bin)" = "8192" && echo
 EOF_LARGE_IO
 	wait_for_fixed "$log" "READBIG_OK" "pre-mount shell commands did not drain" 45 220
 
-	send_script <<'EOF_MOUNT_TMPFS'
+	send_script_sync <<'EOF_MOUNT_TMPFS'
 mount -t tmpfs tmpfs /mnt&&echo MNT_OK
 echo MNT_PAYLOAD>/mnt/linux-mount.txt
 cat /mnt/linux-mount.txt&&echo MNT_CAT

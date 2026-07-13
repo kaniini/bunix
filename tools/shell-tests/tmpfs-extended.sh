@@ -6,12 +6,12 @@ run_tmpfs_extended() {
 
 	send_tmpfs_extended_script() {
 		while IFS= read -r line || [ -n "$line" ]; do
-			sync_counter=$((sync_counter + 1))
-			tmpfs_extended_sync_marker="__BUNIX_TMPFS_EXTENDED_SYNC_$$_${sync_counter}__"
-			printf '%s\n' "$line" >&3
-			printf 'printf "%s\\n"\n' "$tmpfs_extended_sync_marker" >&3
-			wait_for_fixed "$log" "$tmpfs_extended_sync_marker" \
-				"tmpfs extended command did not complete after: $line" \
+			tmpfs_extended_prompts_before=$(current_prompt_count "$prompt_probe")
+			tmpfs_extended_cpr_before=$(current_prompt_count "$cpr_probe")
+			send_line "$line"
+			wait_for_shell_prompt_count_gt "$tmpfs_extended_prompts_before" \
+				"$tmpfs_extended_cpr_before" \
+				"tmpfs extended prompt did not return after: $line" \
 				90 220
 			sleep "$send_line_delay"
 		done
