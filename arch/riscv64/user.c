@@ -26,6 +26,7 @@ enum {
 	SYSCALL_IPC_RECV = -13,
 	SYSCALL_IPC_CALL = -14,
 	SYSCALL_IPC_TRY_RECV = -72,
+	SYSCALL_IPC_RECV_ANY = -126,
 	SYSCALL_HANDLE_CLOSE = -16,
 	SYSCALL_BOOT_MODULE_READ = -18,
 	SYSCALL_CLOCK_MONOTONIC_NS = -20,
@@ -563,6 +564,61 @@ static u64 native_sys_ipc_try_recv(const struct native_syscall_args *args)
 	return 0;
 }
 
+static u64 native_sys_ipc_recv_any(const struct native_syscall_args *args)
+{
+	enum {
+		IPC_RECV_ANY_MAX = 4,
+	};
+	u64 handles[IPC_RECV_ANY_MAX];
+	struct ipc_port *ports[IPC_RECV_ANY_MAX] = { 0 };
+	struct ipc_message message;
+	struct user_ipc_message user_message;
+	u64 index = 0;
+	u64 count = args->arg1;
+
+	if (args->arg0 == 0 || args->arg2 == 0 || args->arg3 == 0 ||
+	    count == 0 || count > IPC_RECV_ANY_MAX ||
+	    arch_user_copy_from(handles, args->arg0,
+				count * sizeof(handles[0])) != 0) {
+		return (u64)-1;
+	}
+
+	for (u64 i = 0; i < count; i++) {
+		ports[i] = task_port_from_handle(task_current(), handles[i],
+						 TASK_RIGHT_RECV);
+		if (ports[i] == 0) {
+			for (u64 j = 0; j < i; j++) {
+				ipc_port_release(ports[j]);
+			}
+			return (u64)-1;
+		}
+	}
+
+	if (ipc_recv_any(ports, count, &message, &index) != 0) {
+		for (u64 i = 0; i < count; i++) {
+			ipc_port_release(ports[i]);
+		}
+		return (u64)-1;
+	}
+
+	ipc_message_to_user(&message, &user_message);
+	if (arch_user_copy_to(args->arg2, &user_message,
+			      sizeof(user_message)) != 0 ||
+	    arch_user_copy_to(args->arg3, &index, sizeof(index)) != 0) {
+		ipc_message_release(&message);
+		for (u64 i = 0; i < count; i++) {
+			ipc_port_release(ports[i]);
+		}
+		return (u64)-1;
+	}
+
+	ipc_message_release(&message);
+	for (u64 i = 0; i < count; i++) {
+		ipc_port_release(ports[i]);
+	}
+	return 0;
+}
+
 static u64 native_sys_ipc_call(const struct native_syscall_args *args)
 {
 	struct user_ipc_message user_request;
@@ -928,6 +984,7 @@ static const struct native_syscall_entry native_syscalls[] = {
 	{ SYSCALL_IPC_SEND, "ipc_send", native_sys_ipc_send },
 	{ SYSCALL_IPC_RECV, "ipc_recv", native_sys_ipc_recv },
 	{ SYSCALL_IPC_TRY_RECV, "ipc_try_recv", native_sys_ipc_try_recv },
+	{ SYSCALL_IPC_RECV_ANY, "ipc_recv_any", native_sys_ipc_recv_any },
 	{ SYSCALL_IPC_CALL, "ipc_call", native_sys_ipc_call },
 	{ SYSCALL_HANDLE_CLOSE, "handle_close", native_sys_handle_close },
 	{ SYSCALL_HANDLE_FIND, "handle_find", native_sys_handle_find },

@@ -369,8 +369,7 @@ int main(void)
 		if (poll_claims()) {
 			continue;
 		}
-		if (bunix_ipc_try_recv(BUNIX_HANDLE_SELF, &message) != 0) {
-			bunix_sleep_ns(1000000ull);
+		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0) {
 			continue;
 		}
 		if (message.protocol != BUNIX_PROTO_NAMES) {
@@ -396,6 +395,11 @@ int main(void)
 			if (create_registration_claim(&message, &reply) != 0) {
 				reply.words[0] = (u64)-1;
 			}
+			break;
+		case BUNIX_NAMES_CLAIM_READY:
+			(void)poll_claims();
+			reply.words[0] = 0;
+			should_reply = 0;
 			break;
 		case BUNIX_NAMES_REGISTER:
 			if (register_name(&message) == 0) {

@@ -68,6 +68,7 @@ enum {
 	BUNIX_SYSCALL_SCHED_POLICY_GET = -120,
 	BUNIX_SYSCALL_SCHED_POLICY_SET = -122,
 	BUNIX_SYSCALL_BOOT_EVENT = -124,
+	BUNIX_SYSCALL_IPC_RECV_ANY = -126,
 	BUNIX_IPC_WORDS = 4,
 	BUNIX_IPC_STATS_CPUS = 8,
 	BUNIX_SCHED_STATS_CPUS = 8,
@@ -115,6 +116,7 @@ enum {
 	BUNIX_NAMES_WAIT = 4,
 	BUNIX_NAMES_CLAIM_ADMIN = 5,
 	BUNIX_NAMES_CREATE_CLAIM = 6,
+	BUNIX_NAMES_CLAIM_READY = 7,
 	BUNIX_NAMES_ROOT = 1,
 	BUNIX_BLOCK_GET_INFO = 1,
 	BUNIX_BLOCK_READ = 2,
@@ -1186,31 +1188,18 @@ static inline long bunix_ipc_try_recv(u64 port, struct bunix_msg *message)
 	return bunix_syscall2(BUNIX_SYSCALL_IPC_TRY_RECV, port, (u64)message);
 }
 
+static inline long bunix_ipc_recv_any(const u64 *ports, u64 count,
+				      struct bunix_msg *message, u64 *index)
+{
+	return bunix_syscall4(BUNIX_SYSCALL_IPC_RECV_ANY, (u64)ports, count,
+			      (u64)message, (u64)index);
+}
+
 static inline long bunix_ipc_call(u64 port, const struct bunix_msg *request,
 				  struct bunix_msg *reply)
 {
 	return bunix_syscall3(BUNIX_SYSCALL_IPC_CALL, port, (u64)request,
 			      (u64)reply);
-}
-
-static inline long bunix_names_register_claim(u64 claim_handle,
-					      u64 service_handle)
-{
-	struct bunix_msg request = {
-		.protocol = BUNIX_PROTO_NAMES,
-		.type = BUNIX_NAMES_REGISTER,
-		.sender = 0,
-		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
-		.reply = 0,
-		.cap = service_handle,
-		.words = { 0, 0, 0, 0 },
-	};
-	struct bunix_msg reply;
-
-	if (bunix_ipc_call(claim_handle, &request, &reply) != 0) {
-		return -1;
-	}
-	return reply.words[0] == 0 ? 0 : -1;
 }
 
 static inline long bunix_handle_close(u64 handle)
@@ -1223,6 +1212,56 @@ static inline u64 bunix_handle_find(unsigned int tag)
 	const long handle = bunix_syscall1(BUNIX_SYSCALL_HANDLE_FIND, tag);
 
 	return handle > 0 ? (u64)handle : 0;
+}
+
+static inline long bunix_names_register_claim(u64 claim_handle,
+					      u64 service_handle)
+{
+	long reply_handle;
+	u64 names_handle;
+	struct bunix_msg request = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_REGISTER,
+		.sender = 0,
+		.cap_rights = BUNIX_RIGHT_SEND | BUNIX_RIGHT_DUP,
+		.reply = 0,
+		.cap = service_handle,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg nudge = {
+		.protocol = BUNIX_PROTO_NAMES,
+		.type = BUNIX_NAMES_CLAIM_READY,
+		.sender = 0,
+		.cap_rights = 0,
+		.reply = 0,
+		.cap = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct bunix_msg reply;
+
+	reply_handle = bunix_port_create("names-claim-reply");
+	if (reply_handle <= 0) {
+		return -1;
+	}
+
+	request.reply = (u64)reply_handle;
+	if (bunix_ipc_send(claim_handle, &request) != 0) {
+		bunix_handle_close((u64)reply_handle);
+		return -1;
+	}
+
+	names_handle = bunix_handle_find(BUNIX_CAP_NAME);
+	if (names_handle == 0 || bunix_ipc_send(names_handle, &nudge) != 0) {
+		bunix_handle_close((u64)reply_handle);
+		return -1;
+	}
+
+	if (bunix_ipc_recv((u64)reply_handle, &reply) != 0) {
+		bunix_handle_close((u64)reply_handle);
+		return -1;
+	}
+	bunix_handle_close((u64)reply_handle);
+	return reply.words[0] == 0 ? 0 : -1;
 }
 
 static inline u64 bunix_task_handle_find(u64 task, unsigned int tag)

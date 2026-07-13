@@ -86,20 +86,24 @@ static long register_service(u64 service)
 static int recv_user_message(struct bunix_msg *message, int *management)
 {
 	const u64 mgmt = USER_HANDLE_MGMT;
+	u64 ports[2];
+	u64 count = 0;
+	u64 index = 0;
+	u64 mgmt_index = (u64)-1;
 
 	if (message == 0 || management == 0) {
 		return -1;
 	}
-	if (mgmt != 0 && bunix_ipc_try_recv(mgmt, message) == 0) {
-		*management = 1;
-		return 0;
+	if (mgmt != 0) {
+		mgmt_index = count;
+		ports[count++] = mgmt;
 	}
-	if (bunix_ipc_try_recv(BUNIX_HANDLE_SELF, message) == 0) {
-		*management = 0;
-		return 0;
+	ports[count++] = BUNIX_HANDLE_SELF;
+	if (bunix_ipc_recv_any(ports, count, message, &index) != 0) {
+		return -1;
 	}
-	bunix_sleep_ns(1000000ull);
-	return -1;
+	*management = (index == mgmt_index) ? 1 : 0;
+	return 0;
 }
 
 static struct user_credential *credential_find(u64 task)

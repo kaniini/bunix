@@ -33,7 +33,7 @@ Tasks:
 - [ ] Reproduce the `log=info` hang from exploration 069 with broad raw-log
       filtering, capture the last successful server readiness point, and prove
       whether `log=debug` succeeds only because of extra serial pacing.
-- [ ] Identify the exact launch-order or wakeup dependency that makes module
+- [x] Identify the exact launch-order or wakeup dependency that makes module
       start logs observable in control flow; replace it with explicit
       readiness RPCs, notifications, or scheduler wakeups.
 - [x] Debug the synthetic `run_boot_spawns()` failure where proc cannot open
@@ -172,6 +172,27 @@ Progress:
   OpenRC wrappers append sysinit/boot/default start/end markers to the same
   file, so the Linux-init-to-login interval is diagnosable without serial log
   scraping.
+- The early boot log-pacing dependency was a timer-polled IPC readiness path:
+  the names server only noticed private claim ports while polling, and the
+  proc, user, and Linux servers slept for 1 ms whenever neither their
+  management port nor service port had an immediately queued message.  Extra
+  serial logging could accidentally create enough scheduling/timer pacing to
+  hide that missing wakeup.
+- Names claim registration now sends the registration to the private claim
+  port, nudges the names service with an explicit `BUNIX_NAMES_CLAIM_READY`
+  message, and waits on a reply port.  The names server blocks on its service
+  port and polls claim ports only when it has a reason to do so.
+- The kernel now exposes `ipc_recv_any` as a native syscall on x86_64 and
+  riscv64.  It blocks one thread on a bounded set of receive ports, reports
+  which port delivered the message, and guards against stale multi-port waits
+  being overwritten while the receiver wakes.  The proc, user, and Linux
+  servers use it to receive from their management and service ports without
+  fixed sleeps.
+- Latest generated Alpine networking profile
+  `build/run-profile/20260713T032407Z-15933` reached `login:` at 3651 ms from
+  profile start, `root-shell` at 3755 ms, completed the network probe at
+  3961 ms, and exited QEMU at 4019 ms.  The profile stayed inside the log
+  volume gates with 183 serial lines and 9103 bytes.
 - Validation:
   - `make test-alpine-rootfs`
   - `make test-alpine-rootfs-stock-networking`
@@ -184,3 +205,11 @@ Progress:
   - `make BUNIX_SHELL_PART=procfs-sysfs-surface test-shell-part`
   - `make ROOTFS_FLAVOR=alpine-squashfs test-boot`
   - `make ARCH=riscv64 build/riscv64/bunixos.kernel`
+  - `git diff --check`
+  - `make build/esp/EFI/BOOT/BOOTX64.EFI`
+  - `make ARCH=riscv64 build/riscv64/bunixos.kernel`
+  - `make test-boot`
+  - `make run-profile`
+  - `make test-smoke`
+  - `make test-boot-virtio-net-networking`
+  - `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T032407Z-15933`

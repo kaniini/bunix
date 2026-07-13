@@ -18,6 +18,7 @@ struct ipc_message_node {
 
 struct ipc_wait {
 	struct ipc_message *message;
+	u64 index;
 	u32 delivered;
 };
 
@@ -32,6 +33,7 @@ struct ipc_port {
 	struct ipc_message_node *tail;
 	struct thread *receiver;
 	struct ipc_wait *receiver_wait;
+	u64 receiver_index;
 	u32 affinity_cpu;
 	u32 affinity_valid;
 	u32 queued;
@@ -338,9 +340,10 @@ int ipc_send(struct ipc_port *port, const struct ipc_message *message)
 	ipc_counters.sends++;
 	ipc_stats_inc_cpu(ipc_counters.cpu_sends);
 	if (port->receiver != 0 && port->receiver_wait != 0 &&
-	    port->head == 0) {
+	    port->receiver_wait->delivered == 0 && port->head == 0) {
 		receiver = port->receiver;
 		*port->receiver_wait->message = direct_message;
+		port->receiver_wait->index = port->receiver_index;
 		port->receiver_wait->delivered = 1;
 		port->receiver = 0;
 		port->receiver_wait = 0;
@@ -438,6 +441,7 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 		thread_prepare_block();
 		port->receiver = thread_current();
 		port->receiver_wait = &wait;
+		port->receiver_index = 0;
 		spin_unlock_irqrestore(&ipc_lock, flags);
 		thread_block_prepared();
 		flags = spin_lock_irqsave(&ipc_lock);
@@ -468,6 +472,95 @@ int ipc_recv(struct ipc_port *port, struct ipc_message *message)
 	}
 	spin_unlock_irqrestore(&ipc_lock, flags);
 	return 0;
+}
+
+int ipc_recv_any(struct ipc_port **ports, u64 count,
+		 struct ipc_message *message, u64 *index)
+{
+	enum {
+		IPC_RECV_ANY_MAX = 4,
+	};
+
+	if (ports == 0 || count == 0 || count > IPC_RECV_ANY_MAX ||
+	    message == 0 || index == 0) {
+		return -1;
+	}
+	for (u64 i = 0; i < count; i++) {
+		if (ports[i] == 0) {
+			return -1;
+		}
+		for (u64 j = i + 1; j < count; j++) {
+			if (ports[i] == ports[j]) {
+				return -1;
+			}
+		}
+	}
+
+	struct ipc_wait wait = {
+		.message = message,
+		.index = 0,
+		.delivered = 0,
+	};
+	struct thread *current = thread_current();
+	u64 flags = spin_lock_irqsave(&ipc_lock);
+
+	for (;;) {
+		for (u64 i = 0; i < count; i++) {
+			ports[i]->affinity_cpu = sched_current_cpu_id();
+			ports[i]->affinity_valid = 1;
+		}
+
+		for (u64 i = 0; i < count; i++) {
+			struct ipc_port *port = ports[i];
+			struct ipc_message_node *node = port->head;
+
+			if (node == 0) {
+				continue;
+			}
+
+			port->head = node->next;
+			if (port->head == 0) {
+				port->tail = 0;
+			}
+			port->queued--;
+			*message = node->message;
+			node->message.reply_port = 0;
+			node->message.cap_type = IPC_CAP_NONE;
+			node->message.cap_object = 0;
+			node->message.cap_rights = 0;
+			message_free(node);
+			*index = i;
+			if (ipc_should_log(port, message)) {
+				console_printf("ipc: recv_any port=%s proto=0x%x type=%u sender=%u queued=%u\n",
+					       port->name, message->protocol,
+					       message->type, message->sender,
+					       port->queued);
+			}
+			spin_unlock_irqrestore(&ipc_lock, flags);
+			return 0;
+		}
+
+		thread_prepare_block();
+		for (u64 i = 0; i < count; i++) {
+			ports[i]->receiver = current;
+			ports[i]->receiver_wait = &wait;
+			ports[i]->receiver_index = i;
+		}
+		spin_unlock_irqrestore(&ipc_lock, flags);
+		thread_block_prepared();
+		flags = spin_lock_irqsave(&ipc_lock);
+		for (u64 i = 0; i < count; i++) {
+			if (ports[i]->receiver == current) {
+				ports[i]->receiver = 0;
+				ports[i]->receiver_wait = 0;
+			}
+		}
+		if (wait.delivered) {
+			*index = wait.index;
+			spin_unlock_irqrestore(&ipc_lock, flags);
+			return 0;
+		}
+	}
 }
 
 int ipc_try_recv(struct ipc_port *port, struct ipc_message *message)
