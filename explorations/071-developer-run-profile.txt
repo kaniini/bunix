@@ -24,20 +24,20 @@ Goal:
 
 Tasks:
 
-- [ ] Define the intended semantics for `make run`, `make run-fast`,
+- [x] Define the intended semantics for `make run`, `make run-fast`,
       `make run-alpine`, and networking-enabled run targets.
-- [ ] Decide whether default `make run` should prioritize fast interactive
+- [x] Decide whether default `make run` should prioritize fast interactive
       development or faithful Alpine/OpenRC/networking bringup, using the
       measured 34-40s login path as the deciding data point.
-- [ ] Add a fast profile that boots to an interactive shell with minimal
+- [x] Add a fast profile that boots to an interactive shell with minimal
       blocking services, quiet logs, and clean poweroff behavior.
 - [ ] Keep a faithful Alpine networking profile that starts OpenRC/networking
       and validates DHCP, DNS, ping, and login behavior.
-- [ ] Ensure both profiles use the same kernel/server artifacts so performance
+- [x] Ensure both profiles use the same kernel/server artifacts so performance
       differences come from policy, not hidden build skew.
-- [ ] Document the run targets in `README.md` with expected boot milestones and
+- [x] Document the run targets in `README.md` with expected boot milestones and
       when to use each target.
-- [ ] Add lightweight smoke tests for the fast and faithful profiles.
+- [x] Add lightweight smoke tests for the fast and faithful profiles.
 
 Baseline from exploration 068:
 
@@ -70,3 +70,54 @@ Expected profile policy:
   DNS, ping, and wget coverage.
 - `make run-profile`: measurement harness that can target either fast or
   faithful policy and records comparable phase data.
+
+Progress:
+
+- `make run` now aliases to `make run-fast`, which boots the synthetic SquashFS
+  profile through the normal `build/esp` EFI image without attaching a network
+  device.
+- `make run-alpine` boots the generated Alpine rootfs through `build/esp-alpine`
+  without a network device.
+- `make run-alpine-net` keeps the virtio-net Alpine profile with the real
+  OpenRC networking service and QEMU user networking attached.
+- `make run-profile` now defaults to the fast profile, while
+  `make run-profile-fast`, `make run-profile-alpine`, and
+  `make run-profile-alpine-net` select explicit policies.  The profile harness
+  has a `RUN_PROFILE_NETWORK_CHECK` policy so synthetic and no-net Alpine
+  profiles are not forced through a networking assertion.
+- Added `test-run-fast`, `test-run-alpine`, and `test-run-alpine-net` smoke
+  targets.  `test-run-alpine-net` reuses the existing OpenRC networking smoke
+  that validates login, service status, DHCP/default IPv4 configuration, and
+  external IPv4 pings.
+- README documents the target split and current warm profile milestones.
+
+Needs:
+
+- Full DNS/wget coverage for the faithful networking profile is still not
+  complete.  `make test-boot-virtio-net-dns-wget` still fails at
+  `busybox wget -O /tmp/bunix-wget.out http://example.com` with
+  `wget: bad address 'example.com'` even though `busybox nslookup example.com`
+  succeeds through `/etc/resolv.conf`.  Exploration
+  `078-wget-resolver-http-compatibility.txt` owns that resolver/TCP
+  compatibility work; this exploration should not be moved to completed until
+  the faithful profile either incorporates a passing DNS/wget gate or that
+  requirement is explicitly moved.
+
+Validation:
+
+- `sh -n tools/run-profile.sh`
+- `make -n run run-alpine run-alpine-net run-profile-fast test-run-fast`
+- `make test-run-fast`
+- `make run-profile-fast`
+  - `build/run-profile/20260713T091742Z-16653`
+  - login prompt at 4859 ms, shell marker at 5682 ms, total 5757 ms
+- `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T091742Z-16653`
+- `make test-run-alpine`
+- `make test-run-alpine-net`
+- `make run-profile-alpine-net`
+  - `build/run-profile/20260713T091905Z-18838`
+  - login prompt at 13354 ms, network marker at 14177 ms, total 14238 ms
+- `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T091905Z-18838`
+- Known failing gate:
+  - `make test-boot-virtio-net-dns-wget`
+  - Artifact: `build/failures/20260713T092016Z-20043/20260713T092540Z-20043`

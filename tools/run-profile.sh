@@ -6,13 +6,14 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 
 qemu=${QEMU:-qemu-system-x86_64}
 ovmf=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE.fd}
-rootfs=${RUN_PROFILE_ROOTFS_FLAVOR:-${ROOTFS_FLAVOR:-alpine-squashfs}}
-esp=${RUN_PROFILE_ESP_DIR:-${ESP_DIR:-build/esp-virtio-net}}
+rootfs=${RUN_PROFILE_ROOTFS_FLAVOR:-${ROOTFS_FLAVOR:-squashfs}}
+esp=${RUN_PROFILE_ESP_DIR:-${ESP_DIR:-build/esp}}
 target=${RUN_PROFILE_BUILD_TARGET:-$esp/EFI/BOOT/BOOTX64.EFI}
 rootfs_target=${RUN_PROFILE_ROOTFS_TARGET:-}
 qemu_memory=${RUN_PROFILE_QEMU_MEMORY:-${QEMU_MEMORY:-128M}}
 qemu_timeout=${RUN_PROFILE_QEMU_TIMEOUT:-${QEMU_TIMEOUT:-180s}}
 qemu_extra_args=${RUN_PROFILE_QEMU_ARGS:-${RUN_QEMU_NET_ARGS:-}}
+network_check=${RUN_PROFILE_NETWORK_CHECK:-auto}
 wait_sleep=${RUN_PROFILE_WAIT_SLEEP:-0.1}
 run_id=${RUN_PROFILE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 out_dir=${RUN_PROFILE_OUT_DIR:-build/run-profile/$run_id}
@@ -410,8 +411,25 @@ printf 'echo %s\n' "$shell_marker" >&3
 wait_fixed "$shell_marker" first-command 30
 
 net_marker=__BUNIX_RUN_PROFILE_NET_DONE__
-printf 'rc-service networking status >/dev/null 2>&1 && test -e /run/openrc/started/networking && busybox grep -F "default_ipv4 1" /proc/net/config >/dev/null 2>&1; echo %s=$?\n' "$net_marker" >&3
-wait_fixed "$net_marker=0" network-command 30
+if [ "$network_check" = auto ]; then
+	if [ "$rootfs" = alpine-squashfs ] && [ -n "$qemu_extra_args" ]; then
+		network_check=required
+	else
+		network_check=skip
+	fi
+fi
+case "$network_check" in
+required)
+	printf 'rc-service networking status >/dev/null 2>&1 && test -e /run/openrc/started/networking && busybox grep -F "default_ipv4 1" /proc/net/config >/dev/null 2>&1; echo %s=$?\n' "$net_marker" >&3
+	wait_fixed "$net_marker=0" network-command 30
+	;;
+skip)
+	event network-command "skipped"
+	;;
+*)
+	fail_profile "invalid RUN_PROFILE_NETWORK_CHECK=$network_check"
+	;;
+esac
 
 printf '/bin/busybox poweroff -f\n' >&3
 event poweroff-sent

@@ -516,7 +516,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-profile test-run-profile-log-volume run-alpine-net run-alpine-net-qemu run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-linux-exec-abi test-proc-exec-stack test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-linux-lifecycle test-lowmem-isolation test-user-memory-contract test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-sleep test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-log-isolation test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-fast run-fast-qemu run-profile run-profile-fast run-profile-alpine run-profile-alpine-net test-run-fast test-run-alpine test-run-alpine-net test-run-profile-log-volume run-alpine run-alpine-qemu run-alpine-net run-alpine-net-qemu run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-linux-exec-abi test-proc-exec-stack test-path-safety test-boot test-boot-alpine-stock-networking test-boot-net-route test-boot-handle-race test-linux-lifecycle test-lowmem-isolation test-user-memory-contract test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-sleep test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-log-isolation test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -1294,28 +1294,78 @@ $(EFI_BOOT_IMG): $(KERNEL) $(GRUB_CFG) $(ROOTFS_FLAVOR_STAMP) $(BOOTSTRAP_MODULE
 	cp modules/vm.server $(ISO_ROOT)/modules/vm.server
 	$(GRUB_MKRESCUE) -o $@ $(ISO_ROOT)
 
-RUN_ROOTFS_FLAVOR ?= alpine-squashfs
-RUN_QEMU_NET_ARGS ?= $(QEMU_VIRTIO_NET_EXTERNAL_ARGS)
+RUN_ROOTFS_FLAVOR ?= squashfs
+RUN_QEMU_NET_ARGS ?= $(if $(filter alpine-squashfs,$(RUN_ROOTFS_FLAVOR)),$(QEMU_VIRTIO_NET_EXTERNAL_ARGS),)
 RUN_PROFILE_ROOTFS_TARGET ?= $(if $(filter alpine-squashfs,$(RUN_ROOTFS_FLAVOR)),$(ALPINE_SQUASHFS_IMAGE),$(SYNTHETIC_SQUASHFS_IMAGE))
+RUN_PROFILE_ESP_DIR ?= $(if $(filter alpine-squashfs,$(RUN_ROOTFS_FLAVOR)),$(VIRTIO_NET_TEST_ESP_DIR),$(ESP_DIR))
+RUN_PROFILE_BUILD_TARGET ?= $(if $(filter alpine-squashfs,$(RUN_ROOTFS_FLAVOR)),$(VIRTIO_NET_TEST_EFI_BOOT_APP),$(EFI_BOOT_APP))
+RUN_PROFILE_NETWORK_CHECK ?= auto
 
-run:
-	$(MAKE) ROOTFS_FLAVOR=$(RUN_ROOTFS_FLAVOR) run-alpine-net-qemu
+run: run-fast
+
+run-fast:
+	$(MAKE) ROOTFS_FLAVOR=squashfs RUN_QEMU_NET_ARGS= run-fast-qemu
+
+run-fast-qemu: $(EFI_BOOT_APP)
+	$(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
+		-smp $(SMP) \
+		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
+		-drive format=raw,file=fat:rw:$(ESP_DIR) \
+		-serial stdio -display none -no-reboot
 
 run-profile:
 	RUN_PROFILE_ROOTFS_FLAVOR=$(RUN_ROOTFS_FLAVOR) \
 		RUN_PROFILE_ROOTFS_TARGET=$(RUN_PROFILE_ROOTFS_TARGET) \
-		RUN_PROFILE_ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) \
-		RUN_PROFILE_BUILD_TARGET=$(VIRTIO_NET_TEST_EFI_BOOT_APP) \
+		RUN_PROFILE_ESP_DIR=$(RUN_PROFILE_ESP_DIR) \
+		RUN_PROFILE_BUILD_TARGET=$(RUN_PROFILE_BUILD_TARGET) \
+		RUN_PROFILE_NETWORK_CHECK=$(RUN_PROFILE_NETWORK_CHECK) \
 		RUN_QEMU_NET_ARGS="$(RUN_QEMU_NET_ARGS)" \
 		OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		sh tools/run-profile.sh
+
+run-profile-fast:
+	$(MAKE) RUN_ROOTFS_FLAVOR=squashfs RUN_QEMU_NET_ARGS= RUN_PROFILE_NETWORK_CHECK=skip run-profile
+
+run-profile-alpine:
+	$(MAKE) RUN_ROOTFS_FLAVOR=alpine-squashfs RUN_QEMU_NET_ARGS= RUN_PROFILE_ESP_DIR=$(ALPINE_ESP_DIR) RUN_PROFILE_BUILD_TARGET=$(ALPINE_EFI_BOOT_APP) RUN_PROFILE_NETWORK_CHECK=skip run-profile
+
+run-profile-alpine-net:
+	$(MAKE) RUN_ROOTFS_FLAVOR=alpine-squashfs RUN_QEMU_NET_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" RUN_PROFILE_NETWORK_CHECK=required run-profile
 
 test-run-profile-log-volume: run-profile tools/check-run-profile-log-volume.sh
 	latest=$$(ls -td build/run-profile/* | head -n 1); \
 		sh tools/check-run-profile-log-volume.sh "$$latest"
 
+test-run-fast:
+	$(MAKE) ROOTFS_FLAVOR=squashfs $(EFI_BOOT_APP)
+	ESP_DIR=$(ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		QEMU_TIMEOUT=60s BUNIX_USER=root BUNIX_PASSWORD=root \
+		BUNIX_PROMPT='~ # ' BUNIX_MARKER=BUNIX_RUN_FAST_OK \
+		BUNIX_CMD='echo fast-profile; test -x /bin/sh' \
+		QEMU_EXTRA_ARGS= sh tools/test-command.sh
+
+test-run-alpine:
+	$(MAKE) ROOTFS_FLAVOR=alpine-squashfs ESP_DIR=$(ALPINE_ESP_DIR) $(ALPINE_EFI_BOOT_APP)
+	ESP_DIR=$(ALPINE_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		QEMU_TIMEOUT=180s BUNIX_USER=root BUNIX_PASSWORD=root \
+		BUNIX_PROMPT='~ # ' BUNIX_MARKER=BUNIX_RUN_ALPINE_OK \
+		BUNIX_CMD='test -e /run/openrc/softlevel; cat /proc/boot_timing >/dev/null' \
+		QEMU_EXTRA_ARGS= sh tools/test-command.sh
+
+test-run-alpine-net: test-boot-virtio-net-networking
+
+run-alpine:
+	$(MAKE) ROOTFS_FLAVOR=alpine-squashfs RUN_QEMU_NET_ARGS= run-alpine-qemu
+
+run-alpine-qemu: $(ALPINE_EFI_BOOT_APP)
+	$(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \
+		-smp $(SMP) \
+		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
+		-drive format=raw,file=fat:rw:$(ALPINE_ESP_DIR) \
+		-serial stdio -display none -no-reboot
+
 run-alpine-net:
-	$(MAKE) ROOTFS_FLAVOR=alpine-squashfs run-alpine-net-qemu
+	$(MAKE) ROOTFS_FLAVOR=alpine-squashfs RUN_QEMU_NET_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" run-alpine-net-qemu
 
 run-alpine-net-qemu: $(VIRTIO_NET_TEST_EFI_BOOT_APP)
 	$(QEMU) -enable-kvm -machine q35 -cpu host -m 128M \

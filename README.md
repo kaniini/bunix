@@ -475,17 +475,38 @@ The static PIE BusyBox path remains available as a compatibility regression:
 make test-shell-static
 ```
 
-For an interactive Alpine serial console with VirtIO-net attached:
+For the fast interactive development profile:
 
 ```sh
 make run
 ```
 
-These targets build a standalone GRUB `BOOTX64.EFI`, expose `build/esp` as an EFI
-System Partition, boot through OVMF with KVM, and print to the serial console.
-The default `make run` path uses the generated Alpine rootfs, preserves
-Alpine's packaged `/etc/init.d/networking` and udhcpc helper script, and
-starts networking through OpenRC, ifupdown-ng, and BusyBox/Alpine `udhcpc`.
+`make run` is an alias for `make run-fast`.  It builds the synthetic SquashFS
+rootfs, boots through OVMF/KVM, and prints the serial console on stdio.  This is
+the everyday kernel/server loop; current warm profiles reach the login prompt in
+about 5 seconds.
+
+For fuller Alpine bringup:
+
+```sh
+make run-alpine
+make run-alpine-net
+```
+
+`make run-alpine` boots the generated Alpine rootfs through BusyBox init and
+OpenRC without attaching a network device.  `make run-alpine-net` attaches
+VirtIO-net, preserves Alpine's packaged `/etc/init.d/networking` and udhcpc
+helper script, and starts networking through OpenRC, ifupdown-ng, and
+BusyBox/Alpine `udhcpc`.  Current warm Alpine-net profiles reach login in about
+13-14 seconds and complete the network readiness marker shortly after that.
+
+The profile harness has matching entry points:
+
+```sh
+make run-profile-fast
+make run-profile-alpine
+make run-profile-alpine-net
+```
 
 The default VirtIO-net QEMU backend uses restricted user networking for
 deterministic DHCP and service tests.  External ICMP smoke testing uses the
