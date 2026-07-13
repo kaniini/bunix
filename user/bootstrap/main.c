@@ -1618,6 +1618,14 @@ static void log_path_line(const char *prefix, const char *path)
 	bunix_console_log(line, cursor);
 }
 
+static void bootstrap_early_step(const char *event, const char *line)
+{
+	bunix_boot_event_record(event);
+	if (bunix_cmdline_has("debug-bootstrap-early") > 0) {
+		bunix_console_log(line, str_len(line));
+	}
+}
+
 static long proc_spawn_wait_args(u64 proc, const char *path,
 				 const char **args, u64 arg_count,
 				 const char **envs, u64 env_count);
@@ -3945,15 +3953,29 @@ int main(void)
 
 	bunix_console_log(launching, sizeof(launching) - 1);
 	bunix_boot_event_record("bootstrap-launching-servers");
+	bootstrap_early_step("bs-claim-names-begin",
+			     "bootstrap: early claim names begin\n");
 	if (claim_names_admin() != 0) {
 		return 1;
 	}
-	register_service(BUNIX_SERVICE_VM, BUNIX_HANDLE_VM);
+	bootstrap_early_step("bs-claim-names-end",
+			     "bootstrap: early claim names end\n");
+	bootstrap_early_step("bs-register-vm-begin",
+			     "bootstrap: early register vm begin\n");
+	if (register_service(BUNIX_SERVICE_VM, BUNIX_HANDLE_VM) != 0) {
+		return 1;
+	}
+	bootstrap_early_step("bs-register-vm-end",
+			     "bootstrap: early register vm end\n");
+	bootstrap_early_step("bs-inherited-handles",
+			     "bootstrap: early inherited handles\n");
 	console = BUNIX_HANDLE_CONSOLE;
 	vm = BUNIX_HANDLE_VM;
 	if (console == 0 || vm == 0) {
 		return 1;
 	}
+	bootstrap_early_step("bs-mgmt-ports-begin",
+			     "bootstrap: early mgmt ports begin\n");
 	user_mgmt = (u64)bunix_port_create("user-mgmt");
 	proc_mgmt = (u64)bunix_port_create("proc-mgmt");
 	linux_mgmt = (u64)bunix_port_create("linux-mgmt");
@@ -3961,6 +3983,8 @@ int main(void)
 	    (long)linux_mgmt <= 0) {
 		return 1;
 	}
+	bootstrap_early_step("bs-mgmt-ports-end",
+			     "bootstrap: early mgmt ports end\n");
 	bunix_console_log(names_ready, sizeof(names_ready) - 1);
 	bunix_boot_event_record("bootstrap-names-ready");
 
