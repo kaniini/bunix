@@ -260,60 +260,6 @@ materialize_openrc_policy() {
 	done < "$runlevel_policy"
 }
 
-install_bunix_openrc_providers() {
-	cat > "$root/etc/init.d/devfs" <<'EOF_BUNIX_DEV'
-#!/sbin/openrc-run
-
-description="Declare Bunix devfs availability to OpenRC"
-
-depend()
-{
-	provide dev dev-mount
-	before hwdrivers machine-id fsck
-}
-
-start()
-{
-	return 0
-}
-EOF_BUNIX_DEV
-	chmod 0755 "$root/etc/init.d/devfs"
-
-	cat > "$root/etc/init.d/sysfs" <<'EOF_BUNIX_SYS'
-#!/sbin/openrc-run
-
-description="Declare Bunix sysfs availability to OpenRC"
-
-depend()
-{
-	before hwdrivers
-}
-
-start()
-{
-	return 0
-}
-EOF_BUNIX_SYS
-	chmod 0755 "$root/etc/init.d/sysfs"
-
-	cat > "$root/etc/init.d/procfs" <<'EOF_BUNIX_PROC'
-#!/sbin/openrc-run
-
-description="Declare Bunix procfs availability to OpenRC"
-
-depend()
-{
-	before sysfs
-}
-
-start()
-{
-	return 0
-}
-EOF_BUNIX_PROC
-	chmod 0755 "$root/etc/init.d/procfs"
-}
-
 apk_add_rootfs() {
 	if [ -n "$apk_arch" ]; then
 		# shellcheck disable=SC2086
@@ -418,7 +364,6 @@ if [ ! -f "$root/etc/init.d/networking" ]; then
 fi
 
 materialize_openrc_policy
-install_bunix_openrc_providers
 generate_openrc_cache
 write_runlevel_inventory "$root" "$bunix_runlevels"
 

@@ -134,8 +134,10 @@ Implementation Notes:
   body, and rejects stale `bunix-openrc-*` scripts or inittab hooks.
 - The default OpenRC policy keeps the real Alpine `networking` service in the
   boot runlevel while suppressing Linux-hardware services Bunix does not
-  currently provide and declaring procfs, sysfs, and devfs availability through
-  Bunix provider scripts.
+  currently provide.  Alpine's packaged `devfs`, `procfs`, and `sysfs` init
+  scripts stay in the rootfs, but Bunix does not link them into the active
+  runlevels because those filesystems are mounted by native servers before
+  Linux init.
 - Static PIE execution was fixed below OpenRC: `/sbin/ifquery` is a symlink to
   the interpreterless `ifupdown` static PIE binary, so proc must report the
   program header address in the loaded image and leave musl's RELR self

@@ -106,6 +106,10 @@ Progress:
   the Linux/net compatibility path below the stock service: UDP receives now
   report source sockaddr data for musl resolver callers, and the net server has
   a minimal outbound IPv4 TCP client data path.
+- Removed the remaining Alpine rootfs overwrite of packaged OpenRC provider
+  scripts.  The image now preserves Alpine's stock `devfs`, `procfs`, `sysfs`,
+  and `networking` init scripts; Bunix policy only controls which runlevel
+  links are active.
 
 Needs:
 
@@ -152,3 +156,8 @@ Validation:
   - `BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' BUNIX_CMD='/bin/nettest' BUNIX_MARKER=NETTEST_OK make test-command`
   - `make test-boot-virtio-net-dns-wget`
   - `make test-boot-virtio-net-external-ping-strict`
+- After removing the remaining Bunix-written OpenRC provider scripts:
+  - `sh -n tools/build-alpine-rootfs.sh`
+  - `sh -n tools/test-alpine-rootfs.sh`
+  - `make test-alpine-rootfs`
+  - `make test-boot-virtio-net-networking`
