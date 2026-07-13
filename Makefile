@@ -1686,7 +1686,7 @@ test-boot-virtio-net-networking-run: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/test-
 	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		QEMU_TIMEOUT=180s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
 		BUNIX_MARKER=BUNIX_NETWORKING_OK \
-		BUNIX_CMD='C=/proc/net/config; rc-service networking status; rc-service networking restart; test -e /run/openrc/started/networking; cat $$C; grep -F "iface eth0" $$C; grep -F "default_ipv4 1" $$C; grep -F "rxq 0 txq 0" $$C; ping -c1 -W4 10.0.2.2; ping -c1 -W4 4.2.2.1; ping -c1 -W4 8.8.8.8' \
+		BUNIX_CMD='C=/proc/net/config; test -e /run/openrc/started/networking; rc-service networking status; cat $$C; grep -F "iface eth0" $$C; grep -F "default_ipv4 1" $$C; grep -F "rxq 0 txq 0" $$C; ping -c1 -W4 10.0.2.2; ping -c1 -W4 4.2.2.1; ping -c1 -W4 8.8.8.8' \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" sh tools/test-command.sh
 
 test-boot-virtio-net-external-stack:
@@ -1763,7 +1763,7 @@ test-boot-virtio-net-external-ping-run: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/te
 	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
 		QEMU_TIMEOUT=180s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
 		BUNIX_MARKER=BUNIX_EXTERNAL_PING_OK \
-		BUNIX_CMD='udhcpc -n -q -i eth0 -t 1 -T 1; C=/proc/net/config; grep -F "iface eth0" $$C; grep -F "default_ipv4 1" $$C; ping -c4 -W4 4.2.2.1 >/tmp/p; cat /tmp/p; grep -F "64 bytes from 4.2.2.1:" /tmp/p; grep -F "4 packets transmitted, 4 packets received" /tmp/p; ping -c1 -W4 8.8.8.8' \
+		BUNIX_CMD='test -e /run/openrc/started/networking; rc-service networking status; C=/proc/net/config; grep -F "iface eth0" $$C; grep -F "default_ipv4 1" $$C; ping -c4 -W4 4.2.2.1 >/tmp/p; cat /tmp/p; grep -F "64 bytes from 4.2.2.1:" /tmp/p; grep -F "4 packets transmitted, 4 packets received" /tmp/p; ping -c1 -W4 8.8.8.8' \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" sh tools/test-command.sh
 
 test-boot-virtio-blk: $(VIRTIO_BLK_TEST_EFI_BOOT_APP) $(VIRTIO_BLK_TEST_IMAGE) tools/check-markers.sh tools/test-lib.sh tools/test-boot.sh tools/test-boot-markers-squashfs.txt

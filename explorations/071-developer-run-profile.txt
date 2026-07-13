@@ -90,6 +90,10 @@ Progress:
   that validates login, service status, DHCP/default IPv4 configuration, and
   external IPv4 pings.
 - README documents the target split and current warm profile milestones.
+- The high-level Alpine networking gates now observe the networking state
+  produced by the boot runlevel.  They require `/run/openrc/started/networking`
+  and `rc-service networking status`, but do not restart networking or rerun
+  `udhcpc` by hand.
 
 Needs:
 
@@ -118,6 +122,11 @@ Validation:
   - `build/run-profile/20260713T091905Z-18838`
   - login prompt at 13354 ms, network marker at 14177 ms, total 14238 ms
 - `sh tools/check-run-profile-log-volume.sh build/run-profile/20260713T091905Z-18838`
+- After tightening the faithful networking checks to avoid manual service
+  restart or direct `udhcpc`:
+  - `make test-alpine-rootfs`
+  - `make test-boot-virtio-net-networking`
+  - `make test-boot-virtio-net-external-ping`
 - Known failing gate:
   - `make test-boot-virtio-net-dns-wget`
   - Artifact: `build/failures/20260713T092016Z-20043/20260713T092540Z-20043`

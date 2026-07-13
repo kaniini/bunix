@@ -511,8 +511,8 @@ make run-profile-alpine-net
 The default VirtIO-net QEMU backend uses restricted user networking for
 deterministic DHCP and service tests.  External ICMP smoke testing uses the
 explicit unrestricted backend in `make test-boot-virtio-net-external-ping`, which
-boots Alpine, runs `udhcpc` through the normal userspace path, and pings
-`4.2.2.1` and `8.8.8.8` before powering off.
+boots Alpine, verifies OpenRC started Alpine's packaged networking service, and
+pings `4.2.2.1` and `8.8.8.8` before powering off.
 
 ## EFI GRUB image
 
