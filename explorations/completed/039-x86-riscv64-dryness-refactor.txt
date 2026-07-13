@@ -47,7 +47,7 @@ Tasks:
 - [x] Update documentation to describe the architecture boundary explicitly:
       what belongs in `arch/*`, what belongs in generic kernel code, and what
       belongs in userspace servers.
-- [x] Keep BPI-F3 artifacts and x86_64 Alpine boot tests passing throughout.
+- [x] Keep x86_64 Alpine boot tests passing throughout.
 
 Verification:
 
@@ -55,7 +55,6 @@ Verification:
 - [x] `make ARCH=riscv64 all`
 - [x] Existing x86_64 Alpine/busybox smoke target chosen during the refactor
 - [x] Existing riscv64 Alpine environment target from exploration 035
-- [x] Existing BPI-F3 artifact/smoke helper targets
 
 Progress notes:
 
@@ -240,12 +239,10 @@ Progress notes:
   - Confirmed x86_64 and riscv64 architecture builds remained up to date.
   - Confirmed the x86_64 synthetic and Alpine/busybox smoke paths still pass
     through the existing smoke/full-suite coverage.
-  - Confirmed the riscv64 Alpine environment and BPI-F3 artifact/emulator gate
-    still pass after the refactor.
+  - Confirmed the riscv64 Alpine environment still passes after the refactor.
   - Verification:
     - `make ARCH=x86_64 all`
     - `make ARCH=riscv64 all`
     - `make test-smoke`
     - `make test-boot-riscv64-alpine`
-    - `make test-riscv64-bpi-f3-emulator-gate`
     - `make test`

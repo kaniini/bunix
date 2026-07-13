@@ -3,10 +3,8 @@ Clean up the riscv64 port and get to an Alpine environment on riscv64.
 Status:
 
 - Active.
-- This exploration pauses `058-riscv64-bpi-f3-board-port.txt`.  BPI-F3
-  hardware proof remains important, but the generic riscv64 port should be
-  cleaned up first so board work does not accumulate around temporary
-  emulator-only scaffolding.
+- The generic riscv64 port should be cleaned up first so board work does not
+  accumulate around temporary emulator-only scaffolding.
 - The next explorations after this one split future refactors into focused
   work:
   - `036-shared-linux-personality-riscv64.txt`
@@ -23,8 +21,9 @@ Problem:
   than the real Linux personality used by x86_64.
 - The riscv64 boot package and runtime path still contain bringup-era special
   cases that are acceptable for smoke tests but not for an Alpine environment.
-- Alpine-on-riscv64 should be proved in QEMU before returning to BPI-F3
-  hardware so board debugging does not hide generic architecture defects.
+- Alpine-on-riscv64 should be proved in QEMU before any board-specific
+  hardware bringup so board debugging does not hide generic architecture
+  defects.
 
 Target outcome:
 
@@ -42,9 +41,7 @@ Target outcome:
 Constraints:
 
 - Do not regress the existing x86_64 Alpine/busybox/OpenRC flow.
-- Do not require BPI-F3 hardware for this exploration.
-- Keep riscv64 BPI-F3 artifact generation working while this exploration is
-  active, but do not close BPI-F3 hardware tasks without real board logs.
+- Do not require hardware-specific board access for this exploration.
 - Prefer shared Linux-personality code over growing `user/riscv64-linux`.
 - Keep architecture-specific syscall ABI details explicit and table-driven
   where possible.
@@ -91,8 +88,8 @@ Verification:
 
 Progress notes:
 
-- Created as the active exploration when `058-riscv64-bpi-f3-board-port.txt`
-  was paused.
+- Created to continue generic riscv64 cleanup before any board-specific
+  hardware bringup.
 - Completed the first audit of bringup-only riscv64 pieces:
   - `user/riscv64-linux/main.c` is a toy Linux personality server.  It only
     recognizes riscv64 Linux `write`, `exit`, `exit_group`, and

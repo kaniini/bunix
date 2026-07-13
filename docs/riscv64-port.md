@@ -355,14 +355,13 @@ that payload under the package name `/bin/musl-hello`; the current static
 hello execution path goes through the userspace riscv64 Linux server described
 above.
 
-## Hardware Port Gate
+## Hardware Port Scope
 
-Board-specific riscv64 work, including the Banana Pi BPI-F3 port, remains
-behind the QEMU `virt` emulator path.  The emulator now has proc/bootstrap,
-shared-Linux, dynamic-loader, and Alpine shell smoke coverage; full OpenRC,
-interactive login, VirtIO, and board-specific drivers still need separate
-work.  Keep board artifact generation working, but do not close board
-hardware proof items from emulator output alone.
+Board-specific riscv64 work is out of scope for the current project plan.
+The emulator now has proc/bootstrap, shared-Linux, dynamic-loader, and Alpine
+shell smoke coverage, but full OpenRC, interactive login, VirtIO, and the
+generic driver model still need enough quality work that hardware-specific
+artifact generation would be premature.
 
 ## Unsupported features
 

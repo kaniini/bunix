@@ -34,7 +34,6 @@ Tasks:
       image once the shared Linux personality can execute them.
 - [x] Add a riscv64 QEMU boot target that uses the new artifact and powers off
       cleanly after a deterministic init/shell smoke.
-- [x] Keep BPI-F3 artifact generation compatible with the chosen carrier.
 - [x] Update `docs/riscv64-port.md` with exact artifact paths and operator
       commands.
 
@@ -43,7 +42,6 @@ Verification:
 - [x] `make ARCH=riscv64 all`
 - [x] New riscv64 Alpine artifact test
 - [x] New riscv64 Alpine QEMU boot target
-- [x] Existing BPI-F3 artifact/smoke helper target
 - [x] `git diff --check`
 - [x] Full completion gate: `make test`
 
@@ -80,15 +78,11 @@ Progress notes:
     squashfs, runs `/bin/dyn-hello`, spawns Alpine `/bin/sh -c 'echo
     BUNIX_RISCV64_ALPINE_SH_OK'` through proc/Linux, and powers off through
     the native machine poweroff path.
-  - BPI-F3 artifacts now copy the same default and UART boot packages into
-    `build/riscv64/bpi-f3/` and keep the U-Boot recipes in sync with the
-    chosen carrier.
 - Verification for closing this exploration:
   - `make ARCH=riscv64 all`
   - `make test-riscv64-alpine-rootfs`
   - `make test-riscv64-dynamic-linker-artifacts`
   - `make test-boot-riscv64-alpine`
-  - `make test-riscv64-bpi-f3-emulator-gate`
   - `git diff --check`
   - Full completion gate from the immediately preceding completed boundary:
     `make test` launched 20 shards with 0 skipped and all shards passing.

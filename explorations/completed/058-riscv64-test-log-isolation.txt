@@ -24,11 +24,6 @@ Tasks:
       targets do not write the same log by default.
 - [x] Update test-efficiency notes with the riscv64 log-isolation contract.
 
-Deferred:
-
-- BPI-F3 helper-script log isolation belongs with the postponed BPI-F3 block.
-  Do not do BPI-F3-specific script work in this exploration.
-
 Needs:
 
 - RISC-V boot verification is blocked by pre-existing userspace/server parity

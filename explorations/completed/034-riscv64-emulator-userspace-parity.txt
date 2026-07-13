@@ -1,5 +1,4 @@
-Finish riscv64 userspace bringup in the QEMU virt emulator before starting
-board-specific hardware work.
+Finish riscv64 userspace bringup in the QEMU virt emulator.
 
 Problem:
 
@@ -10,9 +9,9 @@ Problem:
   tasks through the normal proc/bootstrap path, does not have general
   userspace VM/copyin/copyout on riscv64, and does not run the Linux
   personality in the emulator.
-- Board bringup should wait until the QEMU `virt` emulator path is genuinely
-  working.  Otherwise hardware debugging will mix platform defects with
-  unfinished generic riscv64 architecture work.
+- Board bringup should remain out of scope until the QEMU `virt` emulator path
+  is genuinely working.  Otherwise hardware debugging would mix platform
+  defects with unfinished generic riscv64 architecture work.
 
 Intended outcome:
 
@@ -25,16 +24,14 @@ Intended outcome:
   carrier, loaded through the normal proc/VFS/server path, executed by the
   Linux personality server using riscv64 Linux syscall numbers, and observed
   in a QEMU smoke test.
-- The BPI-F3 exploration remains blocked until this emulator target is
-  complete and stable.
+- Board-specific hardware work is not part of this exploration.
 
 Constraints:
 
 - Keep hardware/board-specific code out of this exploration.  The target is
   `qemu-system-riscv64 -machine virt`.
-- Prioritize further riscv64 emulator bringup over BPI-F3 work.  Board
-  bringup must not start while any emulator userspace parity tasks in this
-  exploration remain open.
+- Prioritize further riscv64 emulator bringup over board-specific work.  Board
+  bringup must not start while emulator userspace parity tasks remain open.
 - Preserve the microkernel shape.  Do not pull VFS, proc, Linux personality,
   or filesystem policy into the riscv64 kernel path to simplify bringup.
 - Keep x86_64 behavior and tests green while adding riscv64 implementations of
@@ -73,8 +70,8 @@ Tasks:
       static musl hello path, checks their serial or dmesg markers, and ends in
       guest poweroff.
 - [x] Update `docs/riscv64-port.md` with the emulator-supported feature set,
-      the remaining unsupported features, and the explicit gate that BPI-F3
-      work starts only after the emulator target is stable.
+      the remaining unsupported features, and the scope boundary for
+      board-specific hardware work.
 
 Verification:
 
@@ -572,8 +569,8 @@ Verification notes:
   execution bridge.
 - `make test-boot` passed after changing the shared initial stack layout,
   covering the x86_64 boot path.
-- Confirmed the BPI-F3 board port remains gated: do not begin BPI-F3 hardware
-  work until the QEMU `virt` riscv64 emulator userspace path fully works.
+- Confirmed board-specific hardware work remains out of scope until the QEMU
+  `virt` riscv64 emulator userspace path fully works.
 - Added a userspace riscv64 Linux personality smoke server for the static
   musl hello surface:
   - `user/riscv64-linux/main.c` builds as `build/riscv64/modules/linux.server`
@@ -622,5 +619,5 @@ Verification notes:
     required records.
 - Marked the riscv64 port documentation task complete.  `docs/riscv64-port.md`
   now records the supported QEMU `virt` emulator feature set, the current
-  unsupported areas, the static-musl Linux server path, and the explicit BPI-F3
-  hardware gate.
+  unsupported areas, the static-musl Linux server path, and the board-specific
+  hardware scope boundary.

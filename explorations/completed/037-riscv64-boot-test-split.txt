@@ -34,8 +34,8 @@ Tasks:
       interaction or keep sleep-dependent checks out of the early boot path.
 - [x] Move test-only checks behind explicit command-line tokens or dedicated
       test entry helpers while preserving existing smoke target coverage.
-- [x] Keep platform/FDT diagnostics available for BPI-F3 review logs without
-      forcing them into every future riscv64 Alpine boot.
+- [x] Keep platform/FDT diagnostics available for future board-review logs
+      without forcing them into every future riscv64 Alpine boot.
 - [x] Ensure scheduler, timer, syscall, user-mode, ELF-loader, and user-copy
       self-tests still run under narrow `make` targets.
 - [x] Update `docs/riscv64-port.md` and exploration notes with the new boot
@@ -46,7 +46,6 @@ Verification:
 - [x] `make ARCH=riscv64 all`
 - [x] Existing `make test-boot-riscv64-early`
 - [x] Existing `make test-boot-riscv64-uart-console`
-- [x] Existing `make test-riscv64-bpi-f3-emulator-gate`
 - [x] `git diff --check`
 - [x] Full completion gate: `make test`
 
