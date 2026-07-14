@@ -42,6 +42,7 @@ fi
 
 APK_ARCH=riscv64 \
 APK_REPOSITORIES_FILE="$repositories" \
+APK_GUEST_REPOSITORIES_FILE="$repositories" \
 ALPINE_ROOTFS_ARTIFACT_DIR="$artifact_dir" \
 ALPINE_ROOTFS_PACKAGES="${RISCV64_ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc ifupdown-ng}" \
 BUNIX_ALPINE_OVERLAY=0 \

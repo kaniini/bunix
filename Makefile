@@ -517,7 +517,7 @@ USER_OBJS := $(USER_CRT0_OBJ) $(BUILD_DIR)/user/bootstrap/main.c.o \
 	$(BUILD_DIR)/user/ping/main.c.o
 DEPS := $(KERNEL_OBJS:.o=.d) $(USER_OBJS:.o=.d)
 
-.PHONY: all clean run run-fast run-fast-qemu run-profile run-profile-fast run-profile-alpine run-profile-alpine-net test-run-fast test-run-alpine test-run-alpine-net test-run-profile-log-volume run-alpine run-alpine-qemu run-alpine-net run-alpine-net-qemu run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-linux-exec-abi test-proc-exec-stack test-path-safety test-boot test-boot-alpine-stock-networking test-boot-openrc-fork-reclaim test-boot-openrc-fork-reclaim-run test-boot-net-route test-boot-handle-race test-linux-lifecycle test-lowmem-isolation test-user-memory-contract test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-sleep test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-log-isolation test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-wget-readv test-boot-virtio-net-wget-readv-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
+.PHONY: all clean run run-fast run-fast-qemu run-profile run-profile-fast run-profile-alpine run-profile-alpine-net test-run-fast test-run-alpine test-run-alpine-net test-run-profile-log-volume run-alpine run-alpine-qemu run-alpine-net run-alpine-net-qemu run-virtio run-virtio-net run-kernel run-iso run-riscv64-early run-riscv64-alpine riscv64-muslcc-toolchain test test-alpine-rootfs test-alpine-rootfs-stock-networking test-riscv64-alpine-rootfs test-riscv64-dynamic-linker-artifacts test-linux-exec-abi test-proc-exec-stack test-path-safety test-boot test-boot-alpine-stock-networking test-boot-openrc-fork-reclaim test-boot-openrc-fork-reclaim-run test-boot-net-route test-boot-handle-race test-linux-lifecycle test-lowmem-isolation test-user-memory-contract test-boot-ext2 test-boot-ext2-fsck test-boot-ext2-root test-boot-riscv64-early test-boot-riscv64-sleep test-boot-riscv64-alpine test-boot-riscv64-uart-console test-riscv64-log-isolation test-riscv64-bootpkg test-riscv64-shared-linux-server-build test-riscv64-proc-server-build test-riscv64-fs-server-build test-riscv64-user-abi test-boot-usb test-boot-usb-synth test-boot-xhci-discovery test-boot-usb-hid-kbd test-boot-usb-storage test-boot-virtio test-boot-virtio-net test-boot-virtio-net-dhcp test-boot-virtio-net-ifup test-boot-virtio-net-ifup-run test-boot-virtio-net-networking test-boot-virtio-net-networking-run test-boot-virtio-net-external-stack test-boot-virtio-net-external-ping-strict test-boot-virtio-net-external-ping-strict-run test-boot-virtio-net-dns-wget test-boot-virtio-net-dns-wget-run test-boot-virtio-net-apk-add test-boot-virtio-net-apk-add-run test-boot-virtio-net-wget-readv test-boot-virtio-net-wget-readv-run test-boot-virtio-net-socket-peer test-boot-virtio-net-socket-peer-ipv6 test-boot-virtio-net-socket-peer-udp6 test-boot-virtio-net-socket-peer-tcp6 test-boot-virtio-net-external-ping test-boot-virtio-net-external-ping-run test-boot-virtio-blk test-boot-virtio-blk-irq test-boot-virtio-blk-backend test-boot-virtio-blk-irq-backend test-command test-shell test-shell-part test-shell-squashfs-rootfs test-smoke test-smoke-parallel test-shell-parallel test-parallel test-prune-artifacts test-shell-static test-shell-dynamic list-shell-shards audit-linux-syscalls security-audit-check iso esp check-tools FORCE
 
 all: $(KERNEL)
 
@@ -1729,6 +1729,20 @@ test-boot-virtio-net-dns-wget-run: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/guest-n
 		BUNIX_FAILURE_GUEST_PROBES=0 \
 		BUNIX_MARKER=BUNIX_NET_DNS_WGET_OK \
 		BUNIX_CMD_FILE=tools/guest-network-dns-wget.sh \
+		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" sh tools/test-command.sh
+
+test-boot-virtio-net-apk-add:
+	$(MAKE) ROOTFS_FLAVOR=alpine-squashfs test-boot-virtio-net-apk-add-run
+
+test-boot-virtio-net-apk-add-run: $(VIRTIO_NET_TEST_EFI_BOOT_APP) tools/guest-apk-install-smoke.sh tools/test-lib.sh tools/test-command.sh
+	ESP_DIR=$(VIRTIO_NET_TEST_ESP_DIR) OVMF_CODE=$(OVMF_CODE) QEMU=$(QEMU) SMP=$(SMP) \
+		QEMU_TIMEOUT=420s BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' \
+		BUNIX_LOGIN_TIMEOUT=180 \
+		BUNIX_COMMAND_TIMEOUT=360 \
+		BUNIX_SEND_DELAY=0.2 \
+		BUNIX_FAILURE_GUEST_PROBES=0 \
+		BUNIX_MARKER=BUNIX_APK_INSTALL_OK \
+		BUNIX_CMD_FILE=tools/guest-apk-install-smoke.sh \
 		QEMU_EXTRA_ARGS="$(QEMU_VIRTIO_NET_EXTERNAL_ARGS)" sh tools/test-command.sh
 
 test-boot-virtio-net-wget-readv:

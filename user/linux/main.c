@@ -68,6 +68,7 @@ enum {
 	LINUX_TIOCSPGRP = 0x5410,
 	LINUX_TIOCGWINSZ = 0x5413,
 	LINUX_SIOCGIFFLAGS = 0x8913,
+	LINUX_SIOCSIFFLAGS = 0x8914,
 	LINUX_SIOCGIFHWADDR = 0x8927,
 	LINUX_SIOCGIFMTU = 0x8921,
 	LINUX_SIOCGIFINDEX = 0x8933,
@@ -187,8 +188,12 @@ enum {
 	LINUX_O_NOFOLLOW = 00400000,
 	LINUX_O_DIRECTORY = 00200000,
 	LINUX_O_CLOEXEC = 02000000,
+	LINUX___O_TMPFILE = 020000000,
+	LINUX_O_TMPFILE = 020200000,
+	LINUX_O_TMPFILE_MASK = 020300000,
 	LINUX_DUP_CLOEXEC = 02000000,
 	LINUX_FD_CLOEXEC = 1,
+	LINUX_FD_TMPFILE = 1 << 1,
 	LINUX_FD_CONSOLE = 1,
 	LINUX_FD_FILE = 2,
 	LINUX_FD_DIR = 3,
@@ -281,6 +286,7 @@ enum {
 	LINUX_AT_SYMLINK_NOFOLLOW = 0x100,
 	LINUX_AT_REMOVEDIR = 0x200,
 	LINUX_AT_EACCESS = 0x200,
+	LINUX_AT_SYMLINK_FOLLOW = 0x400,
 	LINUX_AT_NO_AUTOMOUNT = 0x800,
 	LINUX_AT_EMPTY_PATH = 0x1000,
 	LINUX_AT_STATX_SYNC_TYPE = 0x6000,
@@ -333,6 +339,8 @@ struct linux_fd {
 	struct linux_open_file *open_file;
 	char path[LINUX_MAX_PATH];
 };
+
+static u64 linux_tmpfile_counter;
 
 struct linux_vfs_stat {
 	u64 size;
@@ -1139,6 +1147,51 @@ static int path_has_prefix(const char *path, const char *prefix)
 	return 1;
 }
 
+static int path_contains(const char *path, const char *needle)
+{
+	if (path == 0 || needle == 0 || needle[0] == '\0') {
+		return 0;
+	}
+	for (u64 i = 0; path[i] != '\0' && i < LINUX_MAX_PATH; i++) {
+		u64 j = 0;
+
+		while (i + j < LINUX_MAX_PATH &&
+		       path[i + j] != '\0' && needle[j] != '\0' &&
+		       path[i + j] == needle[j]) {
+			j++;
+		}
+		if (needle[j] == '\0') {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int linux_parse_proc_self_fd(const char *path, u64 *fd_out)
+{
+	const char prefix[] = "/proc/self/fd/";
+	u64 i = sizeof(prefix) - 1;
+	u64 value = 0;
+
+	if (path == 0 || fd_out == 0 || !path_has_prefix(path, prefix) ||
+	    path[i] == '\0') {
+		return -1;
+	}
+	while (path[i] != '\0') {
+		const char c = path[i++];
+
+		if (c < '0' || c > '9') {
+			return -1;
+		}
+		if (value > (((u64)-1) / 10)) {
+			return -1;
+		}
+		value = value * 10 + (u64)(c - '0');
+	}
+	*fd_out = value;
+	return 0;
+}
+
 static int linux_fd_allows_zero_size_read(const struct linux_fd *fd)
 {
 	return fd != 0 && path_has_prefix(fd->path, "/proc/");
@@ -1198,6 +1251,34 @@ static void append_long(char *line, u64 line_size, u64 *cursor, long value)
 	append_dec(line, line_size, cursor, (u64)value);
 }
 
+static int linux_debug_apk_enabled(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0) {
+		enabled = bunix_cmdline_has("debug-linux-apk") > 0;
+	}
+	return enabled;
+}
+
+static int linux_debug_apk_path_applies(const char *path)
+{
+	if (!linux_debug_apk_enabled() || path == 0) {
+		return 0;
+	}
+	return path_contains(path, ".apk") ||
+	       string_equal(path, "bin") ||
+	       string_equal(path, "/bin") ||
+	       path_contains(path, "busybox-extras") ||
+	       path_contains(path, "busybox-paths") ||
+	       path_contains(path, "/etc/apk") ||
+	       path_contains(path, "etc/apk") ||
+	       path_contains(path, "/lib/apk") ||
+	       path_contains(path, "lib/apk") ||
+	       path_contains(path, "installed.tmp") ||
+	       path_contains(path, "world.tmp");
+}
+
 static void linux_debug_path_log(const struct linux_process *process,
 				 const char *syscall, const char *path)
 {
@@ -1208,6 +1289,7 @@ static void linux_debug_path_log(const struct linux_process *process,
 
 	const int all_paths = bunix_cmdline_has("debug-linux-paths") > 0;
 	const int late_paths = bunix_cmdline_has("debug-linux-paths-late") > 0;
+	const int apk_paths = linux_debug_apk_path_applies(path);
 	int task_paths = 0;
 
 	append_text(task_token, sizeof(task_token), &token_cursor,
@@ -1219,10 +1301,10 @@ static void linux_debug_path_log(const struct linux_process *process,
 		task_paths = bunix_cmdline_has(task_token) > 0;
 	}
 
-	if (!all_paths && !late_paths && !task_paths) {
+	if (!all_paths && !late_paths && !task_paths && !apk_paths) {
 		return;
 	}
-	if (!all_paths && !task_paths && process != 0 &&
+	if (!apk_paths && !all_paths && !task_paths && process != 0 &&
 	    process->bunix_task < 140) {
 		return;
 	}
@@ -1250,7 +1332,8 @@ static void linux_debug_path_result_log(const struct linux_process *process,
 	char line[352];
 	u64 cursor = 0;
 
-	if (!linux_debug_paths_enabled_for_task(process)) {
+	if (!linux_debug_paths_enabled_for_task(process) &&
+	    !linux_debug_apk_path_applies(path)) {
 		return;
 	}
 	append_text(line, sizeof(line), &cursor, "linux-server: ");
@@ -1268,20 +1351,94 @@ static void linux_debug_path_result_log(const struct linux_process *process,
 		append_text(line, sizeof(line), &cursor, path);
 	}
 	append_char(line, sizeof(line), &cursor, '\n');
-	bunix_console_log(line, cursor);
+	(void)bunix_early_console_write(line, cursor);
 }
+
+static void linux_debug_apk_openat_state_log(
+	const struct linux_process *process, u64 dirfd, const char *phase,
+	const char *path, const char *opened_path, long result, u64 flags)
+{
+	const struct linux_fd *base_fd = 0;
+	char line[896];
+	u64 cursor = 0;
+
+	if (!linux_debug_apk_path_applies(path) &&
+	    !linux_debug_apk_path_applies(opened_path)) {
+		return;
+	}
+	if (process != 0 && dirfd < process->fd_capacity) {
+		base_fd = &process->fds[dirfd];
+	}
+	append_text(line, sizeof(line), &cursor,
+		    "linux-server: apk-openat-state ");
+	append_text(line, sizeof(line), &cursor, phase);
+	append_text(line, sizeof(line), &cursor, " pid=");
+	append_dec(line, sizeof(line), &cursor,
+		   process != 0 ? process->pid : 0);
+	append_text(line, sizeof(line), &cursor, " task=");
+	append_dec(line, sizeof(line), &cursor,
+		   process != 0 ? process->bunix_task : 0);
+	append_text(line, sizeof(line), &cursor, " dirfd=");
+	append_dec(line, sizeof(line), &cursor, dirfd);
+	append_text(line, sizeof(line), &cursor, " result=");
+	append_long(line, sizeof(line), &cursor, result);
+	append_text(line, sizeof(line), &cursor, " flags=");
+	append_dec(line, sizeof(line), &cursor, flags);
+	append_text(line, sizeof(line), &cursor, " base_kind=");
+	append_dec(line, sizeof(line), &cursor,
+		   base_fd != 0 ? base_fd->kind : 0);
+	append_text(line, sizeof(line), &cursor, " base_handle=");
+	append_dec(line, sizeof(line), &cursor,
+		   base_fd != 0 ? base_fd->handle : 0);
+	append_text(line, sizeof(line), &cursor, " base_flags=");
+	append_dec(line, sizeof(line), &cursor,
+		   base_fd != 0 ? base_fd->flags : 0);
+	append_text(line, sizeof(line), &cursor, " base_status=");
+	append_dec(line, sizeof(line), &cursor,
+		   base_fd != 0 ? base_fd->status_flags : 0);
+	append_text(line, sizeof(line), &cursor, " base_path=");
+	if (base_fd != 0 && base_fd->path[0] != '\0') {
+		append_text(line, sizeof(line), &cursor, base_fd->path);
+	}
+	append_text(line, sizeof(line), &cursor, " path=");
+	if (path != 0) {
+		append_text(line, sizeof(line), &cursor, path);
+	}
+	append_text(line, sizeof(line), &cursor, " opened=");
+	if (opened_path != 0) {
+		append_text(line, sizeof(line), &cursor, opened_path);
+	}
+	append_char(line, sizeof(line), &cursor, '\n');
+	(void)bunix_early_console_write(line, cursor);
+}
+
+static void linux_debug_path_arg_offset_result_log(
+	const struct linux_process *process, const char *syscall,
+	u64 path_len, u64 path_buffer, u64 path_offset, long result);
 
 static void linux_debug_path_arg_result_log(const struct linux_process *process,
 					    const char *syscall,
 					    u64 path_len, u64 path_buffer,
 					    long result)
 {
+	linux_debug_path_arg_offset_result_log(process, syscall, path_len,
+					       path_buffer, 0, result);
+}
+
+static void linux_debug_path_arg_offset_result_log(
+	const struct linux_process *process, const char *syscall,
+	u64 path_len, u64 path_buffer, u64 path_offset, long result)
+{
 	char path[LINUX_MAX_PATH];
 
-	if (!linux_debug_paths_enabled_for_task(process)) {
+	if (!linux_debug_paths_enabled_for_task(process) &&
+	    !linux_debug_apk_enabled()) {
 		return;
 	}
-	if (linux_read_path_arg(path_buffer, path_len, path, sizeof(path)) != 0) {
+	if (path_buffer == 0 ||
+	    path_len == 0 || path_len > sizeof(path) ||
+	    bunix_buffer_read(path_buffer, path_offset, path, path_len) != 0 ||
+	    path[path_len - 1] != '\0') {
 		path[0] = '\0';
 	}
 	linux_debug_path_result_log(process, syscall, path, result);
@@ -1535,6 +1692,7 @@ static const char *linux_debug_message_name(u64 type)
 	case BUNIX_LINUX_SETHOSTNAME: return "sethostname";
 	case BUNIX_LINUX_GETCWD: return "getcwd";
 	case BUNIX_LINUX_CHDIR: return "chdir";
+	case BUNIX_LINUX_FCHDIR: return "fchdir";
 	case BUNIX_LINUX_MKDIR: return "mkdir";
 	case BUNIX_LINUX_RMDIR: return "rmdir";
 	case BUNIX_LINUX_RENAME: return "rename";
@@ -1573,6 +1731,7 @@ static const char *linux_debug_message_name(u64 type)
 	case BUNIX_LINUX_TASK_FAULT: return "task_fault";
 	case BUNIX_LINUX_TTY_INPUT_BUFFER: return "tty_input_buffer";
 	case BUNIX_LINUX_GRANT_TTY_INPUT_TASK: return "grant_tty_input_task";
+	case BUNIX_LINUX_RESOLVE_FD_PATH: return "resolve_fd_path";
 	default: return 0;
 	}
 }
@@ -1828,7 +1987,7 @@ static long linux_exec_prepare(u64 path_len, u64 image_len, u64 vector_len,
 	    bunix_buffer_read(buffer, LINUX_EXEC_PREPARE_PATH_OFF,
 			      path, path_len) != 0 ||
 	    path[path_len - 1] != '\0' ||
-	    path[0] != '/' ||
+	    path[0] == '\0' ||
 	    bunix_buffer_read(buffer, LINUX_EXEC_PREPARE_IMAGE_OFF,
 			      image, image_len) != 0) {
 		return -LINUX_EINVAL;
@@ -1869,6 +2028,47 @@ static long linux_exec_prepare(u64 path_len, u64 image_len, u64 vector_len,
 	}
 	linux_exec_args_free(&args);
 	return result;
+}
+
+static long linux_resolve_fd_path(struct linux_process *process, u64 path_len,
+				  u64 out_cap, u64 buffer,
+				  u64 *reply_path_len)
+{
+	char path[LINUX_MAX_PATH];
+	u64 fd;
+	u64 resolved_len;
+
+	if (process == 0 || reply_path_len == 0 || buffer == 0 ||
+	    path_len == 0 || path_len > sizeof(path) ||
+	    out_cap == 0 || out_cap > LINUX_MAX_PATH ||
+	    bunix_buffer_read(buffer, 0, path, path_len) != 0 ||
+	    path[path_len - 1] != '\0') {
+		return -LINUX_EINVAL;
+	}
+	if (linux_parse_proc_self_fd(path, &fd) != 0) {
+		return -LINUX_EINVAL;
+	}
+	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
+		return -LINUX_EBADF;
+	}
+	if (process->fds[fd].kind != LINUX_FD_FILE &&
+	    process->fds[fd].kind != LINUX_FD_DIR) {
+		return -LINUX_EBADF;
+	}
+	if (process->fds[fd].path[0] == '\0') {
+		return -LINUX_ENOENT;
+	}
+
+	resolved_len = string_len(process->fds[fd].path) + 1;
+	if (resolved_len > out_cap) {
+		return -LINUX_ENAMETOOLONG;
+	}
+	if (bunix_buffer_write(buffer, 0, process->fds[fd].path,
+			       resolved_len) != 0) {
+		return -LINUX_EFAULT;
+	}
+	*reply_path_len = resolved_len;
+	return 0;
 }
 
 static int linux_process_set_cwd(struct linux_process *process,
@@ -2023,7 +2223,7 @@ static void linux_debug_openrc_state_log_fd(const struct linux_process *process,
 		append_text(line, sizeof(line), &cursor, fd->path);
 	}
 	append_char(line, sizeof(line), &cursor, '\n');
-	bunix_console_log(line, cursor);
+	(void)bunix_early_console_write(line, cursor);
 }
 
 static void linux_debug_openrc_state_log_path(const struct linux_process *process,
@@ -2784,6 +2984,62 @@ static long path_normalize(const char *cwd, const char *input, char *out)
 	temp[pos] = '\0';
 	string_copy(out, temp);
 	return 0;
+}
+
+static long linux_path_join_child(const char *dir, const char *name, char *out)
+{
+	u64 pos = 0;
+	u64 i = 0;
+
+	if (dir == 0 || name == 0 || out == 0 ||
+	    dir[0] == '\0' || name[0] == '\0') {
+		return -LINUX_EINVAL;
+	}
+	if (path_eq(dir, ".")) {
+		string_copy(out, name);
+		return linux_check_name_max(out);
+	}
+	while (dir[i] != '\0') {
+		if (pos + 1 >= LINUX_MAX_PATH) {
+			return -LINUX_ENAMETOOLONG;
+		}
+		out[pos++] = dir[i++];
+	}
+	if (pos == 0) {
+		return -LINUX_EINVAL;
+	}
+	if (out[pos - 1] != '/') {
+		if (pos + 1 >= LINUX_MAX_PATH) {
+			return -LINUX_ENAMETOOLONG;
+		}
+		out[pos++] = '/';
+	}
+	i = 0;
+	while (name[i] != '\0') {
+		if (pos + 1 >= LINUX_MAX_PATH) {
+			return -LINUX_ENAMETOOLONG;
+		}
+		out[pos++] = name[i++];
+	}
+	out[pos] = '\0';
+	return linux_check_name_max(out);
+}
+
+static void linux_tmpfile_name(struct linux_process *process, char *name,
+			       u64 name_size)
+{
+	u64 cursor = 0;
+	const u64 serial = ++linux_tmpfile_counter;
+
+	append_text(name, name_size, &cursor, ".bunix-tmpfile.");
+	append_dec(name, name_size, &cursor, process != 0 ? process->pid : 0);
+	append_char(name, name_size, &cursor, '.');
+	append_dec(name, name_size, &cursor, serial);
+	if (cursor < name_size) {
+		name[cursor] = '\0';
+	} else if (name_size != 0) {
+		name[name_size - 1] = '\0';
+	}
 }
 
 static int linux_cache_path_for_dirfd(const struct linux_process *process,
@@ -5106,6 +5362,28 @@ static unsigned int linux_ifflags_from_net(u64 flags)
 	return out;
 }
 
+static long linux_set_ifflags(u64 iface, unsigned int flags)
+{
+	struct bunix_msg reply;
+	u64 set = 0;
+	u64 clear = 0;
+
+	if ((flags & LINUX_IFF_UP) != 0) {
+		set |= BUNIX_NET_IFACE_FLAG_UP;
+	} else {
+		clear |= BUNIX_NET_IFACE_FLAG_UP;
+	}
+	if ((flags & LINUX_IFF_BROADCAST) != 0) {
+		set |= BUNIX_NET_IFACE_FLAG_BROADCAST;
+	} else {
+		clear |= BUNIX_NET_IFACE_FLAG_BROADCAST;
+	}
+	return iface == 1 ||
+		       linux_net_request(BUNIX_NET_INTERFACE_SET_FLAGS, 0, 0,
+					 iface, set, clear, 0, &reply) == 0 ?
+	       0 : -LINUX_EINVAL;
+}
+
 static void linux_store_mac(char *ifreq, u64 mac_hi)
 {
 	for (u64 i = 0; i < 6; i++) {
@@ -5193,6 +5471,8 @@ static long linux_net_ioctl(u64 request, u64 buffer)
 	case LINUX_SIOCGIFFLAGS:
 		store_u16(ifreq, 16, linux_ifflags_from_net(info.flags));
 		break;
+	case LINUX_SIOCSIFFLAGS:
+		return linux_set_ifflags((u64)iface, load_u16(ifreq, 16));
 	case LINUX_SIOCGIFMTU:
 		store_u32(ifreq, 16, (unsigned int)info.mtu);
 		break;
@@ -5219,12 +5499,22 @@ static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
 	u64 pgid;
 
 	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
+		linux_debug_openrc_state_log_fd(process, 0, fd, "ioctl-badfd",
+						-LINUX_EBADF, request, value);
 		return -LINUX_EBADF;
 	}
 	if (process->fds[fd].kind == LINUX_FD_SOCKET) {
-		return linux_net_ioctl(request, buffer);
+		const long result = linux_net_ioctl(request, buffer);
+
+		linux_debug_openrc_state_log_fd(process, &process->fds[fd],
+						fd, "ioctl-socket", result,
+						request, value);
+		return result;
 	}
 	if (process->fds[fd].kind != LINUX_FD_CONSOLE) {
+		linux_debug_openrc_state_log_fd(process, &process->fds[fd],
+						fd, "ioctl-nontty",
+						-LINUX_ENOTTY, request, value);
 		return -LINUX_ENOTTY;
 	}
 
@@ -5260,6 +5550,9 @@ static long linux_ioctl(struct linux_process *process, u64 fd, u64 request,
 		return bunix_buffer_write(buffer, 0, data, 8) == 0 ?
 		       0 : -LINUX_EFAULT;
 	default:
+		linux_debug_openrc_state_log_fd(process, &process->fds[fd],
+						fd, "ioctl-console",
+						-LINUX_EINVAL, request, value);
 		return -LINUX_EINVAL;
 	}
 }
@@ -5652,6 +5945,184 @@ static long linux_dirfd_base_handle(struct linux_process *process, u64 dirfd,
 static long linux_ftruncate(struct linux_process *process, u64 fd, u64 length);
 static long linux_close(struct linux_process *process, u64 fd);
 
+static void linux_unlink_hidden_path(struct linux_process *process,
+				     const char *path)
+{
+	struct bunix_msg reply;
+
+	if (process == 0 || path == 0 || path[0] == '\0') {
+		return;
+	}
+	if (linux_vfs_path_call_word3(process, BUNIX_VFS_UNLINK_BUFFER, 0,
+				      path, process->bunix_task,
+				      &reply) == 0 &&
+	    reply.words[0] == 0) {
+		linux_vfs_note_mutation(path[0] == '/' ? path : 0);
+	}
+}
+
+static long linux_open_tmpfile(struct linux_process *process, u64 dirfd,
+			       const char *dir_path, u64 base_handle,
+			       u64 flags, u64 mode, const char *dir_key)
+{
+	char name[64];
+	char tmp_path[LINUX_MAX_PATH];
+	char tmp_key[LINUX_MAX_PATH];
+	struct bunix_msg reply;
+	long result;
+
+	if ((flags & LINUX_O_ACCMODE) == 0) {
+		return -LINUX_EINVAL;
+	}
+	if (dir_key == 0 || dir_key[0] == '\0') {
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "tmpfile-no-key", dir_path,
+						 dir_key, -LINUX_ENOENT,
+						 flags);
+		return -LINUX_ENOENT;
+	}
+
+	if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER, base_handle,
+				dir_path, &reply) != 0) {
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "tmpfile-open-call", dir_path,
+						 dir_key, -LINUX_ENOENT,
+						 flags);
+		return -LINUX_ENOENT;
+	}
+	if (reply.words[0] != 0) {
+		result = linux_vfs_error(reply.words[0]);
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "tmpfile-open", dir_path,
+						 dir_key, result, flags);
+		return result;
+	}
+	if (reply.words[3] != BUNIX_VFS_TYPE_DIRECTORY) {
+		(void)linux_close_raw_vfs_handle(reply.words[1]);
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "tmpfile-notdir", dir_path,
+						 dir_key, -LINUX_ENOTDIR,
+						 flags);
+		return -LINUX_ENOTDIR;
+	}
+	(void)linux_close_raw_vfs_handle(reply.words[1]);
+
+	for (u64 attempt = 0; attempt < 32; attempt++) {
+		linux_tmpfile_name(process, name, sizeof(name));
+		result = linux_path_join_child(dir_path, name, tmp_path);
+		if (result != 0) {
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "tmpfile-path",
+							 dir_path, dir_key,
+							 result, flags);
+			return result;
+		}
+		result = linux_path_join_child(dir_key, name, tmp_key);
+		if (result != 0) {
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "tmpfile-key",
+							 dir_path, dir_key,
+							 result, flags);
+			return result;
+		}
+
+		if (linux_vfs_path_call_word3(
+			    process, BUNIX_VFS_CREATE_BUFFER, base_handle,
+			    tmp_path,
+			    process->bunix_task |
+			    (((mode & ~process->umask) & 0777) << 32),
+			    &reply) != 0) {
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "tmpfile-create-call",
+							 dir_path, tmp_key,
+							 -LINUX_EIO, flags);
+			return -LINUX_EIO;
+		}
+		if (reply.words[0] == BUNIX_VFS_ERR_EXIST) {
+			continue;
+		}
+		if (reply.words[0] != 0) {
+			result = linux_vfs_error(reply.words[0]);
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "tmpfile-create",
+							 dir_path, tmp_key,
+							 result, flags);
+			return result;
+		}
+		linux_vfs_note_mutation(tmp_key);
+
+		if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER,
+					base_handle, tmp_path, &reply) != 0) {
+			linux_unlink_hidden_path(process, tmp_key);
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "tmpfile-reopen-call",
+							 tmp_path, tmp_key,
+							 -LINUX_EIO, flags);
+			return -LINUX_EIO;
+		}
+		if (reply.words[0] != 0) {
+			result = linux_vfs_error(reply.words[0]);
+			linux_unlink_hidden_path(process, tmp_key);
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "tmpfile-reopen",
+							 tmp_path, tmp_key,
+							 result, flags);
+			return result;
+		}
+		if (reply.words[3] != BUNIX_VFS_TYPE_REGULAR) {
+			(void)linux_close_raw_vfs_handle(reply.words[1]);
+			linux_unlink_hidden_path(process, tmp_key);
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "tmpfile-reopen-type",
+							 tmp_path, tmp_key,
+							 -LINUX_EIO, flags);
+			return -LINUX_EIO;
+		}
+
+		const long fd = alloc_fd(process, LINUX_FD_FILE,
+					 reply.words[1], reply.words[2]);
+
+		if (fd < 0) {
+			(void)linux_close_raw_vfs_handle(reply.words[1]);
+			linux_unlink_hidden_path(process, tmp_key);
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "tmpfile-alloc-fd",
+							 tmp_path, tmp_key,
+							 fd, flags);
+			return fd;
+		}
+		if (linux_fd_open_file_create(&process->fds[fd],
+					      reply.words[1],
+					      reply.words[2]) != 0) {
+			const u64 remote_handle = reply.words[1];
+
+			(void)linux_close_raw_vfs_handle(remote_handle);
+			(void)linux_close(process, (u64)fd);
+			linux_unlink_hidden_path(process, tmp_key);
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "tmpfile-open-file",
+							 tmp_path, tmp_key,
+							 -LINUX_EMFILE,
+							 flags);
+			return -LINUX_EMFILE;
+		}
+		string_copy(process->fds[fd].path, tmp_key);
+		process->fds[fd].flags |= LINUX_FD_TMPFILE;
+		if ((flags & LINUX_O_CLOEXEC) != 0) {
+			process->fds[fd].flags |= LINUX_FD_CLOEXEC;
+		}
+		process->fds[fd].status_flags = flags &
+			(LINUX_O_ACCMODE | LINUX_O_APPEND);
+		(void)dirfd;
+		return fd;
+	}
+
+	linux_debug_apk_openat_state_log(process, dirfd, "tmpfile-exist",
+					 dir_path, dir_key, -LINUX_EEXIST,
+					 flags);
+	return -LINUX_EEXIST;
+}
+
 static long linux_openat(struct linux_process *process, u64 dirfd,
 			 u64 path_len, u64 flags, u64 mode, u64 path_buffer)
 {
@@ -5676,6 +6147,9 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		linux_debug_openrc_state_log_path(process, dirfd,
 						  "openat-normalize", path,
 						  0, normalize_result, flags);
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "openat-normalize", path,
+						 0, normalize_result, flags);
 		return normalize_result;
 	}
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
@@ -5684,12 +6158,27 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		linux_debug_openrc_state_log_path(process, dirfd,
 						  "openat-dirfd", path,
 						  0, base_result, flags);
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "openat-dirfd", path, 0,
+						 base_result, flags);
 		return base_result;
 	}
 	if (linux_cache_path_for_dirfd(process, dirfd, path, opened_path) == 0) {
 		opened_key = opened_path;
 	} else if (path[0] == '/' || dirfd == LINUX_AT_FDCWD) {
 		opened_key = full_path;
+	}
+	if ((flags & LINUX___O_TMPFILE) != 0 &&
+	    (flags & LINUX_O_TMPFILE_MASK) != LINUX_O_TMPFILE) {
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "openat-bad-tmpfile",
+						 path, opened_key,
+						 -LINUX_EINVAL, flags);
+		return -LINUX_EINVAL;
+	}
+	if ((flags & LINUX_O_TMPFILE_MASK) == LINUX_O_TMPFILE) {
+		return linux_open_tmpfile(process, dirfd, path, base_handle,
+					  flags, mode, opened_key);
 	}
 	if ((flags & LINUX_O_NOFOLLOW) != 0) {
 		struct bunix_msg meta;
@@ -5704,6 +6193,11 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 							  path, opened_key,
 							  -LINUX_ELOOP,
 							  flags);
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "openat-nofollow",
+							 path, opened_key,
+							 -LINUX_ELOOP,
+							 flags);
 			return -LINUX_ELOOP;
 		}
 	}
@@ -5714,6 +6208,10 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 						  "openat-vfs-call", path,
 						  opened_key, -LINUX_ENOENT,
 						  flags);
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "openat-vfs-call", path,
+						 opened_key, -LINUX_ENOENT,
+						 flags);
 		return -LINUX_ENOENT;
 	}
 	if (reply.words[0] == 0 &&
@@ -5724,6 +6222,10 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 						  "openat-exist", path,
 						  opened_key, -LINUX_EEXIST,
 						  flags);
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "openat-exist", path,
+						 opened_key, -LINUX_EEXIST,
+						 flags);
 		return -LINUX_EEXIST;
 	}
 	if (reply.words[0] == BUNIX_VFS_ERR_NOENT &&
@@ -5737,6 +6239,10 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 							  "openat-create-call",
 							  path, opened_key,
 							  -LINUX_EIO, flags);
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "openat-create-call",
+							 path, opened_key,
+							 -LINUX_EIO, flags);
 			return -LINUX_EIO;
 		}
 		if (reply.words[0] != 0) {
@@ -5746,6 +6252,10 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 							  "openat-create",
 							  path, opened_key,
 							  result, flags);
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "openat-create",
+							 path, opened_key,
+							 result, flags);
 			return result;
 		}
 		linux_vfs_note_mutation(opened_key);
@@ -5755,6 +6265,10 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 							  "openat-reopen",
 							  path, opened_key,
 							  -LINUX_EIO, flags);
+			linux_debug_apk_openat_state_log(process, dirfd,
+							 "openat-reopen",
+							 path, opened_key,
+							 -LINUX_EIO, flags);
 			return -LINUX_EIO;
 		}
 	}
@@ -5764,6 +6278,9 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		linux_debug_openrc_state_log_path(process, dirfd,
 						  "openat-open", path,
 						  opened_key, result, flags);
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "openat-open", path,
+						 opened_key, result, flags);
 		return result;
 	}
 	if ((flags & LINUX_O_DIRECTORY) != 0 &&
@@ -5773,6 +6290,10 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 						  "openat-notdir", path,
 						  opened_key, -LINUX_ENOTDIR,
 						  flags);
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "openat-notdir", path,
+						 opened_key, -LINUX_ENOTDIR,
+						 flags);
 		return -LINUX_ENOTDIR;
 	}
 	if (reply.words[3] == BUNIX_VFS_TYPE_DIRECTORY &&
@@ -5783,6 +6304,10 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 						  "openat-isdir", path,
 						  opened_key, -LINUX_EISDIR,
 						  flags);
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "openat-isdir", path,
+						 opened_key, -LINUX_EISDIR,
+						 flags);
 		return -LINUX_EISDIR;
 	}
 	if (opened_key != 0 && linux_console_path(opened_key)) {
@@ -5803,6 +6328,9 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 		linux_debug_openrc_state_log_path(process, dirfd,
 						  "openat-alloc-fd", path,
 						  opened_key, fd, flags);
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "openat-alloc-fd", path,
+						 opened_key, fd, flags);
 		return fd;
 	}
 	if (linux_fd_open_file_create(&process->fds[fd], reply.words[1],
@@ -5814,6 +6342,10 @@ static long linux_openat(struct linux_process *process, u64 dirfd,
 						  "openat-open-file",
 						  path, opened_key,
 						  -LINUX_EMFILE, flags);
+		linux_debug_apk_openat_state_log(process, dirfd,
+						 "openat-open-file", path,
+						 opened_key, -LINUX_EMFILE,
+						 flags);
 		return -LINUX_EMFILE;
 	}
 	if (opened_key != 0) {
@@ -6298,10 +6830,12 @@ static long linux_linkat(struct linux_process *process, u64 olddirfd,
 	};
 	u64 old_base;
 	u64 new_base;
+	u64 old_fd = 0;
+	u64 vfs_flags = 0;
 	long base_result;
 	long name_result;
 
-	if (flags != 0) {
+	if ((flags & ~LINUX_AT_SYMLINK_FOLLOW) != 0) {
 		return -LINUX_EINVAL;
 	}
 	if (old_len == 0 || new_len == 0 ||
@@ -6324,10 +6858,26 @@ static long linux_linkat(struct linux_process *process, u64 olddirfd,
 	if (name_result != 0) {
 		return name_result;
 	}
-	base_result = linux_dirfd_base_handle(process, olddirfd, old_path,
-					      &old_base);
-	if (base_result != 0) {
-		return base_result;
+	if ((flags & LINUX_AT_SYMLINK_FOLLOW) != 0 &&
+	    linux_parse_proc_self_fd(old_path, &old_fd) == 0) {
+		if (old_fd >= process->fd_capacity ||
+		    process->fds[old_fd].kind == 0) {
+			return -LINUX_EBADF;
+		}
+		if (process->fds[old_fd].kind != LINUX_FD_FILE) {
+			return -LINUX_EPERM;
+		}
+		if (process->fds[old_fd].path[0] == '\0') {
+			return -LINUX_ENOENT;
+		}
+		string_copy(old_path, process->fds[old_fd].path);
+		old_base = 0;
+	} else {
+		base_result = linux_dirfd_base_handle(process, olddirfd,
+						      old_path, &old_base);
+		if (base_result != 0) {
+			return base_result;
+		}
 	}
 	base_result = linux_dirfd_base_handle(process, newdirfd, new_path,
 					      &new_base);
@@ -6335,7 +6885,7 @@ static long linux_linkat(struct linux_process *process, u64 olddirfd,
 		return base_result;
 	}
 	if (linux_vfs_two_path_call(process, BUNIX_VFS_LINK_BUFFER, old_base,
-				    old_path, new_base, new_path, flags,
+				    old_path, new_base, new_path, vfs_flags,
 				    &reply) != 0) {
 		return -LINUX_EIO;
 	}
@@ -7119,6 +7669,8 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 	base_result = linux_dirfd_base_handle(process, dirfd, path,
 					      &base_handle);
 	if (base_result != 0) {
+		linux_debug_path_result_log(process, "newfstatat", path,
+					    base_result);
 		return base_result;
 	}
 	if (linux_cache_path_for_dirfd(process, dirfd, path, cache_path) == 0) {
@@ -7128,6 +7680,8 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 	nofollow = (flags & LINUX_AT_SYMLINK_NOFOLLOW) != 0 ? 1 : 0;
 	if (linux_stat_cache_get(process, base_handle, path, cache_key, nofollow,
 				 &cached_result, out)) {
+		linux_debug_path_result_log(process, "newfstatat", path,
+					    cached_result);
 		return cached_result;
 	}
 
@@ -7135,6 +7689,7 @@ static long linux_newfstatat(struct linux_process *process, u64 dirfd,
 					  nofollow, out);
 	linux_stat_cache_put(process, base_handle, path, cache_key, nofollow,
 			     result, out);
+	linux_debug_path_result_log(process, "newfstatat", path, result);
 	return result;
 }
 
@@ -7670,6 +8225,43 @@ static long linux_chdir(struct linux_process *process, u64 path_len,
 				     &close_reply);
 		return -LINUX_ENOMEM;
 	}
+	old_handle = process->cwd_handle;
+	process->cwd_handle = reply.words[1];
+	linux_file_ref_add(process->cwd_handle);
+	(void)linux_close_vfs_handle(old_handle);
+	return 0;
+}
+
+static long linux_fchdir(struct linux_process *process, u64 fd)
+{
+	struct bunix_msg reply;
+	u64 old_handle;
+
+	if (fd >= process->fd_capacity || process->fds[fd].kind == 0) {
+		return -LINUX_EBADF;
+	}
+	if (process->fds[fd].kind != LINUX_FD_DIR) {
+		return -LINUX_ENOTDIR;
+	}
+	if (process->fds[fd].path[0] != '/') {
+		return -LINUX_ENOENT;
+	}
+	if (linux_vfs_path_call(process, BUNIX_VFS_OPEN_BUFFER, 0,
+				process->fds[fd].path, &reply) != 0) {
+		return -LINUX_ENOENT;
+	}
+	if (reply.words[0] != 0) {
+		return linux_vfs_error(reply.words[0]);
+	}
+	if (reply.words[3] != BUNIX_VFS_TYPE_DIRECTORY) {
+		(void)linux_close_raw_vfs_handle(reply.words[1]);
+		return -LINUX_ENOTDIR;
+	}
+	if (linux_process_set_cwd(process, process->fds[fd].path) != 0) {
+		(void)linux_close_raw_vfs_handle(reply.words[1]);
+		return -LINUX_ENOMEM;
+	}
+
 	old_handle = process->cwd_handle;
 	process->cwd_handle = reply.words[1];
 	linux_file_ref_add(process->cwd_handle);
@@ -10459,6 +11051,11 @@ static long linux_close(struct linux_process *process, u64 fd)
 
 	if (process->fds[fd].kind == LINUX_FD_FILE ||
 	    process->fds[fd].kind == LINUX_FD_DIR) {
+		if ((process->fds[fd].flags & LINUX_FD_TMPFILE) != 0 &&
+		    process->fds[fd].open_file != 0 &&
+		    process->fds[fd].open_file->refs <= 1) {
+			linux_unlink_hidden_path(process, process->fds[fd].path);
+		}
 		if (linux_open_file_ref_drop(&process->fds[fd]) != 0) {
 			return -LINUX_EIO;
 		}
@@ -10588,8 +11185,9 @@ static long linux_dup_to(struct linux_process *process, u64 old_fd,
 	}
 
 	process->fds[new_fd] = process->fds[old_fd];
-	process->fds[new_fd].flags = (flags & LINUX_DUP_CLOEXEC) != 0 ?
-				     LINUX_FD_CLOEXEC : 0;
+	process->fds[new_fd].flags =
+		(process->fds[old_fd].flags & ~LINUX_FD_CLOEXEC) |
+		((flags & LINUX_DUP_CLOEXEC) != 0 ? LINUX_FD_CLOEXEC : 0);
 	linux_fd_ref_add(&process->fds[new_fd]);
 	if (process->fds[new_fd].kind == LINUX_FD_PIPE_READ ||
 	    process->fds[new_fd].kind == LINUX_FD_PIPE_WRITE) {
@@ -11171,6 +11769,10 @@ int main(void)
 				bunix_handle_close(message.cap);
 			}
 			break;
+		case BUNIX_LINUX_FCHDIR:
+			reply.words[0] = (u64)linux_fchdir(process,
+							   message.words[0]);
+			break;
 		case BUNIX_LINUX_GETUID:
 		case BUNIX_LINUX_GETGID:
 		case BUNIX_LINUX_GETEUID:
@@ -11398,6 +12000,10 @@ int main(void)
 							      message.words[2],
 							      message.words[3],
 							      message.cap);
+			linux_debug_path_arg_result_log(process, "faccessat",
+							message.words[1],
+							message.cap,
+							(long)reply.words[0]);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
@@ -11489,6 +12095,14 @@ int main(void)
 				process, message.words[0], message.words[1],
 				message.words[2], message.words[3] & 0xffffffff,
 				message.words[3] >> 32, message.cap);
+			linux_debug_path_arg_result_log(process, "linkat-old",
+							message.words[2],
+							message.cap,
+							(long)reply.words[0]);
+			linux_debug_path_arg_offset_result_log(
+				process, "linkat-new",
+				message.words[3] & 0xffffffff, message.cap,
+				message.words[2], (long)reply.words[0]);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
@@ -11500,6 +12114,14 @@ int main(void)
 				process, message.words[0], message.words[1],
 				message.words[2], message.words[3] & 0xffffffff,
 				message.words[3] >> 32, message.cap);
+			linux_debug_path_arg_result_log(process, "renameat-old",
+							message.words[2],
+							message.cap,
+							(long)reply.words[0]);
+			linux_debug_path_arg_offset_result_log(
+				process, "renameat-new",
+				message.words[3] & 0xffffffff, message.cap,
+				message.words[2], (long)reply.words[0]);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
@@ -11804,6 +12426,14 @@ int main(void)
 		case BUNIX_LINUX_EXEC_PROCESS:
 			reply.words[0] = (u64)linux_exec_process(process);
 			break;
+		case BUNIX_LINUX_RESOLVE_FD_PATH:
+			reply.words[0] = (u64)linux_resolve_fd_path(
+				process, message.words[0], message.words[1],
+				message.cap, &reply.words[1]);
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
+			break;
 		case BUNIX_LINUX_NEWFSTATAT:
 		{
 			struct linux_vfs_stat stat;
@@ -11836,6 +12466,10 @@ int main(void)
 							  message.words[2],
 							  message.words[3],
 							  message.cap);
+			linux_debug_path_arg_result_log(process, "statx",
+							message.words[1],
+							message.cap,
+							(long)reply.words[0]);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}
@@ -11846,6 +12480,10 @@ int main(void)
 							      message.words[1],
 							      message.words[2],
 							      message.cap);
+			linux_debug_path_arg_result_log(process, "utimensat",
+							message.words[1],
+							message.cap,
+							(long)reply.words[0]);
 			if (message.cap != 0) {
 				bunix_handle_close(message.cap);
 			}

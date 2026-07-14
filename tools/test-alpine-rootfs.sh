@@ -61,6 +61,7 @@ require_file "$artifact_dir/openrc-initd.tsv"
 require_file "$artifact_dir/openrc-confd.tsv"
 require_file "$artifact_dir/openrc-policy.tsv"
 require_file "$artifact_dir/openrc-networking.stock"
+require_file "$artifact_dir/repositories"
 require_file "$root/var/cache/rc/deptree"
 require_file "$root/fastboot"
 
@@ -75,9 +76,22 @@ require_grep "replace	inittab	getty	/bin/login" \
 
 require_grep "networking" "$artifact_dir/openrc-initd.tsv"
 require_grep "ifupdown-ng" "$artifact_dir/manifest.txt"
+require_grep "apk-tools" "$artifact_dir/manifest.txt"
+require_grep "alpine-keys" "$artifact_dir/manifest.txt"
 require_grep "alpine_networking_service=stock" \
 	"$artifact_dir/manifest.txt"
+require_grep "guest_repositories=/etc/apk/repositories" \
+	"$artifact_dir/manifest.txt"
+require_grep "repositories=$artifact_dir/repositories" \
+	"$artifact_dir/manifest.txt"
 require_file "$root/usr/share/udhcpc/default.script"
+require_file "$root/sbin/apk"
+require_file "$root/etc/apk/repositories"
+require_dir "$root/etc/apk/keys"
+require_grep "http://dl-cdn.alpinelinux.org/alpine/edge/main" \
+	"$root/etc/apk/repositories"
+require_grep "http://dl-cdn.alpinelinux.org/alpine/edge/community" \
+	"$root/etc/apk/repositories"
 reject_file "$root/sbin/bunix-udhcpc-script"
 if [ "$(readlink "$root/usr/share/udhcpc/default.script" 2>/dev/null || true)" = \
      "/sbin/bunix-udhcpc-script" ]; then

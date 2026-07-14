@@ -1901,8 +1901,13 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
+			file = parent_file_for_path(path);
+			if (file == 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
 			if (!task_can_access(message.words[3] & 0xffffffff,
-					     parent_file_for_path(path), 03)) {
+					     file, 03)) {
 				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
 				break;
 			}
@@ -1923,8 +1928,13 @@ int main(void)
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
 				break;
 			}
+			file = parent_file_for_path(path);
+			if (file == 0) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
 			if (!task_can_access(message.words[3] & 0xffffffff,
-					     parent_file_for_path(path), 03)) {
+					     file, 03)) {
 				reply.words[0] = BUNIX_VFS_ERR_ACCESS;
 				break;
 			}

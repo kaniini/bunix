@@ -13,8 +13,15 @@ manifest=$artifact_dir/manifest.txt
 apk_log=$artifact_dir/apk.log
 apk_plain_log=$artifact_dir/apk.plain.log
 apk_cache=${APK_CACHE_DIR:-$artifact_dir/apk-cache}
-repositories=${APK_REPOSITORIES_FILE:-/etc/apk/repositories}
-apk_packages=${ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc ifupdown-ng}
+repositories_default=0
+if [ -n "${APK_REPOSITORIES_FILE:-}" ]; then
+	repositories=$APK_REPOSITORIES_FILE
+else
+	repositories=$artifact_dir/repositories
+	repositories_default=1
+fi
+guest_repositories=${APK_GUEST_REPOSITORIES_FILE:-}
+apk_packages=${ALPINE_ROOTFS_PACKAGES:-alpine-baselayout busybox musl openrc ifupdown-ng apk-tools alpine-keys}
 apk_arch=${APK_ARCH:-}
 if [ -n "${ALPINE_OPENRC_POLICY:-}" ]; then
 	runlevel_policy=$ALPINE_OPENRC_POLICY
@@ -271,9 +278,40 @@ apk_add_rootfs() {
 	fi
 }
 
+write_default_repositories() {
+	cat > "$repositories" <<'EOF_REPOSITORIES'
+http://dl-cdn.alpinelinux.org/alpine/edge/main
+http://dl-cdn.alpinelinux.org/alpine/edge/community
+EOF_REPOSITORIES
+}
+
+install_guest_repositories() {
+	mkdir -p "$root/etc/apk"
+	if [ -n "$guest_repositories" ]; then
+		if [ ! -r "$guest_repositories" ]; then
+			echo "guest apk repositories file is not readable: $guest_repositories" >&2
+			exit 2
+		fi
+		cp "$guest_repositories" "$root/etc/apk/repositories"
+	elif [ -r "$repositories" ]; then
+		cp "$repositories" "$root/etc/apk/repositories"
+	else
+		write_default_repositories
+		cp "$repositories" "$root/etc/apk/repositories"
+	fi
+	chmod 0444 "$root/etc/apk/repositories"
+}
+
 safe_rm_rf "$stage" "ALPINE_ROOTFS_STAGE"
 mkdir -p "$root" "$(dirname "$out")" "$artifact_dir" "$apk_cache"
 apk_cache=$(CDPATH= cd "$apk_cache" && pwd)
+if [ ! -r "$repositories" ]; then
+	if [ "$repositories_default" != 1 ]; then
+		echo "apk repositories file is not readable: $repositories" >&2
+		exit 2
+	fi
+	write_default_repositories
+fi
 
 if ! apk_add_rootfs \
 	--root "$root" --initdb --allow-untrusted \
@@ -331,6 +369,7 @@ if [ -n "$extra_dir" ]; then
 fi
 chmod 0444 "$root/etc/passwd" "$root/etc/group"
 chmod 0400 "$root/etc/shadow"
+install_guest_repositories
 
 if [ ! -e "$root/etc/alpine-release" ]; then
 	if [ -r /etc/alpine-release ]; then
@@ -384,6 +423,7 @@ find "$root/var/cache/apk" -type f -delete 2>/dev/null || true
 	echo "source=apk"
 	echo "apk_cache=$apk_cache"
 	echo "repositories=$repositories"
+	echo "guest_repositories=/etc/apk/repositories"
 	echo "packages=$apk_packages"
 	echo "apk_arch=${apk_arch:-$(apk --print-arch)}"
 	echo "bunix_overlay=$bunix_overlay"

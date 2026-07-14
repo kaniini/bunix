@@ -1400,6 +1400,28 @@ static int copy_lower_path_to_upper(const char *relative, u64 task)
 	return 0;
 }
 
+static int copy_lower_path_mutable_to_upper(const char *relative, u64 task)
+{
+	struct unionfs_copy_meta meta;
+
+	if (relative == 0 || whiteout_exists(relative) ||
+	    lower_stat_path_meta(relative, &meta) != 0) {
+		return -1;
+	}
+	if ((meta.mode_type >> 32) == BUNIX_VFS_TYPE_REGULAR) {
+		return copy_lower_path_to_upper(relative, task);
+	}
+	return -1;
+}
+
+static int path_mutation_can_copy_up(u64 type)
+{
+	return type == BUNIX_VFS_CHMOD_BUFFER ||
+	       type == BUNIX_VFS_CHOWN_BUFFER ||
+	       type == BUNIX_VFS_UTIMENS_BUFFER ||
+	       type == BUNIX_VFS_TRUNCATE;
+}
+
 static struct unionfs_open *open_from_handle(u64 handle)
 {
 	return (struct unionfs_open *)bunix_u64_tree_get(&open_files, handle);
@@ -1679,7 +1701,16 @@ static void reply_mutate(struct bunix_msg *message, struct bunix_msg *reply,
 		}
 	}
 	if (service_path_call(upper_service, message->type, upper,
-			      message->words[3], 0, reply) != 0) {
+			      message->words[3], message, reply) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (reply->words[0] == BUNIX_VFS_ERR_NOENT &&
+	    path_mutation_can_copy_up(message->type) &&
+	    copy_lower_path_mutable_to_upper(relative,
+					     message->words[3]) == 0 &&
+	    service_path_call(upper_service, message->type, upper,
+			      message->words[3], message, reply) != 0) {
 		reply->words[0] = (u64)-1;
 		return;
 	}
@@ -1753,11 +1784,13 @@ static void reply_rename(struct bunix_msg *message, struct bunix_msg *reply,
 	}
 	if (reply->words[0] == BUNIX_VFS_ERR_NOENT &&
 	    !whiteout_exists(old_relative) &&
-	    copy_lower_path_to_upper(old_relative, message->words[3]) == 0 &&
-	    service_rename_call(upper_service, old_upper, new_upper,
-				message->words[3], reply) != 0) {
-		reply->words[0] = (u64)-1;
-		return;
+	    copy_lower_path_mutable_to_upper(old_relative,
+					     message->words[3]) == 0) {
+		if (service_rename_call(upper_service, old_upper, new_upper,
+					message->words[3], reply) != 0) {
+			reply->words[0] = (u64)-1;
+			return;
+		}
 	}
 	if (reply->words[0] == 0) {
 		(void)whiteout_add(old_relative);
@@ -1789,12 +1822,13 @@ static void reply_link(struct bunix_msg *message, struct bunix_msg *reply,
 	}
 	if (reply->words[0] == BUNIX_VFS_ERR_NOENT &&
 	    !whiteout_exists(old_relative) &&
-	    copy_lower_path_to_upper(old_relative, message->words[3]) == 0 &&
-	    service_two_path_call(upper_service, BUNIX_VFS_LINK_BUFFER,
-				  old_upper, new_upper, message->words[3],
-				  reply) != 0) {
-		reply->words[0] = (u64)-1;
-		return;
+	    copy_lower_path_to_upper(old_relative, message->words[3]) == 0) {
+		if (service_two_path_call(upper_service, BUNIX_VFS_LINK_BUFFER,
+					  old_upper, new_upper,
+					  message->words[3], reply) != 0) {
+			reply->words[0] = (u64)-1;
+			return;
+		}
 	}
 	if (reply->words[0] == 0) {
 		whiteout_remove(new_relative);

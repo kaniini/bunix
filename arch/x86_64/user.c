@@ -151,6 +151,7 @@ enum {
 	LINUX_SYSCALL_FLOCK = 73,
 	LINUX_SYSCALL_GETCWD = 79,
 	LINUX_SYSCALL_CHDIR = 80,
+	LINUX_SYSCALL_FCHDIR = 81,
 	LINUX_SYSCALL_RENAME = 82,
 	LINUX_SYSCALL_MKDIR = 83,
 	LINUX_SYSCALL_SYMLINK = 88,
@@ -284,9 +285,11 @@ enum {
 	LINUX_TIOCGWINSZ = 0x5413,
 	LINUX_TERMIOS_SIZE = 60,
 	LINUX_SIOCGIFFLAGS = 0x8913,
+	LINUX_SIOCSIFFLAGS = 0x8914,
 	LINUX_SIOCGIFHWADDR = 0x8927,
 	LINUX_SIOCGIFMTU = 0x8921,
 	LINUX_SIOCGIFINDEX = 0x8933,
+	LINUX_SIOCGIFTXQLEN = 0x8942,
 	LINUX_IFREQ_SIZE = 40,
 	ARCH_USER_MAX_CPUS = 8,
 	LINUX_MAX_SYSCALL_BUFFER = 65536,
@@ -375,6 +378,7 @@ enum {
 	LINUX_RPC_FORK_PROCESS = 1001,
 	LINUX_RPC_EXEC_PROCESS = 1002,
 	LINUX_RPC_EXEC_PREPARE = 1005,
+	LINUX_RPC_RESOLVE_FD_PATH = 1012,
 	USER_PROC_SET_CMDLINE_BUFFER = 14,
 	USER_PROC_INFO_BY_LINUX_PID = 18,
 	USER_PROC_EXEC_REPLACE_TASK = 16,
@@ -611,6 +615,22 @@ static u64 str_len(const char *value)
 	}
 
 	return len;
+}
+
+static int str_starts_with(const char *value, const char *prefix)
+{
+	u64 i = 0;
+
+	if (value == 0 || prefix == 0) {
+		return 0;
+	}
+	while (prefix[i] != '\0') {
+		if (value[i] != prefix[i]) {
+			return 0;
+		}
+		i++;
+	}
+	return 1;
 }
 
 static int read_current_user(u64 vaddr, void *dst, u64 len)
@@ -1243,6 +1263,7 @@ static int linux_syscall_forwards_scalar(u64 number)
 	case LINUX_SYSCALL_KILL:
 	case LINUX_SYSCALL_REBOOT:
 	case LINUX_SYSCALL_FTRUNCATE:
+	case LINUX_SYSCALL_FCHDIR:
 	case LINUX_SYSCALL_FCHMOD:
 	case LINUX_SYSCALL_FCHOWN:
 	case LINUX_SYSCALL_LISTEN:
@@ -3501,6 +3522,8 @@ static int linux_proc_exec_replace(struct task *task, const char *load_path,
 static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 			const char *user_path) __attribute__((noinline));
 static u64 linux_exec_process(struct task *task);
+static int linux_exec_resolve_fd_path(struct task *task, char *path,
+				      u64 path_size);
 static void linux_proc_set_cmdline(struct task *task, u64 linux_pid,
 				   const struct linux_exec_args *args);
 
@@ -3525,6 +3548,12 @@ static u64 linux_execve(struct task *task, struct arch_syscall_frame *frame,
 		return (u64)path_result;
 	}
 	linux_debug_exec_log(task, "copy-path", path, 0);
+	path_result = linux_exec_resolve_fd_path(task, path, sizeof(path));
+	if (path_result != 0) {
+		linux_debug_exec_log(task, "resolve-fd-path", path,
+				     path_result);
+		return (u64)path_result;
+	}
 	mem_copy((u8 *)load_path, (const u8 *)path, str_len(path) + 1);
 	arg_result = linux_exec_collect_args(path, frame->arg1, &args);
 	if (arg_result == 0) {
@@ -3646,6 +3675,66 @@ static u64 linux_exec_process(struct task *task)
 	}
 
 	return reply.words[0];
+}
+
+static int linux_exec_resolve_fd_path(struct task *task, char *path,
+				      u64 path_size)
+{
+	struct ipc_port *linux = ipc_port_find("linux");
+	struct ipc_port *reply_port = task_reply_port(task);
+	struct shared_buffer *buffer;
+	struct ipc_message request = {
+		.protocol = USER_FOURCC_LINX,
+		.type = LINUX_RPC_RESOLVE_FD_PATH,
+		.sender = 0,
+		.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_RECV |
+			      TASK_RIGHT_DUP,
+		.reply_port = reply_port,
+		.cap_type = IPC_CAP_BUFFER,
+		.cap_object = 0,
+		.words = { 0, 0, 0, 0 },
+	};
+	struct ipc_message reply;
+	u64 path_len;
+	int result;
+
+	if (path == 0 || path_size == 0 ||
+	    !str_starts_with(path, "/proc/self/fd/")) {
+		return 0;
+	}
+	if (linux == 0 || reply_port == 0) {
+		return -LINUX_ENOSYS;
+	}
+	path_len = str_len(path) + 1;
+	if (path_len == 1 || path_len > path_size ||
+	    path_len > LINUX_EXEC_MAX_PATH) {
+		return -LINUX_EINVAL;
+	}
+	buffer = buffer_create(LINUX_EXEC_MAX_PATH);
+	if (buffer == 0) {
+		return -LINUX_ENOMEM;
+	}
+	if (buffer_write(buffer, 0, path, path_len) != 0) {
+		buffer_release(buffer);
+		return -LINUX_EFAULT;
+	}
+	request.cap_object = buffer;
+	request.words[0] = path_len;
+	request.words[1] = LINUX_EXEC_MAX_PATH;
+	if (linux_forward_message(linux, reply_port, &request, &reply) != 0) {
+		buffer_release(buffer);
+		return -LINUX_ENOSYS;
+	}
+	result = (int)(i64)reply.words[0];
+	if (result == 0 &&
+	    (reply.words[1] == 0 || reply.words[1] > path_size ||
+	     reply.words[1] > LINUX_EXEC_MAX_PATH ||
+	     buffer_read(buffer, 0, path, reply.words[1]) != 0 ||
+	     path[reply.words[1] - 1] != '\0')) {
+		result = -LINUX_EINVAL;
+	}
+	buffer_release(buffer);
+	return result;
 }
 
 static void linux_proc_set_cmdline(struct task *task, u64 linux_pid,
@@ -3907,6 +3996,8 @@ static const char *linux_syscall_name(u64 number)
 		return "getcwd";
 	case LINUX_SYSCALL_CHDIR:
 		return "chdir";
+	case LINUX_SYSCALL_FCHDIR:
+		return "fchdir";
 	case LINUX_SYSCALL_RENAME:
 		return "rename";
 	case LINUX_SYSCALL_MKDIR:
@@ -5144,9 +5235,11 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		    arg1 == LINUX_TIOCGPGRP || arg1 == LINUX_TIOCSPGRP ||
 		    arg1 == LINUX_TIOCGWINSZ ||
 		    arg1 == LINUX_SIOCGIFFLAGS ||
+		    arg1 == LINUX_SIOCSIFFLAGS ||
 		    arg1 == LINUX_SIOCGIFHWADDR ||
 		    arg1 == LINUX_SIOCGIFMTU ||
-		    arg1 == LINUX_SIOCGIFINDEX) {
+		    arg1 == LINUX_SIOCGIFINDEX ||
+		    arg1 == LINUX_SIOCGIFTXQLEN) {
 			break;
 		}
 		return (u64)-LINUX_ENOTTY;
@@ -5920,9 +6013,11 @@ poll_again:
 		    arg1 != LINUX_TIOCGPGRP && arg1 != LINUX_TIOCSPGRP &&
 		    arg1 != LINUX_TIOCGWINSZ &&
 		    arg1 != LINUX_SIOCGIFFLAGS &&
+		    arg1 != LINUX_SIOCSIFFLAGS &&
 		    arg1 != LINUX_SIOCGIFHWADDR &&
 		    arg1 != LINUX_SIOCGIFMTU &&
-		    arg1 != LINUX_SIOCGIFINDEX) {
+		    arg1 != LINUX_SIOCGIFINDEX &&
+		    arg1 != LINUX_SIOCGIFTXQLEN) {
 			return (u64)-LINUX_ENOTTY;
 		}
 		if (arg2 == 0) {
@@ -5943,9 +6038,11 @@ poll_again:
 		} else if (arg1 == LINUX_TIOCGWINSZ) {
 			output_size = 8;
 		} else if (arg1 == LINUX_SIOCGIFFLAGS ||
+			   arg1 == LINUX_SIOCSIFFLAGS ||
 			   arg1 == LINUX_SIOCGIFHWADDR ||
 			   arg1 == LINUX_SIOCGIFMTU ||
-			   arg1 == LINUX_SIOCGIFINDEX) {
+			   arg1 == LINUX_SIOCGIFINDEX ||
+			   arg1 == LINUX_SIOCGIFTXQLEN) {
 			output_size = LINUX_IFREQ_SIZE;
 		}
 		if (output_size != 0) {
@@ -5974,9 +6071,11 @@ poll_again:
 				}
 			}
 			if ((arg1 == LINUX_SIOCGIFFLAGS ||
+			     arg1 == LINUX_SIOCSIFFLAGS ||
 			     arg1 == LINUX_SIOCGIFHWADDR ||
 			     arg1 == LINUX_SIOCGIFMTU ||
-			     arg1 == LINUX_SIOCGIFINDEX)) {
+			     arg1 == LINUX_SIOCGIFINDEX ||
+			     arg1 == LINUX_SIOCGIFTXQLEN)) {
 				const u64 flags =
 					spin_lock_irqsave(&syscall_copy_lock);
 				const int failed =
@@ -6008,9 +6107,11 @@ poll_again:
 				       arg1 == LINUX_TCSETSF) ?
 				      TASK_RIGHT_RECV : TASK_RIGHT_SEND) : 0;
 		if (arg1 == LINUX_SIOCGIFFLAGS ||
+		    arg1 == LINUX_SIOCSIFFLAGS ||
 		    arg1 == LINUX_SIOCGIFHWADDR ||
 		    arg1 == LINUX_SIOCGIFMTU ||
-		    arg1 == LINUX_SIOCGIFINDEX) {
+		    arg1 == LINUX_SIOCGIFINDEX ||
+		    arg1 == LINUX_SIOCGIFTXQLEN) {
 			request.cap_rights = TASK_RIGHT_SEND | TASK_RIGHT_RECV;
 		}
 		request.cap_object = buffer;
