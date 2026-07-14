@@ -104,6 +104,7 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "arch-vm: failed") ||
 	    str_starts_with(fmt, "elf: invalid") ||
 	    str_starts_with(fmt, "elf: failed") ||
+	    str_starts_with(fmt, "kernel: fork failed") ||
 	    str_starts_with(fmt, "kernel: failed") ||
 	    str_starts_with(fmt, "kernel: invalid") ||
 	    str_starts_with(fmt, "kernel: too many") ||
@@ -116,6 +117,7 @@ static u32 log_level_for_format(const char *fmt)
 	    str_starts_with(fmt, "smp: ap start timeout") ||
 	    str_starts_with(fmt, "smp: lapic delivery timeout") ||
 	    str_starts_with(fmt, "syscall: unknown") ||
+	    str_starts_with(fmt, "linux: fork syscall failed") ||
 	    str_starts_with(fmt, "linux: unknown")) {
 		return CONSOLE_LOG_ERROR;
 	}

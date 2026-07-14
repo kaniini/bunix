@@ -1,0 +1,57 @@
+Fix OpenRC bootmisc fork exhaustion.
+
+Problem:
+
+- During Alpine/OpenRC boot, `bootmisc` can fail with:
+
+  `/usr/libexec/rc/sh/openrc-run.sh: line 313: can't fork: Out of memory`
+
+- A shell-level `fork` failure during OpenRC service startup may indicate a
+  leaked process/task/thread object, an over-constrained allocator, missing
+  cleanup after exited children, or incorrect Linux `fork`/`clone` resource
+  accounting.
+
+Intended outcome:
+
+- `make run` completes the normal Alpine OpenRC boot path without `bootmisc`
+  failing due to `can't fork: Out of memory`.
+- Repeated service starts and login/logout cycles do not consume process,
+  task, thread, or userspace allocator state without release.
+- Any remaining real resource limit failures report accurate limits rather than
+  spurious `ENOMEM`.
+
+Tasks:
+
+- [x] Reproduce the OpenRC `bootmisc` fork failure and capture process/task
+      counts before and after the failure.
+- [x] Trace the failing `fork`/`clone`/`vfork` path through the Linux server,
+      proc server, task primitives, VM mappings, and allocator calls.
+- [x] Identify whether the failure is caused by a leak, a fixed table, a stale
+      zombie/reaped-child path, or allocator fragmentation/limit behavior.
+- [x] Fix the underlying resource accounting or cleanup defect.
+- [x] Add a regression test that stresses OpenRC-style repeated shell forks
+      and confirms resource counts return to baseline after children exit.
+- [x] Validate full Alpine boot through `bootmisc` and a login/logout cycle.
+
+Findings:
+
+- `vfork` failure was not real memory exhaustion. The parent shell had
+  overlapping anonymous VMA metadata after a middle `munmap` split.
+- `task_remove_vm_region()` held a pointer into `task->vm_regions`, then grew
+  the region array before updating the left split. When the grow reallocated
+  the array, the stale pointer write was lost and the next `vfork` copied
+  overlapping VMA metadata into the child.
+- VM mapping extension now refuses to extend across another existing region,
+  and the split path refreshes the region pointer after grow.
+- `bootmisc` then exposed a separate utmpfs compatibility issue: OpenRC uses
+  `: >/var/run/utmp` and `chmod /var/run/utmp`. The virtual utmp file now
+  accepts zero-length truncate and chmod/chown as no-op successful operations.
+
+Validation:
+
+- `KEEP_TMP=1 make test-boot-openrc-fork-reclaim`
+- Kept log: `/tmp/bunix-command-test.20260714T025308Z-30323/serial.log`
+- The regression restarts `bootmisc` three times, runs 64 shell forks, checks
+  task count returns to baseline, and rejects the old fork/VMA/utmp failures.
+- `make test`
+- Full test artifact: `build/test-runs/20260714T025405Z-31597`

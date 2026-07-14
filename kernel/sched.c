@@ -3069,6 +3069,60 @@ static int regions_overlap(u64 a_base, u64 a_len, u64 b_base, u64 b_len)
 	return a_base < b_end && b_base < a_end;
 }
 
+static int vm_region_metadata_matches(const struct task_vm_region *region,
+				      u32 prot, u32 flags, u32 kind,
+				      u32 object_type, u32 object_id)
+{
+	return region != 0 &&
+	       region->kind == kind &&
+	       region->prot == prot &&
+	       region->flags == flags &&
+	       region->object_type == object_type &&
+	       region->object_id == object_id;
+}
+
+static int vm_region_append_offset_matches(const struct task_vm_region *region,
+					   u32 object_type, u32 object_id,
+					   u64 offset)
+{
+	return region != 0 &&
+	       (object_id == 0 ||
+		object_type == TASK_VM_OBJECT_ANON ||
+		region->offset + region->len == offset);
+}
+
+static int vm_region_prepend_offset_matches(const struct task_vm_region *region,
+					    u64 base, u64 len,
+					    u32 object_type, u32 object_id,
+					    u64 offset)
+{
+	if (region == 0) {
+		return 0;
+	}
+	if (base >= region->base || object_id == 0 ||
+	    object_type == TASK_VM_OBJECT_ANON) {
+		return 1;
+	}
+	return offset + (region->base - base) == region->offset &&
+	       offset + len >= region->offset;
+}
+
+static int task_vm_range_overlaps_other_locked(const struct task *task,
+					       u32 skip_index, u64 base,
+					       u64 len)
+{
+	for (u32 i = 0; i < task->vm_region_count; i++) {
+		const struct task_vm_region *region = &task->vm_regions[i];
+
+		if (i != skip_index &&
+		    regions_overlap(base, len, region->base, region->len)) {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
 u32 task_id(const struct task *task)
 {
 	return task != 0 ? task->pid : 0;
@@ -3236,19 +3290,18 @@ int task_add_vm_mapping(struct task *task, u64 base, u64 len, u32 prot,
 
 	for (u32 i = 0; i < task->vm_region_count; i++) {
 		struct task_vm_region *region = &task->vm_regions[i];
-		const int offset_extends =
-			object_id == 0 ||
-			object_type == TASK_VM_OBJECT_ANON ||
-			region->offset + region->len == offset;
+		const u64 new_len = region->len + len;
 
-		if (region->kind == kind &&
-		    region->prot == prot &&
-		    region->flags == map_flags &&
-		    region->object_type == object_type &&
-		    region->object_id == object_id &&
-		    offset_extends &&
-		    region_end(region) == base) {
-			region->len += len;
+		if (vm_region_metadata_matches(region, prot, map_flags, kind,
+					       object_type, object_id) &&
+		    vm_region_append_offset_matches(region, object_type,
+						    object_id, offset) &&
+		    region_end(region) == base &&
+		    new_len >= region->len &&
+		    !task_vm_range_overlaps_other_locked(task, i,
+							 region->base,
+							 new_len)) {
+			region->len = new_len;
 			spin_unlock_irqrestore(&task->lock, irq_flags);
 			return 0;
 		}
@@ -3259,8 +3312,11 @@ int task_add_vm_mapping(struct task *task, u64 base, u64 len, u32 prot,
 
 		if (regions_overlap(base, len, region->base, region->len)) {
 			spin_unlock_irqrestore(&task->lock, irq_flags);
-			console_printf("sched: vma overlap task=%u base=%p len=%u\n",
-				       task->pid, (const void *)base, (u32)len);
+			console_printf("sched: vma overlap task=%u base=%p len=%u existing_base=%p existing_len=%u existing_kind=%u existing_prot=0x%x kind=%u prot=0x%x\n",
+				       task->pid, (const void *)base, (u32)len,
+				       (const void *)region->base,
+				       (u32)region->len, region->kind,
+				       region->prot, kind, prot);
 			return -1;
 		}
 	}
@@ -3308,18 +3364,32 @@ int task_add_or_extend_vm_mapping(struct task *task, u64 base, u64 len,
 	for (u32 i = 0; i < task->vm_region_count; i++) {
 		struct task_vm_region *region = &task->vm_regions[i];
 		const u64 end = region_end(region);
+		const u64 req_end = base + len;
 
-		if (region->kind == kind &&
-		    region->prot == prot &&
-		    region->flags == map_flags &&
-		    region->object_type == object_type &&
-		    region->object_id == object_id &&
-		    region->base <= base &&
-		    base + len >= region->base &&
+		if (vm_region_metadata_matches(region, prot, map_flags, kind,
+					       object_type, object_id) &&
+		    vm_region_prepend_offset_matches(region, base, len,
+						     object_type, object_id,
+						     offset) &&
+		    region->base <= req_end &&
 		    base <= end) {
-			const u64 new_end = base + len > end ? base + len : end;
+			const u64 new_base =
+				base < region->base ? base : region->base;
+			const u64 new_end = req_end > end ? req_end : end;
+			const u64 new_len = new_end - new_base;
 
-			region->len = new_end - region->base;
+			if (new_end < new_base ||
+			    task_vm_range_overlaps_other_locked(task, i,
+							       new_base,
+							       new_len)) {
+				continue;
+			}
+
+			if (new_base != region->base) {
+				region->base = new_base;
+				region->offset = offset;
+			}
+			region->len = new_len;
 			spin_unlock_irqrestore(&task->lock, flags);
 			return 0;
 		}
@@ -3514,6 +3584,7 @@ int task_remove_vm_region(struct task *task, u64 base, u64 len)
 					       task->pid);
 				return -1;
 			}
+			region = &task->vm_regions[i];
 			right.base = remove_end;
 			right.len = region_end - remove_end;
 			region->len = remove_base - region_base;

@@ -411,6 +411,15 @@ int main(void)
 			}
 			stat_utmp(&message, &reply, user);
 			break;
+		case BUNIX_VFS_CHMOD_BUFFER:
+		case BUNIX_VFS_CHOWN_BUFFER:
+			if (read_resolved_path(&message, path) != 0 ||
+			    !utmp_path(path)) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+				break;
+			}
+			reply.words[0] = 0;
+			break;
 		case BUNIX_VFS_STAT_META:
 			if (message.words[0] != 1) {
 				reply.words[0] = BUNIX_VFS_ERR_NOENT;
@@ -433,6 +442,23 @@ int main(void)
 			reply.words[1] = nread < 0 ? 0 : (u64)nread;
 			break;
 		}
+		case BUNIX_VFS_TRUNCATE:
+			if (message.words[0] != 1) {
+				reply.words[0] = BUNIX_VFS_ERR_NOENT;
+			} else if (message.words[1] != 0) {
+				reply.words[0] = BUNIX_VFS_ERR_INVAL;
+			} else {
+				reply.words[0] = 0;
+			}
+			break;
+		case BUNIX_VFS_WRITE_FILE_BUFFER:
+			reply.words[0] = BUNIX_VFS_ERR_ACCESS;
+			break;
+		case BUNIX_VFS_CHMOD:
+		case BUNIX_VFS_CHOWN:
+			reply.words[0] = message.words[0] == 1 ?
+					 0 : BUNIX_VFS_ERR_NOENT;
+			break;
 		case BUNIX_VFS_CLOSE:
 			reply.words[0] = 0;
 			break;
