@@ -116,6 +116,7 @@ enum {
 	LINUX_SYSCALL_RT_SIGRETURN = 15,
 	LINUX_SYSCALL_RT_SIGTIMEDWAIT = 128,
 	LINUX_SYSCALL_IOCTL = 16,
+	LINUX_SYSCALL_READV = 19,
 	LINUX_SYSCALL_WRITEV = 20,
 	LINUX_SYSCALL_ACCESS = 21,
 	LINUX_SYSCALL_PIPE = 22,
@@ -3842,6 +3843,8 @@ static const char *linux_syscall_name(u64 number)
 		return "rt_sigtimedwait";
 	case LINUX_SYSCALL_IOCTL:
 		return "ioctl";
+	case LINUX_SYSCALL_READV:
+		return "readv";
 	case LINUX_SYSCALL_WRITEV:
 		return "writev";
 	case LINUX_SYSCALL_ACCESS:
@@ -5460,6 +5463,60 @@ poll_again:
 				total += wrote;
 				offset += wrote;
 				if (wrote != chunk) {
+					return total;
+				}
+			}
+		}
+		return total;
+	}
+	case LINUX_SYSCALL_READV: {
+		struct {
+			u64 base;
+			u64 len;
+		} iov;
+		u64 total = 0;
+
+		if (arg2 == 0) {
+			return 0;
+		}
+		if (linux == 0 || reply_port == 0) {
+			return (u64)-LINUX_ENOSYS;
+		}
+		if (arg1 == 0) {
+			return (u64)-LINUX_EFAULT;
+		}
+		if (arg2 > LINUX_IOV_MAX) {
+			return linux_einval_u64(__func__, __LINE__);
+		}
+		for (u64 i = 0; i < arg2; i++) {
+			if (read_current_user(arg1 + i * sizeof(iov), &iov,
+					      sizeof(iov)) != 0) {
+				return (u64)-LINUX_EFAULT;
+			}
+			if (iov.base == 0 && iov.len != 0) {
+				return total != 0 ? total : (u64)-LINUX_EFAULT;
+			}
+			for (u64 offset = 0; offset < iov.len;) {
+				const u64 chunk =
+					min_u64(iov.len - offset,
+						LINUX_MAX_SYSCALL_BUFFER);
+				const u64 nread =
+					linux_read_one(linux, reply_port, arg0,
+						       iov.base + offset,
+						       chunk,
+						       TASK_RIGHT_SEND |
+						       TASK_RIGHT_RECV |
+						       TASK_RIGHT_DUP);
+
+				if ((i64)nread < 0) {
+					return total != 0 ? total : nread;
+				}
+				if (nread == 0) {
+					return total;
+				}
+				total += nread;
+				offset += nread;
+				if (nread != chunk) {
 					return total;
 				}
 			}

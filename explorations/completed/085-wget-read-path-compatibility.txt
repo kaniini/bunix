@@ -1,0 +1,72 @@
+Fix wget HTTP response reads.
+
+Problem:
+
+- In the Alpine environment, `wget -O/dev/null
+  http://cachefly.cachefly.net/100mb.test` connects and starts saving, then
+  fails with `wget: read error: Function not implemented`.
+- This means the networking path is far enough along to connect, but some read
+  operation used by BusyBox wget is still returning `ENOSYS`.
+
+Intended outcome:
+
+- `make run` boots to the Alpine login environment with networking available.
+- After login, `wget -O/dev/null http://cachefly.cachefly.net/100mb.test`
+  reads HTTP response data instead of failing with `Function not implemented`.
+- The fix identifies the exact Linux syscall or VFS/socket operation returning
+  `ENOSYS`, adds the missing compatibility path, and keeps existing ping/DNS
+  behavior working.
+
+Tasks:
+
+- [x] Reproduce the BusyBox wget failure with `log=debug` or equivalent Linux
+      syscall tracing enabled.
+- [x] Identify which syscall or server RPC returns `ENOSYS` during the read
+      path.
+- [x] Implement the missing read/socket compatibility behavior.
+- [x] Add focused coverage that exercises BusyBox wget against a deterministic
+      HTTP endpoint or controlled network fixture.
+- [x] Validate that DNS, TCP connect, HTTP read, and `/dev/null` writes all
+      work together.
+
+Findings:
+
+- The cachefly failure reproduced on a `log=debug virtio-net-test` Alpine boot.
+- Once Linux/server logs were dumped through `dmesg`, the failing path showed
+  BusyBox wget setting the TCP socket nonblocking with `fcntl()`, then issuing
+  Linux syscall `19`.
+- On x86_64, syscall `19` is `readv`. The x86_64 Linux syscall shim handled
+  `writev`, but not `readv`, so the syscall fell through as unknown and
+  returned `-ENOSYS`.
+- The exact reported cachefly command now streams response data instead of
+  failing with `Function not implemented`. A manual probe reached more than
+  1.6 MiB read from the 100 MiB object before being stopped because the current
+  MVP outbound TCP path estimates around two hours for the full transfer.
+
+Implementation notes:
+
+- Added x86_64 Linux `readv` support by iterating user iovecs and reusing the
+  existing chunked `read` forwarding path.
+- Extended `iovtest` to cover `readv` success, zero-iov behavior, and `EFAULT`
+  for invalid iovecs.
+- Added a deterministic host-backed HTTP fixture and guest test that uses
+  BusyBox wget through virtio-net/QEMU user networking to fetch a fixed 256 KiB
+  payload from `10.0.2.2`.
+
+Validation:
+
+- [x] Reproduced original cachefly `read error: Function not implemented`.
+- [x] `make build/x86_64/bunixos.kernel build/modules/iovtest.user`
+- [x] `sh -n tools/guest-network-wget-readv.sh`
+- [x] `python3 -m py_compile tools/http-readv-fixture.py`
+- [x] `BUNIX_USER=root BUNIX_PASSWORD=root BUNIX_PROMPT='~ # ' BUNIX_CMD='/bin/iovtest' BUNIX_MARKER=IOVTEST_OK make test-command`
+- [x] `make test-boot-virtio-net-wget-readv`
+- [x] `make test-boot-virtio-net-dns-wget`
+- [x] `make test-boot-virtio-net-external-ping-strict`
+- [x] `make test`
+
+Remaining limits:
+
+- The 100 MiB cachefly object now reads instead of hitting `ENOSYS`, but the
+  current outbound TCP stack is far too slow for large-transfer validation.
+  Track that separately from the syscall compatibility fix.

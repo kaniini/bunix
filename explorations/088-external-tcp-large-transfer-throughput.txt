@@ -1,0 +1,36 @@
+Improve outbound TCP throughput for large downloads.
+
+Problem:
+
+- After Linux `readv` support fixed the BusyBox wget `Function not implemented`
+  error, `wget -O/dev/null http://cachefly.cachefly.net/100mb.test` streamed
+  data successfully but estimated roughly two hours to complete the 100 MiB
+  transfer.
+- The current outbound TCP implementation is intentionally minimal and appears
+  adequate for small HTTP fixtures, DNS/wget smoke tests, and simple TCP flows,
+  but it is not yet suitable for realistic large downloads or package-manager
+  workloads.
+
+Intended outcome:
+
+- Large outbound TCP downloads complete at a practical speed in QEMU user
+  networking.
+- The implementation remains correct under packet loss, delayed ACKs, repeated
+  reads, partial writes, and normal close behavior.
+- `wget -O/dev/null http://cachefly.cachefly.net/100mb.test` or an equivalent
+  deterministic large-transfer fixture can complete within a bounded test
+  timeout.
+
+Tasks:
+
+- [ ] Measure current outbound TCP throughput with a deterministic local HTTP
+      fixture at several payload sizes.
+- [ ] Inspect ACK cadence, receive queue sizing, advertised window behavior,
+      and packet dequeue/interrupt overhead during a large transfer.
+- [ ] Implement the lowest-risk TCP improvements needed for practical large
+      download throughput.
+- [ ] Add a bounded large-transfer regression that does not depend on an
+      external network service.
+- [ ] Recheck the cachefly command manually once the deterministic large
+      transfer gate is healthy.
+
