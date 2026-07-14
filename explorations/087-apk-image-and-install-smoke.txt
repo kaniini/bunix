@@ -1,0 +1,30 @@
+Add apk to the Alpine image and verify package installation.
+
+Problem:
+
+- The Alpine rootfs should include `apk` so the system can install packages
+  from inside Bunix.
+- It is not enough for the binary to exist; package installation needs working
+  DNS/networking, TLS or repository fetch behavior as configured, filesystem
+  writes, directory metadata, temporary files, and process execution.
+
+Intended outcome:
+
+- The default Alpine image used by `make run` contains `apk`.
+- After login, an `apk add` smoke test can initialize or use the package
+  database and install a small package successfully.
+- Failures in the install path are traced to concrete missing syscalls,
+  filesystem semantics, networking behavior, or image construction issues.
+
+Tasks:
+
+- [ ] Update the Alpine image construction so `apk` is present in the default
+      environment.
+- [ ] Verify `apk --version` and basic package database access inside Bunix.
+- [ ] Run a minimal `apk add` smoke test against the configured Alpine
+      repositories.
+- [ ] Fix any missing syscall, VFS, networking, temporary-file, or metadata
+      behavior needed by the smoke test.
+- [ ] Add automated coverage for the apk presence check and at least one
+      deterministic package installation path.
+

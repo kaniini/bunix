@@ -1,0 +1,57 @@
+Fix procfs process identity and parentage.
+
+Problem:
+
+- BusyBox `top` shows a mysterious `/bin/process` process.
+- BusyBox `top` also shows processes parented to `{process}`, which makes the
+  Linux process tree misleading.
+- Bunix native task names are useful for observability, but Linux-visible
+  process metadata must not invent a fake `/bin/process` root or collapse
+  parentage through a synthetic process label.
+
+Intended outcome:
+
+- No spurious `/bin/process` process appears in Linux procfs or BusyBox `top`.
+- Linux processes report meaningful parent PIDs through `/proc/<pid>/stat`.
+- Native Bunix tasks can remain visible as kernel/native tasks, but they should
+  not be presented as a fake Linux executable unless there is a real process.
+- BusyBox `top` should show shell/user process parentage that corresponds to
+  the Linux process model rather than everything appearing under `{process}`.
+
+Tasks:
+
+- [x] Identify where `/bin/process` is created or exported.
+- [x] Identify why procfs parent PID/cmdline data causes BusyBox `top` to show
+      `{process}` as the parent.
+- [x] Fix proc/procfs metadata so Linux-visible process identity and parentage
+      are accurate.
+- [x] Add focused regression coverage for `/bin/process` absence and parent
+      PID/name behavior.
+- [x] Validate with focused procfs/top-compatible tests and full `make test`.
+
+Findings:
+
+- The proc server seeded Linux child process records with `/bin/process` during
+  clone/fork registration before exec updated the cmdline.
+- Procfs also hardcoded the process comm as `(process)`, the fallback cmdline
+  as `/bin/process`, and the `/proc/<pid>/stat` PPID as `1`.
+- BusyBox `top` uses `/proc/<pid>/stat`, so the hardcoded comm and PPID made
+  user processes appear parented to `{process}`.
+
+Implementation notes:
+
+- Linux child process records now inherit the parent cmdline only until exec
+  publishes the real argv; they no longer invent `/bin/process`.
+- Procfs resolves numeric paths through Linux-visible PIDs first, emits
+  Linux-visible PID/PPID values in stat/status data, derives comm names from
+  argv or Bunix task names, and leaves native/kernel-style cmdline data empty
+  instead of using a fake executable path.
+- `/proc` directory entries now use the visible Linux PID when a process has
+  one.
+
+Validation:
+
+- [x] `make build/modules/proc.server build/modules/procfs.server`
+- [x] `sh -n tools/shell-tests/procfs-cmdline.sh`
+- [x] `BUNIX_SHELL_PART=procfs-cmdline make test-shell-part`
+- [x] `make test`

@@ -1905,7 +1905,8 @@ static long register_linux_child_process(u64 linux_pid, u64 task_id, u64 ppid,
 	process->status = 0;
 	process->exited = 0;
 	process->waiter = 0;
-	if (process_set_cmdline(process, "/bin/process", 12) != 0) {
+	if (parent != 0 && parent->cmdline != 0 &&
+	    process_set_cmdline(process, parent->cmdline, parent->cmd_len) != 0) {
 		bunix_free(process);
 		return -1;
 	}
@@ -1920,7 +1921,9 @@ static long register_linux_child_process(u64 linux_pid, u64 task_id, u64 ppid,
 	}
 	*pid = process->pid;
 	notify_procfs_process_upsert(process);
-	notify_procfs_process_cmdline(process);
+	if (process->cmdline != 0) {
+		notify_procfs_process_cmdline(process);
+	}
 	return 0;
 }
 

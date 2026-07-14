@@ -201,6 +201,20 @@ static char *str_dup(const char *text)
 	return copy;
 }
 
+static void str_copy(char *out, u64 out_size, const char *src)
+{
+	u64 i = 0;
+
+	if (out == 0 || out_size == 0) {
+		return;
+	}
+	while (i + 1 < out_size && src[i] != '\0') {
+		out[i] = src[i];
+		i++;
+	}
+	out[i] = '\0';
+}
+
 static int path_has_prefix(const char *path, const char *prefix)
 {
 	u64 i = 0;
@@ -662,11 +676,11 @@ static u64 proc_path_pid(u64 pid, u64 caller_task, u64 caller_proc_pid)
 	if (pid == 0) {
 		return proc_self_pid(caller_task, caller_proc_pid);
 	}
-	if (proc_info(pid, &info) == 0) {
-		return pid;
-	}
 	if (proc_info_by_linux_pid(pid, &info) == 0) {
 		return info.pid;
+	}
+	if (proc_info(pid, &info) == 0) {
+		return pid;
 	}
 	return 0;
 }
@@ -2171,19 +2185,110 @@ static u64 build_net_socket_table(u64 protocol, u64 family)
 	return len;
 }
 
+static u64 proc_visible_pid(const struct proc_info *info)
+{
+	if (info == 0) {
+		return 0;
+	}
+	return info->linux_pid != 0 ? info->linux_pid : info->pid;
+}
+
+static u64 proc_visible_pid_for_internal(u64 pid)
+{
+	struct proc_info info;
+
+	if (proc_info(pid, &info) != 0) {
+		return pid;
+	}
+	return proc_visible_pid(&info);
+}
+
+static u64 proc_visible_ppid(u64 ppid)
+{
+	if (ppid == 0) {
+		return 0;
+	}
+	return proc_visible_pid_for_internal(ppid);
+}
+
+static int task_name_by_id(u64 task_id, char *out, u64 out_size)
+{
+	if (out == 0 || out_size == 0) {
+		return -1;
+	}
+	out[0] = '\0';
+	if (task_id == 0) {
+		return -1;
+	}
+	for (u64 index = 0;; index++) {
+		u64 packed = 0;
+		u64 words[2] = { 0, 0 };
+		u64 len = 0;
+		const long rc = bunix_task_info(index, &packed, words);
+
+		if (rc != 0) {
+			break;
+		}
+		if ((packed & 0xffffffff) != task_id) {
+			continue;
+		}
+		for (u64 i = 0; i < 16 && len + 1 < out_size; i++) {
+			const u64 slot = i / 8;
+			const u64 shift = (i % 8) * 8;
+			const char c = (char)((words[slot] >> shift) & 0xff);
+
+			if (c == '\0') {
+				break;
+			}
+			out[len++] = c;
+		}
+		out[len] = '\0';
+		return len == 0 ? -1 : 0;
+	}
+	return -1;
+}
+
+static void sanitize_comm(char *name)
+{
+	for (u64 i = 0; name[i] != '\0'; i++) {
+		if (name[i] == '(' || name[i] == ')' || name[i] == ' ' ||
+		    name[i] == '\t' || name[i] == '\n' || name[i] == '\r') {
+			name[i] = '_';
+		}
+	}
+}
+
+static void basename_from_path(char *out, u64 out_size, const char *path)
+{
+	const char *base = path;
+
+	for (u64 i = 0; path[i] != '\0'; i++) {
+		if (path[i] == '/' && path[i + 1] != '\0') {
+			base = path + i + 1;
+		}
+	}
+	str_copy(out, out_size, base);
+}
+
 static const char *pid_name(u64 pid)
 {
 	static char name[32];
+	struct proc_info info = { 0, 0, 0 };
+	char cmdline[PROCFS_MAX_PATH];
+	u64 cmdline_len = 0;
 
-	(void)pid;
-	name[0] = 'p';
-	name[1] = 'r';
-	name[2] = 'o';
-	name[3] = 'c';
-	name[4] = 'e';
-	name[5] = 's';
-	name[6] = 's';
-	name[7] = '\0';
+	if (proc_cmdline_bytes(pid, cmdline, sizeof(cmdline), &cmdline_len) == 0 &&
+	    cmdline_len != 0 && cmdline[0] != '\0') {
+		basename_from_path(name, sizeof(name), cmdline);
+		sanitize_comm(name);
+		return name;
+	}
+	if (proc_info(pid, &info) == 0 &&
+	    task_name_by_id(info.task_id, name, sizeof(name)) == 0) {
+		sanitize_comm(name);
+		return name;
+	}
+	str_copy(name, sizeof(name), "unknown");
 	return name;
 }
 
@@ -2193,7 +2298,7 @@ static const char *pid_cmdline(u64 pid)
 
 	if (proc_cmdline(pid, cmdline, sizeof(cmdline)) != 0 ||
 	    cmdline[0] == '\0') {
-		return "/bin/process";
+		return "";
 	}
 	return cmdline;
 }
@@ -2201,10 +2306,31 @@ static const char *pid_cmdline(u64 pid)
 static u64 build_pid_stat(u64 pid)
 {
 	u64 len = 0;
+	struct proc_info info = { 0, 0, 0 };
+	struct proc_details details = { 0, 'S', 0 };
+	u64 visible_pid = pid;
+	u64 visible_ppid = 0;
+	char state = 'S';
 
-	append_u64(&len, pid);
-	append_str(&len, " (process) S 1");
-	append_str(&len, " 1 1 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ");
+	if (proc_info(pid, &info) == 0) {
+		visible_pid = proc_visible_pid(&info);
+	}
+	if (proc_details(pid, &details) == 0) {
+		visible_ppid = proc_visible_ppid(details.ppid);
+		state = details.state == '\0' ? 'S' : details.state;
+	}
+	append_u64(&len, visible_pid);
+	append_str(&len, " (");
+	append_str(&len, pid_name(pid));
+	append_str(&len, ") ");
+	append_char(&len, state);
+	append_char(&len, ' ');
+	append_u64(&len, visible_ppid);
+	append_char(&len, ' ');
+	append_u64(&len, visible_pid);
+	append_char(&len, ' ');
+	append_u64(&len, visible_pid);
+	append_str(&len, " 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ");
 	append_u64(&len, bunix_timer_ticks());
 	append_str(&len, " 0 0 0 4194304 5242880 8388608 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 4194304 5242880 9437184 8384512 8388608 0 0 0\n");
 	return len;
@@ -2215,8 +2341,11 @@ static u64 build_pid_status(u64 pid)
 	u64 len = 0;
 	struct proc_info info = { 0, 0, 0 };
 	struct proc_details details = { 0, 'S', 0 };
+	u64 visible_pid = pid;
 
-	(void)proc_info(pid, &info);
+	if (proc_info(pid, &info) == 0) {
+		visible_pid = proc_visible_pid(&info);
+	}
 	(void)proc_details(pid, &details);
 	append_str(&len, "Name:\t");
 	append_str(&len, pid_name(pid));
@@ -2225,7 +2354,7 @@ static u64 build_pid_status(u64 pid)
 	append_char(&len, details.state == '\0' ? 'S' : details.state);
 	append_str(&len, details.state == 'Z' ? " (zombie)\n" : " (sleeping)\n");
 	append_str(&len, "Pid:\t");
-	append_u64(&len, pid);
+	append_u64(&len, visible_pid);
 	append_char(&len, '\n');
 	append_str(&len, "BunixTask:\t");
 	append_u64(&len, info.task_id);
@@ -2234,7 +2363,7 @@ static u64 build_pid_status(u64 pid)
 	append_u64(&len, info.linux_pid);
 	append_char(&len, '\n');
 	append_str(&len, "PPid:\t");
-	append_u64(&len, details.ppid);
+	append_u64(&len, proc_visible_ppid(details.ppid));
 	append_char(&len, '\n');
 	append_str(&len, "Uid:\t1000\t1000\t1000\t1000\n");
 	append_str(&len, "Gid:\t1000\t1000\t1000\t1000\n");
@@ -2252,8 +2381,7 @@ static u64 build_pid_cmdline(u64 pid)
 	if (proc_cmdline_bytes(pid, cmdline, sizeof(cmdline),
 			       &cmdline_len) != 0 ||
 	    cmdline_len == 0) {
-		append_str(&len, "/bin/process");
-		append_char(&len, '\0');
+		return 0;
 	} else {
 		append_bytes(&len, cmdline, cmdline_len);
 		append_char(&len, '\0');
@@ -2263,12 +2391,7 @@ static u64 build_pid_cmdline(u64 pid)
 
 static u64 build_self_cmdline(u64 pid)
 {
-	u64 len = 0;
-
-	(void)pid;
-	append_str(&len, "/bin/process");
-	append_char(&len, '\0');
-	return len;
+	return build_pid_cmdline(pid);
 }
 
 static u64 build_pid_statm(u64 pid)
@@ -2283,9 +2406,17 @@ static u64 build_pid_statm(u64 pid)
 static u64 build_pid_smaps(u64 pid)
 {
 	u64 len = 0;
+	const char *path = pid_cmdline(pid);
 
-	(void)pid;
-	append_str(&len, "00400000-00401000 r-xp 00000000 00:00 0 /bin/process\n");
+	append_str(&len, "00400000-00401000 r-xp 00000000 00:00 0 ");
+	if (path[0] != '\0') {
+		append_str(&len, path);
+	} else {
+		append_char(&len, '[');
+		append_str(&len, pid_name(pid));
+		append_char(&len, ']');
+	}
+	append_char(&len, '\n');
 	append_str(&len, "Size:                  4 kB\n");
 	append_str(&len, "Rss:                   4 kB\n");
 	append_str(&len, "Pss:                   4 kB\n");
@@ -2578,7 +2709,7 @@ static const char *proc_dir_entry(u64 index, u64 *type)
 	if (proc_at(index - static_count, &info) != 0) {
 		return 0;
 	}
-	u64_to_dec(pid_name_buf, sizeof(pid_name_buf), info.pid);
+	u64_to_dec(pid_name_buf, sizeof(pid_name_buf), proc_visible_pid(&info));
 	*type = BUNIX_VFS_TYPE_DIRECTORY;
 	return pid_name_buf;
 }
