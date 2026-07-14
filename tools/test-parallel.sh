@@ -320,8 +320,12 @@ run_worker() {
 
 		if [ "$harness" = boot ]; then
 			worker_esp=${ESP_DIR:-}
+			worker_qemu_extra_args=${BUNIX_VM_QEMU_EXTRA_ARGS:-}
 			case "$rootfs" in
-			alpine|alpine-squashfs) worker_esp=${ALPINE_ESP_DIR:-build/esp-alpine} ;;
+			alpine|alpine-squashfs)
+				worker_esp=${ALPINE_ESP_DIR:-build/esp-alpine}
+				worker_qemu_extra_args=${BUNIX_ALPINE_QEMU_EXTRA_ARGS:-$worker_qemu_extra_args}
+				;;
 			synthetic) worker_esp=${ESP_DIR:-build/esp} ;;
 			*)
 				echo "unknown rootfs flavor for shard $name: $rootfs" > "$attempt_dir/stderr.log"
@@ -341,6 +345,7 @@ run_worker() {
 				    SMP="$worker_smp" \
 				    QEMU_MEMORY="$worker_memory" \
 				    QEMU_TIMEOUT="$worker_timeout" \
+				    QEMU_EXTRA_ARGS="$worker_qemu_extra_args" \
 				    sh tools/test-boot.sh >"$attempt_dir/stdout.log" 2>"$attempt_dir/stderr.log" &&
 				    { [ -z "$marker_file" ] || sh tools/check-markers.sh "$attempt_dir/serial.log" "$marker_file" >>"$attempt_dir/stdout.log" 2>>"$attempt_dir/stderr.log"; }; then
 					attempt_ok=1

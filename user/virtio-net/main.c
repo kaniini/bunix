@@ -12,6 +12,10 @@ enum {
 	VIRTIO_NET_TX_BUFFER_SIZE = sizeof(struct bunix_virtio_net_header) +
 				    VIRTIO_NET_MAX_MTU,
 	VIRTIO_NET_RX_POLL_ROUNDS = 16,
+	VIRTIO_NET_TX_POLL_ROUNDS = 64,
+	VIRTIO_NET_IDLE_SLEEP_NS = 1000000ull,
+	VIRTIO_NET_ACTIVE_SLEEP_NS = 100000ull,
+	VIRTIO_NET_ACTIVE_SLEEP_ROUNDS = 256,
 };
 
 struct virtio_net_queue {
@@ -455,7 +459,7 @@ static int poll_rx_once(struct virtio_net_device *device, u64 *completed)
 			   &used_idx) != 0) {
 		return -1;
 	}
-	while (device->rx.seen_used != (u64)used_idx) {
+	while ((unsigned short)device->rx.seen_used != used_idx) {
 		struct bunix_virtio_used_elem elem;
 		u64 id;
 		u64 len;
@@ -484,7 +488,7 @@ static int poll_rx_once(struct virtio_net_device *device, u64 *completed)
 	return 0;
 }
 
-static int poll_rx_bounded(struct virtio_net_device *device)
+static int poll_rx_bounded(struct virtio_net_device *device, u64 *completed_out)
 {
 	u64 completed = 0;
 
@@ -496,14 +500,21 @@ static int poll_rx_bounded(struct virtio_net_device *device)
 			if (notify_queue(device, 0) != 0) {
 				return -1;
 			}
+			if (completed_out != 0) {
+				*completed_out += completed;
+			}
 			return 0;
 		}
 		bunix_sleep_ns(1000000ull);
 	}
+	if (completed_out != 0) {
+		*completed_out += completed;
+	}
 	return 0;
 }
 
-static int poll_tx_completions(struct virtio_net_device *device)
+static int poll_tx_completions(struct virtio_net_device *device,
+			       u64 *completed)
 {
 	unsigned short used_idx;
 
@@ -511,7 +522,7 @@ static int poll_tx_completions(struct virtio_net_device *device)
 			   &used_idx) != 0) {
 		return -1;
 	}
-	while (device->tx.seen_used != (u64)used_idx) {
+	while ((unsigned short)device->tx.seen_used != used_idx) {
 		struct bunix_virtio_used_elem elem;
 
 		if (queue_read_used_elem(&device->tx, device->tx.seen_used,
@@ -521,6 +532,9 @@ static int poll_tx_completions(struct virtio_net_device *device)
 		device->tx.seen_used++;
 		if (device->tx_inflight != 0) {
 			(void)complete_tx_frame(device);
+			if (completed != 0) {
+				*completed += 1;
+			}
 		}
 	}
 	return 0;
@@ -554,9 +568,10 @@ static int submit_tx_frame(struct virtio_net_device *device, u64 frame_len)
 	return 0;
 }
 
-static int poll_tx_once(struct virtio_net_device *device)
+static int poll_tx_once(struct virtio_net_device *device, u64 *activity)
 {
 	struct bunix_net_packet_info info;
+	u64 completed = 0;
 	struct bunix_msg request = {
 		.protocol = BUNIX_PROTO_NET,
 		.type = BUNIX_NET_PACKET_TX_DEQUEUE,
@@ -568,8 +583,11 @@ static int poll_tx_once(struct virtio_net_device *device)
 	};
 	struct bunix_msg reply;
 
-	if (poll_tx_completions(device) != 0) {
+	if (poll_tx_completions(device, &completed) != 0) {
 		return -1;
+	}
+	if (activity != 0) {
+		*activity += completed;
 	}
 	if (device->tx_inflight != 0 || device->tx_dequeue_buffer == 0) {
 		return 0;
@@ -586,7 +604,28 @@ static int poll_tx_once(struct virtio_net_device *device)
 	    info.len > device->mtu) {
 		return -1;
 	}
-	return submit_tx_frame(device, info.len);
+	if (submit_tx_frame(device, info.len) != 0) {
+		return -1;
+	}
+	if (activity != 0) {
+		*activity += 1;
+	}
+	return 0;
+}
+
+static int poll_tx_bounded(struct virtio_net_device *device, u64 *activity)
+{
+	for (u64 i = 0; i < VIRTIO_NET_TX_POLL_ROUNDS; i++) {
+		const u64 before = activity != 0 ? *activity : 0;
+
+		if (poll_tx_once(device, activity) != 0) {
+			return -1;
+		}
+		if (activity != 0 && *activity == before) {
+			break;
+		}
+	}
+	return 0;
 }
 
 static int attach_net_interface(struct virtio_net_device *device)
@@ -699,8 +738,12 @@ static int init_device(struct virtio_net_device *device)
 	log_iface(device->iface_id, device->mtu);
 	log_text("virtio-net: rx ready\n", text_len("virtio-net: rx ready\n"));
 	log_text("virtio-net: tx ready\n", text_len("virtio-net: tx ready\n"));
-	(void)poll_rx_bounded(device);
-	(void)poll_tx_once(device);
+	{
+		u64 activity = 0;
+
+		(void)poll_rx_bounded(device, &activity);
+		(void)poll_tx_bounded(device, &activity);
+	}
 	return 0;
 }
 
@@ -714,9 +757,21 @@ int main(void)
 			 text_len("virtio-net: init failed\n"));
 		return 1;
 	}
+	u64 active_rounds = 0;
 	for (;;) {
-		(void)poll_rx_bounded(&device);
-		(void)poll_tx_once(&device);
-		bunix_sleep_ns(100000000ull);
+		u64 activity = 0;
+
+		(void)poll_rx_bounded(&device, &activity);
+		(void)poll_tx_bounded(&device, &activity);
+		if (activity == 0) {
+			active_rounds = 0;
+			bunix_sleep_ns(VIRTIO_NET_IDLE_SLEEP_NS);
+		} else {
+			active_rounds++;
+			if (active_rounds >= VIRTIO_NET_ACTIVE_SLEEP_ROUNDS) {
+				active_rounds = 0;
+				bunix_sleep_ns(VIRTIO_NET_ACTIVE_SLEEP_NS);
+			}
+		}
 	}
 }

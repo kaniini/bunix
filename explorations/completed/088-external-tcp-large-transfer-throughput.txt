@@ -1,0 +1,97 @@
+Improve outbound TCP throughput for large downloads.
+
+Problem:
+
+- Current reported external wget failure:
+
+  ```
+  ~ # wget -O/dev/null http://cachefly.cachefly.net/100mb.test
+  Connecting to cachefly.cachefly.net (205.234.175.175:80)
+  saving to '/dev/null'
+  wget: read error: Function not implemented
+  ~ #
+  ```
+
+- After Linux `readv` support fixed the BusyBox wget `Function not implemented`
+  error, `wget -O/dev/null http://cachefly.cachefly.net/100mb.test` streamed
+  data successfully but estimated roughly two hours to complete the 100 MiB
+  transfer.
+- Completed exploration `085-wget-read-path-compatibility` owns the original
+  `wget: read error: Function not implemented` regression. This exploration
+  should fail fast if that ENOSYS path returns, then continue with throughput
+  once the read path is confirmed healthy.
+- The current outbound TCP implementation is intentionally minimal and appears
+  adequate for small HTTP fixtures, DNS/wget smoke tests, and simple TCP flows,
+  but it is not yet suitable for realistic large downloads or package-manager
+  workloads.
+
+Intended outcome:
+
+- Large outbound TCP downloads complete at a practical speed in QEMU user
+  networking.
+- The implementation remains correct under packet loss, delayed ACKs, repeated
+  reads, partial writes, and normal close behavior.
+- `wget -O/dev/null http://cachefly.cachefly.net/100mb.test` or an equivalent
+  deterministic large-transfer fixture can complete within a bounded test
+  timeout.
+
+Tasks:
+
+- [x] Confirm the cachefly/large-wget path no longer fails with
+      `Function not implemented`, and treat any ENOSYS return as a regression
+      against completed exploration 085.
+- [x] Measure current outbound TCP throughput with a deterministic local HTTP
+      fixture at several payload sizes.
+- [x] Inspect ACK cadence, receive queue sizing, advertised window behavior,
+      and packet dequeue/interrupt overhead during a large transfer.
+- [x] Implement the lowest-risk TCP improvements needed for practical large
+      download throughput.
+- [x] Add a bounded large-transfer regression that does not depend on an
+      external network service.
+- [x] Recheck the cachefly command manually once the deterministic large
+      transfer gate is healthy.
+
+Findings:
+
+- The original `wget: read error: Function not implemented` path remained
+  fixed by exploration 085. The current failure mode was not `ENOSYS`.
+- Local 4 MiB wget through a deterministic host HTTP fixture completed in about
+  two seconds once virtio-net stopped sleeping for 100 ms after every poll.
+- External Cachefly repeatedly stalled at about 85.2 MiB. That point matched
+  the scale of the virtio used-ring 16-bit index wrapping after roughly 65k
+  packet completions.
+- `virtio-net` tracked `seen_used` as a monotonic `u64`, but compared it
+  directly to the device's 16-bit used index. After the device wrapped the
+  used index, the driver replayed stale used-ring entries and stopped making
+  forward progress. RX and TX completion loops now compare the low 16 bits.
+- The net server now bounds the passive packet receive queue so AF_PACKET-style
+  observation cannot retain every inbound frame from large TCP transfers.
+- The TCP receive side now advertises a bounded receive window and has a
+  bounded out-of-order queue so ordinary gaps can recover without forcing the
+  sender to retransmit all later data.
+- Large writes to `/dev/null` exposed two unrelated resource leaks/error
+  issues on the write path: devfs and net now close forwarded message caps, and
+  Linux write-buffer allocation failure reports `ENOMEM` instead of `EBADF`.
+- The full test gate exposed an Alpine OpenRC harness issue after the TCP work:
+  parallel Alpine shards still used the no-net Alpine ESP while the current
+  rootfs starts the real Alpine networking service for eth0. Those shards now
+  use a dedicated network-capable Alpine ESP and QEMU virtio-net args.
+
+Validation:
+
+- `python3 -m py_compile tools/http-readv-fixture.py`
+- `sh -n tools/guest-network-large-wget.sh`
+- `make build/modules/net.server build/modules/virtio-net.server build/modules/devfs.server build/modules/linux.server`
+- `make test-boot-virtio-net-large-wget`
+- `make test-boot-virtio-net-wget-readv`
+- `BUNIX_TEST_SET=openrc BUNIX_TEST_JOBS=1 make test-shell-parallel`
+  passed with run artifact `build/test-runs/20260714T164112Z-12203`.
+- `make test` passed with run artifact
+  `build/test-runs/20260714T164222Z-13334`.
+- Final `make test-boot-virtio-net-large-wget` recheck passed after the
+  OpenRC harness fix.
+- Manual Cachefly check:
+  `wget -O/dev/null http://cachefly.cachefly.net/100mb.test`
+  completed successfully with `BUNIX_CACHEFLY_WGET_STATUS=0` in 41 seconds.
+  Kept log:
+  `/tmp/bunix-command-test.20260714T160634Z-10495/serial.log`.

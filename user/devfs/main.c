@@ -279,6 +279,9 @@ int main(void)
 			continue;
 		}
 		if (message.protocol != BUNIX_PROTO_VFS) {
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
 			continue;
 		}
 		reply.protocol = BUNIX_PROTO_VFS;
@@ -398,6 +401,9 @@ int main(void)
 			break;
 		}
 
+		if (message.cap != 0) {
+			bunix_handle_close(message.cap);
+		}
 		bunix_ipc_send(message.reply, &reply);
 	}
 }

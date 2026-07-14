@@ -1,6 +1,6 @@
 You are working on a series of explorations.
 
-The current exploration is: 088-external-tcp-large-transfer-throughput.txt
+The current exploration is: none
 
 Read it, then complete tasks and mark tasks as completed as they are completed.
 Commit each exploration as tasks are completed.
@@ -19,7 +19,7 @@ When an exploration is considered complete:
 If an exploration is considered complete, but has follow-up items or
 unfulfilled needs, plan a new exploration.
 
-The goal is considered achieved when no further explorations are available.
+The goal is achieved: no further explorations are available.
 
 Update task list with needs.
 

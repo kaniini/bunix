@@ -6,6 +6,8 @@
 enum {
 	NET_IFACE_LO = 1,
 	NET_PACKET_MAX = 65536,
+	NET_PACKET_RX_QUEUE_MAX_BYTES = 256 * 1024,
+	NET_PACKET_RX_QUEUE_MAX_PACKETS = 256,
 	NET_UDP_PORT_EPHEMERAL_FIRST = 49152,
 	NET_UDP_PORT_EPHEMERAL_LAST = 65535,
 	NET_UDP_POLLIN = 1 << 0,
@@ -26,6 +28,8 @@ enum {
 	NET_TCP_POLLHUP = 1 << 2,
 	NET_TCP_SHUT_RD = 1 << 0,
 	NET_TCP_SHUT_WR = 1 << 1,
+	NET_TCP_WINDOW_MAX = 65535,
+	NET_TCP_RX_BUFFER_LIMIT = 4 * 1024 * 1024,
 	NET_PROTO_UDP = 17,
 	NET_PROTO_TCP = 6,
 	NET_PROTO_ICMP = 1,
@@ -74,6 +78,8 @@ struct net_interface {
 	u64 tx_packets;
 	u64 rx_drops;
 	u64 tx_drops;
+	u64 rx_queued_bytes;
+	u64 rx_queued_packets;
 };
 
 struct net_addr {
@@ -167,6 +173,7 @@ struct udp_socket {
 
 struct tcp_segment {
 	struct tcp_segment *next;
+	u64 seq;
 	u64 offset;
 	u64 len;
 	unsigned char data[];
@@ -197,6 +204,8 @@ struct tcp_socket {
 	u64 rx_len;
 	struct tcp_segment *rx_head;
 	struct tcp_segment *rx_tail;
+	u64 ofo_len;
+	struct tcp_segment *ofo_head;
 	u64 tx_len;
 	struct tcp_segment *tx_head;
 	struct tcp_segment *tx_tail;
@@ -242,6 +251,8 @@ static struct net_interface loopback = {
 	.tx_packets = 0,
 	.rx_drops = 0,
 	.tx_drops = 0,
+	.rx_queued_bytes = 0,
+	.rx_queued_packets = 0,
 };
 static struct net_interface *packet_ifaces;
 static u64 next_packet_iface_id = 2;
@@ -405,6 +416,15 @@ static u64 packet_queue_count(const struct net_packet *packet)
 	return count;
 }
 
+static int packet_rx_queue_has_space(const struct net_interface *iface,
+				     u64 len)
+{
+	return iface != 0 &&
+	       iface->rx_queued_packets < NET_PACKET_RX_QUEUE_MAX_PACKETS &&
+	       iface->rx_queued_bytes <= NET_PACKET_RX_QUEUE_MAX_BYTES &&
+	       len <= NET_PACKET_RX_QUEUE_MAX_BYTES - iface->rx_queued_bytes;
+}
+
 static void reply_interface_at(struct bunix_msg *reply,
 			       const struct bunix_msg *message)
 {
@@ -474,7 +494,9 @@ static void packet_iface_info_store(struct bunix_net_packet_interface_info *info
 	info->tx_packets = iface->tx_packets;
 	info->rx_drops = iface->rx_drops;
 	info->tx_drops = iface->tx_drops;
-	info->rx_pending = packet_queue_count(iface->rx_head);
+	info->rx_pending = iface->rx_queued_packets != 0 ?
+			   iface->rx_queued_packets :
+			   packet_queue_count(iface->rx_head);
 	info->tx_pending = packet_queue_count(iface->tx_head);
 }
 
@@ -2773,13 +2795,24 @@ static void reply_packet_rx_submit(struct bunix_msg *reply,
 	packet_ingress_tcp_ipv6(iface, packet->data, packet->len);
 	packet_ingress_icmp_ipv4(packet->data, packet->len);
 	packet_ingress_icmp_ipv6(packet->data, packet->len);
+	iface->rx_packets++;
+	if (!packet_rx_queue_has_space(iface, packet->len)) {
+		iface->rx_drops++;
+		bunix_free(packet);
+		reply->words[0] = 0;
+		reply->words[1] = info.iface;
+		reply->words[2] = info.len;
+		reply->words[3] = 0;
+		return;
+	}
 	if (iface->rx_tail != 0) {
 		iface->rx_tail->next = packet;
 	} else {
 		iface->rx_head = packet;
 	}
 	iface->rx_tail = packet;
-	iface->rx_packets++;
+	iface->rx_queued_packets++;
+	iface->rx_queued_bytes += packet->len;
 	reply->words[0] = 0;
 	reply->words[1] = info.iface;
 	reply->words[2] = info.len;
@@ -2919,6 +2952,14 @@ static void reply_packet_rx_dequeue(struct bunix_msg *reply,
 	}
 	if (iface->rx_tail == packet) {
 		iface->rx_tail = prev;
+	}
+	if (iface->rx_queued_packets != 0) {
+		iface->rx_queued_packets--;
+	}
+	if (iface->rx_queued_bytes >= packet->len) {
+		iface->rx_queued_bytes -= packet->len;
+	} else {
+		iface->rx_queued_bytes = 0;
 	}
 	reply->words[0] = 0;
 	reply->words[1] = iface->id;
@@ -3638,6 +3679,8 @@ static struct tcp_socket *tcp_alloc_socket(u64 family)
 	socket->rx_len = 0;
 	socket->rx_head = 0;
 	socket->rx_tail = 0;
+	socket->ofo_len = 0;
+	socket->ofo_head = 0;
 	socket->tx_len = 0;
 	socket->tx_head = 0;
 	socket->tx_tail = 0;
@@ -3884,6 +3927,103 @@ static int tcp_socket_is_external(const struct tcp_socket *socket)
 				     socket->peer_addr.lo);
 }
 
+static u64 tcp_seq_distance(u64 from, u64 to)
+{
+	return (to - from) & 0xffffffffull;
+}
+
+static int tcp_seq_after(u64 seq, u64 base)
+{
+	const u64 distance = tcp_seq_distance(base, seq);
+
+	return distance != 0 && distance < 0x80000000ull;
+}
+
+static int tcp_seq_before(u64 seq, u64 base)
+{
+	const u64 distance = tcp_seq_distance(seq, base);
+
+	return distance != 0 && distance < 0x80000000ull;
+}
+
+static u64 tcp_receive_queued_len(const struct tcp_socket *socket)
+{
+	u64 queued;
+
+	if (socket == 0) {
+		return 0;
+	}
+	queued = socket->rx_len + socket->ofo_len;
+	if (queued < socket->rx_len) {
+		return NET_TCP_RX_BUFFER_LIMIT;
+	}
+	return queued;
+}
+
+static u64 tcp_receive_window(const struct tcp_socket *socket)
+{
+	u64 available;
+	u64 queued;
+
+	queued = tcp_receive_queued_len(socket);
+	if (socket == 0 || queued >= NET_TCP_RX_BUFFER_LIMIT) {
+		return 0;
+	}
+	available = NET_TCP_RX_BUFFER_LIMIT - queued;
+	return available > NET_TCP_WINDOW_MAX ? NET_TCP_WINDOW_MAX : available;
+}
+
+static int tcp_receive_can_queue(const struct tcp_socket *socket, u64 len)
+{
+	const u64 queued = tcp_receive_queued_len(socket);
+
+	return socket != 0 && queued <= NET_TCP_RX_BUFFER_LIMIT &&
+	       len <= NET_TCP_RX_BUFFER_LIMIT - queued;
+}
+
+static struct tcp_segment *tcp_segment_alloc(const unsigned char *data, u64 len,
+					     u64 seq)
+{
+	struct tcp_segment *segment;
+
+	if (data == 0 && len != 0) {
+		return 0;
+	}
+	segment = (struct tcp_segment *)bunix_alloc(sizeof(*segment) +
+						    (len == 0 ? 1 : len));
+	if (segment == 0) {
+		return 0;
+	}
+	segment->next = 0;
+	segment->seq = seq & 0xffffffffull;
+	segment->offset = 0;
+	segment->len = len;
+	for (u64 i = 0; i < len; i++) {
+		segment->data[i] = data[i];
+	}
+	return segment;
+}
+
+static void tcp_segment_append_existing(struct tcp_segment **head,
+					struct tcp_segment **tail,
+					u64 *queued_len,
+					struct tcp_segment *segment)
+{
+	if (head == 0 || tail == 0 || segment == 0) {
+		return;
+	}
+	segment->next = 0;
+	if (*tail != 0) {
+		(*tail)->next = segment;
+	} else {
+		*head = segment;
+	}
+	*tail = segment;
+	if (queued_len != 0) {
+		*queued_len += segment->len - segment->offset;
+	}
+}
+
 static int tcp_segment_enqueue(struct tcp_segment **head,
 			       struct tcp_segment **tail,
 			       u64 *queued_len,
@@ -3894,26 +4034,116 @@ static int tcp_segment_enqueue(struct tcp_segment **head,
 	if (head == 0 || tail == 0 || (data == 0 && len != 0)) {
 		return -1;
 	}
-	segment = (struct tcp_segment *)bunix_alloc(sizeof(*segment) +
-						    (len == 0 ? 1 : len));
+	segment = tcp_segment_alloc(data, len, 0);
 	if (segment == 0) {
 		return -1;
 	}
-	segment->next = 0;
-	segment->offset = 0;
-	segment->len = len;
-	for (u64 i = 0; i < len; i++) {
-		segment->data[i] = data[i];
+	tcp_segment_append_existing(head, tail, queued_len, segment);
+	return 0;
+}
+
+static void tcp_drain_out_of_order(struct tcp_socket *socket)
+{
+	while (socket != 0 && socket->ofo_head != 0) {
+		struct tcp_segment *segment = socket->ofo_head;
+		u64 readable;
+
+		if (segment->seq != socket->rx_ack) {
+			const u64 end = (segment->seq + segment->len) &
+					0xffffffffull;
+			u64 trim;
+
+			if (!tcp_seq_before(segment->seq, socket->rx_ack)) {
+				break;
+			}
+			socket->ofo_head = segment->next;
+			if (socket->ofo_len >= segment->len) {
+				socket->ofo_len -= segment->len;
+			} else {
+				socket->ofo_len = 0;
+			}
+			if (!tcp_seq_after(end, socket->rx_ack)) {
+				bunix_free(segment);
+				continue;
+			}
+			trim = tcp_seq_distance(segment->seq, socket->rx_ack);
+			if (trim >= segment->len) {
+				bunix_free(segment);
+				continue;
+			}
+			segment->seq = socket->rx_ack;
+			segment->offset = trim;
+		} else {
+			socket->ofo_head = segment->next;
+			if (socket->ofo_len >= segment->len) {
+				socket->ofo_len -= segment->len;
+			} else {
+				socket->ofo_len = 0;
+			}
+		}
+		readable = segment->len - segment->offset;
+		socket->rx_ack = (socket->rx_ack + readable) &
+				 0xffffffffull;
+		tcp_segment_append_existing(&socket->rx_head,
+					    &socket->rx_tail,
+					    &socket->rx_len, segment);
 	}
-	if (*tail != 0) {
-		(*tail)->next = segment;
-	} else {
-		*head = segment;
+}
+
+static int tcp_queue_in_order(struct tcp_socket *socket,
+			      const unsigned char *data, u64 len)
+{
+	if (!tcp_receive_can_queue(socket, len) ||
+	    tcp_segment_enqueue(&socket->rx_head, &socket->rx_tail,
+				&socket->rx_len, data, len) != 0) {
+		return -1;
 	}
-	*tail = segment;
-	if (queued_len != 0) {
-		*queued_len += len;
+	socket->rx_ack = (socket->rx_ack + len) & 0xffffffffull;
+	tcp_drain_out_of_order(socket);
+	return 0;
+}
+
+static int tcp_queue_out_of_order(struct tcp_socket *socket,
+				  const unsigned char *data, u64 len, u64 seq)
+{
+	struct tcp_segment **link;
+	struct tcp_segment *segment;
+	u64 end;
+
+	if (socket == 0 || len == 0 ||
+	    tcp_seq_distance(socket->rx_ack, seq) > NET_TCP_RX_BUFFER_LIMIT ||
+	    tcp_seq_distance(socket->rx_ack, (seq + len) & 0xffffffffull) >
+		    NET_TCP_RX_BUFFER_LIMIT ||
+	    !tcp_receive_can_queue(socket, len)) {
+		return -1;
 	}
+	seq &= 0xffffffffull;
+	end = (seq + len) & 0xffffffffull;
+	link = &socket->ofo_head;
+	while (*link != 0 && tcp_seq_before((*link)->seq, seq)) {
+		const u64 current_end = ((*link)->seq + (*link)->len) &
+					0xffffffffull;
+
+		if (!tcp_seq_after(seq, current_end) && seq != current_end) {
+			return 0;
+		}
+		link = &(*link)->next;
+	}
+	if (*link != 0) {
+		if ((*link)->seq == seq) {
+			return 0;
+		}
+		if (!tcp_seq_before(end, (*link)->seq) && end != (*link)->seq) {
+			return 0;
+		}
+	}
+	segment = tcp_segment_alloc(data, len, seq);
+	if (segment == 0) {
+		return -1;
+	}
+	segment->next = *link;
+	*link = segment;
+	socket->ofo_len += len;
 	return 0;
 }
 
@@ -4020,7 +4250,7 @@ static int tcp_send_external_ipv4(struct tcp_socket *socket, u64 flags,
 	net_write_be32(frame + 42, socket->rx_ack & 0xffffffffu);
 	frame[46] = 0x50;
 	frame[47] = (unsigned char)(flags & 0xff);
-	net_write_be16(frame + 48, 65535);
+	net_write_be16(frame + 48, tcp_receive_window(socket));
 	net_write_be16(frame + 50, 0);
 	net_write_be16(frame + 52, 0);
 	for (u64 i = 0; i < payload_len; i++) {
@@ -4156,14 +4386,30 @@ static void packet_ingress_tcp_ipv4(struct net_interface *iface,
 			}
 		}
 		if (payload_len != 0) {
-			if (socket->handshake_done && seq == socket->rx_ack &&
-			    tcp_segment_enqueue(&socket->rx_head,
-						&socket->rx_tail,
-						&socket->rx_len, payload,
-						payload_len) == 0) {
-				socket->rx_ack =
-					(socket->rx_ack + payload_len) &
-					0xffffffffu;
+			if (socket->handshake_done) {
+				const u64 end = (seq + payload_len) &
+						0xffffffffull;
+
+				if (seq == socket->rx_ack) {
+					(void)tcp_queue_in_order(socket,
+								 payload,
+								 payload_len);
+				} else if (tcp_seq_after(seq, socket->rx_ack)) {
+					(void)tcp_queue_out_of_order(socket,
+								     payload,
+								     payload_len,
+								     seq);
+				} else if (tcp_seq_after(end, socket->rx_ack)) {
+					const u64 trim =
+						tcp_seq_distance(seq,
+								 socket->rx_ack);
+
+					if (trim < payload_len) {
+						(void)tcp_queue_in_order(
+							socket, payload + trim,
+							payload_len - trim);
+					}
+				}
 			}
 			if (socket->handshake_done) {
 				(void)tcp_send_external_ipv4(socket,
@@ -4548,6 +4794,15 @@ static void tcp_segment_free_all(struct tcp_socket *socket)
 	socket->rx_head = 0;
 	socket->rx_tail = 0;
 	socket->rx_len = 0;
+	segment = socket->ofo_head;
+	while (segment != 0) {
+		struct tcp_segment *next = segment->next;
+
+		bunix_free(segment);
+		segment = next;
+	}
+	socket->ofo_head = 0;
+	socket->ofo_len = 0;
 }
 
 static void tcp_tx_segment_free_all(struct tcp_socket *socket)
@@ -4606,6 +4861,7 @@ static void reply_tcp_write(struct bunix_msg *reply,
 		return;
 	}
 	segment->next = 0;
+	segment->seq = 0;
 	segment->offset = 0;
 	segment->len = len;
 	if (len != 0 &&
@@ -4695,6 +4951,10 @@ static void reply_tcp_read(struct bunix_msg *reply,
 			}
 			bunix_free(segment);
 		}
+	}
+	if (done != 0 && tcp_socket_is_external(socket) &&
+	    socket->family == BUNIX_NET_ADDR_FAMILY_IPV4) {
+		(void)tcp_send_external_ipv4(socket, NET_TCP_FLAG_ACK, 0, 0);
 	}
 	if (done == 0 && !socket->peer_write_closed) {
 		reply->words[0] = (u64)-1;
@@ -5644,8 +5904,13 @@ int main(void)
 			.words = { 0, 0, 0, 0 },
 		};
 
-		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0 ||
-		    message.protocol != BUNIX_PROTO_NET) {
+		if (bunix_ipc_recv(BUNIX_HANDLE_SELF, &message) != 0) {
+			continue;
+		}
+		if (message.protocol != BUNIX_PROTO_NET) {
+			if (message.cap != 0) {
+				bunix_handle_close(message.cap);
+			}
 			continue;
 		}
 
@@ -5833,6 +6098,9 @@ int main(void)
 			break;
 		}
 
+		if (message.cap != 0) {
+			bunix_handle_close(message.cap);
+		}
 		if (message.reply != 0) {
 			bunix_ipc_send(message.reply, &reply);
 		}

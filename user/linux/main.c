@@ -10929,7 +10929,8 @@ static long linux_write_buffer(struct linux_process *process, u64 fd, u64 len,
 			struct bunix_msg reply;
 
 			if (tmp < 0) {
-				return done != 0 ? (long)done : -(long)LINUX_EBADF;
+				return done != 0 ? (long)done :
+				       -(long)LINUX_ENOMEM;
 			}
 			if (chunk != 0 &&
 			    (bunix_buffer_read(buffer, done, write_buffer, chunk) != 0 ||
