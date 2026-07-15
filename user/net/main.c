@@ -3,6 +3,8 @@
 
 #define NET_HANDLE_NAMES (bunix_handle_find(BUNIX_CAP_NAME))
 
+struct net_interface;
+
 enum {
 	NET_IFACE_LO = 1,
 	NET_PACKET_MAX = 65536,
@@ -29,11 +31,20 @@ enum {
 	NET_TCP_SHUT_RD = 1 << 0,
 	NET_TCP_SHUT_WR = 1 << 1,
 	NET_TCP_WINDOW_MAX = 65535,
-	NET_TCP_RX_BUFFER_LIMIT = 4 * 1024 * 1024,
+	NET_TCP_WINDOW_SCALE_SHIFT = 8,
+	NET_TCP_SYN_OPTION_LEN = 12,
+	NET_TCP_RX_BUFFER_LIMIT = 16 * 1024 * 1024,
+	NET_TCP_RX_SEGMENT_CAPACITY = 32 * 1024,
+	NET_TCP_OPTION_EOL = 0,
+	NET_TCP_OPTION_NOP = 1,
+	NET_TCP_OPTION_MSS = 2,
+	NET_TCP_OPTION_WINDOW_SCALE = 3,
+	NET_TCP_OPTION_SACK_PERMITTED = 4,
 	NET_PROTO_UDP = 17,
 	NET_PROTO_TCP = 6,
 	NET_PROTO_ICMP = 1,
 	NET_PROTO_ICMPV6 = 58,
+	NET_ETH_HEADER_LEN = 14,
 	NET_ETH_IPV4 = 0x0800,
 	NET_ETH_ARP = 0x0806,
 	NET_ETH_IPV6 = 0x86dd,
@@ -52,6 +63,8 @@ enum {
 	NET_PACKET_BROADCAST = 1,
 	NET_NEIGHBOR_TTL_NS = 120000000000ull,
 };
+
+static u64 interface_frame_limit(const struct net_interface *iface);
 
 struct net_packet {
 	struct net_packet *next;
@@ -81,6 +94,14 @@ struct net_interface {
 	u64 rx_queued_bytes;
 	u64 rx_queued_packets;
 };
+
+static u64 interface_frame_limit(const struct net_interface *iface)
+{
+	if (iface == 0 || iface->mtu > ((u64)-1) - NET_ETH_HEADER_LEN) {
+		return 0;
+	}
+	return iface->mtu + NET_ETH_HEADER_LEN;
+}
 
 struct net_addr {
 	u64 family;
@@ -176,6 +197,7 @@ struct tcp_segment {
 	u64 seq;
 	u64 offset;
 	u64 len;
+	u64 capacity;
 	unsigned char data[];
 };
 
@@ -206,6 +228,9 @@ struct tcp_socket {
 	struct tcp_segment *rx_tail;
 	u64 ofo_len;
 	struct tcp_segment *ofo_head;
+	u64 rx_window_shift;
+	u64 rx_window_scale_enabled;
+	u64 peer_window_shift;
 	u64 tx_len;
 	struct tcp_segment *tx_head;
 	struct tcp_segment *tx_tail;
@@ -312,6 +337,9 @@ static u64 iface_ipv4_addr(u64 iface_id);
 static int iface_ipv6_addr(u64 iface_id, u64 *hi, u64 *lo);
 static int packet_tx_enqueue_copy(struct net_interface *iface,
 				  const unsigned char *data, u64 len);
+static int packet_tx_enqueue_tcp_ack(struct net_interface *iface,
+				     const unsigned char *data, u64 len);
+static u64 net_read_be16(const unsigned char *data);
 static long udp_bind_socket(struct udp_socket *socket, u64 hi, u64 lo,
 			    u64 port);
 static u64 net_checksum_sum(const unsigned char *data, u64 len, u64 sum);
@@ -423,6 +451,30 @@ static int packet_rx_queue_has_space(const struct net_interface *iface,
 	       iface->rx_queued_packets < NET_PACKET_RX_QUEUE_MAX_PACKETS &&
 	       iface->rx_queued_bytes <= NET_PACKET_RX_QUEUE_MAX_BYTES &&
 	       len <= NET_PACKET_RX_QUEUE_MAX_BYTES - iface->rx_queued_bytes;
+}
+
+static int packet_tap_should_queue(const unsigned char *data, u64 len)
+{
+	u64 ethertype;
+
+	if (data == 0 || len < 14) {
+		return 0;
+	}
+	ethertype = net_read_be16(data + 12);
+	if (ethertype == NET_ETH_IPV4 && len >= 14 + 20) {
+		const unsigned char *ip = data + 14;
+		const u64 ihl = (ip[0] & 0x0f) * 4;
+
+		if ((ip[0] >> 4) == 4 && ihl >= 20 && len >= 14 + ihl &&
+		    ip[9] == NET_PROTO_TCP) {
+			return 0;
+		}
+	}
+	if (ethertype == NET_ETH_IPV6 && len >= 14 + 40 &&
+	    data[14 + 6] == NET_PROTO_TCP) {
+		return 0;
+	}
+	return 1;
 }
 
 static void reply_interface_at(struct bunix_msg *reply,
@@ -1784,6 +1836,72 @@ static void net_write_be64(unsigned char *data, u64 value)
 	}
 }
 
+static void append_char(char *line, u64 size, u64 *offset, char c)
+{
+	if (*offset + 1 < size) {
+		line[(*offset)++] = c;
+	}
+}
+
+static void append_text(char *line, u64 size, u64 *offset, const char *text)
+{
+	for (u64 i = 0; text[i] != 0; i++) {
+		append_char(line, size, offset, text[i]);
+	}
+}
+
+static void append_dec(char *line, u64 size, u64 *offset, u64 value)
+{
+	char digits[20];
+	u64 count = 0;
+
+	if (value == 0) {
+		append_char(line, size, offset, '0');
+		return;
+	}
+	while (value != 0 && count < sizeof(digits)) {
+		digits[count++] = (char)('0' + (value % 10));
+		value /= 10;
+	}
+	while (count != 0) {
+		append_char(line, size, offset, digits[--count]);
+	}
+}
+
+static void tcp_debug_rx_event(const char *event, const struct tcp_socket *socket,
+			       u64 seq, u64 len)
+{
+	static int enabled = -1;
+	static u64 logs;
+	char line[192];
+	u64 offset = 0;
+
+	if (enabled < 0) {
+		enabled = bunix_cmdline_has("debug-net-tcp-rx") > 0;
+	}
+	if (!enabled || logs >= 128) {
+		return;
+	}
+	logs++;
+	append_text(line, sizeof(line), &offset, "net-tcp-rx: event=");
+	append_text(line, sizeof(line), &offset, event);
+	append_text(line, sizeof(line), &offset, " id=");
+	append_dec(line, sizeof(line), &offset, socket != 0 ? socket->id : 0);
+	append_text(line, sizeof(line), &offset, " seq=");
+	append_dec(line, sizeof(line), &offset, seq & 0xffffffffull);
+	append_text(line, sizeof(line), &offset, " len=");
+	append_dec(line, sizeof(line), &offset, len);
+	append_text(line, sizeof(line), &offset, " ack=");
+	append_dec(line, sizeof(line), &offset,
+		   socket != 0 ? socket->rx_ack & 0xffffffffull : 0);
+	append_text(line, sizeof(line), &offset, " rx=");
+	append_dec(line, sizeof(line), &offset, socket != 0 ? socket->rx_len : 0);
+	append_text(line, sizeof(line), &offset, " ofo=");
+	append_dec(line, sizeof(line), &offset, socket != 0 ? socket->ofo_len : 0);
+	append_text(line, sizeof(line), &offset, "\n");
+	bunix_console_log(line, offset);
+}
+
 static u64 net_read_be64(const unsigned char *data)
 {
 	u64 value = 0;
@@ -1792,6 +1910,119 @@ static u64 net_read_be64(const unsigned char *data)
 		value = (value << 8) | data[i];
 	}
 	return value;
+}
+
+static int packet_is_pure_tcp_ack_ipv4(const unsigned char *packet, u64 len,
+				       u64 *src_ip, u64 *dst_ip,
+				       u64 *src_port, u64 *dst_port)
+{
+	const unsigned char *ip;
+	const unsigned char *tcp;
+	u64 ihl;
+	u64 total_len;
+	u64 fragment;
+	u64 tcp_header_len;
+
+	if (packet == 0 || len < 14 + 20 + 20 ||
+	    net_read_be16(packet + 12) != NET_ETH_IPV4) {
+		return 0;
+	}
+	ip = packet + 14;
+	if ((ip[0] >> 4) != 4 || ip[9] != NET_PROTO_TCP) {
+		return 0;
+	}
+	ihl = (ip[0] & 0x0f) * 4;
+	if (ihl < 20 || len < 14 + ihl + 20) {
+		return 0;
+	}
+	total_len = net_read_be16(ip + 2);
+	if (total_len < ihl + 20 || len < 14 + total_len) {
+		return 0;
+	}
+	fragment = net_read_be16(ip + 6);
+	if ((fragment & 0x3fff) != 0) {
+		return 0;
+	}
+	tcp = ip + ihl;
+	tcp_header_len = (tcp[12] >> 4) * 4;
+	if (tcp_header_len < 20 || total_len != ihl + tcp_header_len ||
+	    tcp[13] != NET_TCP_FLAG_ACK) {
+		return 0;
+	}
+	if (src_ip != 0) {
+		*src_ip = net_read_be32(ip + 12);
+	}
+	if (dst_ip != 0) {
+		*dst_ip = net_read_be32(ip + 16);
+	}
+	if (src_port != 0) {
+		*src_port = net_read_be16(tcp);
+	}
+	if (dst_port != 0) {
+		*dst_port = net_read_be16(tcp + 2);
+	}
+	return 1;
+}
+
+static int packet_tcp_ack_same_flow(const unsigned char *packet, u64 len,
+				    u64 src_ip, u64 dst_ip, u64 src_port,
+				    u64 dst_port)
+{
+	u64 packet_src_ip = 0;
+	u64 packet_dst_ip = 0;
+	u64 packet_src_port = 0;
+	u64 packet_dst_port = 0;
+
+	return packet_is_pure_tcp_ack_ipv4(packet, len, &packet_src_ip,
+					   &packet_dst_ip, &packet_src_port,
+					   &packet_dst_port) &&
+	       packet_src_ip == src_ip && packet_dst_ip == dst_ip &&
+	       packet_src_port == src_port && packet_dst_port == dst_port;
+}
+
+static void packet_tx_drop_stale_tcp_acks(struct net_interface *iface,
+					  const unsigned char *data, u64 len)
+{
+	struct net_packet *prev = 0;
+	struct net_packet *packet;
+	u64 src_ip = 0;
+	u64 dst_ip = 0;
+	u64 src_port = 0;
+	u64 dst_port = 0;
+
+	if (iface == 0 ||
+	    !packet_is_pure_tcp_ack_ipv4(data, len, &src_ip, &dst_ip,
+					 &src_port, &dst_port)) {
+		return;
+	}
+	packet = iface->tx_head;
+	while (packet != 0) {
+		struct net_packet *next = packet->next;
+
+		if (packet_tcp_ack_same_flow(packet->data, packet->len, src_ip,
+					     dst_ip, src_port, dst_port)) {
+			if (prev != 0) {
+				prev->next = next;
+			} else {
+				iface->tx_head = next;
+			}
+			if (iface->tx_tail == packet) {
+				iface->tx_tail = prev;
+			}
+			bunix_free(packet);
+			packet = next;
+			continue;
+		}
+		prev = packet;
+		packet = next;
+	}
+}
+
+static int packet_tx_enqueue_tcp_ack(struct net_interface *iface,
+				     const unsigned char *data, u64 len)
+{
+	packet_tx_drop_stale_tcp_acks(iface, data, len);
+	return packet_tx_enqueue_copy(iface, data, len);
 }
 
 static void neighbor_prune_expired(void)
@@ -2746,64 +2977,49 @@ static void packet_ingress_icmp_ipv4(const unsigned char *packet, u64 len)
 	}
 }
 
-static void reply_packet_rx_submit(struct bunix_msg *reply,
-				   const struct bunix_msg *message)
+static long packet_rx_ingest_frame(u64 iface_id, const unsigned char *frame,
+				   u64 len)
 {
-	struct bunix_net_packet_info info;
 	struct net_interface *iface;
 	struct net_packet *packet;
 
-	if (message->cap == 0 ||
-	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
-	    bunix_buffer_read(message->cap, 0, &info, sizeof(info)) != 0) {
-		reply->words[0] = (u64)-1;
-		return;
-	}
-	iface = interface_find(info.iface);
-	if (iface == 0 || iface == &loopback || info.len == 0 ||
-	    info.len > iface->mtu ||
+	iface = interface_find(iface_id);
+	if (iface == 0 || iface == &loopback || frame == 0 || len == 0 ||
+	    len > interface_frame_limit(iface) ||
 	    (iface->flags & BUNIX_NET_IFACE_FLAG_RUNNING) == 0) {
 		if (iface != 0 && iface != &loopback) {
 			iface->rx_drops++;
 		}
-		reply->words[0] = (u64)-1;
-		return;
+		return -1;
 	}
-	packet = (struct net_packet *)bunix_alloc(sizeof(*packet) + info.len);
+	packet_ingress_arp_ipv4(iface, frame, len);
+	packet_ingress_learn_ipv4_neighbor(iface, frame, len);
+	packet_ingress_learn_ipv6_neighbor(iface, frame, len);
+	packet_ingress_ndp_ipv6(iface, frame, len);
+	packet_ingress_udp_ipv4(frame, len);
+	packet_ingress_udp_ipv6(frame, len);
+	packet_ingress_tcp_ipv4(iface, frame, len);
+	packet_ingress_tcp_ipv6(iface, frame, len);
+	packet_ingress_icmp_ipv4(frame, len);
+	packet_ingress_icmp_ipv6(frame, len);
+	iface->rx_packets++;
+	if (!packet_tap_should_queue(frame, len)) {
+		return 0;
+	}
+	if (!packet_rx_queue_has_space(iface, len)) {
+		iface->rx_drops++;
+		return 0;
+	}
+	packet = (struct net_packet *)bunix_alloc(sizeof(*packet) + len);
 	if (packet == 0) {
 		iface->rx_drops++;
-		reply->words[0] = (u64)-1;
-		return;
+		return -1;
 	}
 	packet->next = 0;
 	packet->family = 0;
-	packet->len = info.len;
-	if (bunix_buffer_read(message->cap, sizeof(info), packet->data,
-			      info.len) != 0) {
-		bunix_free(packet);
-		iface->rx_drops++;
-		reply->words[0] = (u64)-1;
-		return;
-	}
-	packet_ingress_arp_ipv4(iface, packet->data, packet->len);
-	packet_ingress_learn_ipv4_neighbor(iface, packet->data, packet->len);
-	packet_ingress_learn_ipv6_neighbor(iface, packet->data, packet->len);
-	packet_ingress_ndp_ipv6(iface, packet->data, packet->len);
-	packet_ingress_udp_ipv4(packet->data, packet->len);
-	packet_ingress_udp_ipv6(packet->data, packet->len);
-	packet_ingress_tcp_ipv4(iface, packet->data, packet->len);
-	packet_ingress_tcp_ipv6(iface, packet->data, packet->len);
-	packet_ingress_icmp_ipv4(packet->data, packet->len);
-	packet_ingress_icmp_ipv6(packet->data, packet->len);
-	iface->rx_packets++;
-	if (!packet_rx_queue_has_space(iface, packet->len)) {
-		iface->rx_drops++;
-		bunix_free(packet);
-		reply->words[0] = 0;
-		reply->words[1] = info.iface;
-		reply->words[2] = info.len;
-		reply->words[3] = 0;
-		return;
+	packet->len = len;
+	for (u64 i = 0; i < len; i++) {
+		packet->data[i] = frame[i];
 	}
 	if (iface->rx_tail != 0) {
 		iface->rx_tail->next = packet;
@@ -2812,11 +3028,70 @@ static void reply_packet_rx_submit(struct bunix_msg *reply,
 	}
 	iface->rx_tail = packet;
 	iface->rx_queued_packets++;
-	iface->rx_queued_bytes += packet->len;
+	iface->rx_queued_bytes += len;
+	return 0;
+}
+
+static void reply_packet_rx_submit(struct bunix_msg *reply,
+				   const struct bunix_msg *message)
+{
+	struct bunix_net_packet_info info;
+	static unsigned char frame[NET_PACKET_MAX];
+
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    bunix_buffer_read(message->cap, 0, &info, sizeof(info)) != 0 ||
+	    info.len > sizeof(frame) ||
+	    bunix_buffer_read(message->cap, sizeof(info), frame, info.len) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	if (packet_rx_ingest_frame(info.iface, frame, info.len) != 0) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
 	reply->words[0] = 0;
 	reply->words[1] = info.iface;
 	reply->words[2] = info.len;
 	reply->words[3] = 0;
+}
+
+static void reply_packet_rx_submit_batch(struct bunix_msg *reply,
+					 const struct bunix_msg *message)
+{
+	const u64 count = message->words[0];
+	const u64 slot_size = message->words[1];
+	u64 processed = 0;
+	u64 failed = 0;
+	static unsigned char frame[NET_PACKET_MAX];
+
+	if (message->cap == 0 ||
+	    (message->cap_rights & BUNIX_RIGHT_RECV) == 0 ||
+	    count > 64 || slot_size < sizeof(struct bunix_net_packet_info) ||
+	    slot_size > sizeof(struct bunix_net_packet_info) + NET_PACKET_MAX) {
+		reply->words[0] = (u64)-1;
+		return;
+	}
+	for (u64 i = 0; i < count; i++) {
+		struct bunix_net_packet_info info;
+		const u64 offset = i * slot_size;
+
+		if (bunix_buffer_read(message->cap, offset, &info,
+				      sizeof(info)) != 0 ||
+		    info.len > sizeof(frame) ||
+		    sizeof(info) + info.len > slot_size ||
+		    bunix_buffer_read(message->cap, offset + sizeof(info),
+				      frame, info.len) != 0 ||
+		    packet_rx_ingest_frame(info.iface, frame, info.len) != 0) {
+			failed++;
+			continue;
+		}
+		processed++;
+	}
+	reply->words[0] = 0;
+	reply->words[1] = processed;
+	reply->words[2] = failed;
+	reply->words[3] = count;
 }
 
 static int packet_matches_ethertype(const struct net_packet *packet,
@@ -2983,7 +3258,7 @@ static void reply_packet_tx_enqueue(struct bunix_msg *reply,
 	}
 	iface = interface_find(info.iface);
 	if (iface == 0 || iface == &loopback || info.len == 0 ||
-	    info.len > iface->mtu ||
+	    info.len > interface_frame_limit(iface) ||
 	    (iface->flags & BUNIX_NET_IFACE_FLAG_RUNNING) == 0) {
 		if (iface != 0 && iface != &loopback) {
 			iface->tx_drops++;
@@ -3681,6 +3956,9 @@ static struct tcp_socket *tcp_alloc_socket(u64 family)
 	socket->rx_tail = 0;
 	socket->ofo_len = 0;
 	socket->ofo_head = 0;
+	socket->rx_window_shift = 0;
+	socket->rx_window_scale_enabled = 0;
+	socket->peer_window_shift = 0;
 	socket->tx_len = 0;
 	socket->tx_head = 0;
 	socket->tx_tail = 0;
@@ -3960,17 +4238,34 @@ static u64 tcp_receive_queued_len(const struct tcp_socket *socket)
 	return queued;
 }
 
-static u64 tcp_receive_window(const struct tcp_socket *socket)
+static u64 tcp_receive_window_available(const struct tcp_socket *socket)
 {
-	u64 available;
 	u64 queued;
 
 	queued = tcp_receive_queued_len(socket);
 	if (socket == 0 || queued >= NET_TCP_RX_BUFFER_LIMIT) {
 		return 0;
 	}
-	available = NET_TCP_RX_BUFFER_LIMIT - queued;
+	return NET_TCP_RX_BUFFER_LIMIT - queued;
+}
+
+static u64 tcp_receive_window(const struct tcp_socket *socket)
+{
+	u64 available = tcp_receive_window_available(socket);
+
 	return available > NET_TCP_WINDOW_MAX ? NET_TCP_WINDOW_MAX : available;
+}
+
+static u64 tcp_receive_window_field(const struct tcp_socket *socket)
+{
+	u64 window = tcp_receive_window_available(socket);
+
+	if (socket == 0 || !socket->rx_window_scale_enabled ||
+	    socket->rx_window_shift == 0) {
+		return tcp_receive_window(socket);
+	}
+	window >>= socket->rx_window_shift;
+	return window > NET_TCP_WINDOW_MAX ? NET_TCP_WINDOW_MAX : window;
 }
 
 static int tcp_receive_can_queue(const struct tcp_socket *socket, u64 len)
@@ -3981,16 +4276,87 @@ static int tcp_receive_can_queue(const struct tcp_socket *socket, u64 len)
 	       len <= NET_TCP_RX_BUFFER_LIMIT - queued;
 }
 
-static struct tcp_segment *tcp_segment_alloc(const unsigned char *data, u64 len,
-					     u64 seq)
+static u64 tcp_ipv4_mss(const struct net_interface *iface)
+{
+	if (iface != 0 && iface->mtu > 40) {
+		return iface->mtu - 40;
+	}
+	return 536;
+}
+
+static void tcp_write_syn_options_ipv4(unsigned char *options, u64 mss)
+{
+	if (options == 0) {
+		return;
+	}
+	options[0] = NET_TCP_OPTION_MSS;
+	options[1] = 4;
+	net_write_be16(options + 2, mss > 65535 ? 65535 : mss);
+	options[4] = NET_TCP_OPTION_NOP;
+	options[5] = NET_TCP_OPTION_WINDOW_SCALE;
+	options[6] = 3;
+	options[7] = NET_TCP_WINDOW_SCALE_SHIFT;
+	options[8] = NET_TCP_OPTION_SACK_PERMITTED;
+	options[9] = 2;
+	options[10] = NET_TCP_OPTION_EOL;
+	options[11] = NET_TCP_OPTION_EOL;
+}
+
+static int tcp_parse_window_scale_option(const unsigned char *tcp,
+					 u64 tcp_header_len,
+					 u64 *shift_out)
+{
+	u64 offset = 20;
+
+	if (shift_out != 0) {
+		*shift_out = 0;
+	}
+	while (tcp != 0 && offset < tcp_header_len) {
+		const u64 kind = tcp[offset];
+		u64 option_len;
+
+		if (kind == NET_TCP_OPTION_EOL) {
+			break;
+		}
+		if (kind == NET_TCP_OPTION_NOP) {
+			offset++;
+			continue;
+		}
+		if (offset + 1 >= tcp_header_len) {
+			break;
+		}
+		option_len = tcp[offset + 1];
+		if (option_len < 2 || offset + option_len > tcp_header_len) {
+			break;
+		}
+		if (kind == NET_TCP_OPTION_WINDOW_SCALE && option_len == 3) {
+			u64 shift = tcp[offset + 2];
+
+			if (shift > 14) {
+				shift = 14;
+			}
+			if (shift_out != 0) {
+				*shift_out = shift;
+			}
+			return 1;
+		}
+		offset += option_len;
+	}
+	return 0;
+}
+
+static struct tcp_segment *tcp_segment_alloc_capacity(const unsigned char *data,
+						      u64 len, u64 seq,
+						      u64 capacity)
 {
 	struct tcp_segment *segment;
 
-	if (data == 0 && len != 0) {
+	if ((data == 0 && len != 0) || capacity < len) {
 		return 0;
 	}
 	segment = (struct tcp_segment *)bunix_alloc(sizeof(*segment) +
-						    (len == 0 ? 1 : len));
+						    (capacity == 0 ? 1 :
+						     capacity));
 	if (segment == 0) {
 		return 0;
 	}
@@ -3998,10 +4364,17 @@ static struct tcp_segment *tcp_segment_alloc(const unsigned char *data, u64 len,
 	segment->seq = seq & 0xffffffffull;
 	segment->offset = 0;
 	segment->len = len;
+	segment->capacity = capacity;
 	for (u64 i = 0; i < len; i++) {
 		segment->data[i] = data[i];
 	}
 	return segment;
+}
+
+static struct tcp_segment *tcp_segment_alloc(const unsigned char *data, u64 len,
+					     u64 seq)
+{
+	return tcp_segment_alloc_capacity(data, len, seq, len);
 }
 
 static void tcp_segment_append_existing(struct tcp_segment **head,
@@ -4022,24 +4395,6 @@ static void tcp_segment_append_existing(struct tcp_segment **head,
 	if (queued_len != 0) {
 		*queued_len += segment->len - segment->offset;
 	}
-}
-
-static int tcp_segment_enqueue(struct tcp_segment **head,
-			       struct tcp_segment **tail,
-			       u64 *queued_len,
-			       const unsigned char *data, u64 len)
-{
-	struct tcp_segment *segment;
-
-	if (head == 0 || tail == 0 || (data == 0 && len != 0)) {
-		return -1;
-	}
-	segment = tcp_segment_alloc(data, len, 0);
-	if (segment == 0) {
-		return -1;
-	}
-	tcp_segment_append_existing(head, tail, queued_len, segment);
-	return 0;
 }
 
 static void tcp_drain_out_of_order(struct tcp_socket *socket)
@@ -4093,10 +4448,35 @@ static void tcp_drain_out_of_order(struct tcp_socket *socket)
 static int tcp_queue_in_order(struct tcp_socket *socket,
 			      const unsigned char *data, u64 len)
 {
+	struct tcp_segment *tail;
+	u64 capacity;
+
 	if (!tcp_receive_can_queue(socket, len) ||
-	    tcp_segment_enqueue(&socket->rx_head, &socket->rx_tail,
-				&socket->rx_len, data, len) != 0) {
+	    (data == 0 && len != 0)) {
 		return -1;
+	}
+	tail = socket->rx_tail;
+	if (tail != 0 && tail->capacity >= tail->len &&
+	    len <= tail->capacity - tail->len) {
+		for (u64 i = 0; i < len; i++) {
+			tail->data[tail->len + i] = data[i];
+		}
+		tail->len += len;
+		socket->rx_len += len;
+	} else {
+		struct tcp_segment *segment;
+
+		capacity = NET_TCP_RX_SEGMENT_CAPACITY;
+		if (capacity < len) {
+			capacity = len;
+		}
+		segment = tcp_segment_alloc_capacity(data, len, 0, capacity);
+		if (segment == 0) {
+			return -1;
+		}
+		tcp_segment_append_existing(&socket->rx_head,
+					    &socket->rx_tail,
+					    &socket->rx_len, segment);
 	}
 	socket->rx_ack = (socket->rx_ack + len) & 0xffffffffull;
 	tcp_drain_out_of_order(socket);
@@ -4177,9 +4557,11 @@ static int tcp_send_external_ipv4(struct tcp_socket *socket, u64 flags,
 	u64 dest_ip;
 	u64 next_hop_ip;
 	u64 dest_mac = 0;
+	u64 tcp_header_len;
 	u64 tcp_len;
 	u64 ip_len;
 	u64 frame_len;
+	u64 payload_offset;
 	unsigned short ip_checksum;
 	unsigned short tcp_checksum;
 
@@ -4203,12 +4585,16 @@ static int tcp_send_external_ipv4(struct tcp_socket *socket, u64 flags,
 	source_ip = socket->local.lo != 0 ? socket->local.lo :
 		    iface_ipv4_addr(route->iface);
 	next_hop_ip = route->gateway_lo != 0 ? route->gateway_lo : dest_ip;
-	tcp_len = 20 + payload_len;
+	tcp_header_len = (flags & NET_TCP_FLAG_SYN) != 0 ?
+			 20 + NET_TCP_SYN_OPTION_LEN : 20;
+	tcp_len = tcp_header_len + payload_len;
 	ip_len = 20 + tcp_len;
 	frame_len = 14 + ip_len;
+	payload_offset = 14 + 20 + tcp_header_len;
 	if (iface == 0 || source_ip == 0 || iface->mac_hi == 0 ||
 	    tcp_len > 0xffff || ip_len > 0xffff ||
-	    frame_len > NET_PACKET_MAX || frame_len > iface->mtu) {
+	    ip_len > iface->mtu || frame_len > NET_PACKET_MAX ||
+	    frame_len > interface_frame_limit(iface)) {
 		return -1;
 	}
 	{
@@ -4248,13 +4634,16 @@ static int tcp_send_external_ipv4(struct tcp_socket *socket, u64 flags,
 	net_write_be16(frame + 36, socket->peer_addr.port);
 	net_write_be32(frame + 38, socket->tx_seq & 0xffffffffu);
 	net_write_be32(frame + 42, socket->rx_ack & 0xffffffffu);
-	frame[46] = 0x50;
+	frame[46] = (unsigned char)((tcp_header_len / 4) << 4);
 	frame[47] = (unsigned char)(flags & 0xff);
-	net_write_be16(frame + 48, tcp_receive_window(socket));
+	net_write_be16(frame + 48, tcp_receive_window_field(socket));
 	net_write_be16(frame + 50, 0);
 	net_write_be16(frame + 52, 0);
+	if ((flags & NET_TCP_FLAG_SYN) != 0) {
+		tcp_write_syn_options_ipv4(frame + 54, tcp_ipv4_mss(iface));
+	}
 	for (u64 i = 0; i < payload_len; i++) {
-		frame[54 + i] = payload[i];
+		frame[payload_offset + i] = payload[i];
 	}
 	ip_checksum = net_checksum_finish(net_checksum_sum(frame + 14, 20, 0));
 	frame[24] = (unsigned char)((ip_checksum >> 8) & 0xff);
@@ -4274,7 +4663,9 @@ static int tcp_send_external_ipv4(struct tcp_socket *socket, u64 flags,
 		bunix_free(frame);
 		return 0;
 	}
-	if (packet_tx_enqueue_copy(iface, frame, frame_len) != 0) {
+	if (((flags & 0xff) == NET_TCP_FLAG_ACK && payload_len == 0 ?
+		     packet_tx_enqueue_tcp_ack(iface, frame, frame_len) :
+		     packet_tx_enqueue_copy(iface, frame, frame_len)) != 0) {
 		bunix_free(frame);
 		return -1;
 	}
@@ -4375,6 +4766,17 @@ static void packet_ingress_tcp_ipv4(struct net_interface *iface,
 		if ((flags & NET_TCP_FLAG_SYN) != 0 &&
 		    (flags & NET_TCP_FLAG_ACK) != 0 &&
 		    !socket->handshake_done) {
+			u64 peer_shift = 0;
+
+			if (tcp_parse_window_scale_option(tcp, tcp_header_len,
+							  &peer_shift)) {
+				socket->rx_window_scale_enabled = 1;
+				socket->peer_window_shift = peer_shift;
+			} else {
+				socket->rx_window_scale_enabled = 0;
+				socket->rx_window_shift = 0;
+				socket->peer_window_shift = 0;
+			}
 			socket->rx_ack = (seq + 1) & 0xffffffffu;
 			socket->handshake_done = 1;
 			(void)tcp_send_external_ipv4(socket, NET_TCP_FLAG_ACK,
@@ -4386,32 +4788,63 @@ static void packet_ingress_tcp_ipv4(struct net_interface *iface,
 			}
 		}
 		if (payload_len != 0) {
+			int send_ack = 0;
+
 			if (socket->handshake_done) {
 				const u64 end = (seq + payload_len) &
 						0xffffffffull;
 
 				if (seq == socket->rx_ack) {
-					(void)tcp_queue_in_order(socket,
-								 payload,
-								 payload_len);
+					if (tcp_queue_in_order(socket, payload,
+							       payload_len) != 0) {
+						tcp_debug_rx_event("queue-fail",
+								   socket, seq,
+								   payload_len);
+						send_ack = 1;
+					} else {
+						tcp_debug_rx_event("queue-ok",
+								   socket, seq,
+								   payload_len);
+					}
 				} else if (tcp_seq_after(seq, socket->rx_ack)) {
 					(void)tcp_queue_out_of_order(socket,
 								     payload,
 								     payload_len,
 								     seq);
+					tcp_debug_rx_event("out-of-order",
+							   socket, seq,
+							   payload_len);
+					send_ack = 1;
 				} else if (tcp_seq_after(end, socket->rx_ack)) {
 					const u64 trim =
 						tcp_seq_distance(seq,
 								 socket->rx_ack);
 
 					if (trim < payload_len) {
-						(void)tcp_queue_in_order(
-							socket, payload + trim,
-							payload_len - trim);
+						if (tcp_queue_in_order(
+							    socket,
+							    payload + trim,
+							    payload_len - trim) !=
+						    0) {
+							tcp_debug_rx_event(
+								"trim-fail",
+								socket, seq,
+								payload_len);
+							send_ack = 1;
+						} else {
+							tcp_debug_rx_event(
+								"trim-ok",
+								socket, seq,
+								payload_len);
+						}
 					}
+				} else {
+					tcp_debug_rx_event("duplicate", socket,
+							   seq, payload_len);
+					send_ack = 1;
 				}
 			}
-			if (socket->handshake_done) {
+			if (socket->handshake_done && send_ack) {
 				(void)tcp_send_external_ipv4(socket,
 							     NET_TCP_FLAG_ACK,
 							     0, 0);
@@ -4577,6 +5010,9 @@ static int tcp_connect_external_ipv4(struct tcp_socket *client, u64 dest_ip,
 	client->peer_socket = 0;
 	client->tx_seq = 0;
 	client->rx_ack = 0;
+	client->rx_window_shift = NET_TCP_WINDOW_SCALE_SHIFT;
+	client->rx_window_scale_enabled = 0;
+	client->peer_window_shift = 0;
 	client->handshake_done = 0;
 	if (tcp_send_external_ipv4(client, NET_TCP_FLAG_SYN, 0, 0) != 0) {
 		client->state = NET_TCP_STATE_OPEN;
@@ -4864,6 +5300,7 @@ static void reply_tcp_write(struct bunix_msg *reply,
 	segment->seq = 0;
 	segment->offset = 0;
 	segment->len = len;
+	segment->capacity = len;
 	if (len != 0 &&
 	    bunix_buffer_read(message->cap, 0, segment->data, len) != 0) {
 		bunix_free(segment);
@@ -5208,7 +5645,7 @@ static int packet_tx_enqueue_copy(struct net_interface *iface,
 	struct net_packet *packet;
 
 	if (iface == 0 || iface == &loopback || data == 0 || len == 0 ||
-	    len > iface->mtu ||
+	    len > interface_frame_limit(iface) ||
 	    (iface->flags & BUNIX_NET_IFACE_FLAG_RUNNING) == 0) {
 		if (iface != 0 && iface != &loopback) {
 			iface->tx_drops++;
@@ -6020,6 +6457,9 @@ int main(void)
 			break;
 		case BUNIX_NET_PACKET_RX_SUBMIT:
 			reply_packet_rx_submit(&reply, &message);
+			break;
+		case BUNIX_NET_PACKET_RX_SUBMIT_BATCH:
+			reply_packet_rx_submit_batch(&reply, &message);
 			break;
 		case BUNIX_NET_PACKET_RX_DEQUEUE:
 			reply_packet_rx_dequeue(&reply, &message);

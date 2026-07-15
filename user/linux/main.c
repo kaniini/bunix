@@ -465,11 +465,24 @@ struct linux_tty {
 	u64 cpr_state;
 };
 
+struct linux_net_read_wait {
+	struct linux_net_read_wait *next;
+	u64 pid;
+	u64 fd;
+	u64 len;
+	u64 flags;
+	u64 buffer;
+	u64 addr_len;
+	u64 reply_handle;
+	u64 reply_type;
+};
+
 static struct bunix_map process_by_task;
 static struct bunix_map process_by_pid;
 static struct bunix_id_table pipe_ids;
 static char write_buffer[LINUX_MAX_WRITE];
 static struct linux_tty console_tty;
+static struct linux_net_read_wait *net_read_waits;
 static u64 linux_vfs_mutation_epochs[LINUX_CACHE_DOMAIN_COUNT];
 static struct linux_access_cache_entry
 	linux_global_path_cache[LINUX_GLOBAL_PATH_CACHE_SIZE];
@@ -496,6 +509,7 @@ static u64 resolve_service(u64 service, unsigned int rights);
 static void linux_process_reset(struct linux_process *process);
 static void linux_access_cache_clear(struct linux_process *process);
 static void linux_close_process_fds(struct linux_process *process);
+static void linux_net_cancel_readers(struct linux_process *process);
 static long linux_user_process_exit(u64 pid);
 static void linux_wake_parent(struct linux_process *child);
 static int linux_signal_process(struct linux_process *process, u64 signal);
@@ -818,6 +832,24 @@ static int recv_linux_message(struct bunix_msg *message, int *management)
 	}
 	*management = (index == mgmt_index) ? 1 : 0;
 	return 0;
+}
+
+static int try_recv_linux_message(struct bunix_msg *message, int *management)
+{
+	const u64 mgmt = LINUX_HANDLE_MGMT;
+
+	if (message == 0 || management == 0) {
+		return -1;
+	}
+	if (mgmt != 0 && bunix_ipc_try_recv(mgmt, message) == 0) {
+		*management = 1;
+		return 0;
+	}
+	if (bunix_ipc_try_recv(BUNIX_HANDLE_SELF, message) == 0) {
+		*management = 0;
+		return 0;
+	}
+	return -1;
 }
 
 static u64 resolve_service_type(u64 service, unsigned int rights,
@@ -1827,8 +1859,12 @@ static void linux_debug_read_kind_log(const struct linux_process *process,
 	static u64 total;
 	static u64 kind_counts[READ_KIND_COUNT];
 	static u64 len1_counts[READ_KIND_COUNT];
+	static u64 socket_len_le_512;
+	static u64 socket_len_le_1500;
+	static u64 socket_len_le_4096;
+	static u64 socket_len_gt_4096;
 	u64 kind;
-	char line[520];
+	char line[720];
 	u64 cursor = 0;
 
 	if (enabled < 0) {
@@ -1866,6 +1902,17 @@ static void linux_debug_read_kind_log(const struct linux_process *process,
 	if (len == 1) {
 		len1_counts[kind]++;
 	}
+	if (kind == READ_KIND_SOCKET) {
+		if (len <= 512) {
+			socket_len_le_512++;
+		} else if (len <= 1500) {
+			socket_len_le_1500++;
+		} else if (len <= 4096) {
+			socket_len_le_4096++;
+		} else {
+			socket_len_gt_4096++;
+		}
+	}
 	if ((total & 255) != 0) {
 		return;
 	}
@@ -1898,6 +1945,78 @@ static void linux_debug_read_kind_log(const struct linux_process *process,
 	append_dec(line, sizeof(line), &cursor, process->fds[fd].kind);
 	append_text(line, sizeof(line), &cursor, " last_len=");
 	append_dec(line, sizeof(line), &cursor, len);
+	append_text(line, sizeof(line), &cursor, " sock_le512=");
+	append_dec(line, sizeof(line), &cursor, socket_len_le_512);
+	append_text(line, sizeof(line), &cursor, " sock_le1500=");
+	append_dec(line, sizeof(line), &cursor, socket_len_le_1500);
+	append_text(line, sizeof(line), &cursor, " sock_le4096=");
+	append_dec(line, sizeof(line), &cursor, socket_len_le_4096);
+	append_text(line, sizeof(line), &cursor, " sock_gt4096=");
+	append_dec(line, sizeof(line), &cursor, socket_len_gt_4096);
+	append_char(line, sizeof(line), &cursor, '\n');
+	bunix_console_log(line, cursor);
+}
+
+static void linux_debug_net_recv_log(u64 request_len, long result)
+{
+	static int enabled = -1;
+	static u64 total;
+	static u64 ready;
+	static u64 eagain;
+	static u64 bytes;
+	static u64 req_le_512;
+	static u64 req_le_1500;
+	static u64 req_le_4096;
+	static u64 req_gt_4096;
+	char line[360];
+	u64 cursor = 0;
+
+	if (enabled < 0) {
+		enabled = bunix_cmdline_has("debug-linux-syscall-counts") > 0;
+	}
+	if (!enabled) {
+		return;
+	}
+	total++;
+	if (request_len <= 512) {
+		req_le_512++;
+	} else if (request_len <= 1500) {
+		req_le_1500++;
+	} else if (request_len <= 4096) {
+		req_le_4096++;
+	} else {
+		req_gt_4096++;
+	}
+	if (result == -(long)LINUX_EAGAIN) {
+		eagain++;
+	} else if (result >= 0) {
+		ready++;
+		bytes += (u64)result;
+	}
+	if ((total & 255) != 0) {
+		return;
+	}
+	append_text(line, sizeof(line), &cursor,
+		    "linux-server: net-recv total=");
+	append_dec(line, sizeof(line), &cursor, total);
+	append_text(line, sizeof(line), &cursor, " ready=");
+	append_dec(line, sizeof(line), &cursor, ready);
+	append_text(line, sizeof(line), &cursor, " eagain=");
+	append_dec(line, sizeof(line), &cursor, eagain);
+	append_text(line, sizeof(line), &cursor, " bytes=");
+	append_dec(line, sizeof(line), &cursor, bytes);
+	append_text(line, sizeof(line), &cursor, " req_le512=");
+	append_dec(line, sizeof(line), &cursor, req_le_512);
+	append_text(line, sizeof(line), &cursor, " req_le1500=");
+	append_dec(line, sizeof(line), &cursor, req_le_1500);
+	append_text(line, sizeof(line), &cursor, " req_le4096=");
+	append_dec(line, sizeof(line), &cursor, req_le_4096);
+	append_text(line, sizeof(line), &cursor, " req_gt4096=");
+	append_dec(line, sizeof(line), &cursor, req_gt_4096);
+	append_text(line, sizeof(line), &cursor, " last_req=");
+	append_dec(line, sizeof(line), &cursor, request_len);
+	append_text(line, sizeof(line), &cursor, " last_result=");
+	append_long(line, sizeof(line), &cursor, result);
 	append_char(line, sizeof(line), &cursor, '\n');
 	bunix_console_log(line, cursor);
 }
@@ -10306,9 +10425,45 @@ static long linux_sendto(struct linux_process *process, u64 fd, u64 len,
 	return 1;
 }
 
+static long linux_net_read_block(struct linux_process *process, u64 fd, u64 len,
+				 u64 flags, u64 buffer, u64 addr_len,
+				 u64 reply_handle, u64 reply_type,
+				 int *blocked)
+{
+	struct linux_net_read_wait *wait;
+
+	if (process == 0 || reply_handle == 0 || buffer == 0) {
+		return -LINUX_EAGAIN;
+	}
+	for (wait = net_read_waits; wait != 0; wait = wait->next) {
+		if (wait->pid == process->pid) {
+			return -LINUX_EAGAIN;
+		}
+	}
+	wait = (struct linux_net_read_wait *)bunix_alloc(sizeof(*wait));
+	if (wait == 0) {
+		return -LINUX_ENOMEM;
+	}
+	wait->next = net_read_waits;
+	wait->pid = process->pid;
+	wait->fd = fd;
+	wait->len = len;
+	wait->flags = flags;
+	wait->buffer = buffer;
+	wait->addr_len = addr_len;
+	wait->reply_handle = reply_handle;
+	wait->reply_type = reply_type;
+	net_read_waits = wait;
+	if (blocked != 0) {
+		*blocked = 1;
+	}
+	return 0;
+}
+
 static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 			   u64 flags, u64 buffer, u64 addr_len,
-			   u64 *actual_addr_len)
+			   u64 *actual_addr_len, u64 reply_handle,
+			   u64 reply_type, int *blocked)
 {
 	struct bunix_msg reply;
 	u64 op;
@@ -10327,23 +10482,19 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 	if (process->fds[fd].handle == LINUX_SOCKET_NET_ICMP &&
 	    process->fds[fd].socket_type == LINUX_SOCK_RAW &&
 	    process->fds[fd].size == LINUX_AF_INET) {
-		for (u64 retry = 0;; retry++) {
-			const long result = linux_icmp_raw_ipv4_recv(process, fd,
-								    len, buffer,
-								    addr_len,
-								    actual_addr_len);
+		const long result = linux_icmp_raw_ipv4_recv(process, fd, len,
+							    buffer, addr_len,
+							    actual_addr_len);
 
-			if (result != -((long)LINUX_EAGAIN)) {
-				return result;
-			}
-			if (!nonblock && linux_alarm_expire_if_ready(process)) {
-				return -LINUX_EINTR;
-			}
-			if (nonblock || retry >= LINUX_RECV_BLOCK_RETRIES) {
-				return -LINUX_EAGAIN;
-			}
-			(void)bunix_sleep_ns(LINUX_RECV_BLOCK_SLEEP_NS);
+		if (result != -((long)LINUX_EAGAIN) || nonblock) {
+			return result;
 		}
+		if (linux_alarm_expire_if_ready(process)) {
+			return -LINUX_EINTR;
+		}
+		return linux_net_read_block(process, fd, len, flags, buffer,
+					    addr_len, reply_handle, reply_type,
+					    blocked);
 	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NET_UDP ||
 	    process->fds[fd].handle == LINUX_SOCKET_NET_TCP ||
@@ -10352,80 +10503,76 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 		     BUNIX_NET_UDP_RECV :
 		     process->fds[fd].handle == LINUX_SOCKET_NET_TCP ?
 		     BUNIX_NET_TCP_READ : BUNIX_NET_ICMP_RECV;
-		for (u64 retry = 0;; retry++) {
-			const u64 native_addr_len =
-				process->fds[fd].handle == LINUX_SOCKET_NET_UDP &&
-				addr_len != 0 ?
-				sizeof(struct bunix_net_endpoint_addr) : 0;
-			const u64 native_addr_offset = native_addr_len != 0 ?
-						       len + addr_len : 0;
+		const u64 native_addr_len =
+			process->fds[fd].handle == LINUX_SOCKET_NET_UDP &&
+			addr_len != 0 ?
+			sizeof(struct bunix_net_endpoint_addr) : 0;
+		const u64 native_addr_offset = native_addr_len != 0 ?
+					       len + addr_len : 0;
 
-			if (linux_net_call(op, buffer, BUNIX_RIGHT_SEND,
-					   process->fds[fd].offset, len,
-					   native_addr_offset, native_addr_len,
-					   &reply) == 0) {
-				const long received = (long)reply.words[1];
+		if (linux_net_call(op, buffer, BUNIX_RIGHT_SEND,
+				   process->fds[fd].offset, len,
+				   native_addr_offset, native_addr_len,
+				   &reply) == 0) {
+			const long received = (long)reply.words[1];
 
-				if (addr_len != 0 &&
-				    process->fds[fd].handle ==
-				    LINUX_SOCKET_NET_UDP) {
-					struct bunix_net_endpoint_addr source;
-					struct linux_sockaddr addr;
-					long actual;
+			if (addr_len != 0 &&
+			    process->fds[fd].handle == LINUX_SOCKET_NET_UDP) {
+				struct bunix_net_endpoint_addr source;
+				struct linux_sockaddr addr;
+				long actual;
 
-					if (received < 0 ||
-					    bunix_buffer_read(buffer,
-							      native_addr_offset,
-							      &source,
-							      sizeof(source)) != 0) {
-						return -LINUX_EFAULT;
-					}
-					actual = linux_sockaddr_from_bunix_net(
-						&source, &addr);
-					if (actual != 0) {
-						return actual;
-					}
-					actual = linux_write_sockaddr_at(
-						buffer, (u64)received,
+				if (received < 0 ||
+				    bunix_buffer_read(buffer, native_addr_offset,
+						      &source,
+						      sizeof(source)) != 0) {
+					return -LINUX_EFAULT;
+				}
+				actual = linux_sockaddr_from_bunix_net(&source,
+								       &addr);
+				if (actual != 0) {
+					return actual;
+				}
+				actual = linux_write_sockaddr_at(
+					buffer, (u64)received, addr_len, &addr);
+				if (actual < 0) {
+					return actual;
+				}
+				if (actual_addr_len != 0) {
+					*actual_addr_len = (u64)actual;
+				}
+			}
+			if (addr_len != 0 &&
+			    process->fds[fd].handle == LINUX_SOCKET_NET_ICMP) {
+				const struct linux_sockaddr addr = {
+					.family = process->fds[fd].size,
+					.hi = reply.words[2],
+					.lo = reply.words[3],
+					.port = 0,
+				};
+				const long actual =
+					linux_write_sockaddr_at(
+						buffer, reply.words[1],
 						addr_len, &addr);
-					if (actual < 0) {
-						return actual;
-					}
-					if (actual_addr_len != 0) {
-						*actual_addr_len = (u64)actual;
-					}
-				}
-				if (addr_len != 0 &&
-				    process->fds[fd].handle ==
-				    LINUX_SOCKET_NET_ICMP) {
-					const struct linux_sockaddr addr = {
-						.family = process->fds[fd].size,
-						.hi = reply.words[2],
-						.lo = reply.words[3],
-						.port = 0,
-					};
-					const long actual =
-						linux_write_sockaddr_at(
-							buffer, reply.words[1],
-							addr_len, &addr);
 
-					if (actual < 0) {
-						return actual;
-					}
-					if (actual_addr_len != 0) {
-						*actual_addr_len = (u64)actual;
-					}
+				if (actual < 0) {
+					return actual;
 				}
-				return received;
+				if (actual_addr_len != 0) {
+					*actual_addr_len = (u64)actual;
+				}
 			}
-			if (!nonblock && linux_alarm_expire_if_ready(process)) {
-				return -LINUX_EINTR;
-			}
-			if (nonblock || retry >= LINUX_RECV_BLOCK_RETRIES) {
-				return -LINUX_EAGAIN;
-			}
-			(void)bunix_sleep_ns(LINUX_RECV_BLOCK_SLEEP_NS);
+			return received;
 		}
+		if (nonblock) {
+			return -LINUX_EAGAIN;
+		}
+		if (linux_alarm_expire_if_ready(process)) {
+			return -LINUX_EINTR;
+		}
+		return linux_net_read_block(process, fd, len, flags, buffer,
+					    addr_len, reply_handle, reply_type,
+					    blocked);
 	}
 	if (process->fds[fd].handle == LINUX_SOCKET_NET_PACKET) {
 		if (process->fds[fd].offset == 0) {
@@ -10453,7 +10600,8 @@ static long linux_recvfrom(struct linux_process *process, u64 fd, u64 len,
 
 static long linux_recvmsg(struct linux_process *process, u64 fd, u64 len,
 			  u64 flags, u64 name_len, u64 buffer,
-			  u64 *actual_name_len)
+			  u64 *actual_name_len, u64 reply_handle,
+			  int *blocked)
 {
 	struct bunix_msg reply;
 	const u64 sockaddr_ll_len = 20;
@@ -10469,7 +10617,8 @@ static long linux_recvmsg(struct linux_process *process, u64 fd, u64 len,
 	}
 	if (process->fds[fd].handle != LINUX_SOCKET_NET_PACKET) {
 		return linux_recvfrom(process, fd, len, flags, buffer, name_len,
-				      actual_name_len);
+				      actual_name_len, reply_handle,
+				      BUNIX_LINUX_RECVMSG, blocked);
 	}
 	if (process->fds[fd].offset == 0) {
 		return -LINUX_EDESTADDRREQ;
@@ -10483,6 +10632,51 @@ static long linux_recvmsg(struct linux_process *process, u64 fd, u64 len,
 		*actual_name_len = sockaddr_ll_len;
 	}
 	return (long)reply.words[2];
+}
+
+static void linux_net_wake_readers(void)
+{
+	struct linux_net_read_wait **link = &net_read_waits;
+
+	while (*link != 0) {
+		struct linux_net_read_wait *wait = *link;
+		struct linux_process *process =
+			linux_process_find_pid(wait->pid);
+		struct bunix_msg reply = {
+			.protocol = BUNIX_PROTO_LINUX,
+			.type = wait->reply_type,
+			.sender = 0,
+			.cap_rights = 0,
+			.reply = 0,
+			.cap = 0,
+			.words = { 0, 0, 0, 0 },
+		};
+		u64 actual_addr_len = 0;
+		long result;
+
+		if (process == 0 || process->exited) {
+			result = -LINUX_EINTR;
+		} else {
+			result = linux_recvfrom(process, wait->fd, wait->len,
+					       wait->flags, wait->buffer,
+					       wait->addr_len,
+					       &actual_addr_len, 0,
+					       wait->reply_type, 0);
+		}
+		if (result == -(long)LINUX_EAGAIN) {
+			link = &wait->next;
+			continue;
+		}
+		*link = wait->next;
+		linux_debug_net_recv_log(wait->len, result);
+		reply.words[0] = (u64)result;
+		reply.words[1] = actual_addr_len;
+		(void)bunix_ipc_send(wait->reply_handle, &reply);
+		if (wait->buffer != 0) {
+			bunix_handle_close(wait->buffer);
+		}
+		bunix_free(wait);
+	}
 }
 
 static long linux_pollfd(struct linux_process *process, long fd, u64 events)
@@ -10713,7 +10907,8 @@ static long linux_read(struct linux_process *process, u64 fd, u64 len,
 	     process->fds[fd].handle == LINUX_SOCKET_NET_RAW ||
 	     process->fds[fd].handle == LINUX_SOCKET_NET_PACKET ||
 	     process->fds[fd].handle == LINUX_SOCKET_NETLINK_ROUTE)) {
-		return linux_recvfrom(process, fd, len, 0, buffer, 0, 0);
+		return linux_recvfrom(process, fd, len, 0, buffer, 0, 0,
+				      reply_handle, BUNIX_LINUX_READ, blocked);
 	}
 	if (process->fds[fd].kind == LINUX_FD_DIR) {
 		return -LINUX_EISDIR;
@@ -11468,6 +11663,28 @@ static long linux_time(u64 buffer, u64 *seconds_out)
 	       (long)seconds : (long)-LINUX_EFAULT;
 }
 
+static void linux_net_cancel_readers(struct linux_process *process)
+{
+	struct linux_net_read_wait **link = &net_read_waits;
+
+	if (process == 0) {
+		return;
+	}
+	while (*link != 0) {
+		struct linux_net_read_wait *wait = *link;
+
+		if (wait->pid != process->pid) {
+			link = &wait->next;
+			continue;
+		}
+		*link = wait->next;
+		if (wait->buffer != 0) {
+			bunix_handle_close(wait->buffer);
+		}
+		bunix_free(wait);
+	}
+}
+
 static void linux_close_process_fds(struct linux_process *process)
 {
 	if (process == 0) {
@@ -11488,6 +11705,7 @@ static void linux_process_reset(struct linux_process *process)
 	}
 
 	(void)linux_user_process_exit(process->bunix_task);
+	linux_net_cancel_readers(process);
 	linux_child_unlink(process);
 	linux_close_process_fds(process);
 	(void)bunix_map_remove(&process_by_task, process->bunix_task);
@@ -11567,8 +11785,16 @@ int main(void)
 		int should_reply = 1;
 		int management = 0;
 
-		if (recv_linux_message(&message, &management) != 0 ||
-		    message.protocol != BUNIX_PROTO_LINUX) {
+		linux_net_wake_readers();
+		if (net_read_waits != 0) {
+			if (try_recv_linux_message(&message, &management) != 0) {
+				(void)bunix_sleep_ns(LINUX_RECV_BLOCK_SLEEP_NS);
+				continue;
+			}
+		} else if (recv_linux_message(&message, &management) != 0) {
+			continue;
+		}
+		if (message.protocol != BUNIX_PROTO_LINUX) {
 			continue;
 		}
 
@@ -12357,30 +12583,50 @@ int main(void)
 				bunix_handle_close(message.cap);
 			}
 			break;
-		case BUNIX_LINUX_RECVFROM:
-			reply.words[0] = (u64)linux_recvfrom(process,
-							     message.words[0],
-							     message.words[1],
-							     message.words[2],
-							     message.cap,
-							     message.words[3],
-							     &reply.words[1]);
-			if (message.cap != 0) {
-				bunix_handle_close(message.cap);
+		case BUNIX_LINUX_RECVFROM: {
+			int blocked = 0;
+			long result;
+
+			result = linux_recvfrom(process, message.words[0],
+						message.words[1],
+						message.words[2], message.cap,
+						message.words[3],
+						&reply.words[1], message.reply,
+						BUNIX_LINUX_RECVFROM, &blocked);
+			reply.words[0] = (u64)result;
+			if (blocked) {
+				should_reply = 0;
+			} else {
+				linux_debug_net_recv_log(message.words[1],
+							 result);
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
 			}
 			break;
-		case BUNIX_LINUX_RECVMSG:
-			reply.words[0] = (u64)linux_recvmsg(process,
-							    message.words[0],
-							    message.words[1],
-							    message.words[2],
-							    message.words[3],
-							    message.cap,
-							    &reply.words[1]);
-			if (message.cap != 0) {
-				bunix_handle_close(message.cap);
+		}
+		case BUNIX_LINUX_RECVMSG: {
+			int blocked = 0;
+			long result;
+
+			result = linux_recvmsg(process, message.words[0],
+					       message.words[1],
+					       message.words[2],
+					       message.words[3], message.cap,
+					       &reply.words[1], message.reply,
+					       &blocked);
+			reply.words[0] = (u64)result;
+			if (blocked) {
+				should_reply = 0;
+			} else {
+				linux_debug_net_recv_log(message.words[1],
+							 result);
+				if (message.cap != 0) {
+					bunix_handle_close(message.cap);
+				}
 			}
 			break;
+		}
 		case BUNIX_LINUX_GETSOCKNAME:
 			reply.words[0] = (u64)linux_socket_addr(process,
 								message.words[0],

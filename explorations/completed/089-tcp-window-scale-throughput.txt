@@ -1,0 +1,72 @@
+Raise external TCP throughput beyond correctness-only large downloads.
+
+Problem:
+
+- Exploration 088 fixed the 85 MiB virtio used-ring wrap stall and proved that
+  `wget -O/dev/null http://cachefly.cachefly.net/100mb.test` can complete, but
+  the manual run took 41 seconds for 100 MiB.
+- On the same host/network, the same Cachefly download completes in roughly
+  two seconds outside the Bunix VM, so 41 seconds is not acceptable evidence of
+  a functional TCP/IP stack.
+- The current IPv4 TCP path advertises a maximum 65,535-byte receive window and
+  sends no window-scale option in SYN. On real WAN RTTs, that caps throughput
+  near `receive_window / RTT` even if CPU, virtio, and host network capacity are
+  much higher.
+
+Intended outcome:
+
+- External IPv4 TCP negotiates window scaling and advertises a receive window
+  that reflects the real Bunix receive buffer, not the 16-bit TCP header field.
+- Large external HTTP downloads improve materially from the 41-second baseline.
+- Deterministic large-transfer tests continue to pass, and regressions back to
+  the old slow path are easy to reproduce.
+
+Tasks:
+
+- [x] Document the current throughput cap and the TCP header evidence for it.
+- [x] Implement IPv4 TCP SYN options for MSS and window scale.
+- [x] Parse SYN-ACK window-scale negotiation and advertise scaled receive
+      windows only when negotiated.
+- [x] Add a Cachefly benchmark test target with a bounded success threshold.
+- [x] Re-run deterministic large-wget, readv, external ping/DNS smoke, and the
+      Cachefly benchmark.
+- [x] Run the full test gate before completing the exploration.
+
+Validation:
+
+- `make test-boot-virtio-net-large-wget` passed after fixing finite
+  `poll(2)` sleep behavior.
+- `make test-boot-virtio-net-wget-readv` passed.
+- `make test-boot-virtio-net-dns-wget` passed.
+- `make test-boot-virtio-net-cachefly-wget` passed with the passt-backed
+  Cachefly benchmark threshold.
+- `make test-boot-virtio-net` passed.
+- `BUNIX_TEST_SET=tmpfs-extended make test-shell-parallel` passed after the
+  initial full-gate tmpfs flake.
+- `BUNIX_TEST_SET=alpine-openrc-smoke,alpine-openrc-full make
+  test-shell-parallel` passed after raising Alpine OpenRC shard memory to
+  512M.
+- `BUNIX_TEST_SET=procfs-sysfs-surface make test-shell-parallel` passed after
+  increasing TTY injection chunk pacing.
+- Final `make test` passed all 29 shards.
+
+Findings:
+
+- QEMU user/slirp strips the window-scale option from SYN-ACK, so it is not a
+  valid external throughput benchmark for scaled receive-window behavior.
+- passt negotiates window scaling with Bunix. Bunix now sends MSS, window
+  scale, and SACK-permitted options in IPv4 TCP SYNs and advertises scaled
+  receive windows only when the peer negotiated scaling.
+- The first major throughput defect was an Ethernet-frame-versus-MTU bug:
+  virtio-net and net server RX checks treated full 1514-byte Ethernet frames as
+  larger than a 1500-byte MTU and dropped them. The frame limit is now
+  `mtu + ethernet_header`.
+- The deterministic slirp large-wget path exposed a separate Linux personality
+  bug: finite `poll(2)` slept the entire user timeout in one shot. BusyBox wget
+  commonly polls with a 1000ms timeout, so Bunix ACKed readable TCP data once
+  per second. Poll now sleeps in short quanta and rechecks readiness until the
+  deadline.
+- The full gate exposed two test-harness issues while validating this slice:
+  Alpine OpenRC shards need 512M with the current standalone EFI image, and
+  shell TTY command injection needed slightly slower chunk pacing to avoid
+  losing tail bytes under parallel load.

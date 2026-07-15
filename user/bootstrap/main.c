@@ -3667,16 +3667,22 @@ static long net_packet_interface_selftest(u64 net)
 		request.words[0] = iface_id;
 		request.words[1] = sizeof(packet.frame);
 		if (bunix_ipc_call(net, &request, &reply) != 0 ||
-		    reply.words[0] != 0 || reply.words[2] != 54 ||
+		    reply.words[0] != 0 || reply.words[2] != 66 ||
 		    bunix_buffer_read((u64)buffer, 0, &packet,
 				      sizeof(packet)) != 0 ||
-		    packet.info.iface != iface_id || packet.info.len != 54 ||
+		    packet.info.iface != iface_id || packet.info.len != 66 ||
 		    packet.frame[0] != 0x02 || packet.frame[5] != 0x07 ||
 		    packet.frame[12] != 0x08 || packet.frame[13] != 0x00 ||
 		    packet.frame[23] != 6 || packet.frame[30] != 0x0a ||
 		    packet.frame[31] != 0x12 || packet.frame[33] != 0x07 ||
 		    packet.frame[36] != 0x34 || packet.frame[37] != 0x56 ||
-		    packet.frame[46] != 0x50 || packet.frame[47] != 0x02 ||
+		    packet.frame[46] != 0x80 || packet.frame[47] != 0x02 ||
+		    packet.frame[54] != 2 || packet.frame[55] != 4 ||
+		    packet.frame[56] != 0x05 || packet.frame[57] != 0xb4 ||
+		    packet.frame[58] != 1 || packet.frame[59] != 3 ||
+		    packet.frame[60] != 3 || packet.frame[61] != 8 ||
+		    packet.frame[62] != 4 || packet.frame[63] != 2 ||
+		    packet.frame[64] != 0 || packet.frame[65] != 0 ||
 		    (((u64)packet.frame[34] << 8) | packet.frame[35]) !=
 			    client_port) {
 			bunix_handle_close((u64)buffer);

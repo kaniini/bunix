@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+real_passt=${BUNIX_REAL_PASST:-/usr/bin/passt}
+
+if [ "${BUNIX_PASST_PCAP:-}" ]; then
+	exec "$real_passt" --pcap "$BUNIX_PASST_PCAP" "$@"
+fi
+exec "$real_passt" "$@"

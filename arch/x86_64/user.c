@@ -5475,6 +5475,9 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 	}
 	case LINUX_SYSCALL_POLL:
 	case LINUX_SYSCALL_PPOLL: {
+		enum {
+			LINUX_POLL_SLEEP_QUANTUM_NS = 10000000ull,
+		};
 		struct {
 			int fd;
 			short events;
@@ -5482,6 +5485,7 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		} pollfd;
 		u64 ready = 0;
 		u64 timeout_ns;
+		u64 deadline_ns = 0;
 		int infinite_timeout;
 		int slept = 0;
 
@@ -5493,6 +5497,12 @@ static u64 linux_syscall_handle(struct arch_syscall_frame *frame)
 		}
 		timeout_ns = linux_poll_timeout_ns(number, arg2);
 		infinite_timeout = linux_poll_timeout_is_infinite(number, arg2);
+		if (!infinite_timeout && timeout_ns != 0) {
+			const u64 now = timer_monotonic_ns();
+
+			deadline_ns = timeout_ns > ((u64)-1) - now ?
+				      (u64)-1 : now + timeout_ns;
+		}
 poll_again:
 		ready = 0;
 		for (u64 i = 0; i < arg1; i++) {
@@ -5520,10 +5530,10 @@ poll_again:
 				return (u64)-LINUX_EFAULT;
 			}
 		}
-		if (ready == 0 && timeout_ns != 0 &&
-		    (infinite_timeout || !slept)) {
+		if (ready == 0 && timeout_ns != 0) {
 			const u64 pending = linux_signal_pending(linux,
 								 reply_port);
+			u64 sleep_ns = LINUX_POLL_SLEEP_QUANTUM_NS;
 
 			if ((i64)pending < 0) {
 				return pending;
@@ -5531,8 +5541,20 @@ poll_again:
 			if (pending != 0) {
 				return (u64)-LINUX_EINTR;
 			}
+			if (!infinite_timeout) {
+				const u64 now = timer_monotonic_ns();
+				u64 remaining;
+
+				if (now >= deadline_ns) {
+					goto poll_done;
+				}
+				remaining = deadline_ns - now;
+				if (sleep_ns > remaining) {
+					sleep_ns = remaining;
+				}
+			}
 			slept = 1;
-			thread_sleep_ns(infinite_timeout ? 10000000ull : timeout_ns);
+			thread_sleep_ns(sleep_ns);
 			const u64 woke_pending = linux_signal_pending(linux,
 								      reply_port);
 
@@ -5544,6 +5566,7 @@ poll_again:
 			}
 			goto poll_again;
 		}
+poll_done:
 		linux_poll_shape_log(arg1, timeout_ns, infinite_timeout, ready,
 				     slept);
 		return ready;
